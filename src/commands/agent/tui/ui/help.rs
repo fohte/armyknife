@@ -39,7 +39,7 @@ fn build_progress_help_lines(bold: Style) -> Vec<Line<'static>> {
             ("h/l", "fold"),
             ("Enter", "open"),
             ("Tab", "pane"),
-            ("Esc", "tasks"),
+            ("Esc/←", "tasks"),
             ("q", "quit"),
         ],
     )

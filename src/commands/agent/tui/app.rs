@@ -2,7 +2,7 @@ use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
-use crate::commands::agent::user_turn::{next_user_turn, user_turns};
+use crate::commands::agent::user_turn::next_user_turn;
 use crate::shared::config::AgentConfig;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -13,11 +13,36 @@ use std::path::PathBuf;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::ProgressRow;
-use super::session_rows::SessionTask;
+use super::session_rows::{SessionTask, build_session_rows_with_vibe, tasks_row_occurrence};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
 use progress::CachedProgress;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct InitialProgressSelection {
+    parent_session_id: String,
+    delegate_session_id: String,
+    select_row: bool,
+    expand_batch: bool,
+}
+
+impl InitialProgressSelection {
+    fn new(parent_session_id: String, delegate_session_id: String) -> Self {
+        Self {
+            parent_session_id,
+            delegate_session_id,
+            select_row: true,
+            expand_batch: true,
+        }
+    }
+}
+
+struct FocusedTaskAncestor {
+    task_session_id: String,
+    progress_delegate_id: String,
+    task_row_occurrence: usize,
+}
 
 mod clean;
 mod delete;
@@ -146,7 +171,7 @@ pub struct App {
     pub(super) progress_implementation_expanded: bool,
     pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
-    pub(super) initial_progress_selection: Option<(String, String)>,
+    pub(super) initial_progress_selection: Option<InitialProgressSelection>,
     pub(super) progress_error: Option<String>,
     progress_cache: HashMap<String, CachedProgress>,
     /// Whether the PROGRESS pane currently receives keyboard input.
@@ -289,41 +314,21 @@ impl App {
     ) {
         let focused_session = focus_session_id
             .and_then(|focus_id| self.sessions.iter().find(|s| s.session_id == focus_id));
-        let focused_task_ancestor = focused_session
-            .filter(|session| session.is_delegated)
-            .and_then(|delegate| {
-                delegate
-                    .ancestor_session_ids
-                    .iter()
-                    .rev()
-                    .find_map(|ancestor_id| {
-                        self.sessions
-                            .iter()
-                            .find(|session| {
-                                session.session_id == *ancestor_id && !session.is_delegated
-                            })
-                            .map(|ancestor| {
-                                (ancestor.session_id.clone(), delegate.session_id.clone())
-                            })
-                    })
-            });
-        let focused_task_ancestor_is_user_turn =
-            focused_task_ancestor
-                .as_ref()
-                .is_some_and(|(ancestor_id, _)| {
-                    user_turns(self.sessions.iter(), &self.agent_config)
-                        .iter()
-                        .any(|turn| turn.session.session_id == *ancestor_id)
-                });
-        let selected_from_delegate_ancestor = focused_task_ancestor.is_some();
+        if let Some(ancestor) = focus_session_id.and_then(|id| self.focused_task_ancestor(id)) {
+            self.progress_focused = true;
+            self.initial_progress_selection = Some(InitialProgressSelection::new(
+                ancestor.task_session_id.clone(),
+                ancestor.progress_delegate_id,
+            ));
+            self.restore_selection(SelectionAnchor::for_session_occurrence(
+                ancestor.task_session_id,
+                ancestor.task_row_occurrence,
+            ));
+            return;
+        }
 
-        let selected_session_id = focused_task_ancestor
-            .map(|(ancestor_id, delegate_id)| {
-                self.progress_focused = true;
-                self.initial_progress_selection = Some((ancestor_id.clone(), delegate_id));
-                ancestor_id
-            })
-            .or_else(|| focused_session.map(|session| session.session_id.clone()))
+        let selected_session_id = focused_session
+            .map(|session| session.session_id.clone())
             .or_else(|| {
                 next_user_turn(&self.sessions, &self.agent_config)
                     .map(|turn| turn.session.session_id.clone())
@@ -331,20 +336,49 @@ impl App {
             .or_else(|| last_selected_session_id.map(str::to_owned));
 
         if let Some(session_id) = selected_session_id {
-            let anchor = if selected_from_delegate_ancestor {
-                SelectionAnchor::for_session_occurrence(
-                    session_id,
-                    if focused_task_ancestor_is_user_turn {
-                        1
-                    } else {
-                        0
-                    },
-                )
-            } else {
-                SelectionAnchor::for_session(session_id)
-            };
-            self.restore_selection(anchor);
+            self.restore_selection(SelectionAnchor::for_session(session_id));
         }
+    }
+
+    fn focused_task_ancestor(&self, focus_session_id: &str) -> Option<FocusedTaskAncestor> {
+        let delegate = self
+            .sessions
+            .iter()
+            .find(|session| session.session_id == focus_session_id && session.is_delegated)?;
+        let filtered_sessions = self
+            .filtered_indices
+            .iter()
+            .filter_map(|&index| self.sessions.get(index))
+            .collect::<Vec<_>>();
+        let rows = build_session_rows_with_vibe(
+            &filtered_sessions,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+        );
+
+        delegate
+            .ancestor_session_ids
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, ancestor_id)| {
+                let ancestor = self
+                    .sessions
+                    .iter()
+                    .find(|session| session.session_id == *ancestor_id && !session.is_delegated)?;
+                let task_row_occurrence = tasks_row_occurrence(&rows, ancestor_id)?;
+                let progress_delegate_id = delegate
+                    .ancestor_session_ids
+                    .get(index + 1)
+                    .unwrap_or(&delegate.session_id)
+                    .clone();
+                Some(FocusedTaskAncestor {
+                    task_session_id: ancestor.session_id.clone(),
+                    progress_delegate_id,
+                    task_row_occurrence,
+                })
+            })
     }
 
     /// Returns the filtered sessions for display.
@@ -412,7 +446,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::commands::agent::types::AgentStatus;
-    use chrono::TimeDelta;
+    use chrono::{TimeDelta, TimeZone};
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
@@ -555,17 +589,18 @@ mod tests {
 
     #[test]
     fn delegated_focus_selects_the_nearest_task_ancestor_and_progress_pane() {
-        let root = create_test_session("root");
-        let mut task = create_test_session("task");
+        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let root = create_test_session_at("root", timestamp);
+        let mut task = create_test_session_at("task", timestamp);
         task.status = SessionStatus::WaitingInput;
         task.crit_urls
             .push("https://example.test/review".to_string());
         task.ancestor_session_ids = vec![root.session_id.clone()];
-        let mut intermediate_delegate = create_test_session("intermediate-delegate");
+        let mut intermediate_delegate = create_test_session_at("intermediate-delegate", timestamp);
         intermediate_delegate.is_delegated = true;
         intermediate_delegate.ancestor_session_ids =
             vec![root.session_id.clone(), task.session_id.clone()];
-        let mut delegate = create_test_session("delegate");
+        let mut delegate = create_test_session_at("delegate", timestamp);
         delegate.is_delegated = true;
         delegate.ancestor_session_ids = vec![
             root.session_id.clone(),
@@ -590,15 +625,19 @@ mod tests {
                 Some("task"),
                 Some(1),
                 true,
-                Some(("task".to_string(), "delegate".to_string())),
+                Some(InitialProgressSelection::new(
+                    "task".to_string(),
+                    "intermediate-delegate".to_string(),
+                )),
             ),
         );
     }
 
     #[test]
     fn delegated_focus_without_a_task_ancestor_keeps_existing_fallback() {
-        let first = create_test_session("first");
-        let mut delegate = create_test_session("delegate");
+        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let first = create_test_session_at("first", timestamp);
+        let mut delegate = create_test_session_at("delegate", timestamp);
         delegate.is_delegated = true;
         let app = App::with_initial_selection(
             vec![first, delegate],

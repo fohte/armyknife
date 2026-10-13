@@ -258,6 +258,44 @@ fn initial_focus_selects_the_delegated_pr_row(
 }
 
 #[rstest]
+fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: DateTime<Utc>) {
+    let root = create_test_session_at("root", timestamp);
+    let mut task = create_test_session_at("task", timestamp);
+    task.ancestor_session_ids = vec![root.session_id.clone()];
+    let mut intermediate_delegate = create_test_session_at("intermediate-delegate", timestamp);
+    intermediate_delegate.is_delegated = true;
+    intermediate_delegate.ancestor_session_ids =
+        vec![root.session_id.clone(), task.session_id.clone()];
+    let mut delegate = create_test_session_at("delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec![
+        root.session_id.clone(),
+        task.session_id.clone(),
+        intermediate_delegate.session_id.clone(),
+    ];
+    let mut app = App::with_initial_selection(
+        vec![root, task, intermediate_delegate, delegate],
+        AgentConfig::default(),
+        Some("delegate"),
+        None,
+    );
+
+    app.begin_progress_refresh("task");
+
+    assert_eq!(
+        (
+            app.selected_session_id(),
+            app.progress_focused,
+            app.progress_list_state
+                .selected()
+                .and_then(|index| app.progress_rows.get(index))
+                .and_then(ProgressRow::selection_key),
+        ),
+        (Some("task"), true, Some("intermediate-delegate")),
+    );
+}
+
+#[rstest]
 fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
     selected_task_session: Session,
     delegated_session: Session,
@@ -268,6 +306,7 @@ fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
         Some("delegate"),
         None,
     );
+    app.begin_progress_refresh("selected");
     let checklist = TqChecklist {
         id: "checklist-a".to_string(),
         name: "実装".to_string(),
