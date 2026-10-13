@@ -290,7 +290,7 @@ fn session_mark(
     match session.display_status() {
         DisplayStatus::Running => ProgressMark::Working,
         DisplayStatus::Background => ProgressMark::Waiting,
-        DisplayStatus::WaitingInput => ProgressMark::User,
+        DisplayStatus::Failed | DisplayStatus::WaitingInput => ProgressMark::User,
         DisplayStatus::Ended => ProgressMark::Done,
         DisplayStatus::UnreadStopped | DisplayStatus::Stopped | DisplayStatus::Paused => {
             ProgressMark::NotStarted
@@ -525,6 +525,24 @@ mod tests {
                     },
                 }),
             ],
+        );
+    }
+
+    #[test]
+    fn failed_session_uses_user_attention_mark_in_progress() {
+        let mut selected = session("selected");
+        selected.status = SessionStatus::Failed;
+
+        assert_eq!(
+            build_progress_rows(&selected, &[], &AgentConfig::default()),
+            vec![ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "session".to_string(),
+                mark: ProgressMark::User,
+                status_label: Some("failed".to_string()),
+                note: None,
+                pane_id: None,
+            })],
         );
     }
 
