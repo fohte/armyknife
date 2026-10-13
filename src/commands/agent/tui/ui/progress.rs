@@ -48,32 +48,47 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
-    let Some(ProgressRow::Work(work)) = app.progress_rows.first().cloned() else {
+    let work_rows = app
+        .progress_rows
+        .iter()
+        .take_while(|row| matches!(row, ProgressRow::Work(_)))
+        .filter_map(|row| match row {
+            ProgressRow::Work(work) => Some(work.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    let work_row_count = work_rows.len();
+    if work_row_count == 0 {
         frame.render_widget(
             Paragraph::new("No progress available").style(Style::default().fg(Color::DarkGray)),
             inner,
         );
         return;
-    };
+    }
 
     let has_implementation = app
         .progress_rows
         .iter()
         .any(|row| matches!(row, ProgressRow::ImplementationHeader { .. }));
-    let has_delegates = app.progress_rows.len() > 1;
-    let work_height = 1;
-    let header_height = usize::from(has_delegates && !has_implementation) as u16;
+    let has_pr_rows = app.progress_rows.iter().skip(work_row_count).any(|row| {
+        matches!(
+            row,
+            ProgressRow::PullRequest(_) | ProgressRow::ChecklistPullRequest { .. }
+        )
+    });
+    let work_height = work_row_count.min(u16::MAX as usize) as u16;
+    let header_height = usize::from(has_pr_rows && !has_implementation) as u16;
     let [work_area, header_area, rows_area] = Layout::vertical([
         Constraint::Length(work_height),
         Constraint::Length(header_height),
         Constraint::Min(0),
     ])
     .areas(inner);
-    render_work_row(frame, work_area, &work, app);
+    render_work_rows(frame, work_area, &work_rows, app);
 
     if has_implementation {
-        render_checklist_rows(frame, rows_area, app);
-    } else if has_delegates {
+        render_checklist_rows(frame, rows_area, app, work_row_count);
+    } else if has_pr_rows {
         render_stage_header(frame, header_area, inner.width);
         render_pr_rows(frame, rows_area, app);
     } else if let Some(error) = app.progress_error.as_deref() {
@@ -89,8 +104,26 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     }
 }
 
-fn render_work_row(frame: &mut Frame, area: Rect, row: &WorkProgressRow, app: &App) {
-    let selected = app.progress_list_state.selected() == Some(0);
+fn render_work_rows(frame: &mut Frame, area: Rect, rows: &[WorkProgressRow], app: &App) {
+    for (index, row) in rows.iter().enumerate() {
+        let row_area = Rect {
+            x: area.x,
+            y: area.y.saturating_add(index.min(u16::MAX as usize) as u16),
+            width: area.width,
+            height: 1,
+        };
+        render_work_row(frame, row_area, row, app, index);
+    }
+}
+
+fn render_work_row(
+    frame: &mut Frame,
+    area: Rect,
+    row: &WorkProgressRow,
+    app: &App,
+    row_index: usize,
+) {
+    let selected = app.progress_list_state.selected() == Some(row_index);
     let marker = if selected && app.progress_focused {
         "› "
     } else if selected {
@@ -175,11 +208,11 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
     frame.render_stateful_widget(table, area, &mut app.progress_table_state);
 }
 
-fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App) {
+fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_count: usize) {
     let table_rows = app
         .progress_rows
         .iter()
-        .skip(1)
+        .skip(work_row_count)
         .map(checklist_table_row)
         .collect::<Vec<_>>();
     let table = Table::new(table_rows, stage_widths())

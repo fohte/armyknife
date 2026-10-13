@@ -179,6 +179,7 @@ pub(super) fn build_implementation_plan(
     }
 }
 
+#[cfg(test)]
 pub(super) fn build_progress_rows(
     selected: &Session,
     delegates: &[Session],
@@ -187,11 +188,40 @@ pub(super) fn build_progress_rows(
     expanded_batches: &HashMap<String, bool>,
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let mut rows = vec![ProgressRow::Work(work_progress_row(
-        selected,
-        !delegates.is_empty(),
+    build_task_progress_rows(
+        std::slice::from_ref(selected),
+        delegates,
+        plan,
+        implementation_expanded,
+        expanded_batches,
         agent_config,
-    ))];
+    )
+}
+
+pub(super) fn build_task_progress_rows(
+    work_sessions: &[Session],
+    delegates: &[Session],
+    plan: &ImplementationPlan,
+    implementation_expanded: bool,
+    expanded_batches: &HashMap<String, bool>,
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let mut rows = work_sessions
+        .iter()
+        .map(|work_session| {
+            let has_delegated_work = delegates.iter().any(|session| {
+                session
+                    .ancestor_session_ids
+                    .iter()
+                    .any(|ancestor_id| ancestor_id == &work_session.session_id)
+            });
+            ProgressRow::Work(work_progress_row(
+                work_session,
+                has_delegated_work,
+                agent_config,
+            ))
+        })
+        .collect::<Vec<_>>();
     let merged_pr_count = plan
         .batches
         .iter()

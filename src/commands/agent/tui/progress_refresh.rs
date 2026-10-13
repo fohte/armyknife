@@ -11,5 +11,8 @@ pub(super) fn start_progress_refresh(
         .task_by_session
         .get(&session_id)
         .map(|task| task.task_id.clone());
-    event_handler.start_progress_fetch(session_id, task_id);
+    let task_session_ids = task_id
+        .as_deref()
+        .map(|task_id| app.progress_task_session_ids(task_id));
+    event_handler.start_progress_fetch(session_id, task_id, task_session_ids);
 }

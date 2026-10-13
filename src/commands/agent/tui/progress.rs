@@ -156,17 +156,31 @@ pub(super) struct PrProgressRow {
     pub stages: StageMarks,
 }
 
+#[cfg(test)]
 pub(super) fn build_progress_rows(
     selected: &Session,
     delegated: &[FetchedDelegate],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let mut rows = Vec::with_capacity(delegated.len() + 1);
-    rows.push(ProgressRow::Work(work_progress_row(
-        selected,
-        !delegated.is_empty(),
-        agent_config,
-    )));
+    build_task_progress_rows(std::slice::from_ref(selected), delegated, agent_config)
+}
+
+pub(super) fn build_task_progress_rows(
+    work_sessions: &[Session],
+    delegated: &[FetchedDelegate],
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let mut rows = Vec::with_capacity(work_sessions.len() + delegated.len());
+    rows.extend(work_sessions.iter().map(|session| {
+        let has_delegated_work = delegated.iter().any(|delegate| {
+            delegate
+                .session
+                .ancestor_session_ids
+                .iter()
+                .any(|ancestor_id| ancestor_id == &session.session_id)
+        });
+        ProgressRow::Work(work_progress_row(session, has_delegated_work, agent_config))
+    }));
     rows.extend(
         delegated
             .iter()
@@ -255,21 +269,50 @@ fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn refresh_rows_from_sessions(
     selected: &Session,
     delegated: &[Session],
     existing_rows: &[ProgressRow],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let has_delegated_work = !delegated.is_empty()
-        || existing_rows
-            .iter()
-            .any(|row| matches!(row, ProgressRow::PullRequest(_)));
-    let mut rows = vec![ProgressRow::Work(work_progress_row(
-        selected,
-        has_delegated_work,
+    refresh_task_rows_from_sessions(
+        std::slice::from_ref(selected),
+        delegated,
+        existing_rows,
         agent_config,
-    ))];
+    )
+}
+
+pub(super) fn refresh_task_rows_from_sessions(
+    work_sessions: &[Session],
+    delegated: &[Session],
+    existing_rows: &[ProgressRow],
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let has_existing_pr_rows = existing_rows.iter().any(|row| {
+        matches!(
+            row,
+            ProgressRow::PullRequest(_) | ProgressRow::ChecklistPullRequest { .. }
+        )
+    });
+    let mut rows = work_sessions
+        .iter()
+        .enumerate()
+        .map(|(index, work_session)| {
+            let has_delegated_work = delegated.iter().any(|session| {
+                session
+                    .ancestor_session_ids
+                    .iter()
+                    .any(|ancestor_id| ancestor_id == &work_session.session_id)
+            }) || (index == 0 && has_existing_pr_rows);
+            ProgressRow::Work(work_progress_row(
+                work_session,
+                has_delegated_work,
+                agent_config,
+            ))
+        })
+        .collect::<Vec<_>>();
     let mut previous = existing_rows
         .iter()
         .filter_map(|row| match row {

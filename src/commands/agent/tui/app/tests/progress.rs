@@ -8,6 +8,8 @@ use crate::commands::agent::tui::progress::{
 use crate::commands::agent::tui::progress_batches::{
     ImplementationPlan, build_implementation_plan,
 };
+use crate::commands::agent::tui::session_rows::SessionTask;
+use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
@@ -97,6 +99,33 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
     ]
 }
 
+fn row_identities(rows: &[ProgressRow]) -> Vec<(&'static str, String)> {
+    rows.iter()
+        .map(|row| match row {
+            ProgressRow::Work(row) => ("work", row.session_id.clone()),
+            ProgressRow::PullRequest(row) => ("pr", row.session_id.clone()),
+            ProgressRow::ImplementationHeader { .. } => ("implementation", String::new()),
+            ProgressRow::BatchHeader { batch_id, .. } => ("batch", batch_id.clone()),
+            ProgressRow::ChecklistPullRequest { row, .. } => {
+                ("checklist-pr", row.session_id.clone())
+            }
+            ProgressRow::PlannedPullRequest {
+                checklist_item_id, ..
+            } => ("planned-pr", checklist_item_id.clone()),
+        })
+        .collect()
+}
+
+fn task_link(task_id: &str) -> SessionTask {
+    SessionTask {
+        task_id: task_id.to_string(),
+        task_number: 10,
+        task_title: "Example task".to_string(),
+        parent_task_id: None,
+        is_closed: false,
+    }
+}
+
 #[rstest]
 fn stale_progress_response_keeps_the_new_selection_state(timestamp: DateTime<Utc>) {
     let mut app = create_test_app(vec![
@@ -145,6 +174,192 @@ fn stale_progress_response_keeps_the_new_selection_state(timestamp: DateTime<Utc
             before.3,
             before.4,
         ),
+    );
+}
+
+#[rstest]
+fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
+    timestamp: DateTime<Utc>,
+) {
+    let mut selected = create_test_session_at("selected", timestamp);
+    selected.work_type = Some("design".to_string());
+    let mut same_task_child = create_test_session_at("same-task-child", timestamp);
+    same_task_child.ancestor_session_ids = vec!["selected".to_string()];
+    let mut other_task_child = create_test_session_at("other-task-child", timestamp);
+    other_task_child.ancestor_session_ids = vec!["selected".to_string()];
+    let mut delegate = create_test_session_at("delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec!["selected".to_string(), "same-task-child".to_string()];
+    let mut nested_delegate = create_test_session_at("nested-delegate", timestamp);
+    nested_delegate.is_delegated = true;
+    nested_delegate.ancestor_session_ids = vec![
+        "selected".to_string(),
+        "same-task-child".to_string(),
+        "delegate".to_string(),
+    ];
+    let mut other_task_delegate = create_test_session_at("other-task-delegate", timestamp);
+    other_task_delegate.is_delegated = true;
+    other_task_delegate.ancestor_session_ids =
+        vec!["selected".to_string(), "other-task-child".to_string()];
+    let unrelated_same_task = create_test_session_at("unrelated-same-task", timestamp);
+    let mut app = create_test_app(vec![
+        selected,
+        same_task_child,
+        other_task_child,
+        delegate.clone(),
+        nested_delegate.clone(),
+        other_task_delegate,
+        unrelated_same_task,
+    ]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("same-task-child"),
+        Some("other-task-child"),
+        Some("delegate"),
+        Some("nested-delegate"),
+        Some("other-task-delegate"),
+        Some("unrelated-same-task"),
+    ]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("selected".to_string(), vec![task_link("task-a")]),
+        ("same-task-child".to_string(), vec![task_link("task-a")]),
+        ("other-task-child".to_string(), vec![task_link("task-b")]),
+        ("unrelated-same-task".to_string(), vec![task_link("task-a")]),
+    ])));
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: vec![
+                FetchedDelegate {
+                    session: delegate,
+                    checklist_item_id: None,
+                    pull_request: None,
+                    lookup_unavailable: false,
+                },
+                FetchedDelegate {
+                    session: nested_delegate,
+                    checklist_item_id: None,
+                    pull_request: None,
+                    lookup_unavailable: false,
+                },
+            ],
+            implementation: None,
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        (
+            row_identities(&app.progress_rows),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        (
+            vec![
+                ("work", "selected".to_string()),
+                ("work", "same-task-child".to_string()),
+                ("work", "unrelated-same-task".to_string()),
+                ("pr", "delegate".to_string()),
+                ("pr", "nested-delegate".to_string()),
+            ],
+            Some(0),
+            None,
+        ),
+    );
+}
+
+#[rstest]
+fn task_progress_keeps_the_checklist_after_all_work_rows(
+    timestamp: DateTime<Utc>,
+    linked_checklist_plan: ImplementationPlan,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let mut same_task = create_test_session_at("same-task", timestamp);
+    same_task.ancestor_session_ids = vec!["selected".to_string()];
+    let mut app = create_test_app(vec![selected, same_task]);
+    app.update_row_order(&[None, Some("selected"), Some("same-task")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("selected".to_string(), vec![task_link("task-a")]),
+        ("same-task".to_string(), vec![task_link("task-a")]),
+    ])));
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            delegated: Vec::new(),
+            implementation: Some(linked_checklist_plan),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        (
+            row_identities(&app.progress_rows),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        (
+            vec![
+                ("work", "selected".to_string()),
+                ("work", "same-task".to_string()),
+                ("implementation", String::new()),
+                ("checklist-pr", "checklist-item:item-a".to_string()),
+            ],
+            Some(0),
+            None,
+        ),
+    );
+}
+
+#[rstest]
+fn project_manager_progress_stays_outside_child_task_scope(timestamp: DateTime<Utc>) {
+    let mut project_manager = create_test_session_at("project-manager", timestamp);
+    project_manager.work_type = Some("project-manager".to_string());
+    let mut child_task = create_test_session_at("child-task", timestamp);
+    child_task.ancestor_session_ids = vec!["project-manager".to_string()];
+    let mut child_delegate = create_test_session_at("child-delegate", timestamp);
+    child_delegate.is_delegated = true;
+    child_delegate.ancestor_session_ids =
+        vec!["project-manager".to_string(), "child-task".to_string()];
+    let mut app = create_test_app(vec![project_manager, child_task, child_delegate]);
+    app.update_row_order(&[
+        None,
+        Some("project-manager"),
+        Some("child-task"),
+        Some("child-delegate"),
+    ]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        (
+            "project-manager".to_string(),
+            vec![task_link("parent-task")],
+        ),
+        ("child-task".to_string(), vec![task_link("child-task")]),
+    ])));
+
+    app.apply_progress_result(
+        "project-manager",
+        Ok(FetchedProgress {
+            selected_session_id: "project-manager".to_string(),
+            delegated: Vec::new(),
+            implementation: None,
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        (
+            row_identities(&app.progress_rows),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        (vec![("work", "project-manager".to_string())], Some(0), None,),
     );
 }
 
