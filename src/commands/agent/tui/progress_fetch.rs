@@ -244,6 +244,7 @@ mod tests {
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
+    use rstest::rstest;
 
     use super::{BranchLookup, Resolution, branch_lookup_for_resolution, direct_delegates};
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
@@ -268,33 +269,31 @@ mod tests {
         );
     }
 
-    #[test]
-    fn returns_unavailable_when_worktree_cannot_be_opened() {
-        assert_eq!(
-            branch_lookup_for_resolution(None, None),
-            BranchLookup::Unavailable,
-        );
-    }
-
-    #[test]
-    fn uses_saved_pr_context_after_worktree_removal() {
-        let saved_context = SessionPrContext {
+    #[rstest]
+    #[case::unavailable(None, BranchLookup::Unavailable)]
+    #[case::saved_context_after_worktree_removal(
+        Some(SessionPrContext {
             owner: "sample-owner".to_string(),
             repo: "sample-repo".to_string(),
             branch: "sample-branch".to_string(),
             checklist_item_id: Some("sample-item".to_string()),
-        };
-
-        assert_eq!(
-            branch_lookup_for_resolution(None, Some(&saved_context)),
-            BranchLookup::Query {
-                query: BranchPrQuery {
-                    owner: "sample-owner".to_string(),
-                    repo: "sample-repo".to_string(),
-                    branch: "sample-branch".to_string(),
-                },
-                checklist_item_id: Some("sample-item".to_string()),
+        }),
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "sample-branch".to_string(),
             },
+            checklist_item_id: Some("sample-item".to_string()),
+        },
+    )]
+    fn falls_back_to_saved_context_when_live_resolution_is_unavailable(
+        #[case] saved_context: Option<SessionPrContext>,
+        #[case] expected: BranchLookup,
+    ) {
+        assert_eq!(
+            branch_lookup_for_resolution(None, saved_context.as_ref()),
+            expected,
         );
     }
 
