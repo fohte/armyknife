@@ -10,7 +10,7 @@ use crate::shared::config::AgentConfig;
 
 use super::chrome::render_with_time;
 
-pub(super) fn create_test_session(id: &str) -> Session {
+pub(in crate::commands::agent::tui) fn create_test_session(id: &str) -> Session {
     Session {
         session_id: id.to_string(),
         work_type: None,

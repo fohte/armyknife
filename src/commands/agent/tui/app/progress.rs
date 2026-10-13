@@ -1,4 +1,7 @@
-use super::super::progress::{FetchedProgress, build_progress_rows, refresh_rows_from_sessions};
+use super::super::progress::{
+    FetchedProgress, ProgressRow, build_progress_rows, refresh_rows_from_sessions,
+};
+use super::super::progress_batches::build_progress_rows as build_checklist_progress_rows;
 use super::super::progress_fetch::direct_delegates;
 use super::App;
 
@@ -16,6 +19,9 @@ impl App {
             .next();
         if self.progress_session_id.as_deref() != Some(session_id) {
             self.progress_rows = work_row.into_iter().collect();
+            self.progress_checklist = None;
+            self.progress_implementation_expanded = true;
+            self.progress_batch_expanded.clear();
             self.progress_list_state.select(Some(0));
             self.progress_table_state.select(None);
             self.progress_session_id = Some(session_id.to_string());
@@ -41,28 +47,30 @@ impl App {
         else {
             return;
         };
-        let selected_row_id = self
-            .progress_list_state
-            .selected()
-            .and_then(|index| self.progress_rows.get(index))
-            .map(|row| row.session_id().to_string());
+        let selected_index = self.progress_list_state.selected().unwrap_or(0);
+        let selected_key = self
+            .progress_rows
+            .get(selected_index)
+            .and_then(ProgressRow::selection_key)
+            .map(str::to_owned);
         let delegated = direct_delegates(self.sessions.clone(), session_id);
-        self.progress_rows = refresh_rows_from_sessions(
-            &selected,
-            &delegated,
-            &self.progress_rows,
-            &self.agent_config,
-        );
-        let selected_index = selected_row_id
-            .and_then(|selected_id| {
-                self.progress_rows
-                    .iter()
-                    .position(|row| row.session_id() == selected_id)
-            })
-            .unwrap_or(0);
-        self.progress_list_state.select(Some(selected_index));
-        self.progress_table_state
-            .select(selected_index.checked_sub(1));
+        let rows = match self.progress_checklist.as_ref() {
+            Some(plan) => build_checklist_progress_rows(
+                &selected,
+                &delegated,
+                plan,
+                self.progress_implementation_expanded,
+                &self.progress_batch_expanded,
+                &self.agent_config,
+            ),
+            None => refresh_rows_from_sessions(
+                &selected,
+                &delegated,
+                &self.progress_rows,
+                &self.agent_config,
+            ),
+        };
+        self.replace_progress_rows(rows, selected_key, selected_index);
     }
 
     pub(in crate::commands::agent::tui) fn apply_progress_result(
@@ -78,23 +86,30 @@ impl App {
                 let Some(selected) = self.selected_session().cloned() else {
                     return;
                 };
-                let selected_progress_session_id = self
-                    .progress_list_state
-                    .selected()
-                    .and_then(|index| self.progress_rows.get(index))
-                    .map(|row| row.session_id().to_string());
-                self.progress_rows =
-                    build_progress_rows(&selected, &progress.delegated, &self.agent_config);
-                let selected_index = selected_progress_session_id
-                    .and_then(|selected_id| {
-                        self.progress_rows
-                            .iter()
-                            .position(|row| row.session_id() == selected_id)
-                    })
-                    .unwrap_or(0);
-                self.progress_list_state.select(Some(selected_index));
-                self.progress_table_state
-                    .select(selected_index.checked_sub(1));
+                let selected_index = self.progress_list_state.selected().unwrap_or(0);
+                let selected_key = self
+                    .progress_rows
+                    .get(selected_index)
+                    .and_then(ProgressRow::selection_key)
+                    .map(str::to_owned);
+                let delegated_sessions = progress
+                    .delegated
+                    .iter()
+                    .map(|delegate| delegate.session.clone())
+                    .collect::<Vec<_>>();
+                self.progress_checklist = progress.implementation.clone();
+                let rows = match progress.implementation.as_ref() {
+                    Some(plan) => build_checklist_progress_rows(
+                        &selected,
+                        &delegated_sessions,
+                        plan,
+                        self.progress_implementation_expanded,
+                        &self.progress_batch_expanded,
+                        &self.agent_config,
+                    ),
+                    None => build_progress_rows(&selected, &progress.delegated, &self.agent_config),
+                };
+                self.replace_progress_rows(rows, selected_key, selected_index);
                 self.progress_session_id = Some(session_id.to_string());
                 self.progress_loading = false;
                 self.progress_error = progress.github_error;
@@ -108,14 +123,131 @@ impl App {
     }
 
     pub(in crate::commands::agent::tui) fn select_progress_row(&mut self, delta: isize) {
-        if self.progress_rows.is_empty() {
+        let selectable = self
+            .progress_rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| row.selection_key().map(|_| index))
+            .collect::<Vec<_>>();
+        if selectable.is_empty() {
             return;
         }
+
         let current = self.progress_list_state.selected().unwrap_or(0);
-        let next = current
+        let position = selectable
+            .iter()
+            .position(|index| *index == current)
+            .unwrap_or_else(|| if delta < 0 { selectable.len() - 1 } else { 0 });
+        let next_position = position
             .saturating_add_signed(delta)
-            .min(self.progress_rows.len() - 1);
-        self.progress_list_state.select(Some(next));
-        self.progress_table_state.select(next.checked_sub(1));
+            .min(selectable.len() - 1);
+        let next_index = selectable[next_position];
+        self.progress_list_state.select(Some(next_index));
+        self.progress_table_state.select(next_index.checked_sub(1));
+    }
+
+    pub(in crate::commands::agent::tui) fn set_progress_batch_collapsed(
+        &mut self,
+        collapsed: bool,
+    ) {
+        let current_index = self.progress_list_state.selected().unwrap_or(0);
+        let target = if collapsed {
+            self.progress_rows.get(current_index).and_then(|row| {
+                if matches!(row, ProgressRow::Work(_)) {
+                    Some((None, true))
+                } else {
+                    row.batch_id().map(|id| (Some(id.to_string()), false))
+                }
+            })
+        } else {
+            self.progress_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(index, row)| match row {
+                    ProgressRow::ImplementationHeader {
+                        collapsed: true, ..
+                    } => Some((index.abs_diff(current_index), (None, true))),
+                    ProgressRow::BatchHeader {
+                        batch_id,
+                        collapsed: true,
+                        ..
+                    } => Some((
+                        index.abs_diff(current_index),
+                        (Some(batch_id.clone()), false),
+                    )),
+                    _ => None,
+                })
+                .min_by_key(|(distance, _)| *distance)
+                .map(|(_, target)| target)
+        };
+        let Some((batch_id, is_implementation)) = target else {
+            return;
+        };
+        if is_implementation && self.progress_implementation_expanded == !collapsed {
+            return;
+        }
+        if let Some(batch_id) = batch_id.as_deref()
+            && self.progress_batch_expanded.get(batch_id).copied() == Some(!collapsed)
+        {
+            return;
+        }
+        let Some(selected) = self
+            .selected_session()
+            .filter(|session| {
+                self.progress_session_id.as_deref() == Some(session.session_id.as_str())
+            })
+            .cloned()
+        else {
+            return;
+        };
+        let Some(plan) = self.progress_checklist.clone() else {
+            return;
+        };
+
+        let selected_key = self
+            .progress_rows
+            .get(current_index)
+            .and_then(ProgressRow::selection_key)
+            .map(str::to_owned);
+        if is_implementation {
+            self.progress_implementation_expanded = !collapsed;
+        } else if let Some(batch_id) = batch_id {
+            self.progress_batch_expanded.insert(batch_id, !collapsed);
+        }
+        let delegated = direct_delegates(self.sessions.clone(), &selected.session_id);
+        let rows = build_checklist_progress_rows(
+            &selected,
+            &delegated,
+            &plan,
+            self.progress_implementation_expanded,
+            &self.progress_batch_expanded,
+            &self.agent_config,
+        );
+        self.replace_progress_rows(rows, selected_key, current_index);
+    }
+
+    fn replace_progress_rows(
+        &mut self,
+        rows: Vec<ProgressRow>,
+        selected_key: Option<String>,
+        previous_index: usize,
+    ) {
+        let selected_index = selected_key
+            .and_then(|key| {
+                rows.iter()
+                    .position(|row| row.selection_key() == Some(key.as_str()))
+            })
+            .or_else(|| {
+                rows.iter()
+                    .enumerate()
+                    .filter(|(_, row)| row.selection_key().is_some())
+                    .min_by_key(|(index, _)| index.abs_diff(previous_index))
+                    .map(|(index, _)| index)
+            })
+            .unwrap_or(0);
+        self.progress_rows = rows;
+        self.progress_list_state.select(Some(selected_index));
+        self.progress_table_state
+            .select(selected_index.checked_sub(1));
     }
 }

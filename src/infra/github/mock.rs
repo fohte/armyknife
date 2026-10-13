@@ -430,6 +430,22 @@ impl GitHubMockServer {
             .await;
     }
 
+    pub async fn graphql_pull_request_by_number_with_ci(&self, pull_request: serde_json::Value) {
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_string_contains("pullRequest(number:"))
+            .and(body_string_contains("statusCheckRollup { state }"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repo0": {
+                        "pr0": pull_request
+                    }
+                }
+            })))
+            .mount(&self.server)
+            .await;
+    }
+
     async fn mount_graphql_batch_pull_request(
         &self,
         pull_request: serde_json::Value,

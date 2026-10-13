@@ -6,16 +6,20 @@ use crate::infra::github::{PrCiState, PrProgressInfo, PrState};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
+use super::progress_batches::ImplementationPlan;
+
 #[derive(Debug)]
 pub(super) struct FetchedProgress {
     pub selected_session_id: String,
     pub delegated: Vec<FetchedDelegate>,
+    pub implementation: Option<ImplementationPlan>,
     pub github_error: Option<String>,
 }
 
 #[derive(Debug)]
 pub(super) struct FetchedDelegate {
     pub session: Session,
+    pub checklist_item_id: Option<String>,
     pub pull_request: Option<PrProgressInfo>,
     pub lookup_unavailable: bool,
 }
@@ -54,6 +58,26 @@ pub(super) struct StageMarks {
 pub(super) enum ProgressRow {
     Work(WorkProgressRow),
     PullRequest(PrProgressRow),
+    ImplementationHeader {
+        merged_pr_count: usize,
+        total_pr_count: usize,
+        collapsed: bool,
+    },
+    BatchHeader {
+        batch_id: String,
+        title: String,
+        merged_pr_count: usize,
+        collapsed: bool,
+    },
+    ChecklistPullRequest {
+        batch_id: String,
+        row: PrProgressRow,
+    },
+    PlannedPullRequest {
+        batch_id: String,
+        checklist_item_id: String,
+        title: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,24 +92,44 @@ pub(super) fn open_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
             .pane_id
             .as_ref()
             .map(|pane_id| ProgressOpenTarget::FocusPane(pane_id.clone())),
-        ProgressRow::PullRequest(row) => {
-            if !row.is_ended
-                && let Some(pane_id) = row.pane_id.as_ref()
-            {
-                return Some(ProgressOpenTarget::FocusPane(pane_id.clone()));
-            }
-            row.url
-                .as_ref()
-                .map(|url| ProgressOpenTarget::OpenUrl(url.clone()))
+        ProgressRow::PullRequest(row) | ProgressRow::ChecklistPullRequest { row, .. } => {
+            open_pull_request_target(row)
         }
+        ProgressRow::ImplementationHeader { .. }
+        | ProgressRow::BatchHeader { .. }
+        | ProgressRow::PlannedPullRequest { .. } => None,
     }
 }
 
+fn open_pull_request_target(row: &PrProgressRow) -> Option<ProgressOpenTarget> {
+    if !row.is_ended
+        && let Some(pane_id) = row.pane_id.as_ref()
+    {
+        return Some(ProgressOpenTarget::FocusPane(pane_id.clone()));
+    }
+    row.url
+        .as_ref()
+        .map(|url| ProgressOpenTarget::OpenUrl(url.clone()))
+}
+
 impl ProgressRow {
-    pub(super) fn session_id(&self) -> &str {
+    pub(super) fn selection_key(&self) -> Option<&str> {
         match self {
-            Self::Work(row) => &row.session_id,
-            Self::PullRequest(row) => &row.session_id,
+            Self::Work(row) => Some(&row.session_id),
+            Self::PullRequest(row) => Some(&row.session_id),
+            Self::ChecklistPullRequest { row, .. } => Some(&row.session_id),
+            Self::ImplementationHeader { .. }
+            | Self::BatchHeader { .. }
+            | Self::PlannedPullRequest { .. } => None,
+        }
+    }
+
+    pub(super) fn batch_id(&self) -> Option<&str> {
+        match self {
+            Self::BatchHeader { batch_id, .. }
+            | Self::ChecklistPullRequest { batch_id, .. }
+            | Self::PlannedPullRequest { batch_id, .. } => Some(batch_id),
+            Self::Work(_) | Self::PullRequest(_) | Self::ImplementationHeader { .. } => None,
         }
     }
 }
@@ -131,7 +175,7 @@ pub(super) fn build_progress_rows(
     rows
 }
 
-fn work_progress_row(
+pub(super) fn work_progress_row(
     selected: &Session,
     has_delegated_work: bool,
     agent_config: &AgentConfig,
@@ -183,7 +227,10 @@ fn work_progress_row(
     }
 }
 
-fn pr_progress_row(delegate: &FetchedDelegate, agent_config: &AgentConfig) -> PrProgressRow {
+pub(super) fn pr_progress_row(
+    delegate: &FetchedDelegate,
+    agent_config: &AgentConfig,
+) -> PrProgressRow {
     let pull_request = delegate.pull_request.as_ref();
     let pr = pull_request.map(|progress| &progress.pull_request);
     let mut row = PrProgressRow {
@@ -223,7 +270,13 @@ pub(super) fn refresh_rows_from_sessions(
         .iter()
         .filter_map(|row| match row {
             ProgressRow::PullRequest(row) => Some((row.session_id.clone(), row.clone())),
-            ProgressRow::Work(_) => None,
+            ProgressRow::ChecklistPullRequest { row, .. } => {
+                Some((row.session_id.clone(), row.clone()))
+            }
+            ProgressRow::Work(_)
+            | ProgressRow::ImplementationHeader { .. }
+            | ProgressRow::BatchHeader { .. }
+            | ProgressRow::PlannedPullRequest { .. } => None,
         })
         .collect::<HashMap<_, _>>();
 
@@ -232,6 +285,7 @@ pub(super) fn refresh_rows_from_sessions(
             pr_progress_row(
                 &FetchedDelegate {
                     session: session.clone(),
+                    checklist_item_id: None,
                     pull_request: None,
                     lookup_unavailable: false,
                 },
@@ -298,7 +352,7 @@ fn session_mark(
     }
 }
 
-fn stage_marks(
+pub(super) fn stage_marks(
     session: &Session,
     progress: Option<&PrProgressInfo>,
     agent_config: &AgentConfig,
@@ -494,6 +548,7 @@ mod tests {
                 &selected,
                 &[FetchedDelegate {
                     session: delegate,
+                    checklist_item_id: None,
                     pull_request: None,
                     lookup_unavailable: false,
                 }],
@@ -555,6 +610,7 @@ mod tests {
                 &selected,
                 &[FetchedDelegate {
                     session: delegated_session(),
+                    checklist_item_id: None,
                     pull_request: None,
                     lookup_unavailable: true,
                 }],
@@ -601,6 +657,7 @@ mod tests {
             &session("selected"),
             &[FetchedDelegate {
                 session: delegated_session(),
+                checklist_item_id: None,
                 pull_request: None,
                 lookup_unavailable: true,
             }],
@@ -652,6 +709,7 @@ mod tests {
             &selected,
             &[FetchedDelegate {
                 session: delegate.clone(),
+                checklist_item_id: None,
                 pull_request: Some(progress_info(PrState::Merged, PrCiState::Successful)),
                 lookup_unavailable: false,
             }],
@@ -766,6 +824,7 @@ mod tests {
                 &selected_session,
                 &[FetchedDelegate {
                     session: delegated_session,
+                    checklist_item_id: None,
                     pull_request: Some(progress_info(pr_state, ci_state)),
                     lookup_unavailable: false,
                 }],

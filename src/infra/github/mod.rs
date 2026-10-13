@@ -8,6 +8,7 @@ pub(crate) mod error;
 #[cfg(test)]
 pub(crate) mod mock;
 mod pr;
+mod pr_number;
 mod repo;
 
 pub use client::GitHubClient;
@@ -18,4 +19,5 @@ pub use pr::{
     BranchPrQuery, CreatePrParams, PrCiState, PrClient, PrInfo, PrProgressInfo, PrState,
     UpdatePrParams,
 };
+pub use pr_number::PrNumberQuery;
 pub use repo::RepoClient;

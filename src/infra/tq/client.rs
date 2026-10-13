@@ -15,6 +15,10 @@ use super::error::{Result, TqError};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
+mod checklist;
+
+pub use checklist::{TqChecklist, TqChecklistItem, TqGithubLink};
+
 const SESSION_LIST_ARGS: &[&str] = &["session", "list", "--limit", "unlimited"];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 

@@ -5,6 +5,7 @@ mod crit_key;
 mod event;
 mod pr_fetch;
 mod progress;
+mod progress_batches;
 mod progress_fetch;
 mod progress_key;
 mod session_key;
@@ -417,7 +418,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
 
         if let Some(session_id) = progress_refresh_schedule.start_pending() {
             app.begin_progress_refresh(&session_id);
-            event_handler.start_progress_fetch(session_id);
+            let task_id = app
+                .task_by_session
+                .get(&session_id)
+                .map(|task| task.task_id.clone());
+            event_handler.start_progress_fetch(session_id, task_id);
         }
 
         if app.should_quit {

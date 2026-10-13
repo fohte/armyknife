@@ -36,6 +36,7 @@ fn stale_progress_response_keeps_the_new_selection_state() {
         Ok(FetchedProgress {
             selected_session_id: "first".to_string(),
             delegated: Vec::new(),
+            implementation: None,
             github_error: None,
         }),
     );
@@ -78,6 +79,7 @@ fn local_progress_refresh_preserves_the_selected_delegate_row() {
         &selected,
         &[FetchedDelegate {
             session: delegate,
+            checklist_item_id: None,
             pull_request: None,
             lookup_unavailable: false,
         }],

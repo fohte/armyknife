@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::ProgressRow;
+use super::progress_batches::ImplementationPlan;
 use super::session_rows::SessionTask;
 use super::tq_sidebar::SidebarSelection;
 use super::tq_snapshot::TqSnapshot;
@@ -152,6 +153,9 @@ pub struct App {
     pub(super) progress_list_state: ListState,
     pub(super) progress_table_state: TableState,
     pub(super) progress_rows: Vec<ProgressRow>,
+    pub(super) progress_checklist: Option<ImplementationPlan>,
+    pub(super) progress_implementation_expanded: bool,
+    pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
     pub(super) progress_loading: bool,
     pub(super) progress_error: Option<String>,
@@ -257,6 +261,9 @@ impl App {
             progress_list_state: ListState::default(),
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),
+            progress_checklist: None,
+            progress_implementation_expanded: true,
+            progress_batch_expanded: HashMap::new(),
             progress_session_id: None,
             progress_loading: false,
             progress_error: None,

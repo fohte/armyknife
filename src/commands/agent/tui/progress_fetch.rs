@@ -4,10 +4,15 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 use crate::infra::git::{GitRepo, github_owner_and_repo};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
+use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
 use super::progress::{FetchedDelegate, FetchedProgress};
+use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
-pub(super) async fn fetch_progress(selected_session_id: String) -> Result<FetchedProgress, String> {
+pub(super) async fn fetch_progress(
+    selected_session_id: String,
+    task_id: Option<String>,
+) -> Result<FetchedProgress, String> {
     let sessions = tokio::task::spawn_blocking(store::list_all_sessions)
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
@@ -21,29 +26,53 @@ pub(super) async fn fetch_progress(selected_session_id: String) -> Result<Fetche
     .await
     .map_err(|error| format!("failed to inspect delegated worktrees: {error}"))?;
 
+    let implementation_checklist = fetch_implementation_checklist(task_id.as_deref()).await;
+    let linked_pr_queries = implementation_checklist
+        .as_ref()
+        .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
+        .unwrap_or_default();
+
     let mut github_error = None;
-    let prs = if query_data.queries.is_empty() {
-        HashMap::new()
-    } else {
+    let mut linked_pr_lookup_failed = false;
+    let mut prs = HashMap::new();
+    let mut linked_prs = HashMap::new();
+    if !query_data.queries.is_empty() || !linked_pr_queries.is_empty() {
         match GitHubClient::get() {
-            Ok(client) => match client
-                .get_pr_progress_for_branches_batch(&query_data.queries)
-                .await
-            {
-                Ok(prs) => prs,
-                Err(error) => {
-                    github_error = Some(format!("failed to fetch PR progress: {error:#}"));
-                    HashMap::new()
+            Ok(client) => {
+                if !query_data.queries.is_empty() {
+                    match client
+                        .get_pr_progress_for_branches_batch(&query_data.queries)
+                        .await
+                    {
+                        Ok(found) => prs = found,
+                        Err(error) => {
+                            github_error = Some(format!("failed to fetch PR progress: {error:#}"));
+                        }
+                    }
                 }
-            },
+                if !linked_pr_queries.is_empty() {
+                    match client
+                        .get_pr_progress_for_numbers_batch(&linked_pr_queries)
+                        .await
+                    {
+                        Ok(found) => linked_prs = found,
+                        Err(error) => {
+                            linked_pr_lookup_failed = true;
+                            github_error.get_or_insert_with(|| {
+                                format!("failed to fetch linked PR progress: {error:#}")
+                            });
+                        }
+                    }
+                }
+            }
             Err(error) => {
+                linked_pr_lookup_failed = !linked_pr_queries.is_empty();
                 github_error = Some(format!("GitHub is unavailable: {error:#}"));
-                HashMap::new()
             }
         }
-    };
+    }
 
-    let delegated = delegated
+    let delegated: Vec<FetchedDelegate> = delegated
         .into_iter()
         .map(|session| {
             let pull_request = query_data
@@ -53,19 +82,49 @@ pub(super) async fn fetch_progress(selected_session_id: String) -> Result<Fetche
                 .and_then(Option::as_ref)
                 .cloned();
             let lookup_unavailable = query_data.unavailable.contains(&session.session_id);
+            let checklist_item_id = query_data
+                .checklist_item_id_by_session
+                .get(&session.session_id)
+                .cloned();
             FetchedDelegate {
                 session,
+                checklist_item_id,
                 pull_request,
                 lookup_unavailable,
             }
         })
         .collect();
+    let implementation = implementation_checklist.map(|(checklist, github_links)| {
+        build_implementation_plan(
+            &checklist,
+            &github_links,
+            &delegated,
+            &linked_prs,
+            linked_pr_lookup_failed,
+        )
+    });
 
     Ok(FetchedProgress {
         selected_session_id,
         delegated,
+        implementation,
         github_error,
     })
+}
+
+async fn fetch_implementation_checklist(
+    task_id: Option<&str>,
+) -> Option<(TqChecklist, Vec<TqGithubLink>)> {
+    let task_id = task_id?;
+    let client = TqClient::detect()?;
+    let checklist = client
+        .list_checklists(task_id)
+        .await
+        .ok()?
+        .into_iter()
+        .find(|checklist| checklist.name == "実装")?;
+    let github_links = client.task_github_links(task_id).await.ok()?;
+    Some((checklist, github_links))
 }
 
 pub(super) fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Session> {
@@ -84,11 +143,16 @@ pub(super) fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) 
 struct BranchQueries {
     queries: Vec<BranchPrQuery>,
     by_session: HashMap<String, BranchPrQuery>,
+    checklist_item_id_by_session: HashMap<String, String>,
     unavailable: HashSet<String>,
 }
 
 enum BranchLookup {
-    Query(BranchPrQuery),
+    Query {
+        query: BranchPrQuery,
+        checklist_item_id: Option<String>,
+    },
+    ChecklistOnly(String),
     NotApplicable,
     Unavailable,
 }
@@ -97,13 +161,31 @@ fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
     let mut result = BranchQueries {
         queries: Vec::new(),
         by_session: HashMap::new(),
+        checklist_item_id_by_session: HashMap::new(),
         unavailable: HashSet::new(),
     };
     let mut seen = HashSet::new();
 
     for session in sessions {
         let query = match branch_query_for(session) {
-            BranchLookup::Query(query) => query,
+            BranchLookup::Query {
+                query,
+                checklist_item_id,
+            } => {
+                if let Some(item_id) = checklist_item_id {
+                    result
+                        .checklist_item_id_by_session
+                        .insert(session.session_id.clone(), item_id);
+                }
+                query
+            }
+            BranchLookup::ChecklistOnly(item_id) => {
+                result
+                    .checklist_item_id_by_session
+                    .insert(session.session_id.clone(), item_id);
+                result.unavailable.insert(session.session_id.clone());
+                continue;
+            }
             BranchLookup::NotApplicable => continue,
             BranchLookup::Unavailable => {
                 result.unavailable.insert(session.session_id.clone());
@@ -134,15 +216,24 @@ fn branch_query_for(session: &Session) -> BranchLookup {
     if branch == "HEAD" {
         return BranchLookup::NotApplicable;
     }
-    let (owner, repo) = match github_owner_and_repo(&repo) {
-        Ok(remote) => remote,
-        Err(_) => return BranchLookup::Unavailable,
-    };
-    BranchLookup::Query(BranchPrQuery {
-        owner,
-        repo,
-        branch,
-    })
+    let checklist_item_id = repo.local_config_value(&branch_checklist_item_config_key(&branch));
+    match github_owner_and_repo(&repo) {
+        Ok((owner, repo_name)) => BranchLookup::Query {
+            query: BranchPrQuery {
+                owner,
+                repo: repo_name,
+                branch,
+            },
+            checklist_item_id,
+        },
+        Err(_) => checklist_item_id
+            .map(BranchLookup::ChecklistOnly)
+            .unwrap_or(BranchLookup::Unavailable),
+    }
+}
+
+fn branch_checklist_item_config_key(branch: &str) -> String {
+    format!("branch.{branch}.x-tq-checklist-item-id")
 }
 
 #[cfg(test)]

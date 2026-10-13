@@ -363,7 +363,7 @@ fn parse_pr_node(node: &serde_json::Value) -> Option<PrInfo> {
     })
 }
 
-fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgressInfo> {
+pub(super) fn parse_pr_progress_node(node: &serde_json::Value) -> Option<PrProgressInfo> {
     let pull_request = parse_pr_node(node)?;
     let ci_state = node
         .get("commits")
