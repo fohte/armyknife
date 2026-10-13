@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.406](https://github.com/fohte/armyknife/compare/v0.1.405...v0.1.406) (2026-10-13)
+
+
+### Features
+
+* **agent:** configure vibe repository access ([#1145](https://github.com/fohte/armyknife/issues/1145)) ([3571c06](https://github.com/fohte/armyknife/commit/3571c0620448548d00bbfc149f83eaba764ad2a1))
+
 ## [0.1.405](https://github.com/fohte/armyknife/compare/v0.1.404...v0.1.405) (2026-10-13)
 
 
