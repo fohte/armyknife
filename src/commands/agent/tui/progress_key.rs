@@ -19,6 +19,9 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
         (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) if current_rows => {
             app.select_progress_row(-1);
         }
+        (KeyCode::Left, _) => {
+            app.progress_focused = false;
+        }
         (KeyCode::Char('h'), KeyModifiers::NONE) if current_rows => {
             app.set_progress_batch_collapsed(true);
         }
@@ -424,6 +427,36 @@ mod tests {
                 effects
             ),
             (Some("selected"), Some(1), Some(KeyEffects::default())),
+        );
+    }
+
+    #[test]
+    fn left_returns_focus_to_tasks_without_changing_either_selection() {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.update_row_order(&[None, Some("selected")]);
+        app.list_state.select(Some(1));
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![work_row(), pull_request_row(false, None, None)];
+        app.progress_list_state.select(Some(1));
+        app.progress_table_state.select(Some(0));
+
+        handle(
+            &mut app,
+            KeyEvent {
+                code: KeyCode::Left,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+
+        assert_eq!(
+            (
+                app.selected_session_id(),
+                app.progress_focused,
+                app.progress_list_state.selected(),
+                app.progress_table_state.selected(),
+            ),
+            (Some("selected"), false, Some(1), Some(0)),
         );
     }
 }

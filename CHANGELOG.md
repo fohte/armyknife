@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.410](https://github.com/fohte/armyknife/compare/v0.1.409...v0.1.410) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/watch:** focus the nearest task ancestor for delegated sessions ([#1153](https://github.com/fohte/armyknife/issues/1153)) ([cc74059](https://github.com/fohte/armyknife/commit/cc74059632bfd86db4b8ce5986deba13bc274102))
+
 ## [0.1.409](https://github.com/fohte/armyknife/compare/v0.1.408...v0.1.409) (2026-10-13)
 
 

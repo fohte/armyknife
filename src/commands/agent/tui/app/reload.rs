@@ -21,10 +21,14 @@ pub(super) struct SelectionAnchor {
 
 impl SelectionAnchor {
     pub(super) fn for_session(session_id: impl Into<String>) -> Self {
+        Self::for_session_occurrence(session_id, 0)
+    }
+
+    pub(super) fn for_session_occurrence(session_id: impl Into<String>, occurrence: usize) -> Self {
         Self {
             position: None,
             session_id: Some(session_id.into()),
-            occurrence: 0,
+            occurrence,
         }
     }
 }

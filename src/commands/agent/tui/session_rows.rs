@@ -76,6 +76,20 @@ impl<'a> SessionRow<'a> {
     }
 }
 
+pub(super) fn tasks_row_occurrence(rows: &[SessionRow<'_>], session_id: &str) -> Option<usize> {
+    let mut occurrence = 0;
+    for row in rows {
+        match row {
+            SessionRow::Session(entry) if entry.session.session_id == session_id => {
+                return Some(occurrence);
+            }
+            _ if row.session_id() == Some(session_id) => occurrence += 1,
+            _ => {}
+        }
+    }
+    None
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Section {
     UserTurn,
