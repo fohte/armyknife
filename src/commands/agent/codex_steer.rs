@@ -487,17 +487,6 @@ mod tests {
             let request = server.read().expect("thread/read request");
             let request: Value = serde_json::from_str(request.to_text().expect("text request"))
                 .expect("request JSON");
-            assert_eq!(
-                request,
-                json!({
-                    "id": TURN_STATUS_READ_REQUEST_ID_START,
-                    "method": "thread/read",
-                    "params": {
-                        "threadId": "fixture-thread-id",
-                        "includeTurns": true,
-                    },
-                }),
-            );
             server
                 .send(Message::Text(
                     json!({
@@ -515,15 +504,27 @@ mod tests {
                     .into(),
                 ))
                 .expect("thread/read response");
+            request
         });
 
+        let status = client
+            .latest_turn_status("fixture-thread-id")
+            .expect("turn status");
+        let request = server_thread.join().expect("server thread");
         assert_eq!(
-            client
-                .latest_turn_status("fixture-thread-id")
-                .expect("turn status"),
-            Some("inProgress".to_string()),
+            (request, status),
+            (
+                json!({
+                    "id": TURN_STATUS_READ_REQUEST_ID_START,
+                    "method": "thread/read",
+                    "params": {
+                        "threadId": "fixture-thread-id",
+                        "includeTurns": true,
+                    },
+                }),
+                Some("inProgress".to_string()),
+            ),
         );
-        server_thread.join().expect("server thread");
     }
 
     fn thread_started_message() -> Message {

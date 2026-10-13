@@ -1,13 +1,13 @@
-use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 
 use super::super::codex_steer::Client;
 use super::super::store;
 use super::super::tmux_sync::TmuxStatusSyncer;
 use super::super::types::{Engine, SessionStatus};
+use super::session_files::session_ids_in;
 
 #[derive(Default)]
 struct AppServerTurnStatusReader {
@@ -25,7 +25,11 @@ impl AppServerTurnStatusReader {
         let Some(client) = &mut self.client else {
             return Ok(None);
         };
-        client.latest_turn_status(thread_id)
+        let result = client.latest_turn_status(thread_id);
+        if result.is_err() {
+            self.client = None;
+        }
+        result
     }
 }
 
@@ -50,25 +54,10 @@ where
     T: TmuxStatusSyncer,
     F: FnMut(&str) -> Result<Option<String>>,
 {
-    if !sessions_dir.exists() {
-        return Ok(0);
-    }
-
-    let entries = fs::read_dir(sessions_dir)
-        .with_context(|| format!("reading sessions dir {}", sessions_dir.display()))?
-        .filter_map(|entry| entry.ok())
-        .collect::<Vec<_>>();
     let mut failed = 0;
 
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().is_none_or(|extension| extension != "json") {
-            continue;
-        }
-        let Some(session_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let Some(session) = store::load_session_from(sessions_dir, session_id)? else {
+    for session_id in session_ids_in(sessions_dir)? {
+        let Some(session) = store::load_session_from(sessions_dir, &session_id)? else {
             continue;
         };
         if session.engine != Engine::Codex || session.status != SessionStatus::Running {

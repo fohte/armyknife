@@ -25,7 +25,6 @@
 //! Auto-pause only considers Stopped sessions. A separate pass closes idle
 //! Stopped or Paused sessions after their linked-worktree pull request merges.
 
-use std::fs;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -48,6 +47,7 @@ use crate::shared::log::short_run_id;
 mod codex_failed;
 mod merged_close;
 mod service;
+mod session_files;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SweepArgs {
@@ -153,7 +153,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
-    // Otherwise only speak up when a pause or merged-session close succeeded.
+    // Otherwise only speak up when a pause, failed Codex turn, or merged-session close succeeded.
     // A session stuck in the signaled-but-not-Paused window (see module docs) gets
     // re-signaled on every sweep pass with no retry limit, so gating on
     // `signaled` too would flood the log for exactly the stuck-process
@@ -310,32 +310,10 @@ where
 {
     let mut report = SweepReport::default();
 
-    if !sessions_dir.exists() {
-        return Ok(report);
-    }
-
     let now = Utc::now();
 
-    // Read directory entries up-front so we don't hold the iterator while
-    // mutating files inside the loop.
-    let entries: Vec<_> = fs::read_dir(sessions_dir)
-        .with_context(|| format!("reading sessions dir {}", sessions_dir.display()))?
-        .filter_map(|e| e.ok())
-        .collect();
-
-    for entry in entries {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-
-        // Extract session_id from the file stem so we can go through the
-        // store helpers (which handle locking) instead of reading raw json.
-        let Some(session_id) = path.file_stem().and_then(|s| s.to_str()) else {
-            continue;
-        };
-
-        let mut session = match store::load_session_from(sessions_dir, session_id)? {
+    for session_id in session_files::session_ids_in(sessions_dir)? {
+        let mut session = match store::load_session_from(sessions_dir, &session_id)? {
             Some(s) => s,
             None => continue,
         };
