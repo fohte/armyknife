@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.400](https://github.com/fohte/armyknife/compare/v0.1.399...v0.1.400) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent:** show full depth in the TASKS tree ([#1127](https://github.com/fohte/armyknife/issues/1127)) ([c29f0f7](https://github.com/fohte/armyknife/commit/c29f0f7aaad5dabb8ffcae96d0ed6aa1c0110996))
+
 ## [0.1.399](https://github.com/fohte/armyknife/compare/v0.1.398...v0.1.399) (2026-10-13)
 
 
