@@ -236,6 +236,7 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
             ProgressRow::PullRequest(row) => Some(pr_table_row(row)),
             ProgressRow::Work(_)
             | ProgressRow::ImplementationHeader { .. }
+            | ProgressRow::UnmatchedDelegatesHeader { .. }
             | ProgressRow::BatchHeader { .. }
             | ProgressRow::ChecklistPullRequest { .. }
             | ProgressRow::PlannedPullRequest { .. } => None,
@@ -334,6 +335,18 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
             ])
             .style(Style::default().fg(Color::DarkGray))
         }
+        ProgressRow::UnmatchedDelegatesHeader { collapsed } => {
+            let disclosure = if *collapsed { "▸" } else { "▾" };
+            Row::new(vec![
+                Cell::from(format!("  {disclosure} チェックリスト外")),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ])
+            .style(Style::default().fg(Color::DarkGray))
+        }
         ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    "),
         ProgressRow::PlannedPullRequest { title, .. } => Row::new(vec![
             Cell::from(format!("    ○ {title}")).style(Style::default().fg(Color::DarkGray)),
@@ -343,7 +356,7 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
             Cell::from(""),
             Cell::from(""),
         ]),
-        ProgressRow::PullRequest(row) => pr_table_row_with_indent(row, "  "),
+        ProgressRow::PullRequest(row) => pr_table_row_with_indent(row, "    "),
         ProgressRow::Work(_) => Row::new(Vec::<Cell>::new()),
     }
 }
@@ -1118,12 +1131,13 @@ mod tests {
                 merged_pr_count: 0,
                 collapsed: false,
             },
+            ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
             ProgressRow::PullRequest(delegate_pr_row),
         ];
-        app.progress_list_state.select(Some(3));
-        app.progress_table_state.select(Some(2));
+        app.progress_list_state.select(Some(4));
+        app.progress_table_state.select(Some(3));
 
-        let mut terminal = Terminal::new(TestBackend::new(84, 5)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(84, 6)).unwrap();
         let actual = progress_snapshot(&mut terminal, &mut app).0;
 
         assert_eq!(
@@ -1134,7 +1148,9 @@ mod tests {
                 "│  ▾ 実 装  (PR 0/1)                                        実 装  差 分  body  CI  merge"
                     .to_string(),
                 "│    ▾ Batch 1".to_string(),
-                "│›   #17 Example task change                              ✓    ◐    ●     ◷   ○".to_string(),
+                "│    ▾ チ ェ ッ ク リ ス ト 外".to_string(),
+                "│›     #17 Example task change                            ✓    ◐    ●     ◷   ○"
+                    .to_string(),
             ],
         );
     }

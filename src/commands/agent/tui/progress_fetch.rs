@@ -7,7 +7,7 @@ use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
 use super::super::session_pr_context::{self, Resolution};
-use super::progress::{FetchedDelegate, FetchedProgress};
+use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
 pub(super) async fn fetch_progress(
@@ -15,6 +15,10 @@ pub(super) async fn fetch_progress(
     task_id: Option<String>,
     task_session_ids: Option<Vec<String>>,
 ) -> Result<FetchedProgress, String> {
+    let request_scope = Some(ProgressFetchScope {
+        task_id: task_id.clone(),
+        session_ids: task_session_ids.clone(),
+    });
     let sessions = tokio::task::spawn_blocking(store::list_all_sessions)
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
@@ -114,6 +118,7 @@ pub(super) async fn fetch_progress(
 
     Ok(FetchedProgress {
         selected_session_id,
+        request_scope,
         delegated,
         implementation,
         github_error,

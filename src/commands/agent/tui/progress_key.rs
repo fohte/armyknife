@@ -273,6 +273,7 @@ mod tests {
             "selected",
             Ok(FetchedProgress {
                 selected_session_id: "selected".to_string(),
+                request_scope: None,
                 delegated: fetched_delegates,
                 implementation: Some(plan),
                 github_error: None,
@@ -280,6 +281,48 @@ mod tests {
         );
         app.progress_list_state.select(Some(2));
         app.progress_table_state.select(Some(1));
+        app
+    }
+
+    #[fixture]
+    fn unmatched_progress_app() -> App {
+        let mut selected = session("selected");
+        selected.work_type = Some("design".to_string());
+        let mut delegate = session("unmapped-delegate");
+        delegate.is_delegated = true;
+        delegate.ancestor_session_ids = vec!["selected".to_string()];
+        delegate.label = Some("Unmapped delegated work".to_string());
+        let fetched_delegate = FetchedDelegate {
+            session: delegate.clone(),
+            checklist_item_id: None,
+            pull_request: None,
+            lookup_unavailable: false,
+        };
+        let plan = build_implementation_plan(
+            &TqChecklist {
+                id: "checklist-1".to_string(),
+                name: "実装".to_string(),
+                items: Vec::new(),
+            },
+            &[],
+            std::slice::from_ref(&fetched_delegate),
+            &Default::default(),
+            false,
+        );
+        let mut app = App::with_sessions(vec![selected, delegate]);
+        app.progress_focused = true;
+        app.update_row_order(&[None, Some("selected"), Some("unmapped-delegate")]);
+        app.list_state.select(Some(1));
+        app.apply_progress_result(
+            "selected",
+            Ok(FetchedProgress {
+                selected_session_id: "selected".to_string(),
+                request_scope: None,
+                delegated: vec![fetched_delegate],
+                implementation: Some(plan),
+                github_error: None,
+            }),
+        );
         app
     }
 
@@ -358,6 +401,45 @@ mod tests {
         expanded_batch_rows()
     }
 
+    fn unmatched_header(collapsed: bool) -> ProgressRow {
+        ProgressRow::UnmatchedDelegatesHeader { collapsed }
+    }
+
+    fn unmatched_delegate_row() -> ProgressRow {
+        ProgressRow::PullRequest(PrProgressRow {
+            session_id: "unmapped-delegate".to_string(),
+            title: "Unmapped delegated work".to_string(),
+            number: None,
+            url: None,
+            pane_id: None,
+            is_ended: false,
+            lookup_unavailable: false,
+            stages: StageMarks {
+                implementation: ProgressMark::Working,
+                diff_review: ProgressMark::NotStarted,
+                pr_body: ProgressMark::NotStarted,
+                ci: ProgressMark::NotStarted,
+                merge: ProgressMark::NotStarted,
+            },
+        })
+    }
+
+    fn unmatched_rows(collapsed: bool) -> Vec<ProgressRow> {
+        let mut rows = vec![
+            work_row(),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 0,
+                collapsed: false,
+            },
+            unmatched_header(collapsed),
+        ];
+        if !collapsed {
+            rows.push(unmatched_delegate_row());
+        }
+        rows
+    }
+
     #[rstest]
     fn batch_heading_keys_fold_and_unfold_the_selected_batch(mut checklist_progress_app: App) {
         let mut actual = Vec::new();
@@ -432,6 +514,97 @@ mod tests {
                 (expected_collapsed, Some(1), Some(0)),
                 (expected_expanded, Some(1), Some(0)),
             ],
+        );
+    }
+
+    #[rstest]
+    fn checklist_out_heading_is_selectable_and_toggles_its_rows(mut unmatched_progress_app: App) {
+        unmatched_progress_app.progress_list_state.select(Some(1));
+        unmatched_progress_app.progress_table_state.select(Some(0));
+        send_progress_key(&mut unmatched_progress_app, KeyCode::Char('j'));
+        let selected_heading = (
+            unmatched_progress_app.progress_rows.clone(),
+            unmatched_progress_app.progress_list_state.selected(),
+            unmatched_progress_app
+                .progress_rows
+                .get(
+                    unmatched_progress_app
+                        .progress_list_state
+                        .selected()
+                        .unwrap_or(0),
+                )
+                .and_then(ProgressRow::selection_key),
+        );
+        let mut actual = vec![selected_heading];
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ] {
+            send_progress_key(&mut unmatched_progress_app, code);
+            actual.push((
+                unmatched_progress_app.progress_rows.clone(),
+                unmatched_progress_app.progress_list_state.selected(),
+                unmatched_progress_app
+                    .progress_rows
+                    .get(
+                        unmatched_progress_app
+                            .progress_list_state
+                            .selected()
+                            .unwrap_or(0),
+                    )
+                    .and_then(ProgressRow::selection_key),
+            ));
+        }
+
+        assert_eq!(
+            actual,
+            vec![
+                (
+                    unmatched_rows(false),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(true),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(false),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(true),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(false),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+            ],
+        );
+    }
+
+    #[rstest]
+    fn h_on_a_checklist_out_pr_collapses_its_group_and_selects_the_heading(
+        mut unmatched_progress_app: App,
+    ) {
+        unmatched_progress_app.progress_list_state.select(Some(3));
+        unmatched_progress_app.progress_table_state.select(Some(2));
+        send_progress_key(&mut unmatched_progress_app, KeyCode::Char('h'));
+
+        assert_eq!(
+            (
+                unmatched_progress_app.progress_rows,
+                unmatched_progress_app.progress_list_state.selected(),
+                unmatched_progress_app.progress_table_state.selected(),
+            ),
+            (unmatched_rows(true), Some(2), Some(1)),
         );
     }
 

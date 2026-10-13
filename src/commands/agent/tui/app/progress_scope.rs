@@ -87,7 +87,8 @@ impl App {
             };
         };
 
-        let task_session_ids = self.progress_task_session_ids(&task_id);
+        let mut task_session_ids = self.progress_task_session_ids(&task_id);
+        task_session_ids.sort_unstable();
         let mut task_session_ids_set = task_session_ids.iter().cloned().collect::<HashSet<_>>();
         task_session_ids_set.insert(selected.session_id.clone());
         let work_sessions = self

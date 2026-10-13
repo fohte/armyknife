@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use super::super::progress::{
-    FetchedProgress, ProgressRow, ProgressSelectionKey, build_task_progress_rows,
-    refresh_task_rows_from_sessions, table_selection_index,
+    FetchedProgress, ProgressFetchScope, ProgressRow, ProgressSelectionKey,
+    build_task_progress_rows, refresh_task_rows_from_sessions, table_selection_index,
 };
 use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
 };
-use super::App;
+use super::{App, ProgressScopeKind};
 use crate::commands::agent::types::Session;
 
 #[derive(Clone)]
@@ -15,6 +15,8 @@ pub(super) struct CachedProgress {
     rows: Vec<ProgressRow>,
     error: Option<String>,
     implementation: Option<ImplementationPlan>,
+    request_scope: Option<ProgressFetchScope>,
+    fetched: bool,
 }
 
 impl App {
@@ -40,9 +42,22 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
+                let request_scope = progress_fetch_scope(&scope.kind);
+                if progress
+                    .request_scope
+                    .as_ref()
+                    .is_some_and(|scope| request_scope.as_ref() != Some(scope))
+                {
+                    return;
+                }
                 let includes_fetched_progress = scope.kind.includes_fetched_progress();
+                let cached_implementation = self
+                    .progress_cache
+                    .get(session_id)
+                    .filter(|cached| cached.request_scope == request_scope)
+                    .and_then(|cached| cached.implementation.clone());
                 let implementation = includes_fetched_progress
-                    .then_some(progress.implementation)
+                    .then(|| progress.implementation.or(cached_implementation))
                     .flatten();
                 let delegated = if includes_fetched_progress {
                     progress
@@ -80,6 +95,8 @@ impl App {
                         rows,
                         error,
                         implementation,
+                        request_scope,
+                        fetched: true,
                     },
                     true,
                 );
@@ -117,6 +134,13 @@ impl App {
         existing_rows: &[ProgressRow],
     ) -> CachedProgress {
         let scope = self.progress_scope(selected);
+        if let Some(snapshot) = self
+            .progress_cache
+            .get(&selected.session_id)
+            .filter(|snapshot| snapshot.fetched)
+        {
+            return snapshot.clone();
+        }
         let implementation = self
             .progress_cache
             .get(&selected.session_id)
@@ -143,6 +167,8 @@ impl App {
             rows,
             error,
             implementation,
+            request_scope: progress_fetch_scope(&scope.kind),
+            fetched: false,
         }
     }
 
@@ -166,6 +192,7 @@ impl App {
         }
         if self.progress_session_id.as_deref() != Some(session_id) {
             self.progress_implementation_expanded = true;
+            self.progress_unmatched_expanded = true;
             self.progress_batch_expanded.clear();
         }
         let initial_target = self.initial_progress_target(session_id).map(str::to_owned);
@@ -242,11 +269,18 @@ impl App {
             ProgressRow::ImplementationHeader { collapsed, .. } => {
                 (ProgressSelectionKey::Implementation, *collapsed)
             }
+            ProgressRow::UnmatchedDelegatesHeader { collapsed } => {
+                (ProgressSelectionKey::UnmatchedDelegates, *collapsed)
+            }
             ProgressRow::BatchHeader {
                 batch_id,
                 collapsed,
                 ..
             } => (ProgressSelectionKey::Batch(batch_id.clone()), *collapsed),
+            ProgressRow::PullRequest(_) if action == ProgressFoldAction::Collapse => (
+                ProgressSelectionKey::UnmatchedDelegates,
+                !self.progress_unmatched_expanded,
+            ),
             ProgressRow::Work(_) if action == ProgressFoldAction::Collapse => (
                 ProgressSelectionKey::Implementation,
                 !self.progress_implementation_expanded,
@@ -287,6 +321,9 @@ impl App {
                 self.progress_batch_expanded
                     .insert(batch_id.clone(), !collapsed);
             }
+            ProgressSelectionKey::UnmatchedDelegates => {
+                self.progress_unmatched_expanded = !collapsed;
+            }
             ProgressSelectionKey::Session(_) => return false,
         }
         let scope = self.progress_scope(&selected);
@@ -301,7 +338,7 @@ impl App {
         delegated: &[Session],
         plan: &ImplementationPlan,
     ) -> Vec<ProgressRow> {
-        let Some(selected) = work_sessions.first() else {
+        let Some(selected) = work_sessions.first().or_else(|| self.selected_session()) else {
             return Vec::new();
         };
         let use_current_expansion = self.progress_session_id.as_deref()
@@ -314,6 +351,10 @@ impl App {
         };
         let initial_target = self.initial_progress_target(&selected.session_id);
         expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
+        let unmatched_expanded = initial_target
+            .is_some_and(|target| plan.batch_id_for_delegate(target).is_none())
+            || !use_current_expansion
+            || self.progress_unmatched_expanded;
         build_checklist_progress_rows(
             work_sessions,
             delegated,
@@ -321,6 +362,7 @@ impl App {
             initial_target.is_some()
                 || !use_current_expansion
                 || self.progress_implementation_expanded,
+            unmatched_expanded,
             &expanded_batches,
             &self.agent_config,
         )
@@ -391,6 +433,28 @@ impl App {
         self.progress_list_state.select(Some(selected_index));
         self.progress_table_state
             .select(table_selection_index(&self.progress_rows, selected_index));
+        if let Some(session_id) = self.progress_session_id.as_deref()
+            && let Some(snapshot) = self.progress_cache.get_mut(session_id)
+        {
+            snapshot.rows.clone_from(&self.progress_rows);
+        }
+    }
+}
+
+fn progress_fetch_scope(scope: &ProgressScopeKind) -> Option<ProgressFetchScope> {
+    match scope {
+        ProgressScopeKind::OwnOnly => None,
+        ProgressScopeKind::Direct => Some(ProgressFetchScope {
+            task_id: None,
+            session_ids: None,
+        }),
+        ProgressScopeKind::Task {
+            task_id,
+            session_ids,
+        } => Some(ProgressFetchScope {
+            task_id: Some(task_id.clone()),
+            session_ids: Some(session_ids.clone()),
+        }),
     }
 }
 
