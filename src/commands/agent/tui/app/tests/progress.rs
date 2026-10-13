@@ -36,6 +36,44 @@ fn selected_task_session(timestamp: DateTime<Utc>) -> Session {
     create_test_session_at("selected", timestamp)
 }
 
+fn progress_delegate(id: &str, timestamp: DateTime<Utc>) -> Session {
+    let mut session = create_test_session_at(id, timestamp);
+    session.is_delegated = true;
+    session.ancestor_session_ids = vec!["selected".to_string()];
+    session
+}
+
+fn fetched_progress_delegate(session: Session) -> FetchedDelegate {
+    FetchedDelegate {
+        pull_request: Some(PrProgressInfo {
+            pull_request: PrInfo {
+                number: 42,
+                title: format!("{} change", session.session_id),
+                state: PrState::Open,
+                url: format!("https://example.test/pull/{}", session.session_id),
+            },
+            ci_state: PrCiState::InProgress,
+        }),
+        session,
+        checklist_item_id: None,
+        lookup_unavailable: false,
+    }
+}
+
+fn unmatched_progress_plan(delegates: &[FetchedDelegate]) -> ImplementationPlan {
+    build_implementation_plan(
+        &TqChecklist {
+            id: "checklist-test".to_string(),
+            name: "Implementation".to_string(),
+            items: Vec::new(),
+        },
+        &[],
+        delegates,
+        &HashMap::new(),
+        false,
+    )
+}
+
 #[fixture]
 fn linked_checklist_plan() -> ImplementationPlan {
     let checklist = TqChecklist {
@@ -1120,6 +1158,149 @@ fn keeps_fetched_checklist_rows_while_a_session_reload_is_incomplete(
             app.progress_table_state.selected(),
         ),
         before,
+    );
+}
+
+#[rstest]
+fn reopening_unmatched_delegates_keeps_cached_rows_after_session_reload_is_incomplete(
+    timestamp: DateTime<Utc>,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let alpha = progress_delegate("alpha", timestamp);
+    let bravo = progress_delegate("bravo", timestamp);
+    let charlie = progress_delegate("charlie", timestamp);
+    let fetched = vec![
+        fetched_progress_delegate(alpha.clone()),
+        fetched_progress_delegate(bravo.clone()),
+        fetched_progress_delegate(charlie.clone()),
+    ];
+    let plan = unmatched_progress_plan(&fetched);
+    let mut app = create_test_app(vec![selected, alpha, bravo, charlie]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("alpha"),
+        Some("bravo"),
+        Some("charlie"),
+    ]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: fetched,
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+    app.sessions
+        .retain(|session| session.session_id == "selected" || session.session_id == "alpha");
+    app.refresh_progress_from_sessions("selected");
+    let header_index = app
+        .progress_rows
+        .iter()
+        .position(|row| matches!(row, ProgressRow::UnmatchedDelegatesHeader { .. }))
+        .unwrap();
+    app.progress_list_state.select(Some(header_index));
+
+    app.set_progress_batch_collapsed(true);
+    app.toggle_selected_progress_heading();
+
+    let delegate_ids = app
+        .progress_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProgressRow::PullRequest(row) => Some(row.session_id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(delegate_ids, vec!["alpha", "bravo", "charlie"]);
+}
+
+#[rstest]
+fn progress_refresh_keeps_cached_delegate_order_and_uses_current_session_state(
+    timestamp: DateTime<Utc>,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let alpha = progress_delegate("alpha", timestamp);
+    let bravo = progress_delegate("bravo", timestamp);
+    let charlie = progress_delegate("charlie", timestamp);
+    let delta = progress_delegate("delta", timestamp);
+    let initial = vec![
+        fetched_progress_delegate(alpha.clone()),
+        fetched_progress_delegate(bravo.clone()),
+        fetched_progress_delegate(charlie.clone()),
+    ];
+    let initial_plan = unmatched_progress_plan(&initial);
+    let mut app = create_test_app(vec![
+        selected,
+        alpha.clone(),
+        bravo.clone(),
+        charlie.clone(),
+        delta.clone(),
+    ]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("alpha"),
+        Some("bravo"),
+        Some("charlie"),
+        Some("delta"),
+    ]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: initial,
+            implementation: Some(initial_plan),
+            github_error: None,
+        }),
+    );
+    app.sessions
+        .iter_mut()
+        .find(|session| session.session_id == "alpha")
+        .unwrap()
+        .status = SessionStatus::Ended;
+    let refreshed = vec![
+        fetched_progress_delegate(charlie),
+        fetched_progress_delegate(alpha),
+        fetched_progress_delegate(bravo),
+        fetched_progress_delegate(delta),
+    ];
+    let refreshed_plan = unmatched_progress_plan(&refreshed);
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: refreshed,
+            implementation: Some(refreshed_plan),
+            github_error: None,
+        }),
+    );
+
+    let rows = app
+        .progress_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProgressRow::PullRequest(row) => Some((row.session_id.as_str(), row.is_ended)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            ("alpha", true),
+            ("bravo", false),
+            ("charlie", false),
+            ("delta", false),
+        ],
     );
 }
 

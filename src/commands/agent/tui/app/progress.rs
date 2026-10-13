@@ -53,16 +53,11 @@ impl App {
                     return;
                 }
                 let includes_fetched_progress = scope.kind.includes_fetched_progress();
-                let cached_implementation = self
-                    .progress_cache
-                    .get(session_id)
-                    .filter(|cached| {
-                        same_implementation_scope(
-                            cached.request_scope.as_ref(),
-                            request_scope.as_ref(),
-                        )
-                    })
-                    .and_then(|cached| cached.implementation.clone());
+                let reusable_cache = self.progress_cache.get(session_id).filter(|cached| {
+                    same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
+                });
+                let cached_implementation =
+                    reusable_cache.and_then(|cached| cached.implementation.clone());
                 let implementation = includes_fetched_progress
                     .then(|| progress.implementation.or(cached_implementation))
                     .flatten();
@@ -94,6 +89,15 @@ impl App {
                             lookup_unavailable: false,
                         });
                     }
+                }
+                if let Some(cached) = reusable_cache {
+                    delegated.sort_by_key(|delegate| {
+                        cached
+                            .delegated_sessions
+                            .iter()
+                            .position(|session| session.session_id == delegate.session.session_id)
+                            .unwrap_or(usize::MAX)
+                    });
                 }
                 let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
@@ -205,12 +209,21 @@ impl App {
         current: &[Session],
         cached: &[Session],
     ) -> Vec<Session> {
-        let mut delegates = current.to_vec();
-        for session in cached {
-            if self.session_by_id(&session.session_id).is_none()
-                && !delegates
-                    .iter()
-                    .any(|delegate| delegate.session_id == session.session_id)
+        let mut delegates = Vec::with_capacity(current.len().max(cached.len()));
+        for cached_session in cached {
+            if let Some(session) = current
+                .iter()
+                .find(|session| session.session_id == cached_session.session_id)
+            {
+                delegates.push(session.clone());
+            } else if self.session_by_id(&cached_session.session_id).is_none() {
+                delegates.push(cached_session.clone());
+            }
+        }
+        for session in current {
+            if !delegates
+                .iter()
+                .any(|delegate| delegate.session_id == session.session_id)
             {
                 delegates.push(session.clone());
             }
@@ -351,7 +364,18 @@ impl App {
             }
         }
         let scope = self.progress_scope(&selected);
-        let rows = self.checklist_rows(&scope.work_sessions, &scope.delegated, &plan);
+        let request_scope = scope.kind.fetch_scope();
+        let cached_delegates = self
+            .progress_cache
+            .get(&selected.session_id)
+            .filter(|cached| {
+                same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
+            })
+            .map(|cached| cached.delegated_sessions.as_slice())
+            .unwrap_or_default();
+        let delegated =
+            self.delegates_with_missing_cached_sessions(&scope.delegated, cached_delegates);
+        let rows = self.checklist_rows(&scope.work_sessions, &delegated, &plan);
         self.replace_progress_rows(rows, Some(target.selection_key()), current_index);
         true
     }
