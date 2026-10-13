@@ -568,7 +568,12 @@ fn process_hook_event_impl_with_instruction(
     let keep_paused = session.status == SessionStatus::Paused
         && event != HookEvent::SessionStart
         && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
-    if !keep_paused {
+    // Claude's idle_prompt notification can follow a failed API turn without
+    // indicating that the user has resumed the session.
+    let keep_failed_after_idle_prompt = session.status == SessionStatus::Failed
+        && event == HookEvent::Notification
+        && input.notification_type.as_deref() == Some("idle_prompt");
+    if !keep_paused && !keep_failed_after_idle_prompt {
         session.status = status;
     }
 
@@ -1398,6 +1403,17 @@ mod tests {
             .expect("session should exist");
 
         process_hook_event_impl(
+            HookEvent::Notification,
+            create_test_input_with_session_and_source("failed-session", Some("idle_prompt"), None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("idle-prompt notification should succeed");
+        let after_idle_prompt = store::load_session_from(sessions_dir, "failed-session")
+            .expect("session should load")
+            .expect("session should exist");
+
+        process_hook_event_impl(
             HookEvent::UserPromptSubmit,
             create_test_input_with_session_and_source("failed-session", None, None),
             sessions_dir,
@@ -1413,57 +1429,70 @@ mod tests {
                 result,
                 after_failure.status,
                 after_failure.last_message,
+                after_idle_prompt.status,
                 after_prompt.status,
             ),
             (
                 ProcessResult::SessionSaved,
                 SessionStatus::Failed,
                 Some(failure_message.to_string()),
+                SessionStatus::Failed,
                 SessionStatus::Running,
             )
         );
     }
 
-    #[test]
-    fn test_hook_event_parsing() {
-        assert_eq!(
-            HookEvent::from_str("session-start").expect("valid event"),
-            HookEvent::SessionStart
-        );
-        assert_eq!(
-            HookEvent::from_str("user-prompt-submit").expect("valid event"),
-            HookEvent::UserPromptSubmit
-        );
-        assert_eq!(
-            HookEvent::from_str("pre-tool-use").expect("valid event"),
-            HookEvent::PreToolUse
-        );
-        assert_eq!(
-            HookEvent::from_str("post-tool-use").expect("valid event"),
-            HookEvent::PostToolUse
-        );
-        assert_eq!(
-            HookEvent::from_str("permission-request").expect("valid event"),
-            HookEvent::PermissionRequest
-        );
-        assert_eq!(
-            HookEvent::from_str("notification").expect("valid event"),
-            HookEvent::Notification
-        );
-        assert_eq!(
-            HookEvent::from_str("stop").expect("valid event"),
-            HookEvent::Stop
-        );
-        assert_eq!(
-            HookEvent::from_str("stop-failure").expect("valid event"),
-            HookEvent::StopFailure
-        );
-        assert_eq!(
-            HookEvent::from_str("session-end").expect("valid event"),
-            HookEvent::SessionEnd
-        );
+    #[rstest]
+    #[case::session_start("session-start", HookEvent::SessionStart)]
+    #[case::user_prompt_submit("user-prompt-submit", HookEvent::UserPromptSubmit)]
+    #[case::pre_tool_use("pre-tool-use", HookEvent::PreToolUse)]
+    #[case::post_tool_use("post-tool-use", HookEvent::PostToolUse)]
+    #[case::permission_request("permission-request", HookEvent::PermissionRequest)]
+    #[case::notification("notification", HookEvent::Notification)]
+    #[case::stop("stop", HookEvent::Stop)]
+    #[case::stop_failure("stop-failure", HookEvent::StopFailure)]
+    #[case::session_end("session-end", HookEvent::SessionEnd)]
+    fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
+        assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
+    }
 
+    #[test]
+    fn test_hook_event_parsing_rejects_unknown_event() {
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn stop_failure_stays_failed_while_sibling_waits_for_permission() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let mut permission_input = create_test_input(None);
+        permission_input.agent_id = Some("sibling-agent".to_string());
+        process_hook_event_impl(
+            HookEvent::PermissionRequest,
+            permission_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("sibling permission hook should succeed");
+
+        process_hook_event_impl(
+            HookEvent::StopFailure,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("stop-failure hook should succeed");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        assert_eq!(
+            (session.status, session.pending_permission_agent_ids),
+            (
+                SessionStatus::Failed,
+                BTreeSet::from(["sibling-agent".to_string()]),
+            ),
+        );
     }
 
     #[rstest]

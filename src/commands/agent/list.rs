@@ -342,17 +342,22 @@ mod tests {
         assert_eq!(format_relative_time(dt, now), expected);
     }
 
-    #[test]
-    fn test_status_display() {
-        assert_eq!(DisplayStatus::Running.display_symbol(), "●");
-        assert_eq!(DisplayStatus::WaitingInput.display_symbol(), "◐");
-        assert_eq!(DisplayStatus::Stopped.display_symbol(), "○");
-        assert_eq!(DisplayStatus::Failed.display_symbol(), "✗");
+    #[rstest]
+    #[case::running(DisplayStatus::Running, "●")]
+    #[case::waiting_input(DisplayStatus::WaitingInput, "◐")]
+    #[case::stopped(DisplayStatus::Stopped, "○")]
+    #[case::failed(DisplayStatus::Failed, "✗")]
+    fn test_status_display_symbol(#[case] status: DisplayStatus, #[case] expected: &str) {
+        assert_eq!(status.display_symbol(), expected);
+    }
 
-        assert_eq!(SessionStatus::Running.display_name(), "running");
-        assert_eq!(SessionStatus::WaitingInput.display_name(), "waiting");
-        assert_eq!(SessionStatus::Stopped.display_name(), "stopped");
-        assert_eq!(SessionStatus::Failed.display_name(), "failed");
+    #[rstest]
+    #[case::running(SessionStatus::Running, "running")]
+    #[case::waiting_input(SessionStatus::WaitingInput, "waiting")]
+    #[case::stopped(SessionStatus::Stopped, "stopped")]
+    #[case::failed(SessionStatus::Failed, "failed")]
+    fn test_status_display_name(#[case] status: SessionStatus, #[case] expected: &str) {
+        assert_eq!(status.display_name(), expected);
     }
 
     /// Test terminal width that results in TITLE width of 30

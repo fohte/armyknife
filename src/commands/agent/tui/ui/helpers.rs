@@ -303,9 +303,14 @@ mod tests {
                 s.status = SessionStatus::Stopped;
                 s
             },
+            {
+                let mut s = create_test_session("5");
+                s.status = SessionStatus::Failed;
+                s
+            },
         ];
 
-        assert_eq!(count_statuses(&sessions), (2, 1, 0));
+        assert_eq!(count_statuses(&sessions), (2, 2, 0));
     }
 
     #[test]
