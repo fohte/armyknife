@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.415](https://github.com/fohte/armyknife/compare/v0.1.414...v0.1.415) (2026-10-13)
+
+
+### Features
+
+* **agent/tui:** allow progress heading selection ([#1163](https://github.com/fohte/armyknife/issues/1163)) ([12c61bd](https://github.com/fohte/armyknife/commit/12c61bdefb2c99a3a7cb51983926d3a18605ae78))
+
 ## [0.1.414](https://github.com/fohte/armyknife/compare/v0.1.413...v0.1.414) (2026-10-13)
 
 
