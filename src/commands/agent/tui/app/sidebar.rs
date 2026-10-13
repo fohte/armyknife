@@ -13,10 +13,7 @@ impl App {
     }
 
     pub fn set_tq_snapshot(&mut self, mut snapshot: TqSnapshot) {
-        let old_position = self.list_state.selected();
-        let old_session_id = self
-            .selected_session()
-            .map(|session| session.session_id.clone());
+        let selection = self.selection_anchor();
         let session_ids = self
             .sessions
             .iter()
@@ -72,7 +69,7 @@ impl App {
         }
 
         self.apply_filter();
-        self.restore_selection(old_position, old_session_id.as_deref());
+        self.restore_selection(selection);
     }
 
     pub fn tq_refresh_started(&mut self) {
@@ -225,13 +222,10 @@ impl App {
         if self.sidebar_selection == self.sidebar_cursor {
             return;
         }
-        let old_position = self.list_state.selected();
-        let old_session_id = self
-            .selected_session()
-            .map(|session| session.session_id.clone());
+        let selection = self.selection_anchor();
         self.sidebar_selection = self.sidebar_cursor.clone();
         self.apply_filter();
-        self.restore_selection(old_position, old_session_id.as_deref());
+        self.restore_selection(selection);
     }
 
     pub fn linked_session_ids_for_sidebar_cursor(&self) -> HashSet<String> {
@@ -333,13 +327,10 @@ impl App {
             return;
         }
 
-        let old_position = self.list_state.selected();
-        let old_session_id = self
-            .selected_session()
-            .map(|session| session.session_id.clone());
+        let selection = self.selection_anchor();
         self.sidebar_selection = self.sidebar_cursor.clone();
         self.apply_filter();
-        self.restore_selection(old_position, old_session_id.as_deref());
+        self.restore_selection(selection);
         if let Some(position) = self.first_session_row_position(&linked_session_ids) {
             self.list_state.select(Some(position));
         }

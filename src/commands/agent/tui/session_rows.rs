@@ -35,9 +35,6 @@ pub(super) struct SessionRowEntry<'a> {
     pub depth: usize,
     pub mark: TaskMark,
     pub is_last_sibling: bool,
-    /// `false` when the session already has a selectable YOUR TURN row, so
-    /// the cursor never holds two positions for one session.
-    pub is_selectable: bool,
     /// Children shown under a root (always 0 on child rows).
     pub child_count: usize,
     pub child_user_turn_count: usize,
@@ -64,10 +61,7 @@ impl<'a> SessionRow<'a> {
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
             SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
-            SessionRow::Session(entry) if entry.is_selectable => {
-                Some(entry.session.session_id.as_str())
-            }
-            SessionRow::Session(_) => None,
+            SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
             SessionRow::SectionHeader(_) => None,
         }
     }
@@ -351,7 +345,6 @@ mod tests {
             depth: usize,
             mark: TaskMark,
             is_last_sibling: bool,
-            is_selectable: bool,
             child_count: usize,
             child_user_turn_count: usize,
         },
@@ -372,7 +365,6 @@ mod tests {
                     depth: entry.depth,
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
-                    is_selectable: entry.is_selectable,
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
                 },
@@ -392,7 +384,6 @@ mod tests {
             depth: 0,
             mark,
             is_last_sibling: false,
-            is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -404,7 +395,6 @@ mod tests {
             depth: 1,
             mark,
             is_last_sibling,
-            is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
         }
@@ -417,9 +407,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks(
-        agent_config: AgentConfig,
-    ) {
+    fn test_build_session_rows_user_turn_also_appears_in_tasks(agent_config: AgentConfig) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());

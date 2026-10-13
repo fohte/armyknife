@@ -12,11 +12,28 @@ use super::super::event::{SessionChange, SessionChangeType};
 use super::super::session_rows::build_session_rows;
 use super::App;
 
+#[derive(Debug)]
+pub(super) struct SelectionAnchor {
+    position: Option<usize>,
+    session_id: Option<String>,
+    occurrence: usize,
+}
+
+impl SelectionAnchor {
+    pub(super) fn for_session(session_id: impl Into<String>) -> Self {
+        Self {
+            position: None,
+            session_id: Some(session_id.into()),
+            occurrence: 0,
+        }
+    }
+}
+
 impl App {
     /// Reloads sessions from disk.
     /// If changes are provided, only those sessions are reloaded (incremental).
     /// If None, performs a full reload.
-    /// Preserves the selection by session_id if possible.
+    /// Preserves the selected session row when it remains visible.
     pub fn reload_sessions(&mut self, changes: Option<&[SessionChange]>) -> Result<()> {
         match changes {
             Some(changes) => self.apply_incremental_changes(changes)?,
@@ -27,11 +44,7 @@ impl App {
 
     /// Performs a full reload of all sessions.
     fn full_reload(&mut self) -> Result<()> {
-        // Remember the currently selected session_id and row position
-        // before any mutation below can reset `list_state` (`apply_filter`
-        // always does).
-        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
-        let old_pos = self.list_state.selected();
+        let selection = self.selection_anchor();
 
         self.sessions = load_sessions()?;
 
@@ -45,17 +58,14 @@ impl App {
 
         // Re-apply filter with current query
         self.apply_filter();
-        self.restore_selection(old_pos, selected_session_id.as_deref());
+        self.restore_selection(selection);
 
         Ok(())
     }
 
     /// Applies incremental changes to the session list.
     fn apply_incremental_changes(&mut self, changes: &[SessionChange]) -> Result<()> {
-        // Same ordering requirement as `full_reload`: capture the position
-        // before `apply_filter` below can reset it.
-        let selected_session_id = self.selected_session().map(|s| s.session_id.clone());
-        let old_pos = self.list_state.selected();
+        let selection = self.selection_anchor();
 
         for change in changes {
             match change.change_type {
@@ -96,7 +106,7 @@ impl App {
         }
 
         self.apply_filter();
-        self.restore_selection(old_pos, selected_session_id.as_deref());
+        self.restore_selection(selection);
 
         Ok(())
     }
@@ -159,17 +169,58 @@ impl App {
         self.position_of_session_row_where(|session| session.session_id == session_id)
     }
 
+    fn position_of_session_row_occurrence(
+        &self,
+        session_id: &str,
+        occurrence: usize,
+    ) -> Option<usize> {
+        self.session_row_positions_where(|session| session.session_id == session_id)
+            .nth(occurrence)
+            .or_else(|| self.position_of_session_row(session_id))
+    }
+
+    fn session_row_positions_where<'a>(
+        &'a self,
+        predicate: impl Fn(&Session) -> bool + 'a,
+    ) -> impl Iterator<Item = usize> + 'a {
+        self.row_sessions
+            .iter()
+            .enumerate()
+            .filter_map(move |(position, session_index)| {
+                let session = (*session_index).and_then(|idx| self.sessions.get(idx))?;
+                predicate(session).then_some(position)
+            })
+    }
+
+    pub(super) fn selection_anchor(&self) -> SelectionAnchor {
+        SelectionAnchor {
+            position: self.list_state.selected(),
+            session_id: self
+                .selected_session()
+                .map(|session| session.session_id.clone()),
+            occurrence: self.selected_session_row_occurrence().unwrap_or_default(),
+        }
+    }
+
+    /// Returns the selected session's occurrence among its rows in display order.
+    /// A session with a YOUR TURN row also appears later in TASKS.
+    pub(super) fn selected_session_row_occurrence(&self) -> Option<usize> {
+        let position = self.list_state.selected()?;
+        let session_index = self.row_sessions.get(position).copied().flatten()?;
+        let preceding_rows = self.row_sessions.get(..position)?;
+        Some(
+            preceding_rows
+                .iter()
+                .filter(|row| **row == Some(session_index))
+                .count(),
+        )
+    }
+
     pub(super) fn position_of_session_row_where(
         &self,
         predicate: impl Fn(&Session) -> bool,
     ) -> Option<usize> {
-        self.row_sessions
-            .iter()
-            .enumerate()
-            .find_map(|(position, session_index)| {
-                let session = (*session_index).and_then(|idx| self.sessions.get(idx))?;
-                predicate(session).then_some(position)
-            })
+        self.session_row_positions_where(predicate).next()
     }
 
     /// Resolves the selection after a row-order rebuild.
@@ -179,20 +230,17 @@ impl App {
     /// session was filtered out entirely) falls back to the first
     /// selectable position at or after the previous one, else the last
     /// selectable position, else `None`.
-    pub(super) fn resync_selection(
-        &mut self,
-        old_pos: Option<usize>,
-        old_session_id: Option<String>,
-    ) {
-        if let Some(id) = old_session_id
-            && let Some(pos) = self.position_of_session_row(&id)
+    pub(super) fn resync_selection(&mut self, anchor: SelectionAnchor) {
+        if let Some(id) = anchor.session_id
+            && let Some(pos) = self.position_of_session_row_occurrence(&id, anchor.occurrence)
         {
             self.list_state.select(Some(pos));
             return;
         }
 
         let selectable = self.selectable_positions();
-        let next = old_pos
+        let next = anchor
+            .position
             .and_then(|p| {
                 selectable
                     .iter()
@@ -204,19 +252,16 @@ impl App {
         self.list_state.select(next);
     }
 
-    /// Restores selection by session_id if possible, otherwise adjusts.
+    /// Restores a captured selection after rebuilding the row order.
     ///
     /// Rebuilds the row order from the current filtered sessions so that
     /// the cursor position is resolved against the actual display order,
     /// not the flat `updated_at` sort order.
     ///
-    /// `old_pos` must be captured by the caller *before* any prior mutation
-    /// (e.g. `apply_filter`) that could have already reset `list_state` --
-    /// otherwise the fallback in [`Self::resync_selection`] anchors on that
-    /// reset position instead of the user's actual previous cursor.
-    pub(super) fn restore_selection(&mut self, old_pos: Option<usize>, session_id: Option<&str>) {
+    /// Capture the anchor before any mutation that can reset `list_state`.
+    pub(super) fn restore_selection(&mut self, anchor: SelectionAnchor) {
         self.rebuild_row_order();
-        self.resync_selection(old_pos, session_id.map(String::from));
+        self.resync_selection(anchor);
     }
 
     /// Persists the currently selected session ID to disk.
@@ -382,13 +427,13 @@ mod tests {
         // Move the selected session to a different (still individually
         // selectable) section, then re-resolve the row order/selection the
         // same way `reload_sessions` does internally after a mutation.
-        let old_pos = app.list_state.selected();
+        let selection = app.selection_anchor();
         app.sessions
             .iter_mut()
             .find(|s| s.session_id == "running-2")
             .expect("running-2 exists")
             .status = SessionStatus::WaitingInput;
-        app.restore_selection(old_pos, Some("running-2"));
+        app.restore_selection(selection);
 
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
@@ -397,13 +442,35 @@ mod tests {
     }
 
     #[test]
+    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session() {
+        let mut waiting = create_test_session("awaiting-1");
+        waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        let mut app = create_test_app(vec![waiting, create_test_session("active-1")]);
+
+        let task_position = app
+            .position_of_session_row_occurrence("awaiting-1", 1)
+            .expect("TASKS row is displayed");
+        app.list_state.select(Some(task_position));
+        app.apply_incremental_changes(&[SessionChange {
+            session_id: "active-1".to_string(),
+            change_type: SessionChangeType::Deleted,
+        }])
+        .expect("incremental reload succeeds");
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.selected_session_row_occurrence(),
+            ),
+            (Some("awaiting-1"), Some(1)),
+        );
+    }
+
+    #[test]
     fn test_restore_selection_fallback_anchors_on_pre_reload_position() {
-        // Regression test: `restore_selection`'s `old_pos` must be the
-        // cursor position from *before* the caller's own `apply_filter`
-        // call (as `full_reload`/`apply_incremental_changes` do), not
-        // whatever `apply_filter` already reset `list_state` to -- otherwise
-        // the fallback always lands on the first selectable row instead of
-        // the nearest one to where the user actually was.
         let mut app = create_test_app(vec![
             create_test_session("a"),
             create_test_session("b"),
@@ -414,7 +481,7 @@ mod tests {
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("c")
         );
-        let old_pos = app.list_state.selected();
+        let selection = app.selection_anchor();
 
         // "c" is about to be excluded by a status filter -- mimics a status
         // change observed mid-reload that moves the selected session out of
@@ -424,16 +491,13 @@ mod tests {
             .find(|s| s.session_id == "c")
             .expect("c exists")
             .status = SessionStatus::Paused;
-        // Applying the filter resets `list_state` to the first selectable
-        // row ("a") before `restore_selection` runs, same as every real
-        // caller's `apply_filter(); restore_selection(...);` sequence.
         app.toggle_status_filter(SessionStatus::Running);
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("a")
         );
 
-        app.restore_selection(old_pos, Some("c"));
+        app.restore_selection(selection);
 
         // "c" no longer matches the filter and has no row at all; falls
         // back to the nearest selectable row at/after its own old position

@@ -80,7 +80,6 @@ pub(super) fn build_task_rows<'a>(
         depth,
         mark: mark_of(session),
         is_last_sibling,
-        is_selectable: !user_turn_session_ids.contains(&session.session_id),
         child_count: 0,
         child_user_turn_count: 0,
         task: task_by_session.get(session.session_id.as_str()).cloned(),

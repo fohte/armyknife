@@ -653,7 +653,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_select_next_skips_tasks_row_of_user_turn_session(
+    fn test_select_next_can_select_tasks_row_of_user_turn_session(
         waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
     ) {
         let (now, sessions) = waiting_and_running_sessions;
@@ -667,8 +667,8 @@ mod tests {
              ◐  crit    project                                                     just now
 
              ── TASKS ──────────────────────────────────────────────────────────────────────
-             ◐ project                 project [crit]                               just now
-            >● project                 project                                      just now
+            >◐ project                 project [crit]                               just now
+             ● project                 project                                      just now
 
 
 
@@ -696,9 +696,10 @@ mod tests {
         sessions.push(unread);
         sessions.push(paused);
         // Start on "waiting" and step to the last TASKS row, crossing the
-        // section boundary and the unselectable duplicate row, so a
-        // cumulative off-by-N from separators would show up here.
+        // section boundary and the selectable duplicate row, so a cumulative
+        // off-by-N from separators would show up here.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 16, |app| {
+            app.select_next();
             app.select_next();
             app.select_next();
             app.select_next();

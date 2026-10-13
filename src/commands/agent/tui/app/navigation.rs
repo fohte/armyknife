@@ -237,6 +237,34 @@ mod tests {
     }
 
     #[test]
+    fn test_select_next_reaches_user_turn_session_in_tasks() {
+        let root = create_test_session("a");
+        let mut waiting = create_test_session("b");
+        waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        waiting.ancestor_session_ids = vec!["a".to_string()];
+        let mut sibling = create_test_session("c");
+        sibling.ancestor_session_ids = vec!["a".to_string()];
+        let mut app = create_test_app(vec![root, waiting, sibling]);
+
+        app.list_state.select(Some(
+            app.position_of_session_row("a")
+                .expect("root session is displayed"),
+        ));
+        app.select_next();
+
+        assert_eq!(
+            (
+                app.selected_session().map(|s| s.session_id.as_str()),
+                app.selected_session_row_occurrence(),
+            ),
+            (Some("b"), Some(1)),
+        );
+    }
+
+    #[test]
     fn test_select_previous_wraps() {
         let mut app = create_test_app(vec![create_test_session("1"), create_test_session("2")]);
         // See test_select_next_wraps: row 0 is a header, rows 1-2 are the
