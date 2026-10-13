@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{SessionRowEntry, SessionTask, TaskMark};
+use super::{SessionRowEntry, SessionTask, TaskMark, VibeMode};
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 
@@ -11,6 +11,7 @@ pub(super) fn build_task_rows<'a>(
     task_by_session: &HashMap<String, SessionTask>,
     user_turn_session_ids: &HashSet<String>,
     agent_config: &AgentConfig,
+    vibe_enabled_session_ids: &HashSet<String>,
 ) -> Vec<SessionRowEntry<'a>> {
     let members: Vec<&'a Session> = sessions
         .iter()
@@ -21,6 +22,13 @@ pub(super) fn build_task_rows<'a>(
         .iter()
         .map(|session| session.session_id.as_str())
         .collect();
+    let mut known_vibe_enabled_session_ids = vibe_enabled_session_ids.clone();
+    known_vibe_enabled_session_ids.extend(
+        members
+            .iter()
+            .filter(|session| session.vibe_enabled)
+            .map(|session| session.session_id.clone()),
+    );
     let mut children_by_parent: HashMap<&'a str, Vec<&'a Session>> = HashMap::new();
     let mut roots = Vec::new();
 
@@ -50,6 +58,7 @@ pub(super) fn build_task_rows<'a>(
         task_by_session,
         user_turn_session_ids,
         agent_config,
+        vibe_enabled_session_ids: &known_vibe_enabled_session_ids,
     };
 
     // Include unvisited sessions as fallback roots. Inconsistent ancestor
@@ -106,6 +115,7 @@ struct TaskTreeBuilder<'context, 'session> {
     task_by_session: &'context HashMap<String, SessionTask>,
     user_turn_session_ids: &'context HashSet<String>,
     agent_config: &'context AgentConfig,
+    vibe_enabled_session_ids: &'context HashSet<String>,
 }
 
 impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
@@ -125,6 +135,7 @@ impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
         rows.push(SessionRowEntry {
             session,
             mark: task_mark(session, has_user_turn, self.agent_config),
+            vibe_mode: vibe_mode(session, self.vibe_enabled_session_ids),
             is_last_sibling,
             tree_prefix: tree_prefix.clone(),
             child_count: 0,
@@ -151,6 +162,18 @@ impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
             self.append_subtree(child, index == last_index, child_prefix, visited, rows);
         }
     }
+}
+
+fn vibe_mode(session: &Session, vibe_enabled_session_ids: &HashSet<String>) -> Option<VibeMode> {
+    if session.vibe_enabled {
+        return Some(VibeMode::Explicit);
+    }
+
+    session
+        .ancestor_session_ids
+        .iter()
+        .any(|id| vibe_enabled_session_ids.contains(id))
+        .then_some(VibeMode::Inherited)
 }
 
 fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig) -> TaskMark {

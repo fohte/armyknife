@@ -25,7 +25,10 @@ mod reload;
 mod sidebar;
 mod worktree;
 
-use reload::{SelectionAnchor, build_title_cache, get_title_display_name, load_sessions};
+use reload::{
+    SelectionAnchor, build_title_cache, get_title_display_name, load_sessions,
+    load_vibe_enabled_session_ids,
+};
 pub(super) use worktree::resolve_labels_for_cwds;
 
 /// Top-level view selection.
@@ -64,6 +67,8 @@ pub struct App {
     pub sessions: Vec<Session>,
     /// Makes work type display settings available without reloading config during rendering.
     pub(super) agent_config: AgentConfig,
+    /// Session IDs whose stored records explicitly enabled vibe mode.
+    pub(super) vibe_enabled_session_ids: HashSet<String>,
     /// State for the list widget (tracks selected index).
     pub list_state: ListState,
     /// Whether the application should quit.
@@ -152,6 +157,7 @@ impl App {
     /// persisted selection.
     pub fn new() -> Result<Self> {
         let sessions = load_sessions()?;
+        let vibe_enabled_session_ids = load_vibe_enabled_session_ids()?;
         let agent_config = crate::shared::config::load_config_or_default().agent;
 
         // Prefer ARMYKNIFE_FOCUS_SESSION over persisted selection
@@ -167,6 +173,7 @@ impl App {
             focus_session_id.as_deref(),
             last_selected_session_id.as_deref(),
         );
+        app.vibe_enabled_session_ids = vibe_enabled_session_ids;
         app.sidebar_visible = true;
         app.sidebar_focused = sidebar_focused;
 
@@ -192,10 +199,16 @@ impl App {
 
         // Build title cache for fast UI rendering
         let title_cache = build_title_cache(&sessions);
+        let vibe_enabled_session_ids = sessions
+            .iter()
+            .filter(|session| session.vibe_enabled)
+            .map(|session| session.session_id.clone())
+            .collect();
 
         let mut app = Self {
             sessions,
             agent_config,
+            vibe_enabled_session_ids,
             list_state,
             should_quit: false,
             error_message: None,

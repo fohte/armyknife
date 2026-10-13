@@ -8,7 +8,7 @@ use ratatui::{
 };
 
 use crate::commands::agent::tui::app::{App, AppMode};
-use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows};
+use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows_with_vibe};
 
 use super::super::helpers::DIM_FG;
 use super::items::{build_header_item, build_session_item, build_user_turn_item};
@@ -55,7 +55,12 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows(&filtered_sessions, &app.task_by_session, &app.agent_config);
+    let rows = build_session_rows_with_vibe(
+        &filtered_sessions,
+        &app.task_by_session,
+        &app.agent_config,
+        &app.vibe_enabled_session_ids,
+    );
     let linked_session_ids = app.linked_session_ids_for_sidebar_cursor();
 
     // Build list items and owned row ids from the same `rows`, then drop
@@ -122,8 +127,8 @@ mod tests {
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::ui::helpers::DIM_FG;
     use crate::commands::agent::tui::ui::test_support::{
-        create_test_session, render_buffer, render_buffer_with, render_to_string,
-        render_to_string_with, render_to_string_with_agent_config,
+        create_test_session, render_buffer, render_buffer_with, render_buffer_with_agent_config,
+        render_to_string, render_to_string_with, render_to_string_with_agent_config,
     };
     use crate::commands::agent::types::AgentStatus;
     use crate::commands::agent::types::SessionStatus;
@@ -237,6 +242,107 @@ mod tests {
              ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit"};
 
         assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_render_vibe_marker_uses_configured_color_and_dims_inherited_rows() {
+        let now = Utc::now();
+
+        let mut explicit = create_test_session("explicit");
+        explicit.updated_at = now;
+        explicit.status = SessionStatus::Running;
+        explicit.label = Some("Explicit".to_string());
+        explicit.vibe_enabled = true;
+
+        let mut inherited = create_test_session("inherited");
+        inherited.updated_at = now;
+        inherited.status = SessionStatus::Running;
+        inherited.label = Some("Inherited".to_string());
+        inherited.ancestor_session_ids = vec!["explicit".to_string()];
+
+        let mut plain = create_test_session("plain");
+        plain.updated_at = now;
+        plain.status = SessionStatus::Running;
+        plain.label = Some("Plain".to_string());
+
+        let mut persisted_ancestor_child = create_test_session("persisted-ancestor-child");
+        persisted_ancestor_child.updated_at = now;
+        persisted_ancestor_child.status = SessionStatus::Running;
+        persisted_ancestor_child.label = Some("Persisted".to_string());
+        persisted_ancestor_child.ancestor_session_ids = vec!["stored-ancestor".to_string()];
+
+        let sessions = vec![explicit.clone(), inherited, plain, persisted_ancestor_child];
+        let marker_config = AgentWorkTypeConfig {
+            icon: "◆".to_string(),
+            color: AgentWorkTypeColor::Named(
+                crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+            ),
+        };
+        let agent_config = AgentConfig {
+            vibe_marker: Some(marker_config),
+            ..AgentConfig::default()
+        };
+        let configured_buffer =
+            render_buffer_with_agent_config(&sessions, Some(1), now, 80, 12, agent_config, |app| {
+                app.vibe_enabled_session_ids
+                    .insert("stored-ancestor".to_string());
+            });
+
+        let mut plain_config_session = explicit;
+        plain_config_session.label = Some("NoConfig".to_string());
+        let no_config_buffer = render_buffer(&[plain_config_session], Some(1), now, 80, 9);
+
+        let actual = (
+            (2..6)
+                .map(|row| rendered_row(&configured_buffer, row))
+                .collect::<Vec<_>>(),
+            (2..6)
+                .map(|row| marker_style_on_row(&configured_buffer, row, "◆"))
+                .collect::<Vec<_>>(),
+            marker_style_on_row(&no_config_buffer, 2, "◆"),
+        );
+        let expected = (
+            vec![
+                ">● project                 Explicit◆ ◐ 0/1                              just now"
+                    .to_string(),
+                " ● project               └─   Inherited◆                                just now"
+                    .to_string(),
+                " ● project                 Plain                                        just now"
+                    .to_string(),
+                " ● project                 Persisted◆                                   just now"
+                    .to_string(),
+            ],
+            vec![
+                Some(("◆".to_string(), Color::LightBlue, Modifier::empty())),
+                Some(("◆".to_string(), Color::LightBlue, Modifier::DIM)),
+                None,
+                Some(("◆".to_string(), Color::LightBlue, Modifier::DIM)),
+            ],
+            None,
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    fn rendered_row(buffer: &ratatui::buffer::Buffer, row: u16) -> String {
+        let mut text = (0..buffer.area.width)
+            .map(|column| buffer[(column, row)].symbol())
+            .collect::<String>();
+        while text.ends_with(' ') {
+            text.pop();
+        }
+        text
+    }
+
+    fn marker_style_on_row(
+        buffer: &ratatui::buffer::Buffer,
+        row: u16,
+        marker: &str,
+    ) -> Option<(String, Color, Modifier)> {
+        (0..buffer.area.width).find_map(|column| {
+            let cell = &buffer[(column, row)];
+            (cell.symbol() == marker).then(|| (cell.symbol().to_string(), cell.fg, cell.modifier))
+        })
     }
 
     #[test]

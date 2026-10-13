@@ -179,6 +179,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub work_type_fallback: Option<AgentWorkTypeConfig>,
 
+    /// Marker shown after the name of a session running in vibe mode.
+    #[serde(default)]
+    pub vibe_marker: Option<AgentWorkTypeConfig>,
+
     /// User-defined status names and the state each name represents.
     #[serde(default)]
     pub statuses: HashMap<String, AgentStatusConfig>,
@@ -819,6 +823,7 @@ mod tests {
                     },
                     work_types: HashMap::new(),
                     work_type_fallback: None,
+                    vibe_marker: None,
                     statuses: HashMap::new(),
                     worktree: WorktreeConfig {
                         dir: ".worktrees".to_string(),
@@ -968,8 +973,31 @@ mod tests {
         let config: Config = serde_yaml::from_str("agent: {}\n").unwrap();
 
         assert_eq!(
-            (config.agent.work_types, config.agent.work_type_fallback),
-            (HashMap::new(), None)
+            (
+                config.agent.work_types,
+                config.agent.work_type_fallback,
+                config.agent.vibe_marker,
+            ),
+            (HashMap::new(), None, None)
+        );
+    }
+
+    #[test]
+    fn parse_agent_vibe_marker_yaml() {
+        let yaml = indoc! {"
+            agent:
+              vibe_marker:
+                icon: ◈
+                color: [12, 34, 56]
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent.vibe_marker,
+            Some(AgentWorkTypeConfig {
+                icon: "◈".to_string(),
+                color: AgentWorkTypeColor::Rgb([12, 34, 56]),
+            })
         );
     }
 

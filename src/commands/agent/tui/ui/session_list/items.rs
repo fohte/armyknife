@@ -9,9 +9,10 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
-    Section, SectionHeaderRow, SessionRowEntry, TaskMark, is_related_task, kin_relation,
+    Section, SectionHeaderRow, SessionRowEntry, TaskMark, VibeMode, is_related_task, kin_relation,
 };
 use crate::commands::agent::user_turn::UserTurn;
+use crate::shared::config::AgentWorkTypeConfig;
 
 use super::super::helpers::{
     DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
@@ -340,7 +341,14 @@ pub(super) fn build_session_item(
     let title_width =
         title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
     let title_style = own_title_style(is_idle, title_kin_color);
-    let title_spans = build_title_spans(entry, &own_title, title_width, query, title_style);
+    let title_spans = build_title_spans(
+        entry,
+        &own_title,
+        title_width,
+        query,
+        title_style,
+        app.agent_config.vibe_marker.as_ref(),
+    );
 
     let time_text = format_compact_time(session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
@@ -429,6 +437,7 @@ fn build_title_spans(
     title_width: usize,
     query: &str,
     title_style: Style,
+    vibe_marker: Option<&AgentWorkTypeConfig>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let crit_badge = if entry.session.crit_urls.is_empty() {
@@ -436,19 +445,34 @@ fn build_title_spans(
     } else {
         " [crit]".to_string()
     };
-    let show_child_badge =
-        !child_badge.is_empty() && child_badge.width() + crit_badge.width() < title_width;
+    let marker = match (entry.vibe_mode, vibe_marker) {
+        (Some(mode), Some(config)) if config.icon.width() + crit_badge.width() < title_width => {
+            Some((mode, config))
+        }
+        _ => None,
+    };
+    let marker_width = marker.map_or(0, |(_, config)| config.icon.width());
+    let show_child_badge = !child_badge.is_empty()
+        && child_badge.width() + crit_badge.width() + marker_width < title_width;
     let child_badge = if show_child_badge {
         child_badge
     } else {
         String::new()
     };
     let badge_width = child_badge.width() + crit_badge.width();
-    let content_width = title_width.saturating_sub(badge_width);
+    let content_width = title_width.saturating_sub(badge_width + marker_width);
 
     let title = truncate(own_title, content_width);
     let mut used_width = title.width();
     let mut spans = highlight_matches(&title, query, title_style);
+    if let Some((mode, config)) = marker {
+        let mut style = Style::default().fg(Color::from(config.color));
+        if mode == VibeMode::Inherited {
+            style = style.add_modifier(Modifier::DIM);
+        }
+        used_width += config.icon.width();
+        spans.push(Span::styled(config.icon.clone(), style));
+    }
     if !child_badge.is_empty() {
         used_width += child_badge.width();
         spans.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));

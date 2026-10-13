@@ -6,10 +6,10 @@ use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::event::{SessionChange, SessionChangeType};
-use super::super::session_rows::build_session_rows;
+use super::super::session_rows::build_session_rows_with_vibe;
 use super::App;
 
 #[derive(Debug)]
@@ -47,6 +47,7 @@ impl App {
         let selection = self.selection_anchor();
 
         self.sessions = load_sessions()?;
+        self.vibe_enabled_session_ids = load_vibe_enabled_session_ids()?;
 
         // Rebuild title cache for new/changed sessions
         self.rebuild_title_cache();
@@ -74,10 +75,18 @@ impl App {
                     if let Some(session) =
                         session_status::load_session_with_bg_run_status(&change.session_id)?
                     {
+                        if session.vibe_enabled {
+                            self.vibe_enabled_session_ids
+                                .insert(session.session_id.clone());
+                        } else {
+                            self.vibe_enabled_session_ids.remove(&session.session_id);
+                        }
+
                         // Check if session is stale (TTY check)
                         if is_session_stale(&session) {
                             self.remove_session(&change.session_id);
                             store::delete_session(&change.session_id)?;
+                            self.vibe_enabled_session_ids.remove(&change.session_id);
                         } else if session.status == SessionStatus::Ended {
                             // Ended sessions are not displayed; remove from list
                             self.remove_session(&change.session_id);
@@ -87,10 +96,12 @@ impl App {
                     } else {
                         // File was deleted or corrupted
                         self.remove_session(&change.session_id);
+                        self.vibe_enabled_session_ids.remove(&change.session_id);
                     }
                 }
                 SessionChangeType::Deleted => {
                     self.remove_session(&change.session_id);
+                    self.vibe_enabled_session_ids.remove(&change.session_id);
                 }
             }
         }
@@ -143,7 +154,12 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let rows = build_session_rows(&filtered, &self.task_by_session, &self.agent_config);
+        let rows = build_session_rows_with_vibe(
+            &filtered,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+        );
         self.row_sessions = rows
             .iter()
             .map(|r| {
@@ -353,6 +369,16 @@ pub(super) fn get_title_display_name(session: &Session) -> String {
 /// a background thread (see `EventHandler::new`).
 pub(super) fn load_sessions() -> Result<Vec<Session>> {
     session_status::list_sessions_with_bg_run_status()
+}
+
+/// Lists explicitly enabled vibe sessions, including ended ancestors that
+/// remain stored and continue to affect descendant sessions.
+pub(super) fn load_vibe_enabled_session_ids() -> Result<HashSet<String>> {
+    Ok(store::list_all_sessions()?
+        .into_iter()
+        .filter(|session| session.vibe_enabled)
+        .map(|session| session.session_id)
+        .collect())
 }
 
 #[cfg(test)]

@@ -25,6 +25,7 @@
         "merge_notification": null,
         "statuses": {},
         "stop_hook_instruction": null,
+        "vibe_marker": null,
         "work_type_fallback": null,
         "work_types": {},
         "worktree": {
@@ -136,6 +137,18 @@
           "type": [
             "string",
             "null"
+          ],
+          "default": null
+        },
+        "vibe_marker": {
+          "description": "Marker shown after the name of a session running in vibe mode.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentWorkTypeConfig"
+            },
+            {
+              "type": "null"
+            }
           ],
           "default": null
         },
