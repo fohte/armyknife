@@ -173,7 +173,8 @@ fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig)
         DisplayStatus::Running => TaskMark::Working,
         DisplayStatus::Background => TaskMark::Waiting,
         DisplayStatus::Ended => TaskMark::Done,
-        DisplayStatus::WaitingInput
+        DisplayStatus::Failed
+        | DisplayStatus::WaitingInput
         | DisplayStatus::UnreadStopped
         | DisplayStatus::Stopped
         | DisplayStatus::Paused => TaskMark::Unclassified,

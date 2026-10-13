@@ -87,6 +87,7 @@ fn status_color(status: DisplayStatus) -> Color {
         DisplayStatus::Running => Color::Green,
         DisplayStatus::WaitingInput => Color::Yellow,
         DisplayStatus::Background => Color::Cyan,
+        DisplayStatus::Failed => Color::Red,
         DisplayStatus::Paused => Color::Indexed(245),
         DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
             Color::DarkGray

@@ -48,6 +48,7 @@ impl Session {
             SessionStatus::Running => DisplayStatus::Running,
             SessionStatus::WaitingInput => DisplayStatus::WaitingInput,
             SessionStatus::Stopped => DisplayStatus::Stopped,
+            SessionStatus::Failed => DisplayStatus::Failed,
             SessionStatus::Paused => DisplayStatus::Paused,
             SessionStatus::Ended => DisplayStatus::Ended,
         }
@@ -66,6 +67,7 @@ impl SessionStatus {
             Self::Running => "running",
             Self::WaitingInput => "waiting",
             Self::Stopped => "stopped",
+            Self::Failed => "failed",
             Self::Paused => "paused",
             Self::Ended => "ended",
         }
@@ -78,6 +80,7 @@ impl DisplayStatus {
             Self::Running => "●",
             Self::WaitingInput => "◐",
             Self::Stopped | Self::Ended => "○",
+            Self::Failed => "✗",
             Self::UnreadStopped => "✱",
             Self::Paused => "⏸",
             Self::Background => "◎",
@@ -90,6 +93,7 @@ impl DisplayStatus {
             Self::Background => "bg",
             Self::WaitingInput => "waiting",
             Self::Stopped | Self::UnreadStopped => "stopped",
+            Self::Failed => "failed",
             Self::Paused => "paused",
             Self::Ended => "ended",
         }
@@ -100,6 +104,7 @@ impl DisplayStatus {
             Self::Running => StatusColor::Green,
             Self::WaitingInput => StatusColor::Yellow,
             Self::Background => StatusColor::Cyan,
+            Self::Failed => StatusColor::Red,
             Self::Paused => StatusColor::Dim,
             Self::Stopped | Self::UnreadStopped | Self::Ended => StatusColor::Gray,
         }
@@ -162,6 +167,7 @@ mod tests {
     #[case::waiting_unread(SessionStatus::WaitingInput, None, false, false, "\u{25d0}")]
     #[case::stopped_unread(SessionStatus::Stopped, None, false, false, "\u{2731}")]
     #[case::stopped_read(SessionStatus::Stopped, Some(()), false, false, "\u{25cb}")]
+    #[case::failed(SessionStatus::Failed, None, false, false, "\u{2717}")]
     #[case::paused_unread(SessionStatus::Paused, None, false, false, "\u{23f8}")]
     #[case::paused_read(SessionStatus::Paused, Some(()), false, false, "\u{23f8}")]
     #[case::ended_unread(SessionStatus::Ended, None, false, false, "\u{25cb}")]
@@ -239,6 +245,15 @@ mod tests {
         false,
         false,
         DisplayStatus::Stopped
+    )]
+    #[case::failed_status_is_not_promoted_by_background_markers(
+        Engine::Claude,
+        SessionStatus::Failed,
+        true,
+        true,
+        true,
+        true,
+        DisplayStatus::Failed
     )]
     #[case::codex_other_background_task(
         Engine::Codex,

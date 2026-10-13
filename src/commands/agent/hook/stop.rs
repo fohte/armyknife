@@ -176,6 +176,8 @@ mod tests {
     #[rstest]
     #[case::claude_stop(Engine::Claude, HookEvent::Stop, b"")]
     #[case::codex_stop(Engine::Codex, HookEvent::Stop, b"{}\n")]
+    #[case::claude_stop_failure(Engine::Claude, HookEvent::StopFailure, b"")]
+    #[case::codex_stop_failure(Engine::Codex, HookEvent::StopFailure, b"")]
     #[case::codex_other_event(Engine::Codex, HookEvent::PostToolUse, b"")]
     fn allowed_or_other_events_write_expected_output(
         #[case] engine: Engine,

@@ -10,7 +10,7 @@ use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
     not(test),
     expect(
         dead_code,
-        reason = "failed and merge candidates are ordered here for external status sources"
+        reason = "merge candidates are ordered here for external status sources"
     )
 )]
 pub(crate) enum UserTurnKind {
@@ -76,7 +76,9 @@ pub(crate) fn next_user_turn<'a>(
 }
 
 fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<UserTurn<'a>> {
-    let kind = if session.has_pending_permission_requests() {
+    let kind = if session.status == SessionStatus::Failed {
+        Some(UserTurnKind::Failed)
+    } else if session.has_pending_permission_requests() {
         Some(UserTurnKind::Allow)
     } else if is_ask_user_question(session) {
         Some(UserTurnKind::Ask)
@@ -279,6 +281,18 @@ mod tests {
         assert_eq!(
             next_user_turn(&[session], &AgentConfig::default()).map(|turn| turn.kind),
             Some(expected)
+        );
+    }
+
+    #[test]
+    fn failed_session_is_reported_as_a_user_turn() {
+        let mut session = session("failed", timestamp(1));
+        session.status = SessionStatus::Failed;
+
+        assert_eq!(
+            next_user_turn(&[session], &AgentConfig::default())
+                .map(|turn| (turn.kind, turn.label, turn.note)),
+            Some((UserTurnKind::Failed, Some("failed"), None))
         );
     }
 

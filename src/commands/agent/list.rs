@@ -217,6 +217,7 @@ fn format_status(status: DisplayStatus) -> String {
         StatusColor::Green => color::GREEN,
         StatusColor::Yellow => color::YELLOW,
         StatusColor::Cyan => color::CYAN,
+        StatusColor::Red => color::RED,
         StatusColor::Gray => color::GRAY,
         StatusColor::Dim => color::DIM,
     };
@@ -346,10 +347,12 @@ mod tests {
         assert_eq!(DisplayStatus::Running.display_symbol(), "●");
         assert_eq!(DisplayStatus::WaitingInput.display_symbol(), "◐");
         assert_eq!(DisplayStatus::Stopped.display_symbol(), "○");
+        assert_eq!(DisplayStatus::Failed.display_symbol(), "✗");
 
         assert_eq!(SessionStatus::Running.display_name(), "running");
         assert_eq!(SessionStatus::WaitingInput.display_name(), "waiting");
         assert_eq!(SessionStatus::Stopped.display_name(), "stopped");
+        assert_eq!(SessionStatus::Failed.display_name(), "failed");
     }
 
     /// Test terminal width that results in TITLE width of 30

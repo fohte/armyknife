@@ -569,6 +569,11 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         "hooks": [{ "type": "command", "command": "a agent hook stop" }]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [{ "type": "command", "command": "a agent hook stop-failure" }]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [{ "type": "command", "command": "a agent hook session-end" }]
@@ -578,7 +583,7 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, or stopped). An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
+These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
 

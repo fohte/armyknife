@@ -221,6 +221,7 @@ mod tests {
     #[rstest]
     #[case::running(SessionStatus::Running)]
     #[case::waiting(SessionStatus::WaitingInput)]
+    #[case::failed(SessionStatus::Failed)]
     #[case::paused(SessionStatus::Paused)]
     #[case::ended(SessionStatus::Ended)]
     fn decide_pause_skips_non_stopped(#[case] status: SessionStatus) {
