@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.408](https://github.com/fohte/armyknife/compare/v0.1.407...v0.1.408) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/tui:** prevent PROGRESS flicker ([#1149](https://github.com/fohte/armyknife/issues/1149)) ([e07788e](https://github.com/fohte/armyknife/commit/e07788ea11ecd534455cf176b5e0d794e5635aca))
+
 ## [0.1.407](https://github.com/fohte/armyknife/compare/v0.1.406...v0.1.407) (2026-10-13)
 
 
