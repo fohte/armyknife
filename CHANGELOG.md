@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.402](https://github.com/fohte/armyknife/compare/v0.1.401...v0.1.402) (2026-10-13)
+
+
+### Features
+
+* **agent:** show vibe markers in watch tasks ([#1137](https://github.com/fohte/armyknife/issues/1137)) ([86e34e4](https://github.com/fohte/armyknife/commit/86e34e4bf5c893794dd7737cee333298e2ff48e4))
+
 ## [0.1.401](https://github.com/fohte/armyknife/compare/v0.1.400...v0.1.401) (2026-10-13)
 
 
