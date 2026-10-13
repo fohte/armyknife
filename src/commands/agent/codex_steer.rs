@@ -457,37 +457,27 @@ fn rpc_error(error: &Value) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::net::Shutdown;
+    use std::os::unix::net::UnixStream;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
 
-    use super::*;
-    use rstest::rstest;
+    use anyhow::anyhow;
+    use tungstenite::{WebSocket, accept};
 
-    fn connected_client_and_server() -> anyhow::Result<(Client, WebSocket<UnixStream>)> {
-        let (client_stream, server_stream) = UnixStream::pair()?;
+    pub(crate) fn accept_with_read_timeout(
+        stream: UnixStream,
+    ) -> anyhow::Result<WebSocket<UnixStream>> {
         // Bound server reads so a broken client path cannot strand the test thread.
-        server_stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        let server = std::thread::spawn(move || {
-            tungstenite::accept(server_stream).map_err(anyhow::Error::from)
-        });
-        let (socket, _) = client("ws://localhost/rpc", client_stream)?;
-        let server = server
-            .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
-
-        Ok((
-            Client {
-                socket,
-                next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
-            },
-            server,
-        ))
+        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+        accept(stream).map_err(anyhow::Error::from)
     }
 
-    fn join_server<T>(
+    pub(crate) fn join_server<T>(
         client_socket: &WebSocket<UnixStream>,
         client_result: &std::result::Result<(), String>,
-        server: std::thread::JoinHandle<anyhow::Result<T>>,
+        server: JoinHandle<anyhow::Result<T>>,
     ) -> anyhow::Result<T> {
         if client_result.is_err() {
             // Release the peer before joining so a failed client cannot leave its read blocked.
@@ -506,6 +496,30 @@ mod tests {
             }
             Ok(()) => server_error,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rstest::rstest;
+    use test_support::{accept_with_read_timeout, join_server};
+
+    fn connected_client_and_server() -> anyhow::Result<(Client, WebSocket<UnixStream>)> {
+        let (client_stream, server_stream) = UnixStream::pair()?;
+        let server = std::thread::spawn(move || accept_with_read_timeout(server_stream));
+        let (socket, _) = client("ws://localhost/rpc", client_stream)?;
+        let server = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+
+        Ok((
+            Client {
+                socket,
+                next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+            },
+            server,
+        ))
     }
 
     #[test]

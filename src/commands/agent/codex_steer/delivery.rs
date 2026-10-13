@@ -391,7 +391,6 @@ fn uncertain_request_error(error: RequestError, method: &str) -> DeliveryError {
 
 #[cfg(test)]
 mod tests {
-    use std::net::Shutdown;
     use std::os::unix::net::UnixStream;
 
     use rstest::{fixture, rstest};
@@ -399,6 +398,7 @@ mod tests {
     use tungstenite::{Message, WebSocket, client};
 
     use super::super::TURN_START_REQUEST_ID;
+    use super::super::test_support::{accept_with_read_timeout, join_server};
     use super::*;
 
     const THREAD_ID: &str = "thread-a";
@@ -408,41 +408,13 @@ mod tests {
     #[fixture]
     fn connected_sockets() -> anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)> {
         let (client_stream, server_stream) = UnixStream::pair()?;
-        // Bound server reads so a broken client path cannot strand the test thread.
-        server_stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        let server = std::thread::spawn(move || {
-            tungstenite::accept(server_stream).map_err(anyhow::Error::from)
-        });
+        let server = std::thread::spawn(move || accept_with_read_timeout(server_stream));
         let (client_socket, _) = client("ws://localhost/rpc", client_stream)?;
         let server_socket = server
             .join()
             .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
 
         Ok((client_socket, server_socket))
-    }
-
-    fn join_server<T>(
-        client_socket: &WebSocket<UnixStream>,
-        client_result: &std::result::Result<(), String>,
-        server: std::thread::JoinHandle<anyhow::Result<T>>,
-    ) -> anyhow::Result<T> {
-        if client_result.is_err() {
-            // Release the peer before joining so a failed client cannot leave its read blocked.
-            let _ = client_socket.get_ref().shutdown(Shutdown::Both);
-        }
-
-        let server_result = server.join().map_err(|_| match client_result {
-            Err(client_error) => anyhow!(
-                "Codex app-server test thread panicked after client operation failed: {client_error}"
-            ),
-            Ok(()) => anyhow!("Codex app-server test thread panicked"),
-        })?;
-        server_result.map_err(|server_error| match client_result {
-            Err(client_error) => {
-                server_error.context(format!("client operation also failed: {client_error}"))
-            }
-            Ok(()) => server_error,
-        })
     }
 
     fn read_request(socket: &mut WebSocket<UnixStream>) -> anyhow::Result<Value> {
