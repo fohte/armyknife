@@ -93,8 +93,10 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         usize::from(has_pr_rows).max(plain_pr_row_count.min(3))
     };
     let available_data_height = inner.height.saturating_sub(header_height);
-    let minimum_data_height =
-        (minimum_data_height.min(usize::from(u16::MAX)) as u16).min(available_data_height);
+    let reserved_work_height =
+        u16::from(work_row_count > 0 && !has_implementation).min(available_data_height);
+    let minimum_data_height = (minimum_data_height.min(usize::from(u16::MAX)) as u16)
+        .min(available_data_height.saturating_sub(reserved_work_height));
     let work_height = work_row_count.min(usize::from(
         available_data_height.saturating_sub(minimum_data_height),
     )) as u16;
@@ -786,7 +788,31 @@ mod tests {
     }
 
     #[rstest]
-    fn keeps_three_pr_rows_visible_when_work_rows_fill_the_pane(
+    #[case::regular_pane(
+        7,
+        vec![
+            "│PROGRESS: project",
+            "│  ● helper",
+            "│> ● builder",
+            "│                                             実 装  差 分  body  CI  merge",
+            "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
+            "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
+            "│  #19 Change 2                               ✓    ◐    ●     ◷   ○",
+        ],
+    )]
+    #[case::short_pane(
+        5,
+        vec![
+            "│PROGRESS: project",
+            "│> ● builder",
+            "│                                             実 装  差 分  body  CI  merge",
+            "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
+            "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
+        ],
+    )]
+    fn keeps_pr_rows_visible_without_hiding_the_selected_work_row(
+        #[case] height: u16,
+        #[case] expected: Vec<&str>,
         task_work_rows: Vec<WorkProgressRow>,
         delegate_pr_row: PrProgressRow,
     ) {
@@ -806,22 +832,14 @@ mod tests {
         app.progress_list_state.select(Some(4));
         app.progress_table_state.select(Some(0));
 
-        let mut terminal = Terminal::new(TestBackend::new(72, 7)).unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(72, height)).unwrap();
         terminal
             .draw(|frame| render_progress(frame, frame.area(), &mut app))
             .unwrap();
 
         assert_eq!(
             buffer_snapshot(terminal.backend().buffer()),
-            vec![
-                "│PROGRESS: project",
-                "│  ● helper",
-                "│> ● builder",
-                "│                                             実 装  差 分  body  CI  merge",
-                "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
-                "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
-                "│  #19 Change 2                               ✓    ◐    ●     ◷   ○",
-            ],
+            expected.into_iter().map(str::to_string).collect::<Vec<_>>(),
         );
     }
 
