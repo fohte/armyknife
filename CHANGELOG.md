@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.403](https://github.com/fohte/armyknife/compare/v0.1.402...v0.1.403) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent:** mark failed Codex turns as Failed ([#1139](https://github.com/fohte/armyknife/issues/1139)) ([612777b](https://github.com/fohte/armyknife/commit/612777b7d02070ffa1b4801b1fcfab71df3d5fd2))
+
 ## [0.1.402](https://github.com/fohte/armyknife/compare/v0.1.401...v0.1.402) (2026-10-13)
 
 
