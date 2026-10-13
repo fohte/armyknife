@@ -46,18 +46,27 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let has_delegates = !progress.delegated.is_empty();
-                let implementation = progress.implementation.clone();
-                let delegated = progress
-                    .delegated
-                    .into_iter()
-                    .map(|mut fetched| {
-                        if let Some(session) = self.session_by_id(&fetched.session.session_id) {
-                            fetched.session = session;
-                        }
-                        fetched
-                    })
-                    .collect::<Vec<_>>();
+                let task_linked_project_manager = selected.work_type.as_deref()
+                    == Some("project-manager")
+                    && self.task_by_session.contains_key(session_id);
+                let implementation = (!task_linked_project_manager)
+                    .then_some(progress.implementation)
+                    .flatten();
+                let delegated = if task_linked_project_manager {
+                    Vec::new()
+                } else {
+                    progress
+                        .delegated
+                        .into_iter()
+                        .map(|mut fetched| {
+                            if let Some(session) = self.session_by_id(&fetched.session.session_id) {
+                                fetched.session = session;
+                            }
+                            fetched
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
                     self.checklist_rows(
                         &scope.work_sessions,
@@ -120,6 +129,32 @@ impl App {
             })
             .map(|session| session.session_id.clone())
             .collect()
+    }
+
+    pub(in crate::commands::agent::tui) fn progress_fetch_task_scope(
+        &self,
+        session_id: &str,
+    ) -> (Option<String>, Option<Vec<String>>) {
+        let task_id = self
+            .task_by_session
+            .get(session_id)
+            .map(|task| task.task_id.clone());
+        let task_linked_project_manager = task_id.is_some()
+            && self
+                .session_by_id(session_id)
+                .is_some_and(|session| session.work_type.as_deref() == Some("project-manager"));
+        let task_session_ids = task_id.as_deref().map(|task_id| {
+            if task_linked_project_manager {
+                Vec::new()
+            } else {
+                self.progress_task_session_ids(task_id)
+            }
+        });
+
+        (
+            (!task_linked_project_manager).then_some(task_id).flatten(),
+            task_session_ids,
+        )
     }
 
     fn progress_scope(&self, selected: &Session) -> ProgressScope {
@@ -189,6 +224,7 @@ impl App {
         } else {
             refresh_task_rows_from_sessions(
                 &scope.work_sessions,
+                &selected.session_id,
                 &scope.delegated,
                 existing_rows,
                 &self.agent_config,

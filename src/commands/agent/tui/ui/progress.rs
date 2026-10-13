@@ -77,18 +77,12 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         )
     });
     let header_height = usize::from(has_pr_rows && !has_implementation) as u16;
-    let checklist_rows = app.progress_rows.iter().skip(work_row_count);
+    let first_checklist_pr_row = first_checklist_pr_row_index(&app.progress_rows, work_row_count);
     let minimum_data_height = if has_implementation {
-        checklist_rows
-            .clone()
-            .position(|row| {
-                matches!(
-                    row,
-                    ProgressRow::ChecklistPullRequest { .. }
-                        | ProgressRow::PlannedPullRequest { .. }
-                )
-            })
-            .map_or(usize::from(checklist_rows.len() > 0), |index| index + 1)
+        first_checklist_pr_row.map_or(
+            usize::from(app.progress_rows.len() > work_row_count),
+            |index| index + 1,
+        )
     } else {
         usize::from(has_pr_rows)
     };
@@ -257,24 +251,13 @@ fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_
         .skip(work_row_count)
         .map(checklist_table_row)
         .collect::<Vec<_>>();
-    let mut table_state = app.progress_table_state;
-    if table_state.selected().is_none() && area.height > 0 {
-        let first_pull_request_row =
-            app.progress_rows
-                .iter()
-                .skip(work_row_count)
-                .position(|row| {
-                    matches!(
-                        row,
-                        ProgressRow::ChecklistPullRequest { .. }
-                            | ProgressRow::PlannedPullRequest { .. }
-                    )
-                });
-        if let Some(row_index) = first_pull_request_row
-            && row_index >= usize::from(area.height)
-        {
-            *table_state.offset_mut() = row_index + 1 - usize::from(area.height);
-        }
+    if app.progress_table_state.selected().is_none()
+        && app.progress_table_state.offset() == 0
+        && area.height > 0
+        && let Some(row_index) = first_checklist_pr_row_index(&app.progress_rows, work_row_count)
+        && row_index >= usize::from(area.height)
+    {
+        *app.progress_table_state.offset_mut() = row_index + 1 - usize::from(area.height);
     }
     let table = Table::new(table_rows, stage_widths())
         .column_spacing(1)
@@ -284,7 +267,16 @@ fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_
         } else {
             Color::Indexed(236)
         }));
-    frame.render_stateful_widget(table, area, &mut table_state);
+    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+}
+
+fn first_checklist_pr_row_index(rows: &[ProgressRow], work_row_count: usize) -> Option<usize> {
+    rows.iter().skip(work_row_count).position(|row| {
+        matches!(
+            row,
+            ProgressRow::ChecklistPullRequest { .. } | ProgressRow::PlannedPullRequest { .. }
+        )
+    })
 }
 
 fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
@@ -469,6 +461,31 @@ mod tests {
                 (text, bold_columns)
             })
             .collect()
+    }
+
+    fn buffer_snapshot(buffer: &Buffer) -> Vec<String> {
+        (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    fn progress_snapshot(
+        terminal: &mut Terminal<TestBackend>,
+        app: &mut App,
+    ) -> (Vec<String>, usize) {
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), app))
+            .unwrap();
+        (
+            buffer_snapshot(terminal.backend().buffer()),
+            app.progress_table_state.offset(),
+        )
     }
 
     #[test]
@@ -821,6 +838,99 @@ mod tests {
                 "│  ▸ Batch one (0 PR merged)",
                 "│  ▾ Batch two",
                 "│    #17 Example task change                              ✓    ◐    ●     ◷   ○",
+            ],
+        );
+    }
+
+    #[rstest]
+    fn preserves_checklist_scroll_offset_when_moving_up(
+        task_work_rows: Vec<WorkProgressRow>,
+        delegate_pr_row: PrProgressRow,
+    ) {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = task_work_rows
+            .into_iter()
+            .map(ProgressRow::Work)
+            .chain([ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 8,
+                collapsed: false,
+            }])
+            .chain((1..=6).map(|batch_number| ProgressRow::BatchHeader {
+                batch_id: format!("batch-{batch_number}"),
+                title: format!("Batch {batch_number}"),
+                merged_pr_count: 0,
+                collapsed: true,
+            }))
+            .chain((0..8).map(|pr_index| {
+                let mut row = delegate_pr_row.clone();
+                row.session_id = format!("delegate-{pr_index}");
+                row.title = format!("Change {pr_index}");
+                row.number = Some(17 + pr_index);
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-7".to_string(),
+                    row,
+                }
+            }))
+            .collect();
+
+        let work_row_count = work_row_count(&app.progress_rows);
+        let last_pr_row_index = app.progress_rows.len() - work_row_count - 1;
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 4)).unwrap();
+        let initial = progress_snapshot(&mut terminal, &mut app);
+        app.progress_list_state
+            .select(Some(work_row_count + last_pr_row_index));
+        app.progress_table_state.select(Some(last_pr_row_index));
+        let selected_last_pr = progress_snapshot(&mut terminal, &mut app);
+        app.select_progress_row(-1);
+        let selected_previous_pr = progress_snapshot(&mut terminal, &mut app);
+        app.select_progress_row(-1);
+        app.select_progress_row(-1);
+        app.select_progress_row(-1);
+        let scrolled_up = progress_snapshot(&mut terminal, &mut app);
+
+        assert_eq!(
+            vec![initial, selected_last_pr, selected_previous_pr, scrolled_up],
+            vec![
+                (
+                    vec![
+                        "│PROGRESS: project".to_string(),
+                        "│  ▸ Batch 5 (0 PR merged)".to_string(),
+                        "│  ▸ Batch 6 (0 PR merged)".to_string(),
+                        "│    #17 Change 0                 ✓    ◐    ●     ◷   ○".to_string(),
+                    ],
+                    5,
+                ),
+                (
+                    vec![
+                        "│PROGRESS: project".to_string(),
+                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      #23 Change 6               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│›     #24 Change 7               ✓    ◐    ●     ◷   ○".to_string(),
+                    ],
+                    12,
+                ),
+                (
+                    vec![
+                        "│PROGRESS: project".to_string(),
+                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│›     #23 Change 6               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      #24 Change 7               ✓    ◐    ●     ◷   ○".to_string(),
+                    ],
+                    12,
+                ),
+                (
+                    vec![
+                        "│PROGRESS: project".to_string(),
+                        "│›     #20 Change 3               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      #21 Change 4               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
+                    ],
+                    10,
+                ),
             ],
         );
     }

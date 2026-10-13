@@ -351,6 +351,7 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
 #[rstest]
 fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
     timestamp: DateTime<Utc>,
+    linked_checklist_plan: ImplementationPlan,
 ) {
     let mut project_manager = create_test_session_at("project-manager", timestamp);
     project_manager.work_type = Some("project-manager".to_string());
@@ -360,7 +361,7 @@ fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
     child_delegate.is_delegated = true;
     child_delegate.ancestor_session_ids =
         vec!["project-manager".to_string(), "child-task".to_string()];
-    let mut app = create_test_app(vec![project_manager, child_task, child_delegate]);
+    let mut app = create_test_app(vec![project_manager, child_task, child_delegate.clone()]);
     app.update_row_order(&[
         None,
         Some("project-manager"),
@@ -376,15 +377,41 @@ fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
         ("child-task".to_string(), vec![task_link("parent-task")]),
     ])));
 
+    assert_eq!(
+        app.progress_fetch_task_scope("project-manager"),
+        (None, Some(Vec::new())),
+    );
+
     app.apply_progress_result(
         "project-manager",
         Ok(FetchedProgress {
             selected_session_id: "project-manager".to_string(),
-            delegated: Vec::new(),
-            implementation: None,
+            delegated: vec![FetchedDelegate {
+                session: child_delegate,
+                checklist_item_id: None,
+                pull_request: None,
+                lookup_unavailable: false,
+            }],
+            implementation: Some(linked_checklist_plan),
             github_error: None,
         }),
     );
+
+    let expected = (
+        vec![expected_work_row("project-manager", "project-manager")],
+        Some(0),
+        None,
+    );
+    assert_eq!(
+        (
+            app.progress_rows.clone(),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        expected.clone(),
+    );
+
+    app.refresh_progress_from_sessions("project-manager");
 
     assert_eq!(
         (
@@ -392,11 +419,7 @@ fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
             app.progress_list_state.selected(),
             app.progress_table_state.selected(),
         ),
-        (
-            vec![expected_work_row("project-manager", "project-manager")],
-            Some(0),
-            None,
-        ),
+        expected,
     );
 }
 

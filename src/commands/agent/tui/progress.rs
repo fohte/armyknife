@@ -305,6 +305,7 @@ pub(super) fn refresh_rows_from_sessions(
 ) -> Vec<ProgressRow> {
     refresh_task_rows_from_sessions(
         std::slice::from_ref(selected),
+        &selected.session_id,
         delegated,
         existing_rows,
         agent_config,
@@ -313,6 +314,7 @@ pub(super) fn refresh_rows_from_sessions(
 
 pub(super) fn refresh_task_rows_from_sessions(
     work_sessions: &[Session],
+    selected_session_id: &str,
     delegated: &[Session],
     existing_rows: &[ProgressRow],
     agent_config: &AgentConfig,
@@ -325,10 +327,9 @@ pub(super) fn refresh_task_rows_from_sessions(
     });
     let mut rows = work_sessions
         .iter()
-        .enumerate()
-        .map(|(index, work_session)| {
+        .map(|work_session| {
             let has_delegated_work = has_delegated_descendant(work_session, delegated.iter())
-                || (index == 0 && has_existing_pr_rows);
+                || (work_session.session_id == selected_session_id && has_existing_pr_rows);
             ProgressRow::Work(work_progress_row(
                 work_session,
                 has_delegated_work,
@@ -642,6 +643,79 @@ mod tests {
                     lookup_unavailable: true,
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn refresh_task_rows_keeps_delegated_wait_on_selected_session_when_peer_is_first() {
+        let mut selected = session("selected");
+        selected.status = SessionStatus::Stopped;
+        selected.agent_status = Some(AgentStatus {
+            kind: "external_wait".to_string(),
+            note: "waiting for delegated work".to_string(),
+        });
+        let peer = session("peer");
+        let delegated = delegated_session();
+        let mut agent_config = AgentConfig::default();
+        agent_config.statuses.insert(
+            "external_wait".to_string(),
+            AgentStatusConfig {
+                state: AgentStatusState::Waiting,
+            },
+        );
+        let previous_rows = build_progress_rows(
+            &selected,
+            &[FetchedDelegate {
+                session: delegated,
+                checklist_item_id: None,
+                pull_request: None,
+                lookup_unavailable: false,
+            }],
+            &agent_config,
+        );
+
+        assert_eq!(
+            refresh_task_rows_from_sessions(
+                &[peer, selected],
+                "selected",
+                &[],
+                &previous_rows,
+                &agent_config,
+            ),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "peer".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Waiting,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Example delegated work".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,
                         pr_body: ProgressMark::NotStarted,
                         ci: ProgressMark::NotStarted,
