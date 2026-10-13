@@ -1,7 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use std::path::PathBuf;
 
+use crate::commands::agent::is_vibe_enabled;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::infra::git::{get_repo_root, get_repo_root_in};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
@@ -102,6 +103,10 @@ pub struct NewArgs {
     #[arg(long, requires = "worktree")]
     pub force: bool,
 
+    /// Require vibe mode in the current or an ancestor session. This flag does not enable it.
+    #[arg(long)]
+    pub vibe: bool,
+
     #[command(flatten)]
     pub common: CommonNewArgs,
 
@@ -112,7 +117,27 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
-    run_inner(args)
+    run_with_vibe_access(args, is_vibe_enabled, || run_inner(args))
+}
+
+fn run_with_vibe_access(
+    args: &NewArgs,
+    vibe_check: impl FnOnce() -> Result<bool>,
+    launch: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if args.vibe {
+        ensure_vibe_access(vibe_check()?)?;
+    }
+
+    launch()
+}
+
+fn ensure_vibe_access(vibe_enabled: bool) -> Result<()> {
+    if !vibe_enabled {
+        bail!("Vibe mode must be enabled to use --vibe.");
+    }
+
+    Ok(())
 }
 
 fn run_inner(args: &NewArgs) -> Result<()> {
@@ -391,6 +416,7 @@ mod tests {
     use super::*;
     use clap::Parser;
     use rstest::rstest;
+    use std::cell::Cell;
 
     #[derive(Parser)]
     struct TestCli {
@@ -406,6 +432,60 @@ mod tests {
         let cli = TestCli::try_parse_from(argv).unwrap();
         let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::without_vibe_flag(&["a"], Ok(false), Ok(()), false, true)]
+    #[case::vibe_enabled(&["a", "--vibe"], Ok(true), Ok(()), true, true)]
+    #[case::vibe_disabled(
+        &["a", "--vibe"],
+        Ok(false),
+        Err("Vibe mode must be enabled to use --vibe."),
+        true,
+        false
+    )]
+    #[case::vibe_check_fails(
+        &["a", "--vibe"],
+        Err("session lookup failed"),
+        Err("session lookup failed"),
+        true,
+        false
+    )]
+    fn vibe_flag_gates_session_launch(
+        #[case] argv: &[&str],
+        #[case] vibe_check_result: std::result::Result<bool, &'static str>,
+        #[case] expected_result: std::result::Result<(), &'static str>,
+        #[case] expected_vibe_check: bool,
+        #[case] expected_launch: bool,
+    ) {
+        let args = TestCli::try_parse_from(argv).unwrap().args;
+        let vibe_checked = Cell::new(false);
+        let launched = Cell::new(false);
+
+        let result = run_with_vibe_access(
+            &args,
+            || {
+                vibe_checked.set(true);
+                vibe_check_result.map_err(anyhow::Error::msg)
+            },
+            || {
+                launched.set(true);
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                vibe_checked.get(),
+                launched.get(),
+            ),
+            (
+                expected_result.map_err(str::to_owned),
+                expected_vibe_check,
+                expected_launch,
+            ),
+        );
     }
 
     #[rstest]
