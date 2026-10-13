@@ -128,6 +128,18 @@ async fn close_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
     .await
 }
 
+pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Result<()> {
+    close_worktree(
+        worktree_path,
+        &CloseArgs {
+            target: None,
+            force,
+            skip_hooks: false,
+        },
+    )
+    .await
+}
+
 async fn close_with_worktree_plan<P, F>(
     prepare: impl Future<Output = Result<P>>,
     close_session: impl FnOnce() -> Result<()>,
