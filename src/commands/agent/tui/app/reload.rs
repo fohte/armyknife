@@ -387,6 +387,7 @@ mod tests {
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
     use chrono::{TimeDelta, Utc};
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
     /// Counter to assign distinct timestamps to test sessions.
@@ -487,6 +488,16 @@ mod tests {
     // Row-order / selection-persistence tests (TRIAGE inbox layout)
     // =========================================================================
 
+    #[fixture]
+    fn app_with_user_turn_and_active_session() -> App {
+        let mut waiting = create_test_session("awaiting-1");
+        waiting.status = SessionStatus::WaitingInput;
+        waiting
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        create_test_app(vec![waiting, create_test_session("active-1")])
+    }
+
     #[test]
     fn test_selection_follows_session_across_status_change() {
         let running_1 = create_test_session("running-1");
@@ -518,14 +529,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session() {
-        let mut waiting = create_test_session("awaiting-1");
-        waiting.status = SessionStatus::WaitingInput;
-        waiting
-            .crit_urls
-            .push("https://example.com/review".to_string());
-        let mut app = create_test_app(vec![waiting, create_test_session("active-1")]);
+    #[rstest]
+    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session(
+        app_with_user_turn_and_active_session: App,
+    ) {
+        let mut app = app_with_user_turn_and_active_session;
 
         let task_position = app
             .position_of_session_row_occurrence("awaiting-1", 1)
@@ -546,14 +554,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_tq_snapshot_updates_preserve_selected_task_occurrence() {
-        let mut waiting = create_test_session("awaiting-1");
-        waiting.status = SessionStatus::WaitingInput;
-        waiting
-            .crit_urls
-            .push("https://example.com/review".to_string());
-        let mut app = create_test_app(vec![waiting, create_test_session("active-1")]);
+    #[rstest]
+    fn test_tq_snapshot_updates_preserve_selected_task_occurrence(
+        app_with_user_turn_and_active_session: App,
+    ) {
+        let mut app = app_with_user_turn_and_active_session;
 
         let initial_task = SessionTask {
             task_id: "initial-task".to_string(),
