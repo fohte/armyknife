@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.414](https://github.com/fohte/armyknife/compare/v0.1.413...v0.1.414) (2026-10-13)
+
+
+### Bug Fixes
+
+* **ci:** cap unit-test hangs at 15 minutes ([#1161](https://github.com/fohte/armyknife/issues/1161)) ([968611d](https://github.com/fohte/armyknife/commit/968611dd9db9ba3d42b1e68e91ad1f6fdc2ff730))
+
 ## [0.1.413](https://github.com/fohte/armyknife/compare/v0.1.412...v0.1.413) (2026-10-13)
 
 
