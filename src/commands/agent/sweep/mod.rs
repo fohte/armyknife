@@ -1,9 +1,9 @@
 //! `a agent sweep` subcommand.
 //!
-//! Scans every session file on disk and pauses any session that has been
-//! `Stopped` for longer than the configured timeout. Designed to be invoked
-//! periodically (e.g., by a launchd agent on a 1-minute interval) rather than
-//! spawned on demand from the Stop hook.
+//! Scans session files to mark failed Codex turns and pause sessions that have
+//! been `Stopped` for longer than the configured timeout. Designed to be
+//! invoked periodically (e.g., by a launchd agent on a 1-minute interval)
+//! rather than spawned on demand from the Stop hook.
 //!
 //! Claude Code (Node.js) can keep running for a long time after receiving
 //! SIGTERM while blocked in known-flaky code paths (a stalled SSE stream, a
@@ -45,6 +45,7 @@ use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_update
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
+mod codex_failed;
 mod merged_close;
 mod service;
 
@@ -59,8 +60,8 @@ pub struct SweepArgs {
     #[arg(long, global = true)]
     pub timeout: Option<String>,
 
-    /// Dry-run: log what would be paused or closed without sending signals or
-    /// updating session files.
+    /// Dry-run: log what would be paused, marked failed, or closed without
+    /// sending signals or updating session files.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -130,10 +131,14 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             args.dry_run,
         )
     };
-    let (report, merged_closed) = run_sweep_passes(pause_enabled, pause_pass, || {
-        merged_close::close_merged_sessions(args.dry_run)
-    })
-    .await?;
+    let codex_failed_pass = || {
+        codex_failed::mark_failed_codex_sessions(&sessions_dir, &LiveTmuxStatusSyncer, args.dry_run)
+    };
+    let (report, codex_failed, merged_closed) =
+        run_sweep_passes(pause_enabled, pause_pass, codex_failed_pass, || {
+            merged_close::close_merged_sessions(args.dry_run)
+        })
+        .await?;
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -141,6 +146,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         signaled = report.signaled,
         waiting = report.waiting,
         active = report.active,
+        codex_failed,
         merged_closed,
         timeout = %timeout_str,
         dry_run = args.dry_run,
@@ -153,11 +159,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     // `signaled` too would flood the log for exactly the stuck-process
     // scenario this module exists to handle; the structured `tracing::info!`
     // above already records every signal for anyone tailing the JSONL log.
-    if report.paused > 0 || merged_closed > 0 || args.dry_run {
+    if report.paused > 0 || codex_failed > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
+            codex_failed,
             merged_closed,
             report.signaled,
             report.waiting,
@@ -169,13 +176,15 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_sweep_passes<P, M, Fut>(
+async fn run_sweep_passes<P, C, M, Fut>(
     pause_enabled: bool,
     pause_pass: P,
+    codex_failed_pass: C,
     merged_close_pass: M,
-) -> Result<(SweepReport, usize)>
+) -> Result<(SweepReport, usize, usize)>
 where
     P: FnOnce() -> Result<SweepReport>,
+    C: FnOnce() -> Result<usize>,
     M: FnOnce() -> Fut,
     Fut: Future<Output = usize>,
 {
@@ -184,8 +193,9 @@ where
     } else {
         SweepReport::default()
     };
+    let codex_failed = codex_failed_pass()?;
     let merged_closed = merged_close_pass().await;
-    Ok((report, merged_closed))
+    Ok((report, codex_failed, merged_closed))
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
@@ -252,12 +262,11 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
     }
 }
 
-/// Result of a single sweep pass. Exposed for tests and for the CLI summary.
+/// Result of the pause pass. Exposed for tests and for the CLI summary.
 ///
-/// The counters break down every non-ended session file that sweep considered
-/// so users can see *why* a given session was or wasn't paused. Ended
-/// sessions are not counted at all -- they match `a agent list`'s view of the
-/// store.
+/// These counters explain why each non-ended session was or was not paused.
+/// Ended sessions are not counted, matching `a agent list`'s view of the
+/// store. Codex failure detections are counted separately.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SweepReport {
     /// Number of non-ended session files scanned.
@@ -675,8 +684,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabling_auto_pause_still_runs_merged_close_pass() {
+    async fn disabling_auto_pause_still_runs_codex_and_merged_passes() {
         let pause_calls = Cell::new(0);
+        let codex_failed_calls = Cell::new(0);
         let close_calls = Cell::new(0);
         let result = run_sweep_passes(
             false,
@@ -687,6 +697,10 @@ mod tests {
                     ..SweepReport::default()
                 })
             },
+            || {
+                codex_failed_calls.set(codex_failed_calls.get() + 1);
+                Ok(3)
+            },
             || async {
                 close_calls.set(close_calls.get() + 1);
                 2
@@ -696,8 +710,13 @@ mod tests {
         .expect("sweep passes");
 
         assert_eq!(
-            (result, pause_calls.get(), close_calls.get()),
-            ((SweepReport::default(), 2), 0, 1),
+            (
+                result,
+                pause_calls.get(),
+                codex_failed_calls.get(),
+                close_calls.get(),
+            ),
+            ((SweepReport::default(), 3, 2), 0, 1, 1),
         );
     }
 

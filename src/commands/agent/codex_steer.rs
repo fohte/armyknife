@@ -19,6 +19,7 @@ use tungstenite::{Message, WebSocket, client};
 use crate::commands::agent::types::ReasoningEffort;
 
 const INITIALIZE_REQUEST_ID: u64 = 1;
+const TURN_STATUS_READ_REQUEST_ID_START: u64 = 100;
 const TURN_START_REQUEST_ID: u64 = 3;
 const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -62,6 +63,7 @@ struct RpcRequest {
 /// before this client begins listening for it.
 pub struct Client {
     socket: WebSocket<UnixStream>,
+    next_status_read_request_id: u64,
 }
 
 impl Client {
@@ -91,7 +93,10 @@ impl Client {
 
         send_request(&mut socket, &initialize_request()).map_err(request_error_to_anyhow)?;
 
-        Ok(Self { socket })
+        Ok(Self {
+            socket,
+            next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+        })
     }
 
     /// Waits for the top-level thread created in `cwd` and returns its ID.
@@ -147,6 +152,15 @@ impl Client {
             effort,
             &client_user_message_id,
         )
+    }
+
+    /// Reads the status of the latest turn recorded for `thread_id`.
+    pub(crate) fn latest_turn_status(&mut self, thread_id: &str) -> anyhow::Result<Option<String>> {
+        let request_id = self.next_status_read_request_id;
+        self.next_status_read_request_id = request_id
+            .checked_add(1)
+            .context("Codex app-server request ID space was exhausted while reading turn status")?;
+        delivery::latest_turn_status(&mut self.socket, thread_id, request_id)
     }
 }
 
@@ -457,7 +471,59 @@ mod tests {
             .join()
             .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
 
-        Ok((Client { socket }, server))
+        Ok((
+            Client {
+                socket,
+                next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+            },
+            server,
+        ))
+    }
+
+    #[test]
+    fn reads_latest_turn_status_from_thread_history() {
+        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+        let server_thread = std::thread::spawn(move || {
+            let request = server.read().expect("thread/read request");
+            let request: Value = serde_json::from_str(request.to_text().expect("text request"))
+                .expect("request JSON");
+            assert_eq!(
+                request,
+                json!({
+                    "id": TURN_STATUS_READ_REQUEST_ID_START,
+                    "method": "thread/read",
+                    "params": {
+                        "threadId": "fixture-thread-id",
+                        "includeTurns": true,
+                    },
+                }),
+            );
+            server
+                .send(Message::Text(
+                    json!({
+                        "id": TURN_STATUS_READ_REQUEST_ID_START,
+                        "result": {
+                            "thread": {
+                                "turns": [
+                                    {"id": "turn-old", "startedAt": 10, "status": "failed"},
+                                    {"id": "turn-new", "startedAt": 20, "status": "inProgress"},
+                                ],
+                            },
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .expect("thread/read response");
+        });
+
+        assert_eq!(
+            client
+                .latest_turn_status("fixture-thread-id")
+                .expect("turn status"),
+            Some("inProgress".to_string()),
+        );
+        server_thread.join().expect("server thread");
     }
 
     fn thread_started_message() -> Message {
