@@ -12,20 +12,15 @@ use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
 pub(super) async fn fetch_progress(
     selected_session_id: String,
-    task_id: Option<String>,
-    task_session_ids: Option<Vec<String>>,
+    request_scope: ProgressFetchScope,
 ) -> Result<FetchedProgress, String> {
-    let request_scope = Some(ProgressFetchScope {
-        task_id: task_id.clone(),
-        session_ids: task_session_ids.clone(),
-    });
     let sessions = tokio::task::spawn_blocking(store::list_all_sessions)
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
-    let delegated = match task_session_ids {
+    let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
-            let session_ids = session_ids.into_iter().collect::<HashSet<_>>();
+            let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
             task_descendant_delegates(&sessions, &session_ids)
         }
         None => direct_delegates(sessions, &selected_session_id),
@@ -38,7 +33,8 @@ pub(super) async fn fetch_progress(
     .await
     .map_err(|error| format!("failed to inspect delegated worktrees: {error}"))?;
 
-    let implementation_checklist = fetch_implementation_checklist(task_id.as_deref()).await;
+    let implementation_checklist =
+        fetch_implementation_checklist(request_scope.task_id.as_deref()).await;
     let linked_pr_queries = implementation_checklist
         .as_ref()
         .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
@@ -118,7 +114,7 @@ pub(super) async fn fetch_progress(
 
     Ok(FetchedProgress {
         selected_session_id,
-        request_scope,
+        request_scope: Some(request_scope),
         delegated,
         implementation,
         github_error,

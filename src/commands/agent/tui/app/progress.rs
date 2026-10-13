@@ -7,7 +7,8 @@ use super::super::progress::{
 use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
 };
-use super::{App, ProgressScopeKind};
+use super::App;
+use super::progress_selection::{FoldTarget, ProgressFoldAction};
 use crate::commands::agent::types::Session;
 
 #[derive(Clone)]
@@ -16,7 +17,7 @@ pub(super) struct CachedProgress {
     error: Option<String>,
     implementation: Option<ImplementationPlan>,
     request_scope: Option<ProgressFetchScope>,
-    fetched: bool,
+    delegated_sessions: Vec<Session>,
 }
 
 impl App {
@@ -42,7 +43,7 @@ impl App {
                     return;
                 };
                 let scope = self.progress_scope(&selected);
-                let request_scope = progress_fetch_scope(&scope.kind);
+                let request_scope = scope.kind.fetch_scope();
                 if progress
                     .request_scope
                     .as_ref()
@@ -54,12 +55,17 @@ impl App {
                 let cached_implementation = self
                     .progress_cache
                     .get(session_id)
-                    .filter(|cached| cached.request_scope == request_scope)
+                    .filter(|cached| {
+                        same_implementation_scope(
+                            cached.request_scope.as_ref(),
+                            request_scope.as_ref(),
+                        )
+                    })
                     .and_then(|cached| cached.implementation.clone());
                 let implementation = includes_fetched_progress
                     .then(|| progress.implementation.or(cached_implementation))
                     .flatten();
-                let delegated = if includes_fetched_progress {
+                let mut delegated = if includes_fetched_progress {
                     progress
                         .delegated
                         .into_iter()
@@ -73,6 +79,21 @@ impl App {
                 } else {
                     Vec::new()
                 };
+                for session in &scope.delegated {
+                    if let Some(fetched) = delegated
+                        .iter_mut()
+                        .find(|fetched| fetched.session.session_id == session.session_id)
+                    {
+                        fetched.session = session.clone();
+                    } else {
+                        delegated.push(super::super::progress::FetchedDelegate {
+                            session: session.clone(),
+                            checklist_item_id: None,
+                            pull_request: None,
+                            lookup_unavailable: false,
+                        });
+                    }
+                }
                 let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
                     self.checklist_rows(
@@ -96,7 +117,10 @@ impl App {
                         error,
                         implementation,
                         request_scope,
-                        fetched: true,
+                        delegated_sessions: delegated
+                            .iter()
+                            .map(|delegate| delegate.session.clone())
+                            .collect(),
                     },
                     true,
                 );
@@ -134,19 +158,22 @@ impl App {
         existing_rows: &[ProgressRow],
     ) -> CachedProgress {
         let scope = self.progress_scope(selected);
-        if let Some(snapshot) = self
-            .progress_cache
-            .get(&selected.session_id)
-            .filter(|snapshot| snapshot.fetched)
-        {
-            return snapshot.clone();
-        }
-        let implementation = self
-            .progress_cache
-            .get(&selected.session_id)
-            .and_then(|snapshot| snapshot.implementation.clone());
+        let current_request_scope = scope.kind.fetch_scope();
+        let cached = self.progress_cache.get(&selected.session_id);
+        let reusable_cache = cached.filter(|snapshot| {
+            same_implementation_scope(
+                snapshot.request_scope.as_ref(),
+                current_request_scope.as_ref(),
+            )
+        });
+        let implementation = reusable_cache.and_then(|snapshot| snapshot.implementation.clone());
+        let cached_delegates = reusable_cache
+            .map(|snapshot| snapshot.delegated_sessions.as_slice())
+            .unwrap_or_default();
+        let delegated =
+            self.delegates_with_missing_cached_sessions(&scope.delegated, cached_delegates);
         let rows = if let Some(plan) = implementation.as_ref() {
-            self.checklist_rows(&scope.work_sessions, &scope.delegated, plan)
+            self.checklist_rows(&scope.work_sessions, &delegated, plan)
         } else {
             refresh_task_rows_from_sessions(
                 &scope.work_sessions,
@@ -157,9 +184,7 @@ impl App {
             )
         };
         let error = if rows.len() > scope.work_sessions.len() {
-            self.progress_cache
-                .get(&selected.session_id)
-                .and_then(|snapshot| snapshot.error.clone())
+            cached.and_then(|snapshot| snapshot.error.clone())
         } else {
             None
         };
@@ -167,9 +192,29 @@ impl App {
             rows,
             error,
             implementation,
-            request_scope: progress_fetch_scope(&scope.kind),
-            fetched: false,
+            request_scope: cached
+                .map(|snapshot| snapshot.request_scope.clone())
+                .unwrap_or(current_request_scope),
+            delegated_sessions: delegated,
         }
+    }
+
+    fn delegates_with_missing_cached_sessions(
+        &self,
+        current: &[Session],
+        cached: &[Session],
+    ) -> Vec<Session> {
+        let mut delegates = current.to_vec();
+        for session in cached {
+            if self.session_by_id(&session.session_id).is_none()
+                && !delegates
+                    .iter()
+                    .any(|delegate| delegate.session_id == session.session_id)
+            {
+                delegates.push(session.clone());
+            }
+        }
+        delegates
     }
 
     fn store_progress_snapshot(
@@ -265,32 +310,13 @@ impl App {
         let Some(selected_row) = self.progress_rows.get(current_index) else {
             return false;
         };
-        let (target, was_collapsed) = match selected_row {
-            ProgressRow::ImplementationHeader { collapsed, .. } => {
-                (ProgressSelectionKey::Implementation, *collapsed)
-            }
-            ProgressRow::UnmatchedDelegatesHeader { collapsed } => {
-                (ProgressSelectionKey::UnmatchedDelegates, *collapsed)
-            }
-            ProgressRow::BatchHeader {
-                batch_id,
-                collapsed,
-                ..
-            } => (ProgressSelectionKey::Batch(batch_id.clone()), *collapsed),
-            ProgressRow::PullRequest(_) if action == ProgressFoldAction::Collapse => (
-                ProgressSelectionKey::UnmatchedDelegates,
-                !self.progress_unmatched_expanded,
-            ),
-            ProgressRow::Work(_) if action == ProgressFoldAction::Collapse => (
-                ProgressSelectionKey::Implementation,
-                !self.progress_implementation_expanded,
-            ),
-            ProgressRow::ChecklistPullRequest { batch_id, .. }
-                if action == ProgressFoldAction::Collapse =>
-            {
-                (ProgressSelectionKey::Batch(batch_id.clone()), false)
-            }
-            _ => return false,
+        let Some((target, was_collapsed)) = FoldTarget::for_row(
+            selected_row,
+            action,
+            self.progress_implementation_expanded,
+            self.progress_unmatched_expanded,
+        ) else {
+            return false;
         };
         let collapsed = match action {
             ProgressFoldAction::Collapse => true,
@@ -314,21 +340,18 @@ impl App {
         };
 
         match &target {
-            ProgressSelectionKey::Implementation => {
-                self.progress_implementation_expanded = !collapsed
-            }
-            ProgressSelectionKey::Batch(batch_id) => {
+            FoldTarget::Implementation => self.progress_implementation_expanded = !collapsed,
+            FoldTarget::Batch(batch_id) => {
                 self.progress_batch_expanded
                     .insert(batch_id.clone(), !collapsed);
             }
-            ProgressSelectionKey::UnmatchedDelegates => {
+            FoldTarget::UnmatchedDelegates => {
                 self.progress_unmatched_expanded = !collapsed;
             }
-            ProgressSelectionKey::Session(_) => return false,
         }
         let scope = self.progress_scope(&selected);
         let rows = self.checklist_rows(&scope.work_sessions, &scope.delegated, &plan);
-        self.replace_progress_rows(rows, Some(target), current_index);
+        self.replace_progress_rows(rows, Some(target.selection_key()), current_index);
         true
     }
 
@@ -441,20 +464,15 @@ impl App {
     }
 }
 
-fn progress_fetch_scope(scope: &ProgressScopeKind) -> Option<ProgressFetchScope> {
-    match scope {
-        ProgressScopeKind::OwnOnly => None,
-        ProgressScopeKind::Direct => Some(ProgressFetchScope {
-            task_id: None,
-            session_ids: None,
-        }),
-        ProgressScopeKind::Task {
-            task_id,
-            session_ids,
-        } => Some(ProgressFetchScope {
-            task_id: Some(task_id.clone()),
-            session_ids: Some(session_ids.clone()),
-        }),
+fn same_implementation_scope(
+    cached: Option<&ProgressFetchScope>,
+    current: Option<&ProgressFetchScope>,
+) -> bool {
+    match (cached, current) {
+        (Some(cached), Some(current)) if cached.task_id.is_some() && current.task_id.is_some() => {
+            cached.task_id == current.task_id
+        }
+        _ => cached == current,
     }
 }
 
@@ -466,11 +484,4 @@ fn expand_initial_target_batch(
     if let Some(batch_id) = target.and_then(|delegate_id| plan.batch_id_for_delegate(delegate_id)) {
         expanded_batches.insert(batch_id.to_string(), true);
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum ProgressFoldAction {
-    Collapse,
-    Expand,
-    Toggle,
 }

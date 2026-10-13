@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::super::progress::ProgressFetchScope;
 use super::super::progress_fetch::{direct_delegates, task_descendant_delegates};
 use super::App;
 use crate::commands::agent::types::Session;
@@ -21,6 +22,23 @@ pub(in crate::commands::agent::tui) enum ProgressScopeKind {
 impl ProgressScopeKind {
     pub(super) fn includes_fetched_progress(&self) -> bool {
         !matches!(self, Self::OwnOnly)
+    }
+
+    pub(in crate::commands::agent::tui) fn fetch_scope(&self) -> Option<ProgressFetchScope> {
+        match self {
+            Self::OwnOnly => None,
+            Self::Direct => Some(ProgressFetchScope {
+                task_id: None,
+                session_ids: None,
+            }),
+            Self::Task {
+                task_id,
+                session_ids,
+            } => Some(ProgressFetchScope {
+                task_id: Some(task_id.clone()),
+                session_ids: Some(session_ids.clone()),
+            }),
+        }
     }
 }
 
@@ -58,7 +76,7 @@ impl App {
             .collect()
     }
 
-    pub(in crate::commands::agent::tui) fn progress_fetch_scope(
+    pub(in crate::commands::agent::tui) fn progress_scope_for_session(
         &self,
         session_id: &str,
     ) -> Option<ProgressScopeKind> {

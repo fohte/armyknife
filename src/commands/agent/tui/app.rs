@@ -55,6 +55,7 @@ mod reload;
 mod tq;
 mod worktree;
 
+#[cfg(test)]
 pub(super) use progress_scope::ProgressScopeKind;
 
 use reload::{

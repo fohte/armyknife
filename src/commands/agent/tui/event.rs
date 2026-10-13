@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
-use super::progress::FetchedProgress;
+use super::progress::{FetchedProgress, ProgressFetchScope};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
@@ -175,12 +175,7 @@ impl EventHandler {
     }
 
     /// Fetch delegated sessions and their PR progress for the selected task.
-    pub fn start_progress_fetch(
-        &self,
-        session_id: String,
-        task_id: Option<String>,
-        task_session_ids: Option<Vec<String>>,
-    ) {
+    pub fn start_progress_fetch(&self, session_id: String, fetch_scope: ProgressFetchScope) {
         let tx = self.sender.clone();
         let Some(rt) = self.rt_handle.as_ref().cloned() else {
             let _ = tx.send(AppEvent::ProgressFetched {
@@ -190,12 +185,8 @@ impl EventHandler {
             return;
         };
         rt.spawn(async move {
-            let result = super::progress_fetch::fetch_progress(
-                session_id.clone(),
-                task_id,
-                task_session_ids,
-            )
-            .await;
+            let result =
+                super::progress_fetch::fetch_progress(session_id.clone(), fetch_scope).await;
             let _ = tx.send(AppEvent::ProgressFetched { session_id, result });
         });
     }

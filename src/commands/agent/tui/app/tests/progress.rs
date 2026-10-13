@@ -545,7 +545,7 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
         ])));
     }
 
-    let fetch_scope = app.progress_fetch_scope("project-manager");
+    let fetch_scope = app.progress_scope_for_session("project-manager");
 
     app.apply_progress_result(
         "project-manager",
@@ -591,7 +591,7 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
 }
 
 #[rstest]
-fn local_progress_refresh_keeps_the_last_fetched_rows_until_fetch_completes(
+fn local_progress_refresh_uses_current_delegate_state(
     timestamp: DateTime<Utc>,
     delegated_session: Session,
 ) {
@@ -608,7 +608,15 @@ fn local_progress_refresh_keeps_the_last_fetched_rows_until_fetch_completes(
             delegated: vec![FetchedDelegate {
                 session: delegated_session,
                 checklist_item_id: None,
-                pull_request: None,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 42,
+                        title: "Finished change".to_string(),
+                        state: PrState::Open,
+                        url: "https://example.test/pull/42".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
                 lookup_unavailable: false,
             }],
             implementation: None,
@@ -645,18 +653,18 @@ fn local_progress_refresh_keeps_the_last_fetched_rows_until_fetch_completes(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
-                    title: "delegate".to_string(),
-                    number: None,
-                    url: None,
+                    title: "Finished change".to_string(),
+                    number: Some(42),
+                    url: Some("https://example.test/pull/42".to_string()),
                     pane_id: None,
-                    is_ended: false,
+                    is_ended: true,
                     lookup_unavailable: false,
                     stages: StageMarks {
-                        implementation: ProgressMark::Working,
-                        diff_review: ProgressMark::NotStarted,
-                        pr_body: ProgressMark::NotStarted,
-                        ci: ProgressMark::NotStarted,
-                        merge: ProgressMark::NotStarted,
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Working,
+                        merge: ProgressMark::Waiting,
                     },
                 }),
             ],
@@ -1116,19 +1124,38 @@ fn keeps_fetched_checklist_rows_while_a_session_reload_is_incomplete(
 }
 
 #[rstest]
+#[case::task_id_changed("task-b", false, vec!["delegate", "selected"])]
+#[case::task_membership_changed("task-a", true, vec!["delegate", "selected"])]
 fn ignores_progress_results_from_an_outdated_task_scope(
     timestamp: DateTime<Utc>,
     delegated_session: Session,
+    #[case] stale_task_id: &str,
+    #[case] add_linked_session: bool,
+    #[case] stale_session_ids: Vec<&str>,
 ) {
     let selected = create_test_session_at("selected", timestamp);
-    let mut app = create_test_app(vec![selected, delegated_session]);
-    app.update_row_order(&[None, Some("selected"), Some("delegate")]);
+    let linked_later = create_test_session_at("linked-later", timestamp);
+    let mut app = create_test_app(vec![selected, delegated_session, linked_later]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("delegate"),
+        Some("linked-later"),
+    ]);
     app.list_state.select(Some(1));
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("selected".to_string(), vec![task_link("task-a")]),
         ("delegate".to_string(), vec![task_link("task-a")]),
     ])));
     app.begin_progress_refresh("selected");
+    if add_linked_session {
+        app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+            ("selected".to_string(), vec![task_link("task-a")]),
+            ("delegate".to_string(), vec![task_link("task-a")]),
+            ("linked-later".to_string(), vec![task_link("task-a")]),
+        ])));
+        app.refresh_progress_from_sessions("selected");
+    }
     let before = app.progress_rows.clone();
 
     app.apply_progress_result(
@@ -1136,8 +1163,13 @@ fn ignores_progress_results_from_an_outdated_task_scope(
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
             request_scope: Some(ProgressFetchScope {
-                task_id: Some("task-b".to_string()),
-                session_ids: Some(vec!["delegate".to_string(), "selected".to_string()]),
+                task_id: Some(stale_task_id.to_string()),
+                session_ids: Some(
+                    stale_session_ids
+                        .iter()
+                        .map(|session_id| session_id.to_string())
+                        .collect(),
+                ),
             }),
             delegated: Vec::new(),
             implementation: None,
