@@ -6,6 +6,8 @@ use anyhow::Context;
 use indoc::indoc;
 use serde::Deserialize;
 
+mod partial_graphql;
+
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
 use crate::infra::external_tool::ExternalTool;
@@ -208,25 +210,6 @@ impl GitHubClient {
             let messages: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
             return Err(GitHubError::GraphQLError(messages.join(", ")).into());
         }
-
-        response
-            .data
-            .ok_or_else(|| GitHubError::GraphQLError("No data in response".to_string()).into())
-    }
-
-    /// Execute a GraphQL query and return any available data, even when some
-    /// fields reported errors. Callers must handle null fields individually.
-    pub(super) async fn graphql_with_partial_data<T: serde::de::DeserializeOwned>(
-        &self,
-        query: &str,
-        variables: serde_json::Value,
-    ) -> Result<T> {
-        let body = serde_json::json!({
-            "query": query,
-            "variables": variables,
-        });
-        let response = self.http.post(&self.graphql_url).json(&body).send().await?;
-        let response: GraphQLResponse<T> = check_response(response).await?;
 
         response
             .data
