@@ -198,15 +198,64 @@ pub(super) fn turn_status<'a>(thread: &'a Value, turn_id: &str) -> Option<&'a st
         .and_then(Value::as_str)
 }
 
+pub(super) fn latest_turn_status(thread: &Value) -> Option<&str> {
+    thread
+        .get("turns")
+        .and_then(Value::as_array)?
+        .iter()
+        .max_by(|left, right| compare_turn_recency(left, right))?
+        .get("status")
+        .and_then(Value::as_str)
+}
+
+fn compare_turn_recency(left: &Value, right: &Value) -> std::cmp::Ordering {
+    let left_started_at = left.get("startedAt").and_then(Value::as_i64);
+    let right_started_at = right.get("startedAt").and_then(Value::as_i64);
+    match (left_started_at, right_started_at) {
+        (Some(left), Some(right)) if left != right => left.cmp(&right),
+        _ => left
+            .get("id")
+            .and_then(Value::as_str)
+            .cmp(&right.get("id").and_then(Value::as_str)),
+    }
+}
+
 pub(super) fn is_terminal_turn_status(status: &str) -> bool {
     matches!(status, "completed" | "interrupted" | "failed")
 }
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
+    use rstest::rstest;
+    use serde_json::{Value, json};
 
-    use super::{MatchingItemSnapshot, has_user_message};
+    use super::{MatchingItemSnapshot, has_user_message, latest_turn_status};
+
+    #[rstest]
+    #[case::newer_start_time(json!({
+        "turns": [
+            {"id": "turn-old", "startedAt": 10, "status": "failed"},
+            {"id": "turn-new", "startedAt": 20, "status": "completed"},
+        ],
+    }), Some("completed"))]
+    #[case::same_start_time_uses_turn_id(json!({
+        "turns": [
+            {"id": "00000000-0000-7000-8000-000000000001", "startedAt": 10, "status": "failed"},
+            {"id": "00000000-0000-7000-8000-000000000002", "startedAt": 10, "status": "inProgress"},
+        ],
+    }), Some("inProgress"))]
+    #[case::missing_start_time_uses_turn_id(json!({
+        "turns": [
+            {"id": "00000000-0000-7000-8000-000000000001", "startedAt": 10, "status": "failed"},
+            {"id": "00000000-0000-7000-8000-000000000002", "status": "inProgress"},
+        ],
+    }), Some("inProgress"))]
+    fn latest_turn_status_picks_most_recent_turn(
+        #[case] thread: Value,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(latest_turn_status(&thread), expected);
+    }
 
     #[test]
     fn ignores_same_body_in_a_different_turn() {

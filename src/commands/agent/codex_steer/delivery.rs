@@ -12,8 +12,8 @@ use super::{DeliveryError, RequestError, RpcRequest, TURN_START_RESPONSE_TIMEOUT
 mod history;
 use history::{
     MatchingItemSnapshot, has_completed_turn_notification, has_recorded_message,
-    has_user_message_notification, is_terminal_turn_status, matching_user_message_snapshot,
-    turn_status,
+    has_user_message_notification, is_terminal_turn_status, latest_turn_status as latest_status,
+    matching_user_message_snapshot, turn_status,
 };
 
 const PRE_TURN_READ_REQUEST_ID: u64 = 2;
@@ -309,6 +309,19 @@ fn read_thread(
         socket,
         &thread_read_request(thread_id, request_id),
     )
+}
+
+pub(super) fn latest_turn_status(
+    socket: &mut WebSocket<UnixStream>,
+    thread_id: &str,
+    request_id: u64,
+) -> anyhow::Result<Option<String>> {
+    let (response, _) = read_thread(socket, thread_id, request_id, super::RESPONSE_TIMEOUT)
+        .map_err(super::request_error_to_anyhow)?;
+    let thread = response
+        .get("thread")
+        .ok_or_else(|| anyhow!("Codex app-server thread/read response did not contain a thread"))?;
+    Ok(latest_status(thread).map(str::to_string))
 }
 
 fn take_request_id(next_request_id: &mut u64) -> super::Result<u64> {

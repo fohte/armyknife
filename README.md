@@ -407,7 +407,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `crit add <url>`                                  |         | Associate a crit review with the calling session                          |
 | `crit open [--session <id> \| --pane <pane_id>]`  |         | Toggle the latest associated review in a tmux floating pane               |
 | `bg run -- <cmd> [args...]`                       |         | Run a command detached and notify this session when it finishes           |
-| `sweep`                                           |         | Pause idle sessions and close those with merged pull requests             |
+| `sweep`                                           |         | Mark failed Codex turns, pause idle sessions, and close merged sessions   |
 | `auto-compact schedule --session <id>`            |         | Detached worker spawned by the Stop hook (not for direct use)             |
 | `window-status <window_id>`                       |         | Print status symbols for the sessions in a tmux window                    |
 | `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty    |
@@ -686,6 +686,8 @@ Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which 
 #### Auto-pause
 
 Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a agent resume` can restore the conversation.
+
+Sweep also checks the latest app-server turn for each running Codex session and marks the session `failed` when Codex reports a failed turn. If the app-server cannot be reached, that session is skipped for the current pass.
 
 `a agent sweep` scans every session file once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
