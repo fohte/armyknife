@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.398](https://github.com/fohte/armyknife/compare/v0.1.397...v0.1.398) (2026-10-13)
+
+
+### Features
+
+* **agent:** configure fallback icons in watch ([#1129](https://github.com/fohte/armyknife/issues/1129)) ([b98fd51](https://github.com/fohte/armyknife/commit/b98fd51ccf36e60f8757931b74cd5fa9585dc26f))
+
 ## [0.1.397](https://github.com/fohte/armyknife/compare/v0.1.396...v0.1.397) (2026-10-13)
 
 
