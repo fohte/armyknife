@@ -3,7 +3,9 @@ use std::{future::Future, io::Write, path::PathBuf, process::Output, time::Durat
 use anyhow::{Context, bail};
 use clap::Args;
 
-use crate::commands::agent::{close_worktree_path, ensure_repo_vibe_access, is_vibe_enabled};
+use crate::commands::agent::{
+    close_worktree, close_worktree_path, ensure_repo_vibe_access, is_vibe_enabled,
+};
 use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
@@ -186,7 +188,16 @@ async fn close_merged_head_worktree(
     match find_local_head_worktree(&owner, &repo_name, &merged_pr.head_ref_name, &config) {
         HeadWorktreeSelection::NotFound => Ok(()),
         HeadWorktreeSelection::Unique(worktree_path) => {
-            close_worktree_path(&worktree_path, force_close).await
+            close_worktree_path(
+                &worktree_path,
+                force_close,
+                |path, args, refuse_current_session| {
+                    let path = path.to_path_buf();
+                    let args = args.clone();
+                    async move { close_worktree(&path, &args, refuse_current_session).await }
+                },
+            )
+            .await
         }
         HeadWorktreeSelection::Ambiguous(count) => {
             eprintln!(

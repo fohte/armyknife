@@ -116,7 +116,7 @@ async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> 
     .await
 }
 
-async fn close_worktree(
+pub(crate) async fn close_worktree(
     worktree_root: &Path,
     args: &CloseArgs,
     refuse_current_session: bool,
@@ -153,17 +153,21 @@ async fn close_worktree(
     .await
 }
 
-pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Result<()> {
-    close_worktree(
-        worktree_path,
-        &CloseArgs {
-            target: None,
-            force,
-            skip_hooks: false,
-        },
-        true,
-    )
-    .await
+pub(crate) async fn close_worktree_path<C, F>(
+    worktree_path: &Path,
+    force: bool,
+    close: C,
+) -> Result<()>
+where
+    C: FnOnce(&Path, &CloseArgs, bool) -> F,
+    F: Future<Output = Result<()>>,
+{
+    let args = CloseArgs {
+        target: None,
+        force,
+        skip_hooks: false,
+    };
+    close(worktree_path, &args, true).await
 }
 
 fn ensure_not_closing_current_session(
@@ -1052,6 +1056,48 @@ mod tests {
             ensure_not_closing_current_session(Some(&session), caller_session_id, current_pane_id,)
                 .map_err(|error| error.to_string()),
             expected,
+        );
+    }
+
+    #[rstest]
+    #[case::without_force(false)]
+    #[case::with_force(true)]
+    #[tokio::test]
+    async fn close_worktree_path_always_refuses_the_callers_session(#[case] force: bool) {
+        let worktree_path = Path::new("/tmp/test-worktree");
+        let called_with = RefCell::new(None);
+
+        let result = close_worktree_path(
+            worktree_path,
+            force,
+            |path, args, refuse_current_session| {
+                called_with.replace(Some((
+                    path.to_path_buf(),
+                    args.target.clone(),
+                    args.force,
+                    args.skip_hooks,
+                    refuse_current_session,
+                )));
+                std::future::ready(Ok(()))
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                called_with.into_inner()
+            ),
+            (
+                Ok(()),
+                Some((
+                    PathBuf::from("/tmp/test-worktree"),
+                    None,
+                    force,
+                    false,
+                    true,
+                )),
+            ),
         );
     }
 

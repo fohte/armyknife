@@ -53,7 +53,7 @@ pub use bg::BgCommands;
 pub use clean::CleanArgs;
 pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
-pub(crate) use close::close_worktree_path;
+pub(crate) use close::{close_worktree, close_worktree_path};
 pub use codex::CodexArgs;
 pub use crit::CritCommands;
 pub use focus::FocusArgs;
