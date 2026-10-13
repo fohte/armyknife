@@ -49,6 +49,7 @@ mod delete;
 mod filter;
 mod navigation;
 mod progress;
+mod progress_scope;
 mod reload;
 mod tq;
 mod worktree;
