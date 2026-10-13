@@ -1,11 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::Session;
-use crate::infra::git::{GitRepo, github_owner_and_repo};
+use crate::commands::agent::types::{Session, SessionPrContext};
+use crate::infra::git::GitRepo;
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
+use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress};
 use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
@@ -148,6 +149,7 @@ struct BranchQueries {
     unavailable: HashSet<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum BranchLookup {
     Query {
         query: BranchPrQuery,
@@ -203,49 +205,57 @@ fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
 }
 
 fn branch_query_for(session: &Session) -> BranchLookup {
-    let repo = match GitRepo::open_at(&session.cwd) {
-        Ok(repo) => repo,
-        Err(_) => return BranchLookup::Unavailable,
-    };
-    if !repo.is_worktree() {
-        return BranchLookup::NotApplicable;
+    branch_query_for_with(session, || {
+        GitRepo::open_at(&session.cwd)
+            .ok()
+            .map(|repo| session_pr_context::resolve(&repo))
+    })
+}
+
+fn branch_query_for_with(
+    session: &Session,
+    resolve_live: impl FnOnce() -> Option<Resolution>,
+) -> BranchLookup {
+    if let Some(context) = &session.pr_context {
+        return branch_query_from_context(context.clone());
     }
-    let branch = match repo.current_branch() {
-        Ok(branch) => branch,
-        Err(_) => return BranchLookup::Unavailable,
-    };
-    if branch == "HEAD" {
-        return BranchLookup::NotApplicable;
-    }
-    let checklist_item_id = repo.local_config_value(&branch_checklist_item_config_key(&branch));
-    match github_owner_and_repo(&repo) {
-        Ok((owner, repo_name)) => BranchLookup::Query {
-            query: BranchPrQuery {
-                owner,
-                repo: repo_name,
-                branch,
-            },
-            checklist_item_id,
-        },
-        Err(_) => checklist_item_id
-            .map(BranchLookup::ChecklistOnly)
-            .unwrap_or(BranchLookup::Unavailable),
+
+    branch_lookup_for_resolution(resolve_live())
+}
+
+fn branch_lookup_for_resolution(live_resolution: Option<Resolution>) -> BranchLookup {
+    match live_resolution {
+        Some(Resolution::Context(context)) => branch_query_from_context(context),
+        Some(Resolution::ChecklistOnly(item_id)) => BranchLookup::ChecklistOnly(item_id),
+        Some(Resolution::NotApplicable) => BranchLookup::NotApplicable,
+        Some(Resolution::Unavailable) => BranchLookup::Unavailable,
+        None => BranchLookup::Unavailable,
     }
 }
 
-fn branch_checklist_item_config_key(branch: &str) -> String {
-    format!("branch.{branch}.x-tq-checklist-item-id")
+fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
+    BranchLookup::Query {
+        query: BranchPrQuery {
+            owner: context.owner,
+            repo: context.repo,
+            branch: context.branch,
+        },
+        checklist_item_id: context.checklist_item_id,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    use std::cell::Cell;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
+    use rstest::{fixture, rstest};
 
-    use super::{branch_queries_for_sessions, direct_delegates};
-    use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use super::{BranchLookup, Resolution, branch_query_for_with, direct_delegates};
+    use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
+    use crate::infra::github::BranchPrQuery;
 
     #[test]
     fn lists_only_immediate_delegates_by_recent_activity() {
@@ -266,23 +276,80 @@ mod tests {
         );
     }
 
-    #[test]
-    fn marks_unresolvable_worktrees_unavailable_without_creating_pr_queries() {
-        let mut delegate = session("delegate", true, vec!["parent"], 10);
-        delegate.cwd = std::env::temp_dir()
-            .join(format!(
-                "armyknife-test-missing-repository-{}",
-                std::process::id()
-            ))
-            .join("worktree");
-        let queries = branch_queries_for_sessions(&[delegate]);
+    #[fixture]
+    fn saved_context() -> SessionPrContext {
+        SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "saved-branch".to_string(),
+            checklist_item_id: Some("saved-item".to_string()),
+        }
+    }
+
+    #[rstest]
+    #[case::missing_repository(None, BranchLookup::Unavailable)]
+    #[case::unavailable_repository(Some(Resolution::Unavailable), BranchLookup::Unavailable)]
+    #[case::live_context(
+        Some(Resolution::Context(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "live-branch".to_string(),
+            checklist_item_id: Some("live-item".to_string()),
+        })),
+        BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "live-branch".to_string(),
+            },
+            checklist_item_id: Some("live-item".to_string()),
+        },
+    )]
+    #[case::checklist_only(
+        Some(Resolution::ChecklistOnly("live-item".to_string())),
+        BranchLookup::ChecklistOnly("live-item".to_string()),
+    )]
+    #[case::not_applicable(Some(Resolution::NotApplicable), BranchLookup::NotApplicable)]
+    fn uses_live_resolution_without_saved_context(
+        #[case] live_resolution: Option<Resolution>,
+        #[case] expected: BranchLookup,
+    ) {
+        let session = session("delegate", true, vec!["parent"], 10);
+        assert_eq!(
+            branch_query_for_with(&session, || live_resolution),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn prefers_saved_context_over_live_context(saved_context: SessionPrContext) {
+        let mut session = session("delegate", true, vec!["parent"], 10);
+        session.pr_context = Some(saved_context);
+        let resolver_called = Cell::new(false);
 
         assert_eq!(
-            (queries.queries, queries.by_session, queries.unavailable,),
             (
-                Vec::new(),
-                HashMap::new(),
-                HashSet::from(["delegate".to_string()]),
+                branch_query_for_with(&session, || {
+                    resolver_called.set(true);
+                    Some(Resolution::Context(SessionPrContext {
+                        owner: "other-owner".to_string(),
+                        repo: "other-repo".to_string(),
+                        branch: "live-branch".to_string(),
+                        checklist_item_id: Some("live-item".to_string()),
+                    }))
+                }),
+                resolver_called.get(),
+            ),
+            (
+                BranchLookup::Query {
+                    query: BranchPrQuery {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repo".to_string(),
+                        branch: "saved-branch".to_string(),
+                    },
+                    checklist_item_id: Some("saved-item".to_string()),
+                },
+                false,
             ),
         );
     }
@@ -295,6 +362,7 @@ mod tests {
     ) -> Session {
         let updated_at = Utc.timestamp_opt(updated_second, 0).single().unwrap();
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

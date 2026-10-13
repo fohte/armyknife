@@ -12,6 +12,9 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
+    /// GitHub lookup data retained after a delegated worktree is removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_context: Option<SessionPrContext>,
     /// Crit review URLs opened by this session, ordered by most recently requested.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub crit_urls: Vec<String>,
@@ -127,6 +130,15 @@ pub struct Session {
     pub engine: Engine,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionPrContext {
+    pub owner: String,
+    pub repo: String,
+    pub branch: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checklist_item_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -157,6 +169,7 @@ mod tests {
                 session.agent_status,
                 session.stop_blocked_by_armyknife,
                 session.agent_status_clear_pending,
+                session.pr_context,
             ),
             (
                 None,
@@ -167,7 +180,8 @@ mod tests {
                 BTreeSet::new(),
                 None,
                 false,
-                false
+                false,
+                None
             )
         );
     }

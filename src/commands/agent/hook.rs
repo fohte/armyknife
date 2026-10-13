@@ -381,6 +381,9 @@ fn process_hook_event_impl_with_instruction(
             .unwrap_or_default();
 
         Session {
+            pr_context: side_effects
+                .capture_pr_context
+                .and_then(|capture| capture(&input.cwd)),
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
             // A new ID in a pane that already tracked a session is a restart or
@@ -1227,6 +1230,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::session_pr_context::fixed_context_capture;
     use crate::commands::agent::types::AgentStatus;
     use rstest::{fixture, rstest};
 
@@ -1831,6 +1835,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            pr_context: None,
             session_id: "paused-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -2292,6 +2297,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            pr_context: None,
             session_id: "end-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -2409,6 +2415,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
@@ -2816,6 +2823,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed.clone()),
@@ -2902,6 +2910,7 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            pr_context: None,
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -3338,6 +3347,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: Some(removed_notification_groups.clone()),
@@ -3660,6 +3670,71 @@ mod tests {
                 result,
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
+            );
+        }
+
+        #[test]
+        fn user_prompt_submit_persists_captured_pr_context() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut side_effects = SideEffects::none();
+            side_effects.capture_pr_context = Some(fixed_context_capture);
+
+            let actual = temp_env::with_vars(
+                [
+                    (EnvVars::session_label_name(), None::<&str>),
+                    (EnvVars::session_work_type_name(), None::<&str>),
+                    (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::ancestor_session_ids_name(), None::<&str>),
+                ],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::UserPromptSubmit,
+                        create_test_input(None),
+                        temp_dir.path(),
+                        &side_effects,
+                    )
+                    .expect("user-prompt-submit should succeed");
+
+                    let session = store::load_session_from(temp_dir.path(), "test-123")
+                        .expect("session should load")
+                        .expect("session should exist");
+                    let mut actual =
+                        serde_json::to_value(session).expect("session should serialize");
+                    actual["created_at"] = serde_json::json!("<timestamp>");
+                    actual["updated_at"] = serde_json::json!("<timestamp>");
+                    actual
+                },
+            );
+
+            assert_eq!(
+                actual,
+                serde_json::json!({
+                    "session_id": "test-123",
+                    "pr_context": {
+                        "owner": "sample-owner",
+                        "repo": "sample-repo",
+                        "branch": "sample-branch",
+                        "checklist_item_id": "sample-item"
+                    },
+                    "cwd": "/tmp/test",
+                    "transcript_path": null,
+                    "tty": null,
+                    "tmux_info": null,
+                    "status": "running",
+                    "created_at": "<timestamp>",
+                    "updated_at": "<timestamp>",
+                    "last_message": null,
+                    "current_tool": null,
+                    "label": null,
+                    "work_type": null,
+                    "ancestor_session_ids": [],
+                    "pending_bg_task_ids": [],
+                    "pending_agent_task_ids": [],
+                    "pending_permission_agent_ids": [],
+                    "read_at": null,
+                    "sweep_signaled": false,
+                    "engine": "claude"
+                }),
             );
         }
 
@@ -4092,6 +4167,7 @@ mod tests {
         fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
+                pr_context: None,
                 session_id: session_id.to_string(),
                 work_type: None,
                 work_type_pinned: false,

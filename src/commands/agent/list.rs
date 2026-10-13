@@ -260,6 +260,7 @@ mod tests {
 
     fn create_test_session() -> Session {
         Session {
+            pr_context: None,
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -424,6 +425,7 @@ mod tests {
         let now = Utc::now();
         let sessions = vec![
             Session {
+                pr_context: None,
                 session_id: "s1".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -454,6 +456,7 @@ mod tests {
                 engine: Engine::Claude,
             },
             Session {
+                pr_context: None,
                 session_id: "s2".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -484,6 +487,7 @@ mod tests {
                 engine: Engine::Claude,
             },
             Session {
+                pr_context: None,
                 session_id: "s3".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -514,6 +518,7 @@ mod tests {
                 engine: Engine::Claude,
             },
             Session {
+                pr_context: None,
                 session_id: "s4".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -820,6 +825,7 @@ mod tests {
         let now = Utc::now();
         let sessions = vec![
             Session {
+                pr_context: None,
                 session_id: "s1".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -855,6 +861,7 @@ mod tests {
                 engine: Engine::Claude,
             },
             Session {
+                pr_context: None,
                 session_id: "s2".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -890,6 +897,7 @@ mod tests {
                 engine: Engine::Claude,
             },
             Session {
+                pr_context: None,
                 session_id: "s3".to_string(),
                 work_type: None,
                 work_type_pinned: false,

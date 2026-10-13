@@ -701,6 +701,7 @@ mod tests {
 
         fn session_with_ancestors(id: &str, ancestor_session_ids: Vec<String>) -> Session {
             Session {
+                pr_context: None,
                 session_id: id.to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -768,6 +769,7 @@ mod tests {
 
         fn session_with_engine(id: &str, engine: Engine) -> Session {
             Session {
+                pr_context: None,
                 session_id: id.to_string(),
                 work_type: None,
                 work_type_pinned: false,

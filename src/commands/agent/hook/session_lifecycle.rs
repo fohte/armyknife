@@ -196,6 +196,7 @@ mod tests {
     fn session(engine: Engine, status: SessionStatus, sweep_signaled: bool) -> Session {
         let now = Utc::now();
         Session {
+            pr_context: None,
             session_id: "thread-one".to_string(),
             work_type: None,
             work_type_pinned: false,

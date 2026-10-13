@@ -150,6 +150,7 @@ mod tests {
         updated_at: DateTime<Utc>,
     ) -> Session {
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),

@@ -68,6 +68,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
                 &session_id,
                 &cwd,
                 ancestor_session_ids,
+                Some(super::session_pr_context::capture),
             )?;
         }
         return run_codex_resume_with_status(&session_id, || {
@@ -499,6 +500,7 @@ mod tests {
         fn session(engine: Engine, status: SessionStatus) -> Session {
             let now = Utc::now();
             Session {
+                pr_context: None,
                 session_id: "resume-target".to_string(),
                 work_type: None,
                 work_type_pinned: false,
@@ -677,6 +679,7 @@ mod tests {
                 "resume-target",
                 Path::new("/tmp/test"),
                 "root",
+                None,
             )
             .expect("metadata should be recorded");
             let current_tmux_info = Some(TmuxInfo {
@@ -762,6 +765,7 @@ mod tests {
 
         fn session(status: SessionStatus, tmux_info: Option<TmuxInfo>) -> Session {
             Session {
+                pr_context: None,
                 session_id: "guard-test".to_string(),
                 work_type: None,
                 work_type_pinned: false,

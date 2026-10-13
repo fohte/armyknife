@@ -232,6 +232,7 @@ mod tests {
     fn session() -> Session {
         let now = Utc::now();
         Session {
+            pr_context: None,
             session_id: "session-placeholder".to_string(),
             work_type: None,
             work_type_pinned: false,
