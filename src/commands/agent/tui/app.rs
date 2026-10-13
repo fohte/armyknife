@@ -12,18 +12,18 @@ use std::path::PathBuf;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
-use super::progress::{
-    FetchedProgress, ProgressRow, build_progress_rows, refresh_rows_from_sessions,
-};
-use super::progress_fetch::direct_delegates;
+use super::progress::ProgressRow;
 use super::session_rows::SessionTask;
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
+
+use progress::CachedProgress;
 
 mod clean;
 mod delete;
 mod filter;
 mod navigation;
+mod progress;
 mod reload;
 mod tq;
 mod worktree;
@@ -144,8 +144,8 @@ pub struct App {
     pub(super) progress_table_state: TableState,
     pub(super) progress_rows: Vec<ProgressRow>,
     pub(super) progress_session_id: Option<String>,
-    pub(super) progress_loading: bool,
     pub(super) progress_error: Option<String>,
+    progress_cache: HashMap<String, CachedProgress>,
     /// Whether the PROGRESS pane currently receives keyboard input.
     pub progress_focused: bool,
 }
@@ -241,8 +241,8 @@ impl App {
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),
             progress_session_id: None,
-            progress_loading: false,
             progress_error: None,
+            progress_cache: HashMap::new(),
             progress_focused: false,
         };
         app.rebuild_row_order();
@@ -274,119 +274,6 @@ impl App {
     pub(super) fn selected_session_id(&self) -> Option<&str> {
         self.selected_session()
             .map(|session| session.session_id.as_str())
-    }
-
-    pub(super) fn begin_progress_refresh(&mut self, session_id: &str) {
-        let Some(session) = self
-            .selected_session()
-            .filter(|session| session.session_id == session_id)
-            .cloned()
-        else {
-            return;
-        };
-        let work_row = build_progress_rows(&session, &[], &self.agent_config)
-            .into_iter()
-            .next();
-        if self.progress_session_id.as_deref() != Some(session_id) {
-            self.progress_rows = work_row.into_iter().collect();
-            self.progress_list_state.select(Some(0));
-            self.progress_table_state.select(None);
-            self.progress_session_id = Some(session_id.to_string());
-        } else if let Some(work_row) = work_row {
-            if let Some(first_row) = self.progress_rows.first_mut() {
-                *first_row = work_row;
-            } else {
-                self.progress_rows.push(work_row);
-            }
-        }
-        self.progress_loading = true;
-        self.progress_error = None;
-    }
-
-    pub(super) fn refresh_progress_from_sessions(&mut self, session_id: &str) {
-        let Some(selected) = self
-            .selected_session()
-            .filter(|session| session.session_id == session_id)
-            .cloned()
-        else {
-            return;
-        };
-        let selected_row_id = self
-            .progress_list_state
-            .selected()
-            .and_then(|index| self.progress_rows.get(index))
-            .map(|row| row.session_id().to_string());
-        let delegated = direct_delegates(self.sessions.clone(), session_id);
-        self.progress_rows = refresh_rows_from_sessions(
-            &selected,
-            &delegated,
-            &self.progress_rows,
-            &self.agent_config,
-        );
-        let selected_index = selected_row_id
-            .and_then(|selected_id| {
-                self.progress_rows
-                    .iter()
-                    .position(|row| row.session_id() == selected_id)
-            })
-            .unwrap_or(0);
-        self.progress_list_state.select(Some(selected_index));
-        self.progress_table_state
-            .select(selected_index.checked_sub(1));
-    }
-
-    pub(super) fn apply_progress_result(
-        &mut self,
-        session_id: &str,
-        result: Result<FetchedProgress, String>,
-    ) {
-        if self.selected_session_id() != Some(session_id) {
-            return;
-        }
-        match result {
-            Ok(progress) if progress.selected_session_id == session_id => {
-                let Some(selected) = self.selected_session().cloned() else {
-                    return;
-                };
-                let selected_progress_session_id = self
-                    .progress_list_state
-                    .selected()
-                    .and_then(|index| self.progress_rows.get(index))
-                    .map(|row| row.session_id().to_string());
-                self.progress_rows =
-                    build_progress_rows(&selected, &progress.delegated, &self.agent_config);
-                let selected_index = selected_progress_session_id
-                    .and_then(|selected_id| {
-                        self.progress_rows
-                            .iter()
-                            .position(|row| row.session_id() == selected_id)
-                    })
-                    .unwrap_or(0);
-                self.progress_list_state.select(Some(selected_index));
-                self.progress_table_state
-                    .select(selected_index.checked_sub(1));
-                self.progress_session_id = Some(session_id.to_string());
-                self.progress_loading = false;
-                self.progress_error = progress.github_error;
-            }
-            Ok(_) => {}
-            Err(error) => {
-                self.progress_loading = false;
-                self.progress_error = Some(error);
-            }
-        }
-    }
-
-    pub(super) fn select_progress_row(&mut self, delta: isize) {
-        if self.progress_rows.is_empty() {
-            return;
-        }
-        let current = self.progress_list_state.selected().unwrap_or(0);
-        let next = current
-            .saturating_add_signed(delta)
-            .min(self.progress_rows.len() - 1);
-        self.progress_list_state.select(Some(next));
-        self.progress_table_state.select(next.checked_sub(1));
     }
 
     fn restore_initial_selection(
@@ -475,12 +362,14 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use super::super::progress::FetchedDelegate;
     use super::*;
     use crate::commands::agent::types::AgentStatus;
-    use chrono::{TimeDelta, TimeZone};
+    use chrono::TimeDelta;
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
+
+    #[path = "progress.rs"]
+    mod progress;
 
     /// Counter to assign distinct timestamps to test sessions.
     /// Each call returns a progressively older timestamp, so sessions
@@ -552,142 +441,6 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("second")
-        );
-    }
-
-    #[test]
-    fn stale_progress_response_keeps_the_new_selection_state() {
-        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
-        let mut app = create_test_app(vec![
-            create_test_session_at("first", timestamp),
-            create_test_session_at("second", timestamp),
-        ]);
-        let first = app.sessions[0].clone();
-        app.progress_rows = build_progress_rows(&first, &[], &AgentConfig::default());
-        app.progress_session_id = Some("first".to_string());
-        app.progress_loading = true;
-        app.progress_error = Some("pending progress state".to_string());
-        app.progress_list_state.select(Some(0));
-        app.progress_table_state.select(None);
-        app.list_state.select(Some(2));
-        let before = (
-            app.progress_session_id.clone(),
-            app.progress_rows.clone(),
-            app.progress_loading,
-            app.progress_error.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
-        );
-
-        app.apply_progress_result(
-            "first",
-            Ok(FetchedProgress {
-                selected_session_id: "first".to_string(),
-                delegated: Vec::new(),
-                github_error: None,
-            }),
-        );
-
-        assert_eq!(
-            (
-                app.selected_session_id(),
-                app.progress_session_id.as_deref(),
-                app.progress_rows.clone(),
-                app.progress_loading,
-                app.progress_error.clone(),
-                app.progress_list_state.selected(),
-                app.progress_table_state.selected(),
-            ),
-            (
-                Some("second"),
-                before.0.as_deref(),
-                before.1,
-                before.2,
-                before.3,
-                before.4,
-                before.5,
-            ),
-        );
-    }
-
-    #[test]
-    fn local_progress_refresh_preserves_the_selected_delegate_row() {
-        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
-        let selected = create_test_session_at("selected", timestamp);
-        let mut delegate = create_test_session_at("delegate", timestamp);
-        delegate.is_delegated = true;
-        delegate.ancestor_session_ids = vec!["selected".to_string()];
-        let mut app = create_test_app(vec![selected.clone(), delegate.clone()]);
-        if app.selected_session_id() != Some("selected") {
-            app.select_next();
-        }
-        app.progress_session_id = Some("selected".to_string());
-        app.progress_rows = build_progress_rows(
-            &selected,
-            &[FetchedDelegate {
-                session: delegate,
-                pull_request: None,
-                lookup_unavailable: false,
-            }],
-            &AgentConfig::default(),
-        );
-        app.progress_list_state.select(Some(1));
-        app.progress_table_state.select(Some(0));
-        app.progress_loading = true;
-        let updated_delegate = app
-            .sessions
-            .iter_mut()
-            .find(|session| session.session_id == "delegate")
-            .expect("delegate session exists");
-        updated_delegate.status = SessionStatus::Ended;
-        updated_delegate.label = Some("Updated delegated work".to_string());
-
-        app.refresh_progress_from_sessions("selected");
-
-        assert_eq!(
-            (
-                app.progress_rows.clone(),
-                app.progress_list_state.selected(),
-                app.progress_table_state.selected(),
-                app.progress_loading,
-            ),
-            (
-                vec![
-                    ProgressRow::Work(crate::commands::agent::tui::progress::WorkProgressRow {
-                        session_id: "selected".to_string(),
-                        role: "session".to_string(),
-                        mark: crate::commands::agent::tui::progress::ProgressMark::Working,
-                        status_label: None,
-                        note: None,
-                        pane_id: None,
-                    },),
-                    ProgressRow::PullRequest(
-                        crate::commands::agent::tui::progress::PrProgressRow {
-                            session_id: "delegate".to_string(),
-                            title: "Updated delegated work".to_string(),
-                            number: None,
-                            url: None,
-                            pane_id: None,
-                            is_ended: true,
-                            lookup_unavailable: false,
-                            stages: crate::commands::agent::tui::progress::StageMarks {
-                                implementation:
-                                    crate::commands::agent::tui::progress::ProgressMark::Done,
-                                diff_review:
-                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
-                                pr_body:
-                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
-                                ci: crate::commands::agent::tui::progress::ProgressMark::NotStarted,
-                                merge:
-                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
-                            },
-                        },
-                    ),
-                ],
-                Some(1),
-                Some(0),
-                true,
-            ),
         );
     }
 
