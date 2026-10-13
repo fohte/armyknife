@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
 use crate::infra::github::{PrCiState, PrProgressInfo, PrState};
@@ -115,14 +117,32 @@ pub(super) fn build_progress_rows(
     delegated: &[FetchedDelegate],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let has_delegated_work = !delegated.is_empty();
+    let mut rows = Vec::with_capacity(delegated.len() + 1);
+    rows.push(ProgressRow::Work(work_progress_row(
+        selected,
+        !delegated.is_empty(),
+        agent_config,
+    )));
+    rows.extend(
+        delegated
+            .iter()
+            .map(|delegate| ProgressRow::PullRequest(pr_progress_row(delegate, agent_config))),
+    );
+    rows
+}
+
+fn work_progress_row(
+    selected: &Session,
+    has_delegated_work: bool,
+    agent_config: &AgentConfig,
+) -> WorkProgressRow {
     let turn = user_turn_for(selected, agent_config);
     let delegated_wait = has_delegated_work
         && selected.status != SessionStatus::Running
         && selected.agent_status.as_ref().is_some_and(|status| {
             agent_config.status_state(&status.kind) == AgentStatusState::Waiting
         });
-    let work = WorkProgressRow {
+    WorkProgressRow {
         session_id: selected.session_id.clone(),
         role: selected
             .work_type
@@ -160,30 +180,32 @@ pub(super) fn build_progress_rows(
                 .map(str::to_owned)
         },
         pane_id: selected.tmux_info.as_ref().map(|info| info.pane_id.clone()),
+    }
+}
+
+fn pr_progress_row(delegate: &FetchedDelegate, agent_config: &AgentConfig) -> PrProgressRow {
+    let pull_request = delegate.pull_request.as_ref();
+    let pr = pull_request.map(|progress| &progress.pull_request);
+    let mut row = PrProgressRow {
+        session_id: delegate.session.session_id.clone(),
+        title: pr.map_or_else(|| session_title(&delegate.session), |pr| pr.title.clone()),
+        number: pr.map(|pr| pr.number),
+        url: pr.map(|pr| pr.url.clone()),
+        pane_id: None,
+        is_ended: false,
+        lookup_unavailable: delegate.lookup_unavailable,
+        stages: stage_marks(&delegate.session, pull_request, agent_config),
     };
+    apply_session_fields(&mut row, &delegate.session);
+    row
+}
 
-    let mut rows = Vec::with_capacity(delegated.len() + 1);
-    rows.push(ProgressRow::Work(work));
-    rows.extend(delegated.iter().map(|delegate| {
-        let pull_request = delegate.pull_request.as_ref();
-        let pr = pull_request.map(|progress| &progress.pull_request);
-        ProgressRow::PullRequest(PrProgressRow {
-            session_id: delegate.session.session_id.clone(),
-            title: pr.map_or_else(|| session_title(&delegate.session), |pr| pr.title.clone()),
-            number: pr.map(|pr| pr.number),
-            url: pr.map(|pr| pr.url.clone()),
-            pane_id: delegate
-                .session
-                .tmux_info
-                .as_ref()
-                .map(|info| info.pane_id.clone()),
-            is_ended: delegate.session.status == SessionStatus::Ended,
-            lookup_unavailable: delegate.lookup_unavailable,
-            stages: stage_marks(&delegate.session, pull_request, agent_config),
-        })
-    }));
-
-    rows
+fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
+    row.pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+    row.is_ended = session.status == SessionStatus::Ended;
+    if row.number.is_none() {
+        row.title = session_title(session);
+    }
 }
 
 pub(super) fn refresh_rows_from_sessions(
@@ -192,44 +214,38 @@ pub(super) fn refresh_rows_from_sessions(
     existing_rows: &[ProgressRow],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let mut rows = build_progress_rows(selected, &[], agent_config);
+    let mut rows = vec![ProgressRow::Work(work_progress_row(
+        selected,
+        !delegated.is_empty(),
+        agent_config,
+    ))];
     let mut previous = existing_rows
         .iter()
         .filter_map(|row| match row {
             ProgressRow::PullRequest(row) => Some((row.session_id.clone(), row.clone())),
             ProgressRow::Work(_) => None,
         })
-        .collect::<std::collections::HashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
 
     for session in delegated {
-        let row = if let Some(mut row) = previous.remove(&session.session_id) {
-            row.pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
-            row.is_ended = session.status == SessionStatus::Ended;
-            if row.number.is_none() {
-                row.title = session_title(session);
-            }
+        let mut row = previous.remove(&session.session_id).unwrap_or_else(|| {
+            pr_progress_row(
+                &FetchedDelegate {
+                    session: session.clone(),
+                    pull_request: None,
+                    lookup_unavailable: false,
+                },
+                agent_config,
+            )
+        });
+        apply_session_fields(&mut row, session);
+        if row.stages.merge != ProgressMark::Done {
             let updated_stages = session_stage_marks(session, row.number.is_some(), agent_config);
             row.stages.implementation = updated_stages.implementation;
             row.stages.diff_review = updated_stages.diff_review;
             row.stages.pr_body = updated_stages.pr_body;
-            ProgressRow::PullRequest(row)
-        } else {
-            let Some(row) = build_progress_rows(
-                selected,
-                &[FetchedDelegate {
-                    session: session.clone(),
-                    pull_request: None,
-                    lookup_unavailable: false,
-                }],
-                agent_config,
-            )
-            .into_iter()
-            .nth(1) else {
-                continue;
-            };
-            row
-        };
-        rows.push(row);
+        }
+        rows.push(ProgressRow::PullRequest(row));
     }
 
     rows
@@ -603,6 +619,57 @@ mod tests {
                         pr_body: ProgressMark::NotStarted,
                         ci: ProgressMark::NotStarted,
                         merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn session_updates_keep_merged_pr_stages_done() {
+        let selected = session("selected");
+        let mut delegate = delegated_session();
+        delegate.crit_urls.push("review-url".to_string());
+        let previous_rows = build_progress_rows(
+            &selected,
+            &[FetchedDelegate {
+                session: delegate.clone(),
+                pull_request: Some(progress_info(PrState::Merged, PrCiState::Successful)),
+                lookup_unavailable: false,
+            }],
+            &AgentConfig::default(),
+        );
+
+        assert_eq!(
+            refresh_rows_from_sessions(
+                &selected,
+                &[delegate],
+                &previous_rows,
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Example delegated work".to_string(),
+                    number: Some(7),
+                    url: Some("https://github.com/example-org/example-project/pull/7".to_string(),),
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Done,
+                        merge: ProgressMark::Done,
                     },
                 }),
             ],

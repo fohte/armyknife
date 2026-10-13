@@ -481,6 +481,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    use super::super::progress::FetchedDelegate;
     use super::*;
     use crate::commands::agent::types::AgentStatus;
     use chrono::{TimeDelta, TimeZone};
@@ -611,6 +612,87 @@ mod tests {
                 before.3,
                 before.4,
                 before.5,
+            ),
+        );
+    }
+
+    #[test]
+    fn local_progress_refresh_preserves_the_selected_delegate_row() {
+        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let selected = create_test_session_at("selected", timestamp);
+        let mut delegate = create_test_session_at("delegate", timestamp);
+        delegate.is_delegated = true;
+        delegate.ancestor_session_ids = vec!["selected".to_string()];
+        let mut app = create_test_app(vec![selected.clone(), delegate.clone()]);
+        if app.selected_session_id() != Some("selected") {
+            app.select_next();
+        }
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = build_progress_rows(
+            &selected,
+            &[FetchedDelegate {
+                session: delegate,
+                pull_request: None,
+                lookup_unavailable: false,
+            }],
+            &AgentConfig::default(),
+        );
+        app.progress_list_state.select(Some(1));
+        app.progress_table_state.select(Some(0));
+        app.progress_loading = true;
+        let updated_delegate = app
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == "delegate")
+            .expect("delegate session exists");
+        updated_delegate.status = SessionStatus::Ended;
+        updated_delegate.label = Some("Updated delegated work".to_string());
+
+        app.refresh_progress_from_sessions("selected");
+
+        assert_eq!(
+            (
+                app.progress_rows.clone(),
+                app.progress_list_state.selected(),
+                app.progress_table_state.selected(),
+                app.progress_loading,
+            ),
+            (
+                vec![
+                    ProgressRow::Work(crate::commands::agent::tui::progress::WorkProgressRow {
+                        session_id: "selected".to_string(),
+                        role: "session".to_string(),
+                        mark: crate::commands::agent::tui::progress::ProgressMark::Working,
+                        status_label: None,
+                        note: None,
+                        pane_id: None,
+                    },),
+                    ProgressRow::PullRequest(
+                        crate::commands::agent::tui::progress::PrProgressRow {
+                            session_id: "delegate".to_string(),
+                            title: "Updated delegated work".to_string(),
+                            number: None,
+                            url: None,
+                            pane_id: None,
+                            is_ended: true,
+                            lookup_unavailable: false,
+                            stages: crate::commands::agent::tui::progress::StageMarks {
+                                implementation:
+                                    crate::commands::agent::tui::progress::ProgressMark::Done,
+                                diff_review:
+                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
+                                pr_body:
+                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
+                                ci: crate::commands::agent::tui::progress::ProgressMark::NotStarted,
+                                merge:
+                                    crate::commands::agent::tui::progress::ProgressMark::NotStarted,
+                            },
+                        },
+                    ),
+                ],
+                Some(1),
+                Some(0),
+                true,
             ),
         );
     }
