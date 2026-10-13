@@ -110,7 +110,7 @@ mod tests {
             ),
         ]);
 
-        let snapshot = TqSnapshot::new(session_tasks, Vec::new(), Vec::new());
+        let snapshot = TqSnapshot::new(session_tasks);
         let mut applied_commands = Vec::new();
         sync_with_panes(&snapshot, &panes, |commands| {
             applied_commands.extend_from_slice(commands);

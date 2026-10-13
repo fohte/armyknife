@@ -61,8 +61,6 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         &app.agent_config,
         &app.vibe_enabled_session_ids,
     );
-    let linked_session_ids = app.linked_session_ids_for_sidebar_cursor();
-
     // Build list items and owned row ids from the same `rows`, then drop
     // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
     //
@@ -79,21 +77,8 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
-            SessionRow::UserTurn(turn) => build_user_turn_item(
-                turn,
-                app,
-                now,
-                term_width,
-                linked_session_ids.contains(&turn.session.session_id),
-            ),
-            SessionRow::Session(entry) => build_session_item(
-                entry,
-                app,
-                now,
-                term_width,
-                &query,
-                linked_session_ids.contains(&entry.session.session_id),
-            ),
+            SessionRow::UserTurn(turn) => build_user_turn_item(turn, app, now, term_width),
+            SessionRow::Session(entry) => build_session_item(entry, app, now, term_width, &query),
         };
         items.push(item);
     }
@@ -103,20 +88,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
     let row_id_refs: Vec<Option<&str>> = row_ids.iter().map(|id| id.as_deref()).collect();
     app.update_row_order(&row_id_refs);
 
-    let selected_session_is_linked = app
-        .selected_session()
-        .is_some_and(|session| linked_session_ids.contains(&session.session_id));
     let list = List::new(items)
-        .highlight_style(if app.sidebar_focused {
-            if selected_session_is_linked {
-                Style::default().bg(Color::Indexed(236))
-            } else {
-                Style::default()
-            }
-        } else {
-            Style::default().bg(Color::DarkGray)
-        })
-        .highlight_symbol(if app.sidebar_focused { "›" } else { ">" });
+        .highlight_style(Style::default().bg(Color::DarkGray))
+        .highlight_symbol(">");
 
     frame.render_stateful_widget(list, area, &mut app.list_state);
 }
@@ -239,7 +213,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -389,7 +363,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -465,7 +439,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -507,7 +481,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -622,7 +596,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
 
@@ -659,7 +633,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -673,7 +647,7 @@ mod tests {
              agent watch1 needs you · 0 running
              ── YOUR TURN ──────────────────────
             >◐  you     session-name ch just now
-             ?: keys   Tab: pane   Esc: sidebar"}
+             ?: keys   Tab: pane   Esc: quit"}
     )]
     #[case::omitted_note(
         "needs_attention",
@@ -683,7 +657,7 @@ mod tests {
              agent watch1 needs you · 0 running · 0 idl
              ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  session-name  just now
-             ?: keys   Tab: pane   Esc: sidebar"}
+             ?: keys   Tab: pane   Esc: quit"}
     )]
     #[case::long_session_name_keeps_time_column(
         "needs_attention",
@@ -693,7 +667,7 @@ mod tests {
              agent watch1 needs you · 0 running · 0 idl
              ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  a-long-ses... just now
-             ?: keys   Tab: pane   Esc: sidebar"}
+             ?: keys   Tab: pane   Esc: quit"}
     )]
     fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
         mut you_user_turn_session: Session,
@@ -745,7 +719,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -778,7 +752,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -829,7 +803,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -877,7 +851,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }
@@ -906,7 +880,7 @@ mod tests {
 
 
 
-             ?: keys   Tab: pane   Esc: sidebar"};
+             ?: keys   Tab: pane   Esc: quit"};
 
         assert_eq!(output, expected);
     }

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.407](https://github.com/fohte/armyknife/compare/v0.1.406...v0.1.407) (2026-10-13)
+
+
+### Features
+
+* **agent/tui:** remove the tq task sidebar ([#1147](https://github.com/fohte/armyknife/issues/1147)) ([4d6772b](https://github.com/fohte/armyknife/commit/4d6772b7a22491ce5a4d427539a2ef89e3275cbc))
+
 ## [0.1.406](https://github.com/fohte/armyknife/compare/v0.1.405...v0.1.406) (2026-10-13)
 
 
