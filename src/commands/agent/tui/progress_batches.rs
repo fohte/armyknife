@@ -255,15 +255,12 @@ pub(super) fn build_task_progress_rows(
             .copied()
             .unwrap_or(!collapsed_by_default);
         let collapsed = !expanded;
-        let show_batch_header = plan.batches.len() > 1 || collapsed;
-        if show_batch_header {
-            rows.push(ProgressRow::BatchHeader {
-                batch_id: batch.id.clone(),
-                title: batch.title.clone(),
-                merged_pr_count: merged_count,
-                collapsed,
-            });
-        }
+        rows.push(ProgressRow::BatchHeader {
+            batch_id: batch.id.clone(),
+            title: batch.title.clone(),
+            merged_pr_count: merged_count,
+            collapsed,
+        });
         if collapsed {
             continue;
         }
@@ -431,6 +428,7 @@ fn pull_request_title(content: &str) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::commands::agent::tui::progress::ProgressSelectionKey;
     use crate::commands::agent::tui::ui::test_support::create_test_session;
     use crate::infra::github::{PrCiState, PrInfo, PrState};
 
@@ -624,7 +622,13 @@ mod tests {
                         title: "Add another sample feature".to_string(),
                     },
                 ],
-                vec![Some("selected"), None, None, None, None],
+                vec![
+                    Some(ProgressSelectionKey::Session("selected".to_string())),
+                    Some(ProgressSelectionKey::Implementation),
+                    Some(ProgressSelectionKey::Batch("batch-1".to_string())),
+                    Some(ProgressSelectionKey::Batch("batch-2".to_string())),
+                    None,
+                ],
             ),
         );
     }
@@ -813,6 +817,12 @@ mod tests {
                     total_pr_count: 1,
                     collapsed: false,
                 },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-1".to_string(),
+                    title: "Batch 1".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
                 ProgressRow::ChecklistPullRequest {
                     batch_id: "batch-1".to_string(),
                     row: super::super::progress::PrProgressRow {
@@ -839,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn omits_batch_heading_when_the_plan_has_one_batch() {
+    fn includes_batch_heading_when_the_plan_has_one_batch() {
         let plan = ImplementationPlan {
             batches: vec![ImplementationBatch {
                 id: "batch-1".to_string(),
@@ -877,6 +887,12 @@ mod tests {
                 ProgressRow::ImplementationHeader {
                     merged_pr_count: 0,
                     total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-1".to_string(),
+                    title: "Batch 1".to_string(),
+                    merged_pr_count: 0,
                     collapsed: false,
                 },
                 ProgressRow::PlannedPullRequest {

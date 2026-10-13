@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use super::super::{App, ProgressScopeKind};
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
-    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
-    WorkProgressRow, build_progress_rows,
+    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressRow,
+    ProgressSelectionKey, StageMarks, WorkProgressRow, build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
     ImplementationPlan, build_implementation_plan,
@@ -81,6 +81,12 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
         ProgressRow::ImplementationHeader {
             merged_pr_count: 0,
             total_pr_count: 1,
+            collapsed: false,
+        },
+        ProgressRow::BatchHeader {
+            batch_id: "batch-a".to_string(),
+            title: "Batch 1".to_string(),
+            merged_pr_count: 0,
             collapsed: false,
         },
         ProgressRow::ChecklistPullRequest {
@@ -243,6 +249,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     app.list_state.select(Some(2));
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("selected".to_string(), vec![task_link("task-a")]),
+        ("delegate".to_string(), vec![task_link("task-a")]),
         (
             "same-task-child".to_string(),
             vec![task_link("task-b"), task_link("task-a")],
@@ -293,7 +300,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
                 expected_unlinked_delegate_row("nested-delegate"),
             ],
             Some(1),
-            Some("selected"),
+            Some(ProgressSelectionKey::Session("selected".to_string())),
             None,
         ),
     );
@@ -341,6 +348,7 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
                     collapsed: false,
                 },
                 expected_unavailable_checklist_rows("selected")[2].clone(),
+                expected_unavailable_checklist_rows("selected")[3].clone(),
             ],
             Some(0),
             None,
@@ -525,7 +533,12 @@ fn initial_focus_selects_the_delegated_pr_row(
                 .and_then(|index| app.progress_rows.get(index))
                 .and_then(ProgressRow::selection_key),
         ),
-        (Some("selected"), true, Some(1), Some("delegate")),
+        (
+            Some("selected"),
+            true,
+            Some(1),
+            Some(ProgressSelectionKey::Session("delegate".to_string())),
+        ),
     );
 }
 
@@ -563,7 +576,13 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
                 .and_then(|index| app.progress_rows.get(index))
                 .and_then(ProgressRow::selection_key),
         ),
-        (Some("task"), true, Some("intermediate-delegate")),
+        (
+            Some("task"),
+            true,
+            Some(ProgressSelectionKey::Session(
+                "intermediate-delegate".to_string(),
+            )),
+        ),
     );
 }
 
@@ -640,7 +659,12 @@ fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
             app.progress_implementation_expanded,
             app.progress_batch_expanded.get("batch-a").copied(),
         ),
-        (Some(2), Some("delegate"), true, Some(true)),
+        (
+            Some(3),
+            Some(ProgressSelectionKey::Session("delegate".to_string())),
+            true,
+            Some(true),
+        ),
     );
 }
 

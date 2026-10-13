@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use super::super::progress::{
-    FetchedProgress, ProgressRow, build_task_progress_rows, refresh_task_rows_from_sessions,
-    table_selection_index,
+    FetchedProgress, ProgressRow, ProgressSelectionKey, build_task_progress_rows,
+    refresh_task_rows_from_sessions, table_selection_index,
 };
 use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
@@ -182,13 +182,13 @@ impl App {
         let initial_selection_index =
             self.initial_progress_row_target(session_id)
                 .and_then(|delegate_id| {
-                    snapshot
-                        .rows
-                        .iter()
-                        .position(|row| row.selection_key() == Some(delegate_id))
+                    snapshot.rows.iter().position(|row| {
+                        row.selection_key()
+                            == Some(ProgressSelectionKey::Session(delegate_id.to_string()))
+                    })
                 });
         let (selected_index, selected_key) = if let Some(index) = initial_selection_index {
-            let key = snapshot.rows[index].selection_key().map(str::to_owned);
+            let key = snapshot.rows[index].selection_key();
             (index, key)
         } else if self.progress_session_id.as_deref() == Some(session_id) {
             self.current_progress_selection()
@@ -196,8 +196,16 @@ impl App {
             snapshot
                 .rows
                 .iter()
-                .position(|row| row.selection_key() == Some(session_id))
-                .map(|index| (index, Some(session_id.to_string())))
+                .position(|row| {
+                    row.selection_key()
+                        == Some(ProgressSelectionKey::Session(session_id.to_string()))
+                })
+                .map(|index| {
+                    (
+                        index,
+                        Some(ProgressSelectionKey::Session(session_id.to_string())),
+                    )
+                })
                 .unwrap_or((0, None))
         };
         self.resolve_initial_progress_selection(
@@ -237,35 +245,18 @@ impl App {
         &mut self,
         collapsed: bool,
     ) {
-        let (current_index, selected_key) = self.current_progress_selection();
-        let target = if collapsed {
-            self.progress_rows.get(current_index).and_then(|row| {
-                if matches!(row, ProgressRow::Work(_)) {
-                    Some(FoldTarget::Implementation)
-                } else {
-                    row.batch_id().map(|id| FoldTarget::Batch(id.to_string()))
-                }
-            })
-        } else {
-            self.progress_rows
-                .iter()
-                .enumerate()
-                .filter_map(|(index, row)| match row {
-                    ProgressRow::ImplementationHeader {
-                        collapsed: true, ..
-                    } => Some((index.abs_diff(current_index), FoldTarget::Implementation)),
-                    ProgressRow::BatchHeader {
-                        batch_id,
-                        collapsed: true,
-                        ..
-                    } => Some((
-                        index.abs_diff(current_index),
-                        FoldTarget::Batch(batch_id.clone()),
-                    )),
-                    _ => None,
-                })
-                .min_by_key(|(distance, _)| *distance)
-                .map(|(_, target)| target)
+        let (current_index, mut selected_key) = self.current_progress_selection();
+        let selected_row = self.progress_rows.get(current_index);
+        let target = match selected_row {
+            Some(ProgressRow::ImplementationHeader { .. }) => Some(FoldTarget::Implementation),
+            Some(ProgressRow::BatchHeader { batch_id, .. }) => {
+                Some(FoldTarget::Batch(batch_id.clone()))
+            }
+            Some(ProgressRow::Work(_)) if collapsed => Some(FoldTarget::Implementation),
+            Some(ProgressRow::ChecklistPullRequest { batch_id, .. }) if collapsed => {
+                Some(FoldTarget::Batch(batch_id.clone()))
+            }
+            _ => None,
         };
         let Some(target) = target else {
             return;
@@ -280,6 +271,12 @@ impl App {
                 return;
             }
             FoldTarget::Implementation | FoldTarget::Batch(_) => {}
+        }
+        if collapsed {
+            selected_key = Some(match &target {
+                FoldTarget::Implementation => ProgressSelectionKey::Implementation,
+                FoldTarget::Batch(batch_id) => ProgressSelectionKey::Batch(batch_id.clone()),
+            });
         }
         let Some(selected) = self
             .selected_session()
@@ -305,13 +302,12 @@ impl App {
         self.replace_progress_rows(rows, selected_key, current_index);
     }
 
-    fn current_progress_selection(&self) -> (usize, Option<String>) {
+    fn current_progress_selection(&self) -> (usize, Option<ProgressSelectionKey>) {
         let index = self.progress_list_state.selected().unwrap_or(0);
         let key = self
             .progress_rows
             .get(index)
-            .and_then(ProgressRow::selection_key)
-            .map(str::to_owned);
+            .and_then(ProgressRow::selection_key);
         (index, key)
     }
 
@@ -391,13 +387,13 @@ impl App {
     fn replace_progress_rows(
         &mut self,
         rows: Vec<ProgressRow>,
-        selected_key: Option<String>,
+        selected_key: Option<ProgressSelectionKey>,
         previous_index: usize,
     ) {
         let selected_index = selected_key
             .and_then(|key| {
                 rows.iter()
-                    .position(|row| row.selection_key() == Some(key.as_str()))
+                    .position(|row| row.selection_key() == Some(key.clone()))
             })
             .or_else(|| {
                 rows.iter()

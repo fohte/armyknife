@@ -36,8 +36,8 @@ fn build_progress_help_lines(bold: Style) -> Vec<Line<'static>> {
         bold,
         &[
             ("j/k", "move"),
-            ("h/l", "fold"),
-            ("Enter", "open"),
+            ("h/l", "fold/unfold"),
+            ("Enter", "toggle/open"),
             ("Tab", "pane"),
             ("Esc/←", "tasks"),
             ("q", "quit"),

@@ -84,6 +84,13 @@ pub(super) enum ProgressRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProgressSelectionKey {
+    Session(String),
+    Implementation,
+    Batch(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProgressOpenTarget {
     FocusPane(String),
     OpenUrl(String),
@@ -116,23 +123,18 @@ fn open_pull_request_target(row: &PrProgressRow) -> Option<ProgressOpenTarget> {
 }
 
 impl ProgressRow {
-    pub(super) fn selection_key(&self) -> Option<&str> {
+    pub(super) fn selection_key(&self) -> Option<ProgressSelectionKey> {
         match self {
-            Self::Work(row) => Some(&row.session_id),
-            Self::PullRequest(row) => Some(&row.session_id),
-            Self::ChecklistPullRequest { row, .. } => Some(&row.session_id),
-            Self::ImplementationHeader { .. }
-            | Self::BatchHeader { .. }
-            | Self::PlannedPullRequest { .. } => None,
-        }
-    }
-
-    pub(super) fn batch_id(&self) -> Option<&str> {
-        match self {
-            Self::BatchHeader { batch_id, .. }
-            | Self::ChecklistPullRequest { batch_id, .. }
-            | Self::PlannedPullRequest { batch_id, .. } => Some(batch_id),
-            Self::Work(_) | Self::PullRequest(_) | Self::ImplementationHeader { .. } => None,
+            Self::Work(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
+            Self::PullRequest(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
+            Self::ChecklistPullRequest { row, .. } => {
+                Some(ProgressSelectionKey::Session(row.session_id.clone()))
+            }
+            Self::ImplementationHeader { .. } => Some(ProgressSelectionKey::Implementation),
+            Self::BatchHeader { batch_id, .. } => {
+                Some(ProgressSelectionKey::Batch(batch_id.clone()))
+            }
+            Self::PlannedPullRequest { .. } => None,
         }
     }
 }

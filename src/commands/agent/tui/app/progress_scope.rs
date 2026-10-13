@@ -93,7 +93,9 @@ impl App {
         let work_sessions = self
             .sessions
             .iter()
-            .filter(|session| task_session_ids_set.contains(&session.session_id))
+            .filter(|session| {
+                !session.is_delegated && task_session_ids_set.contains(&session.session_id)
+            })
             .cloned()
             .collect::<Vec<_>>();
 
