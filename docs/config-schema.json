@@ -25,6 +25,7 @@
         "merge_notification": null,
         "statuses": {},
         "stop_hook_instruction": null,
+        "work_type_fallback": null,
         "work_types": {},
         "worktree": {
           "branch_prefix": "fohte/",
@@ -138,8 +139,20 @@
           ],
           "default": null
         },
+        "work_type_fallback": {
+          "description": "Display configuration used in `a agent watch` when a session has no recorded work type.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentWorkTypeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "work_types": {
-          "description": "Display configuration for agent work types, keyed by skill name. The\n`default` entry supplies the `a agent watch` fallback icon and color.",
+          "description": "Display configuration for agent work types, keyed by skill name.",
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/AgentWorkTypeConfig"
