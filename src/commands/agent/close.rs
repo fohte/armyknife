@@ -140,6 +140,28 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Re
     .await
 }
 
+pub(crate) fn ensure_worktree_path_not_current_session(worktree_path: &Path) -> Result<()> {
+    let sessions = super::store::list_sessions()?;
+    let session = select_worktree_session(&sessions, worktree_path)?;
+    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
+    ensure_not_closing_current_session(session, current_pane_id.as_deref())
+}
+
+fn ensure_not_closing_current_session(
+    session: Option<&Session>,
+    current_pane_id: Option<&str>,
+) -> Result<()> {
+    if session.is_some_and(|session| {
+        session
+            .tmux_info
+            .as_ref()
+            .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
+    }) {
+        bail!("The target worktree contains the caller's current session; skipping close");
+    }
+    Ok(())
+}
+
 async fn close_with_worktree_plan<P, F>(
     prepare: impl Future<Output = Result<P>>,
     close_session: impl FnOnce() -> Result<()>,
@@ -982,6 +1004,22 @@ mod tests {
         assert_eq!(
             should_gracefully_close_worktree_session(&session, current_pane_id),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::same_pane(Some("%42"), Err("The target worktree contains the caller's current session; skipping close".to_string()))]
+    #[case::different_pane(Some("%99"), Ok(()))]
+    #[case::no_current_pane(None, Ok(()))]
+    fn refuses_to_close_the_callers_current_session(
+        session: Session,
+        #[case] current_pane_id: Option<&str>,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        assert_eq!(
+            ensure_not_closing_current_session(Some(&session), current_pane_id)
+                .map_err(|error| error.to_string()),
+            expected,
         );
     }
 
