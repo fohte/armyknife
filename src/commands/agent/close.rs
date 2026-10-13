@@ -16,6 +16,7 @@ use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
 use crate::shared::config::load_config;
+use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
@@ -51,7 +52,7 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         current_worktree_root,
     )? {
         DefaultTarget::Session(session) => close_session_value(&session, args).await,
-        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args).await,
+        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args, false).await,
     }
 }
 
@@ -96,7 +97,7 @@ async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
     )?;
     let worktree_path = PathBuf::from(worktree_path);
     let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
-    close_worktree(&worktree_root, args).await
+    close_worktree(&worktree_root, args, false).await
 }
 
 async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> {
@@ -106,20 +107,44 @@ async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> 
 
     close_with_worktree_plan(
         worktree_delete::prepare(&worktree_root, args.force),
-        || close_worktree_session(session, args.force),
+        || {
+            let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
+            close_worktree_session(session, args.force, current_pane_id.as_deref())
+        },
         |plan| worktree_delete::execute(plan, args.skip_hooks),
     )
     .await
 }
 
-async fn close_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
+async fn close_worktree(
+    worktree_root: &Path,
+    args: &CloseArgs,
+    refuse_current_session: bool,
+) -> Result<()> {
     let sessions = super::store::list_sessions()?;
     let session = select_worktree_session(&sessions, worktree_root)?;
+    let caller_pane_id = if session.is_some() {
+        crate::shared::caller_pane::resolve_caller_pane_id()
+    } else {
+        None
+    };
+    let caller_session_id = if refuse_current_session {
+        EnvVars::load().own_session_id()
+    } else {
+        None
+    };
+    if refuse_current_session {
+        ensure_not_closing_current_session(
+            session,
+            caller_session_id.as_deref(),
+            caller_pane_id.as_deref(),
+        )?;
+    }
     close_with_worktree_plan(
         worktree_delete::prepare(worktree_root, args.force),
         || {
             if let Some(session) = session {
-                close_worktree_session(session, args.force)?;
+                close_worktree_session(session, args.force, caller_pane_id.as_deref())?;
             }
             Ok(())
         },
@@ -136,26 +161,19 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Re
             force,
             skip_hooks: false,
         },
+        true,
     )
     .await
 }
 
-pub(crate) fn ensure_worktree_path_not_current_session(worktree_path: &Path) -> Result<()> {
-    let sessions = super::store::list_sessions()?;
-    let session = select_worktree_session(&sessions, worktree_path)?;
-    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
-    ensure_not_closing_current_session(session, current_pane_id.as_deref())
-}
-
 fn ensure_not_closing_current_session(
     session: Option<&Session>,
+    caller_session_id: Option<&str>,
     current_pane_id: Option<&str>,
 ) -> Result<()> {
     if session.is_some_and(|session| {
-        session
-            .tmux_info
-            .as_ref()
-            .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
+        caller_session_id == Some(session.session_id.as_str())
+            || is_caller_pane_session(session, current_pane_id)
     }) {
         bail!("The target worktree contains the caller's current session; skipping close");
     }
@@ -181,9 +199,12 @@ fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
     close_session(&session, force, &LiveCloseRuntime)
 }
 
-fn close_worktree_session(session: &Session, force: bool) -> Result<()> {
-    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
-    if !should_gracefully_close_worktree_session(session, current_pane_id.as_deref()) {
+fn close_worktree_session(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+) -> Result<()> {
+    if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
     }
     close_tracked_session(session, force)
@@ -193,10 +214,14 @@ fn should_gracefully_close_worktree_session(
     session: &Session,
     current_pane_id: Option<&str>,
 ) -> bool {
+    session.tmux_info.is_some() && !is_caller_pane_session(session, current_pane_id)
+}
+
+fn is_caller_pane_session(session: &Session, current_pane_id: Option<&str>) -> bool {
     session
         .tmux_info
         .as_ref()
-        .is_some_and(|info| current_pane_id != Some(info.pane_id.as_str()))
+        .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
 }
 
 fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
@@ -1008,16 +1033,23 @@ mod tests {
     }
 
     #[rstest]
-    #[case::same_pane(Some("%42"), Err("The target worktree contains the caller's current session; skipping close".to_string()))]
-    #[case::different_pane(Some("%99"), Ok(()))]
-    #[case::no_current_pane(None, Ok(()))]
+    #[case::same_pane(None, Some("%42"), false, Err("The target worktree contains the caller's current session; skipping close".to_string()))]
+    #[case::same_session_id_without_pane(Some("session-1"), None, true, Err("The target worktree contains the caller's current session; skipping close".to_string()))]
+    #[case::different_session_and_pane(Some("session-2"), Some("%99"), false, Ok(()))]
+    #[case::no_caller_context(None, None, false, Ok(()))]
+    #[case::untracked_session(None, None, true, Ok(()))]
     fn refuses_to_close_the_callers_current_session(
-        session: Session,
+        mut session: Session,
+        #[case] caller_session_id: Option<&str>,
         #[case] current_pane_id: Option<&str>,
+        #[case] without_tmux_info: bool,
         #[case] expected: std::result::Result<(), String>,
     ) {
+        if without_tmux_info {
+            session.tmux_info = None;
+        }
         assert_eq!(
-            ensure_not_closing_current_session(Some(&session), current_pane_id)
+            ensure_not_closing_current_session(Some(&session), caller_session_id, current_pane_id,)
                 .map_err(|error| error.to_string()),
             expected,
         );

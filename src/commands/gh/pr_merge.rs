@@ -1,18 +1,9 @@
-use std::{
-    future::Future,
-    io::Write,
-    path::{Path, PathBuf},
-    process::Output,
-    time::Duration,
-};
+use std::{future::Future, io::Write, path::PathBuf, process::Output, time::Duration};
 
 use anyhow::{Context, bail};
 use clap::Args;
 
-use crate::commands::agent::{
-    close_worktree_path, ensure_repo_vibe_access, ensure_worktree_path_not_current_session,
-    is_vibe_enabled,
-};
+use crate::commands::agent::{close_worktree_path, ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
@@ -38,7 +29,7 @@ pub struct PrMergeArgs {
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
 
-    /// Skip close safety checks, but keep the caller's current session open
+    /// Skip normal close safety checks while keeping the caller's current session open
     #[arg(long)]
     pub force_close: bool,
 }
@@ -195,7 +186,7 @@ async fn close_merged_head_worktree(
     match find_local_head_worktree(&owner, &repo_name, &merged_pr.head_ref_name, &config) {
         HeadWorktreeSelection::NotFound => Ok(()),
         HeadWorktreeSelection::Unique(worktree_path) => {
-            close_head_worktree_path(&worktree_path, force_close).await
+            close_worktree_path(&worktree_path, force_close).await
         }
         HeadWorktreeSelection::Ambiguous(count) => {
             eprintln!(
@@ -205,27 +196,6 @@ async fn close_merged_head_worktree(
             Ok(())
         }
     }
-}
-
-async fn close_head_worktree_path(worktree_path: &Path, force_close: bool) -> anyhow::Result<()> {
-    close_head_worktree_path_with(
-        worktree_path,
-        force_close,
-        ensure_worktree_path_not_current_session,
-    )
-    .await
-}
-
-async fn close_head_worktree_path_with<Check>(
-    worktree_path: &Path,
-    force_close: bool,
-    check_current_session: Check,
-) -> anyhow::Result<()>
-where
-    Check: FnOnce(&Path) -> anyhow::Result<()>,
-{
-    check_current_session(worktree_path)?;
-    close_worktree_path(worktree_path, force_close).await
 }
 
 fn find_local_head_worktree(
@@ -1031,40 +1001,6 @@ mod tests {
                 .map(|worktree| (worktree.branch, worktree.path))
                 .collect::<Vec<_>>(),
             vec![("topic/example-branch".to_string(), existing_path)],
-        );
-    }
-
-    #[rstest]
-    #[case::normal_close(false)]
-    #[case::forced_close(true)]
-    #[tokio::test]
-    async fn caller_session_is_not_closed_even_when_force_is_requested(#[case] force_close: bool) {
-        let events = Rc::new(RefCell::new(Vec::new()));
-        let check_events = Rc::clone(&events);
-
-        let result =
-            close_head_worktree_path_with(Path::new("/tmp/worktree"), force_close, move |_| {
-                check_events
-                    .borrow_mut()
-                    .push("check caller session".to_string());
-                anyhow::bail!(
-                    "The target worktree contains the caller's current session; skipping close"
-                );
-            })
-            .await;
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                events.borrow().clone(),
-            ),
-            (
-                Err(
-                    "The target worktree contains the caller's current session; skipping close"
-                        .to_string()
-                ),
-                vec!["check caller session".to_string()],
-            ),
         );
     }
 
