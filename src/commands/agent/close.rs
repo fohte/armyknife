@@ -513,6 +513,7 @@ mod tests {
     #[fixture]
     fn session() -> Session {
         Session {
+            pr_context: None,
             session_id: "session-1".to_string(),
             work_type: None,
             work_type_pinned: false,

@@ -385,6 +385,7 @@ mod tests {
 
     fn session(engine: Engine, status: SessionStatus) -> Session {
         Session {
+            pr_context: None,
             session_id: SESSION_ID.to_string(),
             work_type: None,
             work_type_pinned: false,

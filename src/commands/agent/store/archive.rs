@@ -91,6 +91,7 @@ mod tests {
 
     fn make_session(session_id: &str, engine: Engine) -> Session {
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),

@@ -203,6 +203,17 @@ fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
 }
 
 fn branch_query_for(session: &Session) -> BranchLookup {
+    if let Some(context) = &session.pr_context {
+        return BranchLookup::Query {
+            query: BranchPrQuery {
+                owner: context.owner.clone(),
+                repo: context.repo.clone(),
+                branch: context.branch.clone(),
+            },
+            checklist_item_id: context.checklist_item_id.clone(),
+        };
+    }
+
     let repo = match GitRepo::open_at(&session.cwd) {
         Ok(repo) => repo,
         Err(_) => return BranchLookup::Unavailable,
@@ -245,7 +256,8 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::{branch_queries_for_sessions, direct_delegates};
-    use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
+    use crate::infra::github::BranchPrQuery;
 
     #[test]
     fn lists_only_immediate_delegates_by_recent_activity() {
@@ -287,6 +299,46 @@ mod tests {
         );
     }
 
+    #[test]
+    fn uses_saved_pr_context_after_worktree_removal() {
+        let missing_cwd = std::env::temp_dir()
+            .join(format!(
+                "armyknife-test-missing-pr-worktree-{}",
+                std::process::id()
+            ))
+            .join("worktree");
+        let mut recorded = session("recorded", true, vec!["parent"], 20);
+        recorded.cwd = missing_cwd;
+        recorded.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "sample-branch".to_string(),
+            checklist_item_id: Some("sample-item".to_string()),
+        });
+
+        let queries = branch_queries_for_sessions(&[recorded]);
+        let query = BranchPrQuery {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "sample-branch".to_string(),
+        };
+
+        assert_eq!(
+            (
+                queries.queries,
+                queries.by_session,
+                queries.checklist_item_id_by_session,
+                queries.unavailable,
+            ),
+            (
+                vec![query.clone()],
+                HashMap::from([("recorded".to_string(), query)]),
+                HashMap::from([("recorded".to_string(), "sample-item".to_string())]),
+                HashSet::new(),
+            ),
+        );
+    }
+
     fn session(
         session_id: &str,
         is_delegated: bool,
@@ -295,6 +347,7 @@ mod tests {
     ) -> Session {
         let updated_at = Utc.timestamp_opt(updated_second, 0).single().unwrap();
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

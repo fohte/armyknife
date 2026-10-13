@@ -18,7 +18,7 @@ use super::error::CcError;
 use super::session_status;
 use super::store;
 use super::types::{
-    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
+    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionPrContext, SessionStatus,
     TMUX_SESSION_OPTION, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
@@ -131,7 +131,13 @@ enum ProcessResult {
 /// This is the core logic separated from stdin handling for testability.
 fn process_hook_event(event: HookEvent, input: HookInput) -> Result<ProcessResult> {
     let sessions_dir = store::sessions_dir()?;
-    process_hook_event_impl(event, input, &sessions_dir, &SideEffects::all())
+    process_hook_event_impl_with_context_capture(
+        event,
+        input,
+        &sessions_dir,
+        &SideEffects::all(),
+        Some(super::session_pr_context::capture),
+    )
 }
 
 /// Marks a Codex session ended after its CLI process exits.
@@ -211,29 +217,60 @@ fn session_needs_pane_binding(sessions_dir: &Path, session_id: &str) -> Result<b
 
 /// Internal implementation that returns ProcessResult for testing.
 /// Accepts sessions_dir as a parameter to allow testing with temporary directories.
+#[cfg(test)]
 fn process_hook_event_impl(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
     side_effects: &SideEffects,
 ) -> Result<ProcessResult> {
+    process_hook_event_impl_with_context_capture(event, input, sessions_dir, side_effects, None)
+}
+
+fn process_hook_event_impl_with_context_capture(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
+) -> Result<ProcessResult> {
     let agent_config = (event == HookEvent::Stop).then(|| config::load_config_or_default().agent);
     let stop_hook_instruction = agent_config.as_ref().and_then(stop::configured_instruction);
-    process_hook_event_impl_with_instruction(
+    process_hook_event_impl_with_instruction_and_context_capture(
         event,
         input,
         sessions_dir,
         side_effects,
         stop_hook_instruction,
+        capture_pr_context,
     )
 }
 
+#[cfg(test)]
 fn process_hook_event_impl_with_instruction(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
+) -> Result<ProcessResult> {
+    process_hook_event_impl_with_instruction_and_context_capture(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        None,
+    )
+}
+
+fn process_hook_event_impl_with_instruction_and_context_capture(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
@@ -381,6 +418,7 @@ fn process_hook_event_impl_with_instruction(
             .unwrap_or_default();
 
         Session {
+            pr_context: capture_pr_context.and_then(|capture| capture(&input.cwd)),
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
             // A new ID in a pane that already tracked a session is a restart or
@@ -1831,6 +1869,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            pr_context: None,
             session_id: "paused-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -2292,6 +2331,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            pr_context: None,
             session_id: "end-sess".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -2902,6 +2942,7 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            pr_context: None,
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -4092,6 +4133,7 @@ mod tests {
         fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
+                pr_context: None,
                 session_id: session_id.to_string(),
                 work_type: None,
                 work_type_pinned: false,

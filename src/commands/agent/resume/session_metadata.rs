@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::Utc;
 
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
 use crate::shared::env_var::parse_ancestor_session_ids;
 
 pub(super) fn record_ancestor_session_ids_if_empty(
@@ -13,6 +13,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     session_id: &str,
     cwd: &Path,
     ancestor_session_ids: &str,
+    capture_pr_context: Option<fn(&Path) -> Option<SessionPrContext>>,
 ) -> Result<()> {
     let ancestor_session_ids = parse_ancestor_session_ids(ancestor_session_ids);
     if ancestor_session_ids.is_empty() {
@@ -22,6 +23,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        pr_context: capture_pr_context.and_then(|capture| capture(cwd)),
         session_id: session_id.to_string(),
         work_type: None,
         work_type_pinned: false,
@@ -80,6 +82,7 @@ mod tests {
     fn session(ancestor_session_ids: Vec<String>) -> Session {
         let now = Utc::now();
         Session {
+            pr_context: None,
             session_id: "resume-target".to_string(),
             work_type: None,
             work_type_pinned: false,
@@ -131,6 +134,7 @@ mod tests {
             "resume-target",
             Path::new("/workspace/project"),
             "root, parent",
+            None,
         )
         .expect("record should succeed");
         let actual = store::load_session_from(sessions_dir.path(), "resume-target")
@@ -154,6 +158,7 @@ mod tests {
             "missing-session",
             Path::new("/workspace/resume"),
             "root, parent",
+            None,
         )
         .expect("record should succeed");
 

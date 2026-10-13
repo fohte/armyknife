@@ -170,6 +170,7 @@ mod tests {
         status: SessionStatus,
     ) -> Session {
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             work_type: None,
             work_type_pinned: false,

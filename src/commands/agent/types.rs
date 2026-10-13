@@ -10,7 +10,7 @@ mod agent_status;
 mod session;
 mod status;
 pub use agent_status::AgentStatus;
-pub use session::Session;
+pub use session::{Session, SessionPrContext};
 
 /// Which coding agent CLI hosts a session. Determines the process name to
 /// look for in a tmux pane, and which binary/subcommand `a agent new` /

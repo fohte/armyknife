@@ -66,6 +66,7 @@ mod tests {
     fn session(session_id: &str) -> Session {
         let now = Utc::now();
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

@@ -253,6 +253,7 @@ mod tests {
     fn make_session(id: &str, status: SessionStatus) -> Session {
         let timestamp: DateTime<Utc> = Utc::now();
         Session {
+            pr_context: None,
             session_id: id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

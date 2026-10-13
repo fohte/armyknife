@@ -389,6 +389,7 @@ mod tests {
 
     fn create_test_session_at(id: &str, timestamp: chrono::DateTime<Utc>) -> Session {
         Session {
+            pr_context: None,
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,

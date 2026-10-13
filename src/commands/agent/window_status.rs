@@ -207,6 +207,7 @@ mod tests {
 
     fn session(status: SessionStatus, read_at: Option<chrono::DateTime<Utc>>) -> Session {
         Session {
+            pr_context: None,
             session_id: "test-123".to_string(),
             work_type: None,
             work_type_pinned: false,

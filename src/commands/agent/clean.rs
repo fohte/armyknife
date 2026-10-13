@@ -666,6 +666,7 @@ mod tests {
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
         let now = Utc::now();
         Session {
+            pr_context: None,
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,
