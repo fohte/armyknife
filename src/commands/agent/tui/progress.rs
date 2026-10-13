@@ -1,12 +1,22 @@
 use std::collections::HashMap;
 
-use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
-use crate::infra::github::{PrCiState, PrProgressInfo, PrState};
+use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::user_turn::{UserTurn, user_turns};
+use crate::infra::github::PrProgressInfo;
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
 use super::progress_batches::ImplementationPlan;
+
+#[path = "progress_marks.rs"]
+mod progress_marks;
+#[expect(
+    unused_imports,
+    reason = "Keep all mark helpers available through progress."
+)]
+pub(super) use progress_marks::{
+    active_review_mark, completed_stage_marks, pr_ci_merge_marks, session_mark,
+    session_stage_marks, stage_marks,
+};
 
 #[derive(Debug)]
 pub(super) struct FetchedProgress {
@@ -392,142 +402,6 @@ fn user_turn_for<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option
         .next()
 }
 
-fn session_mark(
-    session: &Session,
-    turn: Option<&UserTurn<'_>>,
-    agent_config: &AgentConfig,
-) -> ProgressMark {
-    if session.status == SessionStatus::Ended {
-        return ProgressMark::Done;
-    }
-    if turn.is_some() {
-        return ProgressMark::User;
-    }
-    if session.status != SessionStatus::Running
-        && let Some(status) = session.agent_status.as_ref()
-    {
-        match agent_config.status_state(&status.kind) {
-            AgentStatusState::Done => return ProgressMark::Done,
-            AgentStatusState::Waiting => return ProgressMark::Waiting,
-            AgentStatusState::User => return ProgressMark::User,
-        }
-    }
-    match session.display_status() {
-        DisplayStatus::Running => ProgressMark::Working,
-        DisplayStatus::Background => ProgressMark::Waiting,
-        DisplayStatus::Failed | DisplayStatus::WaitingInput => ProgressMark::User,
-        DisplayStatus::Ended => ProgressMark::Done,
-        DisplayStatus::UnreadStopped | DisplayStatus::Stopped | DisplayStatus::Paused => {
-            ProgressMark::NotStarted
-        }
-    }
-}
-
-fn stage_marks(
-    session: &Session,
-    progress: Option<&PrProgressInfo>,
-    agent_config: &AgentConfig,
-) -> StageMarks {
-    let is_merged = progress.is_some_and(|progress| progress.pull_request.state == PrState::Merged);
-    if is_merged {
-        return completed_stage_marks();
-    }
-
-    let mut stages = session_stage_marks(session, progress.is_some(), agent_config);
-    (stages.ci, stages.merge) = pr_ci_merge_marks(progress);
-    stages
-}
-
-pub(super) fn pr_ci_merge_marks(progress: Option<&PrProgressInfo>) -> (ProgressMark, ProgressMark) {
-    match progress {
-        None => (ProgressMark::NotStarted, ProgressMark::NotStarted),
-        Some(progress) => {
-            let ci = match progress.ci_state {
-                PrCiState::Waiting => ProgressMark::Waiting,
-                PrCiState::InProgress => ProgressMark::Working,
-                PrCiState::Successful => ProgressMark::Done,
-                PrCiState::Unknown => ProgressMark::NotStarted,
-            };
-            let merge = match progress.pull_request.state {
-                PrState::Merged => ProgressMark::Done,
-                PrState::Open if progress.ci_state == PrCiState::Successful => ProgressMark::User,
-                PrState::Open
-                    if matches!(
-                        progress.ci_state,
-                        PrCiState::Waiting | PrCiState::InProgress
-                    ) =>
-                {
-                    ProgressMark::Waiting
-                }
-                PrState::Open | PrState::Closed => ProgressMark::NotStarted,
-            };
-            (ci, merge)
-        }
-    }
-}
-
-pub(super) fn completed_stage_marks() -> StageMarks {
-    StageMarks {
-        implementation: ProgressMark::Done,
-        diff_review: ProgressMark::Done,
-        pr_body: ProgressMark::Done,
-        ci: ProgressMark::Done,
-        merge: ProgressMark::Done,
-    }
-}
-
-fn session_stage_marks(
-    session: &Session,
-    has_pull_request: bool,
-    agent_config: &AgentConfig,
-) -> StageMarks {
-    let turn = user_turn_for(session, agent_config);
-    let current = session_mark(session, turn.as_ref(), agent_config);
-    let has_crit = !session.crit_urls.is_empty();
-    let has_pr_body_review = session
-        .pending_human_review_ids
-        .iter()
-        .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER));
-    let implementation = if has_pull_request || has_crit || has_pr_body_review {
-        ProgressMark::Done
-    } else {
-        current
-    };
-    let diff_review = if has_crit {
-        active_review_mark(turn.as_ref(), UserTurnKind::Crit, current)
-    } else if has_pr_body_review || has_pull_request {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
-    let pr_body = if has_pr_body_review {
-        active_review_mark(turn.as_ref(), UserTurnKind::Body, current)
-    } else if has_pull_request {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
-
-    StageMarks {
-        implementation,
-        diff_review,
-        pr_body,
-        ci: ProgressMark::NotStarted,
-        merge: ProgressMark::NotStarted,
-    }
-}
-
-fn active_review_mark(
-    turn: Option<&UserTurn<'_>>,
-    expected_kind: UserTurnKind,
-    fallback: ProgressMark,
-) -> ProgressMark {
-    match turn {
-        Some(turn) if turn.kind == expected_kind => ProgressMark::User,
-        _ => fallback,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -538,7 +412,9 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
+    use crate::infra::github::{PrCiState, PrState};
     use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
     #[fixture]
     fn selected_session() -> Session {
