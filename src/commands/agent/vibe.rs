@@ -3,37 +3,25 @@ use clap::Subcommand;
 
 use super::error::CcError;
 use super::store;
-use crate::infra::git::{github_owner_and_repo, open_repo};
-use crate::shared::config::{Config, load_config};
+use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
 
 #[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
 pub enum VibeCommands {
-    /// Enable vibe mode for the calling session when its repository is allowed
+    /// Enable vibe mode for the calling session
     On,
     /// Clear the calling session's explicit vibe setting; inherited settings still apply
     Off,
-    /// Check whether vibe mode is enabled and allowed for this repository
+    /// Check whether this session or an ancestor enabled vibe mode
     Status,
 }
 
 pub fn run(command: &VibeCommands) -> Result<()> {
-    run_with_repo_access(command, ensure_current_repo_vibe_access)
-}
-
-fn run_with_repo_access(
-    command: &VibeCommands,
-    repo_access_check: impl FnOnce() -> Result<()>,
-) -> Result<()> {
     match command {
-        VibeCommands::On => {
-            repo_access_check()?;
-            set(true)
-        }
+        VibeCommands::On => set(true),
         VibeCommands::Off => set(false),
         VibeCommands::Status => {
             if is_vibe_enabled()? {
-                repo_access_check()?;
                 println!("Vibe mode is enabled.");
                 Ok(())
             } else {
@@ -41,12 +29,6 @@ fn run_with_repo_access(
             }
         }
     }
-}
-
-fn ensure_current_repo_vibe_access() -> Result<()> {
-    let repo = open_repo()?;
-    let (owner, repo_name) = github_owner_and_repo(&repo)?;
-    ensure_repo_vibe_access(&load_config()?, &owner, &repo_name)
 }
 
 /// Returns whether the calling session or a stored ancestor explicitly enabled vibe mode.
@@ -256,13 +238,11 @@ mod tests {
             .expect("cache path should be valid UTF-8");
 
         let run_for = |session_id, command| {
-            with_session_env(cache_home, Some(session_id), || {
-                run_with_repo_access(command, || Ok(())).is_ok()
-            })
+            with_session_env(cache_home, Some(session_id), || run(command).is_ok())
         };
         let status_command_succeeds_for = |session_id| {
             with_session_env(cache_home, Some(session_id), || {
-                run_with_repo_access(&VibeCommands::Status, || Ok(())).is_ok()
+                run(&VibeCommands::Status).is_ok()
             })
         };
 
@@ -283,38 +263,6 @@ mod tests {
                 child_status_fails,
             ),
             (true, true, true, true, true, true),
-        );
-    }
-
-    #[rstest]
-    #[case::turning_on(false, VibeCommands::On, Err("repository is not allowed"))]
-    #[case::reporting_status(true, VibeCommands::Status, Err("repository is not allowed"))]
-    fn vibe_commands_require_repo_access(
-        test_store: TestStore,
-        #[case] vibe_enabled: bool,
-        #[case] command: VibeCommands,
-        #[case] expected: std::result::Result<(), &str>,
-    ) {
-        let current = session("current", &[], vibe_enabled);
-        store::save_session_to(&test_store.sessions_dir, &current)
-            .expect("current session should save");
-        let cache_home = test_store
-            .cache_home
-            .to_str()
-            .expect("cache path should be valid UTF-8");
-
-        let result = with_session_env(cache_home, Some("current"), || {
-            run_with_repo_access(&command, || bail!("repository is not allowed"))
-        })
-        .map_err(|error| error.to_string());
-        let actual_vibe_enabled = store::load_session_from(&test_store.sessions_dir, "current")
-            .expect("current session should load")
-            .expect("current session should exist")
-            .vibe_enabled;
-
-        assert_eq!(
-            (result, actual_vibe_enabled),
-            (expected.map_err(str::to_owned), vibe_enabled),
         );
     }
 

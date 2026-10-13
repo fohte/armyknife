@@ -420,7 +420,7 @@ Run `a agent status set` from a tracked Claude Code or Codex session. Claude Cod
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
 
-`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and `a gh pr-merge` applies both checks inside agent sessions. `a agent vibe on` also requires the current repository to be allowed. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which exits with code 0 only when the current session or a stored ancestor enabled the marker and the current repository is allowed:
+`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and `a gh pr-merge` applies both checks inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which reports whether the current session or a stored ancestor enabled the marker; it does not check repository access:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then
@@ -428,7 +428,7 @@ if a agent vibe status >/dev/null 2>&1; then
 fi
 ```
 
-Run `a agent vibe on` in an allowed repository and a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
+Run `a agent vibe on` in a tracked session to enable the marker. Descendants inherit it through the recorded ancestor chain while the enabling session record exists. If armyknife removes that ancestor record during session cleanup, descendants no longer inherit its marker. `a agent vibe off` clears only the calling session's own marker, so it cannot override a marker inherited from an ancestor; run it in the enabling session to disable the mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
