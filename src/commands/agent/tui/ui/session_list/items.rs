@@ -376,7 +376,7 @@ pub(super) fn build_session_item(
 
     // An empty question still renders bare quotes rather than an
     // inconsistent row shape. Sessions already in YOUR TURN skip it there.
-    if session.status == SessionStatus::WaitingInput && entry.is_selectable {
+    if session.status == SessionStatus::WaitingInput && entry.mark != TaskMark::UserTurn {
         let question = session
             .current_tool
             .as_deref()

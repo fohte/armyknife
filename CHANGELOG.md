@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.396](https://github.com/fohte/armyknife/compare/v0.1.395...v0.1.396) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/watch:** select YOUR TURN rows in TASKS ([#1126](https://github.com/fohte/armyknife/issues/1126)) ([9b062e6](https://github.com/fohte/armyknife/commit/9b062e606132263a0d51e6d71251f09ca493a7e3))
+
 ## [0.1.395](https://github.com/fohte/armyknife/compare/v0.1.394...v0.1.395) (2026-10-12)
 
 

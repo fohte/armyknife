@@ -127,7 +127,6 @@ impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
             mark: task_mark(session, has_user_turn, self.agent_config),
             is_last_sibling,
             tree_prefix: tree_prefix.clone(),
-            is_selectable: !has_user_turn,
             child_count: 0,
             child_user_turn_count: 0,
             task: self

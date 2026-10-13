@@ -3,6 +3,7 @@ use std::path::Path;
 use crate::commands::agent::store;
 use crate::infra::tmux;
 
+use super::reload::SelectionAnchor;
 use super::worktree::resolve_worktree_root;
 use super::{App, AppMode};
 
@@ -43,7 +44,7 @@ impl App {
     /// branch, associated tmux windows, and any remaining session files
     /// inside the worktree.
     pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
-        let current_selection = self.list_state.selected();
+        let current_selection = self.selection_anchor();
         let (session_id, is_alive, worktree_cleanup) = match &self.mode {
             AppMode::Confirm {
                 session_id,
@@ -110,13 +111,13 @@ impl App {
 
     /// Re-sorts sessions, rebuilds caches, reapplies filters, and restores
     /// selection.
-    fn refresh_after_mutation(&mut self, previous_selection: Option<usize>) {
+    fn refresh_after_mutation(&mut self, selection: SelectionAnchor) {
         store::sort_sessions(&mut self.sessions);
         self.rebuild_title_cache();
         if self.searchable_text_cache.is_some() {
             self.update_searchable_text_cache();
         }
         self.apply_filter();
-        self.resync_selection(previous_selection, None);
+        self.resync_selection(selection);
     }
 }

@@ -24,16 +24,13 @@ impl App {
 
     /// Clears session-list filters while keeping the selected tq scope.
     pub fn clear_non_sidebar_filters(&mut self) {
-        let old_position = self.list_state.selected();
-        let old_session_id = self
-            .selected_session()
-            .map(|session| session.session_id.clone());
+        let selection = self.selection_anchor();
         self.search_query.clear();
         self.confirmed_query.clear();
         self.status_filter = None;
         self.drilldown_scope = None;
         self.apply_filter();
-        self.restore_selection(old_position, old_session_id.as_deref());
+        self.restore_selection(selection);
     }
 
     /// Enters search mode.
@@ -53,22 +50,20 @@ impl App {
     /// Exits search mode, confirming the search.
     /// Preserves the current selection (by session id) when possible.
     pub fn confirm_search(&mut self) {
-        let old_pos = self.list_state.selected();
-        let old_id = self.selected_session().map(|s| s.session_id.clone());
+        let selection = self.selection_anchor();
         self.confirmed_query = self.search_query.clone();
         self.apply_filter();
-        self.resync_selection(old_pos, old_id);
+        self.resync_selection(selection);
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
     }
 
     /// Exits search mode, cancelling the search.
     pub fn cancel_search(&mut self) {
-        let old_pos = self.list_state.selected();
-        let old_id = self.selected_session().map(|s| s.session_id.clone());
+        let selection = self.selection_anchor();
         self.search_query = self.confirmed_query.clone();
         self.apply_filter();
-        self.resync_selection(old_pos, old_id);
+        self.resync_selection(selection);
         self.mode = AppMode::Normal;
         self.pre_search_selection = None;
     }

@@ -37,9 +37,6 @@ pub(super) struct SessionRowEntry<'a> {
     /// Whether each non-root ancestor was the last child in its own group.
     /// `None` identifies a root; an empty prefix identifies a direct child.
     pub tree_prefix: Option<Vec<bool>>,
-    /// `false` when the session already has a selectable YOUR TURN row, so
-    /// the cursor never holds two positions for one session.
-    pub is_selectable: bool,
     /// Descendants shown under a root (always 0 on descendant rows).
     pub child_count: usize,
     pub child_user_turn_count: usize,
@@ -62,14 +59,11 @@ pub(super) enum TaskMark {
 }
 
 impl<'a> SessionRow<'a> {
-    /// The session_id occupying this row, if it is individually selectable.
+    /// The session_id occupying this row, if it belongs to a session.
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
             SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
-            SessionRow::Session(entry) if entry.is_selectable => {
-                Some(entry.session.session_id.as_str())
-            }
-            SessionRow::Session(_) => None,
+            SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
             SessionRow::SectionHeader(_) => None,
         }
     }
@@ -353,7 +347,6 @@ mod tests {
             mark: TaskMark,
             is_last_sibling: bool,
             tree_prefix: Option<Vec<bool>>,
-            is_selectable: bool,
             child_count: usize,
             child_user_turn_count: usize,
         },
@@ -374,7 +367,6 @@ mod tests {
                     mark: entry.mark,
                     is_last_sibling: entry.is_last_sibling,
                     tree_prefix: entry.tree_prefix.clone(),
-                    is_selectable: entry.is_selectable,
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
                 },
@@ -394,7 +386,6 @@ mod tests {
             mark,
             is_last_sibling: false,
             tree_prefix: None,
-            is_selectable: mark != TaskMark::UserTurn,
             child_count: children,
             child_user_turn_count: user_turns,
         }
@@ -406,7 +397,6 @@ mod tests {
             mark,
             is_last_sibling,
             tree_prefix: Some(Vec::new()),
-            is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
         }
@@ -423,7 +413,6 @@ mod tests {
             mark,
             is_last_sibling,
             tree_prefix: Some(tree_prefix.to_vec()),
-            is_selectable: mark != TaskMark::UserTurn,
             child_count: 0,
             child_user_turn_count: 0,
         }
