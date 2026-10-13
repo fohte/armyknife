@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.404](https://github.com/fohte/armyknife/compare/v0.1.403...v0.1.404) (2026-10-13)
+
+
+### Features
+
+* **agent:** show delegated PR progress in watch ([#1141](https://github.com/fohte/armyknife/issues/1141)) ([9318a11](https://github.com/fohte/armyknife/commit/9318a11000bcecc45a6b497175f735efb4deb431))
+
 ## [0.1.403](https://github.com/fohte/armyknife/compare/v0.1.402...v0.1.403) (2026-10-13)
 
 
