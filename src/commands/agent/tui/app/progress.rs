@@ -139,16 +139,50 @@ impl App {
         if self.selected_session_id() != Some(session_id) {
             return;
         }
+        if self
+            .initial_progress_selection
+            .as_ref()
+            .is_some_and(|(parent_id, _)| parent_id != session_id)
+        {
+            self.initial_progress_selection = None;
+        }
         if self.progress_session_id.as_deref() != Some(session_id) {
             self.progress_implementation_expanded = true;
             self.progress_batch_expanded.clear();
         }
-        let (selected_index, selected_key) =
-            if self.progress_session_id.as_deref() == Some(session_id) {
-                self.current_progress_selection()
-            } else {
-                (0, None)
-            };
+        if let Some((_, delegate_id)) = self
+            .initial_progress_selection
+            .as_ref()
+            .filter(|(parent_id, _)| parent_id == session_id)
+        {
+            self.progress_implementation_expanded = true;
+            if let Some(batch_id) = snapshot
+                .implementation
+                .as_ref()
+                .and_then(|plan| plan.batch_id_for_delegate(delegate_id))
+            {
+                self.progress_batch_expanded
+                    .insert(batch_id.to_string(), true);
+            }
+        }
+        let initial_selection_index =
+            self.initial_progress_selection
+                .as_ref()
+                .and_then(|(_, delegate_id)| {
+                    snapshot
+                        .rows
+                        .iter()
+                        .position(|row| row.selection_key() == Some(delegate_id.as_str()))
+                });
+        let (selected_index, selected_key) = if let Some(index) = initial_selection_index {
+            let key = snapshot.rows[index].selection_key().map(str::to_owned);
+            self.initial_progress_selection = None;
+            (index, key)
+        } else if self.progress_session_id.as_deref() == Some(session_id) {
+            self.current_progress_selection()
+        } else {
+            (0, None)
+        };
         self.progress_session_id = Some(session_id.to_string());
         self.progress_error = snapshot.error.clone();
         self.replace_progress_rows(snapshot.rows, selected_key, selected_index);
@@ -268,18 +302,29 @@ impl App {
         let use_current_expansion = self.progress_session_id.as_deref()
             == Some(selected.session_id.as_str())
             && self.selected_session_id() == Some(selected.session_id.as_str());
-        let default_expanded_batches = HashMap::new();
-        let expanded_batches = if use_current_expansion {
-            &self.progress_batch_expanded
+        let mut expanded_batches = if use_current_expansion {
+            self.progress_batch_expanded.clone()
         } else {
-            &default_expanded_batches
+            HashMap::new()
         };
+        let initial_target = self
+            .initial_progress_selection
+            .as_ref()
+            .filter(|(parent_id, _)| parent_id == &selected.session_id)
+            .map(|(_, delegate_id)| delegate_id);
+        if let Some(target) = initial_target
+            && let Some(batch_id) = plan.batch_id_for_delegate(target)
+        {
+            expanded_batches.insert(batch_id.to_string(), true);
+        }
         build_checklist_progress_rows(
             selected,
             delegated,
             plan,
-            !use_current_expansion || self.progress_implementation_expanded,
-            expanded_batches,
+            initial_target.is_some()
+                || !use_current_expansion
+                || self.progress_implementation_expanded,
+            &expanded_batches,
             &self.agent_config,
         )
     }
