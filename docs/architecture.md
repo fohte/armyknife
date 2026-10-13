@@ -59,7 +59,7 @@ PROGRESS follows the selected TASKS session. When tq data is available, a task-l
 
 At the model layer, `ProgressRow` keeps work sessions, descendant delegates, and implementation checklist entries in one ordered list. Task scope comes from tq links and delegate ancestor IDs. Selection is tracked by row key so the selected session can stay emphasized without changing the order. The plain and checklist views derive their visible rows from this shared list.
 
-In the checklist view, unstarted entries without a delegate or PR link appear as non-selectable rows, and fully merged batches start collapsed. Press `h` or `l` to collapse or expand the implementation section or a batch.
+In the checklist view, unstarted entries without a delegate or PR link appear as non-selectable rows, and fully merged batches start collapsed. Use `j` and `k` to select the implementation or a batch heading. Press `h` to collapse the selected heading, `l` to expand it, or `Enter` to toggle it. Press `h` on a checklist PR row to collapse its batch and select the batch heading.
 
 Worktrees are discovered in the background and their PR statuses are fetched asynchronously when the clean view is entered (batched GraphQL via `GitHubClient::get_prs_for_branches_batch`); the result is shown after a brief "Loading PR status..." banner. Each worktree row in the clean view also shows its nested Claude Code sessions as tree children. `Enter` dispatches by row type: on a worktree row it toggles the section so the user can force-include an active worktree or exclude a merged one; on a nested session row it focuses that session's tmux pane.
 

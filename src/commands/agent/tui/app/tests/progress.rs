@@ -307,6 +307,31 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
 }
 
 #[rstest]
+fn task_linked_delegate_stays_visible_when_its_parent_is_absent(timestamp: DateTime<Utc>) {
+    let selected = create_test_session_at("selected", timestamp);
+    let mut delegate = create_test_session_at("orphan-delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec!["closed-parent".to_string()];
+    let mut app = create_test_app(vec![selected, delegate]);
+    app.update_row_order(&[None, Some("selected"), Some("orphan-delegate")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("selected".to_string(), vec![task_link("task-a")]),
+        ("orphan-delegate".to_string(), vec![task_link("task-a")]),
+    ])));
+
+    app.begin_progress_refresh("selected");
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            expected_work_row("selected", "session"),
+            expected_unlinked_delegate_row("orphan-delegate"),
+        ],
+    );
+}
+
+#[rstest]
 fn task_progress_keeps_the_checklist_after_all_work_rows(
     timestamp: DateTime<Utc>,
     linked_checklist_plan: ImplementationPlan,

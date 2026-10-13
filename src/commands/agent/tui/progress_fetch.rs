@@ -161,16 +161,17 @@ pub(super) fn task_descendant_delegates(
         .iter()
         .filter(|session| {
             session.is_delegated
-                && session
-                    .ancestor_session_ids
-                    .iter()
-                    .rev()
-                    .find(|ancestor_id| {
-                        sessions_by_id
-                            .get(ancestor_id.as_str())
-                            .is_none_or(|ancestor| !ancestor.is_delegated)
-                    })
-                    .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id))
+                && (task_session_ids.contains(&session.session_id)
+                    || session
+                        .ancestor_session_ids
+                        .iter()
+                        .rev()
+                        .find(|ancestor_id| {
+                            sessions_by_id
+                                .get(ancestor_id.as_str())
+                                .is_none_or(|ancestor| !ancestor.is_delegated)
+                        })
+                        .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id)))
         })
         .cloned()
         .collect::<Vec<_>>();

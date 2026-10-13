@@ -245,38 +245,50 @@ impl App {
         &mut self,
         collapsed: bool,
     ) {
-        let (current_index, mut selected_key) = self.current_progress_selection();
-        let selected_row = self.progress_rows.get(current_index);
-        let target = match selected_row {
-            Some(ProgressRow::ImplementationHeader { .. }) => Some(FoldTarget::Implementation),
-            Some(ProgressRow::BatchHeader { batch_id, .. }) => {
-                Some(FoldTarget::Batch(batch_id.clone()))
-            }
-            Some(ProgressRow::Work(_)) if collapsed => Some(FoldTarget::Implementation),
-            Some(ProgressRow::ChecklistPullRequest { batch_id, .. }) if collapsed => {
-                Some(FoldTarget::Batch(batch_id.clone()))
-            }
-            _ => None,
+        let action = if collapsed {
+            ProgressFoldAction::Collapse
+        } else {
+            ProgressFoldAction::Expand
         };
-        let Some(target) = target else {
-            return;
+        self.change_selected_progress_fold(action);
+    }
+
+    pub(in crate::commands::agent::tui) fn toggle_selected_progress_heading(&mut self) -> bool {
+        self.change_selected_progress_fold(ProgressFoldAction::Toggle)
+    }
+
+    fn change_selected_progress_fold(&mut self, action: ProgressFoldAction) -> bool {
+        let current_index = self.progress_list_state.selected().unwrap_or(0);
+        let Some(selected_row) = self.progress_rows.get(current_index) else {
+            return false;
         };
-        match &target {
-            FoldTarget::Implementation if self.progress_implementation_expanded == !collapsed => {
-                return;
+        let (target, was_collapsed) = match selected_row {
+            ProgressRow::ImplementationHeader { collapsed, .. } => {
+                (ProgressSelectionKey::Implementation, *collapsed)
             }
-            FoldTarget::Batch(batch_id)
-                if self.progress_batch_expanded.get(batch_id).copied() == Some(!collapsed) =>
+            ProgressRow::BatchHeader {
+                batch_id,
+                collapsed,
+                ..
+            } => (ProgressSelectionKey::Batch(batch_id.clone()), *collapsed),
+            ProgressRow::Work(_) if action == ProgressFoldAction::Collapse => (
+                ProgressSelectionKey::Implementation,
+                !self.progress_implementation_expanded,
+            ),
+            ProgressRow::ChecklistPullRequest { batch_id, .. }
+                if action == ProgressFoldAction::Collapse =>
             {
-                return;
+                (ProgressSelectionKey::Batch(batch_id.clone()), false)
             }
-            FoldTarget::Implementation | FoldTarget::Batch(_) => {}
-        }
-        if collapsed {
-            selected_key = Some(match &target {
-                FoldTarget::Implementation => ProgressSelectionKey::Implementation,
-                FoldTarget::Batch(batch_id) => ProgressSelectionKey::Batch(batch_id.clone()),
-            });
+            _ => return false,
+        };
+        let collapsed = match action {
+            ProgressFoldAction::Collapse => true,
+            ProgressFoldAction::Expand => false,
+            ProgressFoldAction::Toggle => !was_collapsed,
+        };
+        if was_collapsed == collapsed {
+            return true;
         }
         let Some(selected) = self
             .selected_session()
@@ -285,21 +297,26 @@ impl App {
             })
             .cloned()
         else {
-            return;
+            return false;
         };
         let Some(plan) = self.current_progress_implementation().cloned() else {
-            return;
+            return false;
         };
 
-        match target {
-            FoldTarget::Implementation => self.progress_implementation_expanded = !collapsed,
-            FoldTarget::Batch(batch_id) => {
-                self.progress_batch_expanded.insert(batch_id, !collapsed);
+        match &target {
+            ProgressSelectionKey::Implementation => {
+                self.progress_implementation_expanded = !collapsed
             }
+            ProgressSelectionKey::Batch(batch_id) => {
+                self.progress_batch_expanded
+                    .insert(batch_id.clone(), !collapsed);
+            }
+            ProgressSelectionKey::Session(_) => return false,
         }
         let scope = self.progress_scope(&selected);
         let rows = self.checklist_rows(&scope.work_sessions, &scope.delegated, &plan);
-        self.replace_progress_rows(rows, selected_key, current_index);
+        self.replace_progress_rows(rows, Some(target), current_index);
+        true
     }
 
     fn current_progress_selection(&self) -> (usize, Option<ProgressSelectionKey>) {
@@ -420,7 +437,9 @@ fn expand_initial_target_batch(
     }
 }
 
-enum FoldTarget {
-    Implementation,
-    Batch(String),
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProgressFoldAction {
+    Collapse,
+    Expand,
+    Toggle,
 }
