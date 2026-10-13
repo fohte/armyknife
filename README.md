@@ -373,15 +373,16 @@ a gh pr-review reply review <pr-number> [options]
 
 #### `a gh pr-merge`
 
-Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. After GitHub confirms the merge, the command closes the matching local head-branch worktree using the same safety checks as `a agent close`; cleanup failures are reported without changing the merge result. Cleanup is skipped when no unique local worktree is found. Use `--force-close` to skip the session, draft, and unmerged-worktree safety checks. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
 
 ```sh
 a gh pr-merge <pr-number> [options]
 ```
 
-| Option              | Description                    |
-| ------------------- | ------------------------------ |
-| `-R, --repo <repo>` | Target repository (owner/repo) |
+| Option              | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `-R, --repo <repo>` | Target repository (owner/repo)                    |
+| `--force-close`     | Skip safety checks when closing the head worktree |
 
 ### `a agent`
 
