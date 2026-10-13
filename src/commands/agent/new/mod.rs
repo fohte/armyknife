@@ -1,10 +1,12 @@
 use anyhow::{Context, Result, bail};
 use clap::Args;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::commands::agent::is_vibe_enabled;
 use crate::commands::agent::types::{Engine, ReasoningEffort};
-use crate::infra::git::{get_repo_root, get_repo_root_in};
+use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
+use crate::infra::git::{
+    get_repo_root, get_repo_root_in, github_owner_and_repo, open_repo, open_repo_at,
+};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 
@@ -103,7 +105,8 @@ pub struct NewArgs {
     #[arg(long, requires = "worktree")]
     pub force: bool,
 
-    /// Require vibe mode in the current or an ancestor session. This flag does not enable it.
+    /// Require vibe mode in the current or an ancestor session and an allowed target repository.
+    /// This flag does not enable vibe mode.
     #[arg(long)]
     pub vibe: bool,
 
@@ -117,19 +120,43 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
-    run_with_vibe_access(args, is_vibe_enabled, || run_inner(args))
+    run_with_vibe_access(
+        args,
+        is_vibe_enabled,
+        |args| ensure_target_repo_vibe_access(args, resolve_target_repo_identity, load_config),
+        || run_inner(args),
+    )
 }
 
 fn run_with_vibe_access(
     args: &NewArgs,
     vibe_check: impl FnOnce() -> Result<bool>,
+    repo_access_check: impl FnOnce(&NewArgs) -> Result<()>,
     launch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     if args.vibe {
         ensure_vibe_access(vibe_check()?)?;
+        repo_access_check(args)?;
     }
 
     launch()
+}
+
+fn ensure_target_repo_vibe_access(
+    args: &NewArgs,
+    resolve_repo_identity: impl FnOnce(Option<&Path>) -> Result<(String, String)>,
+    load_config: impl FnOnce() -> Result<Config>,
+) -> Result<()> {
+    let (owner, repo_name) = resolve_repo_identity(args.common.repo.as_deref())?;
+    ensure_repo_vibe_access(&load_config()?, &owner, &repo_name)
+}
+
+fn resolve_target_repo_identity(repo_path: Option<&Path>) -> Result<(String, String)> {
+    let repo = match repo_path {
+        Some(path) => open_repo_at(path)?,
+        None => open_repo()?,
+    };
+    github_owner_and_repo(&repo)
 }
 
 fn ensure_vibe_access(vibe_enabled: bool) -> Result<()> {
@@ -416,7 +443,7 @@ mod tests {
     use super::*;
     use clap::Parser;
     use rstest::rstest;
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     #[derive(Parser)]
     struct TestCli {
@@ -435,31 +462,47 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_vibe_flag(&["a"], Ok(false), Ok(()), false, true)]
-    #[case::vibe_enabled(&["a", "--vibe"], Ok(true), Ok(()), true, true)]
+    #[case::without_vibe_flag(&["a"], Ok(false), Ok(()), Ok(()), false, false, true)]
+    #[case::vibe_enabled(&["a", "--vibe"], Ok(true), Ok(()), Ok(()), true, true, true)]
+    #[case::repo_not_allowed(
+        &["a", "--vibe"],
+        Ok(true),
+        Err("repository is not allowed"),
+        Err("repository is not allowed"),
+        true,
+        true,
+        false
+    )]
     #[case::vibe_disabled(
         &["a", "--vibe"],
         Ok(false),
+        Ok(()),
         Err("Vibe mode must be enabled to use --vibe."),
         true,
+        false,
         false
     )]
     #[case::vibe_check_fails(
         &["a", "--vibe"],
         Err("session lookup failed"),
+        Ok(()),
         Err("session lookup failed"),
         true,
+        false,
         false
     )]
     fn vibe_flag_gates_session_launch(
         #[case] argv: &[&str],
         #[case] vibe_check_result: std::result::Result<bool, &'static str>,
+        #[case] repo_access_result: std::result::Result<(), &'static str>,
         #[case] expected_result: std::result::Result<(), &'static str>,
         #[case] expected_vibe_check: bool,
+        #[case] expected_repo_check: bool,
         #[case] expected_launch: bool,
     ) {
         let args = TestCli::try_parse_from(argv).unwrap().args;
         let vibe_checked = Cell::new(false);
+        let repo_checked = Cell::new(false);
         let launched = Cell::new(false);
 
         let result = run_with_vibe_access(
@@ -467,6 +510,10 @@ mod tests {
             || {
                 vibe_checked.set(true);
                 vibe_check_result.map_err(anyhow::Error::msg)
+            },
+            |_| {
+                repo_checked.set(true);
+                repo_access_result.map_err(anyhow::Error::msg)
             },
             || {
                 launched.set(true);
@@ -478,12 +525,63 @@ mod tests {
             (
                 result.map_err(|error| error.to_string()),
                 vibe_checked.get(),
+                repo_checked.get(),
                 launched.get(),
             ),
             (
                 expected_result.map_err(str::to_owned),
                 expected_vibe_check,
+                expected_repo_check,
                 expected_launch,
+            ),
+        );
+    }
+
+    #[test]
+    fn vibe_flag_checks_the_explicit_target_repository_before_launch() {
+        let args = TestCli::try_parse_from(["a", "--vibe", "-R", "/tmp/example-target"])
+            .unwrap()
+            .args;
+        let selected_path = RefCell::new(None);
+        let launched = Cell::new(false);
+        let config: Config = serde_yaml::from_str(indoc::indoc! {
+            "
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/denied-repository:
+                vibe: false
+            "
+        })
+        .unwrap();
+
+        let result = run_with_vibe_access(
+            &args,
+            || Ok(true),
+            |args| {
+                ensure_target_repo_vibe_access(
+                    args,
+                    |path| {
+                        selected_path.replace(path.map(Path::to_path_buf));
+                        Ok(("example-org".to_string(), "denied-repository".to_string()))
+                    },
+                    || Ok(config),
+                )
+            },
+            || {
+                launched.set(true);
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, selected_path.into_inner(), launched.get()),
+            (
+                Err("Vibe mode is disabled by configuration for repository example-org/denied-repository.".to_string()),
+                Some(PathBuf::from("/tmp/example-target")),
+                false,
             ),
         );
     }
