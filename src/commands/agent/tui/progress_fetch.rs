@@ -13,12 +13,19 @@ use super::progress_batches::{build_implementation_plan, pull_request_queries};
 pub(super) async fn fetch_progress(
     selected_session_id: String,
     task_id: Option<String>,
+    task_session_ids: Option<Vec<String>>,
 ) -> Result<FetchedProgress, String> {
     let sessions = tokio::task::spawn_blocking(store::list_all_sessions)
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
-    let delegated = direct_delegates(sessions, &selected_session_id);
+    let delegated = match task_session_ids {
+        Some(session_ids) => {
+            let session_ids = session_ids.into_iter().collect::<HashSet<_>>();
+            task_descendant_delegates(&sessions, &session_ids)
+        }
+        None => direct_delegates(sessions, &selected_session_id),
+    };
 
     let query_data = tokio::task::spawn_blocking({
         let delegated = delegated.clone();
@@ -142,6 +149,35 @@ pub(super) fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) 
     delegated
 }
 
+pub(super) fn task_descendant_delegates(
+    sessions: &[Session],
+    task_session_ids: &HashSet<String>,
+) -> Vec<Session> {
+    let sessions_by_id = sessions
+        .iter()
+        .map(|session| (session.session_id.as_str(), session))
+        .collect::<HashMap<_, _>>();
+    let mut delegated = sessions
+        .iter()
+        .filter(|session| {
+            session.is_delegated
+                && session
+                    .ancestor_session_ids
+                    .iter()
+                    .rev()
+                    .find(|ancestor_id| {
+                        sessions_by_id
+                            .get(ancestor_id.as_str())
+                            .is_none_or(|ancestor| !ancestor.is_delegated)
+                    })
+                    .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    delegated.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    delegated
+}
+
 struct BranchQueries {
     queries: Vec<BranchPrQuery>,
     by_session: HashMap<String, BranchPrQuery>,
@@ -247,13 +283,16 @@ fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
 
-    use super::{BranchLookup, Resolution, branch_query_for_with, direct_delegates};
+    use super::{
+        BranchLookup, Resolution, branch_query_for_with, direct_delegates,
+        task_descendant_delegates,
+    };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
 
@@ -273,6 +312,45 @@ mod tests {
                 .map(|session| session.session_id)
                 .collect::<Vec<_>>(),
             vec!["direct-newer", "direct-older"],
+        );
+    }
+
+    #[test]
+    fn lists_task_descendant_delegates_without_crossing_into_another_task() {
+        let sessions = vec![
+            session("task-root", false, vec![], 1),
+            session("same-task-child", false, vec!["task-root"], 2),
+            session("other-task-child", false, vec!["task-root"], 3),
+            session("direct-delegate", true, vec!["task-root"], 4),
+            session(
+                "nested-delegate",
+                true,
+                vec!["task-root", "same-task-child", "direct-delegate"],
+                5,
+            ),
+            session(
+                "other-task-delegate",
+                true,
+                vec!["task-root", "other-task-child"],
+                6,
+            ),
+            session(
+                "orphan-task-delegate",
+                true,
+                vec!["task-root", "removed-task-child"],
+                7,
+            ),
+        ];
+
+        assert_eq!(
+            task_descendant_delegates(
+                &sessions,
+                &HashSet::from(["task-root".to_string(), "same-task-child".to_string()]),
+            )
+            .into_iter()
+            .map(|session| session.session_id)
+            .collect::<Vec<_>>(),
+            vec!["nested-delegate", "direct-delegate"],
         );
     }
 

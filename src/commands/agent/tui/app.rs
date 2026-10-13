@@ -49,9 +49,12 @@ mod delete;
 mod filter;
 mod navigation;
 mod progress;
+mod progress_scope;
 mod reload;
 mod tq;
 mod worktree;
+
+pub(super) use progress_scope::ProgressScopeKind;
 
 use reload::{
     SelectionAnchor, build_title_cache, get_title_display_name, load_sessions,

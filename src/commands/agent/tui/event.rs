@@ -175,7 +175,12 @@ impl EventHandler {
     }
 
     /// Fetch delegated sessions and their PR progress for the selected task.
-    pub fn start_progress_fetch(&self, session_id: String, task_id: Option<String>) {
+    pub fn start_progress_fetch(
+        &self,
+        session_id: String,
+        task_id: Option<String>,
+        task_session_ids: Option<Vec<String>>,
+    ) {
         let tx = self.sender.clone();
         let Some(rt) = self.rt_handle.as_ref().cloned() else {
             let _ = tx.send(AppEvent::ProgressFetched {
@@ -185,7 +190,12 @@ impl EventHandler {
             return;
         };
         rt.spawn(async move {
-            let result = super::progress_fetch::fetch_progress(session_id.clone(), task_id).await;
+            let result = super::progress_fetch::fetch_progress(
+                session_id.clone(),
+                task_id,
+                task_session_ids,
+            )
+            .await;
             let _ = tx.send(AppEvent::ProgressFetched { session_id, result });
         });
     }

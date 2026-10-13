@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use super::super::progress::{
-    FetchedProgress, ProgressRow, build_progress_rows, refresh_rows_from_sessions,
+    FetchedProgress, ProgressRow, build_task_progress_rows, refresh_task_rows_from_sessions,
+    table_selection_index,
 };
 use super::super::progress_batches::{
-    ImplementationPlan, build_progress_rows as build_checklist_progress_rows,
+    ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
 };
-use super::super::progress_fetch::direct_delegates;
 use super::App;
 use crate::commands::agent::types::Session;
 
@@ -39,21 +39,29 @@ impl App {
                 let Some(selected) = self.session_by_id(session_id) else {
                     return;
                 };
-                let has_delegates = !progress.delegated.is_empty();
-                let implementation = progress.implementation.clone();
-                let delegated = progress
-                    .delegated
-                    .into_iter()
-                    .map(|mut fetched| {
-                        if let Some(session) = self.session_by_id(&fetched.session.session_id) {
-                            fetched.session = session;
-                        }
-                        fetched
-                    })
-                    .collect::<Vec<_>>();
+                let scope = self.progress_scope(&selected);
+                let includes_fetched_progress = scope.kind.includes_fetched_progress();
+                let implementation = includes_fetched_progress
+                    .then_some(progress.implementation)
+                    .flatten();
+                let delegated = if includes_fetched_progress {
+                    progress
+                        .delegated
+                        .into_iter()
+                        .map(|mut fetched| {
+                            if let Some(session) = self.session_by_id(&fetched.session.session_id) {
+                                fetched.session = session;
+                            }
+                            fetched
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    Vec::new()
+                };
+                let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
                     self.checklist_rows(
-                        &selected,
+                        &scope.work_sessions,
                         &delegated
                             .iter()
                             .map(|delegate| delegate.session.clone())
@@ -61,7 +69,7 @@ impl App {
                         plan,
                     )
                 } else {
-                    build_progress_rows(&selected, &delegated, &self.agent_config)
+                    build_task_progress_rows(&scope.work_sessions, &delegated, &self.agent_config)
                 };
                 let error = (has_delegates || implementation.is_some())
                     .then_some(progress.github_error)
@@ -88,13 +96,6 @@ impl App {
             .unwrap_or_default()
     }
 
-    fn session_by_id(&self, session_id: &str) -> Option<Session> {
-        self.sessions
-            .iter()
-            .find(|session| session.session_id == session_id)
-            .cloned()
-    }
-
     fn refresh_local_progress(
         &mut self,
         session_id: &str,
@@ -115,17 +116,23 @@ impl App {
         selected: &Session,
         existing_rows: &[ProgressRow],
     ) -> CachedProgress {
-        let delegated = direct_delegates(self.sessions.clone(), &selected.session_id);
+        let scope = self.progress_scope(selected);
         let implementation = self
             .progress_cache
             .get(&selected.session_id)
             .and_then(|snapshot| snapshot.implementation.clone());
         let rows = if let Some(plan) = implementation.as_ref() {
-            self.checklist_rows(selected, &delegated, plan)
+            self.checklist_rows(&scope.work_sessions, &scope.delegated, plan)
         } else {
-            refresh_rows_from_sessions(selected, &delegated, existing_rows, &self.agent_config)
+            refresh_task_rows_from_sessions(
+                &scope.work_sessions,
+                &selected.session_id,
+                &scope.delegated,
+                existing_rows,
+                &self.agent_config,
+            )
         };
-        let error = if rows.len() > 1 {
+        let error = if rows.len() > scope.work_sessions.len() {
             self.progress_cache
                 .get(&selected.session_id)
                 .and_then(|snapshot| snapshot.error.clone())
@@ -186,7 +193,12 @@ impl App {
         } else if self.progress_session_id.as_deref() == Some(session_id) {
             self.current_progress_selection()
         } else {
-            (0, None)
+            snapshot
+                .rows
+                .iter()
+                .position(|row| row.selection_key() == Some(session_id))
+                .map(|index| (index, Some(session_id.to_string())))
+                .unwrap_or((0, None))
         };
         self.resolve_initial_progress_selection(
             session_id,
@@ -217,7 +229,8 @@ impl App {
             .min(selectable.len() - 1);
         let next_index = selectable[next_position];
         self.progress_list_state.select(Some(next_index));
-        self.progress_table_state.select(next_index.checked_sub(1));
+        self.progress_table_state
+            .select(table_selection_index(&self.progress_rows, next_index));
     }
 
     pub(in crate::commands::agent::tui) fn set_progress_batch_collapsed(
@@ -287,8 +300,8 @@ impl App {
                 self.progress_batch_expanded.insert(batch_id, !collapsed);
             }
         }
-        let delegated = direct_delegates(self.sessions.clone(), &selected.session_id);
-        let rows = self.checklist_rows(&selected, &delegated, &plan);
+        let scope = self.progress_scope(&selected);
+        let rows = self.checklist_rows(&scope.work_sessions, &scope.delegated, &plan);
         self.replace_progress_rows(rows, selected_key, current_index);
     }
 
@@ -304,10 +317,13 @@ impl App {
 
     fn checklist_rows(
         &self,
-        selected: &Session,
+        work_sessions: &[Session],
         delegated: &[Session],
         plan: &ImplementationPlan,
     ) -> Vec<ProgressRow> {
+        let Some(selected) = work_sessions.first() else {
+            return Vec::new();
+        };
         let use_current_expansion = self.progress_session_id.as_deref()
             == Some(selected.session_id.as_str())
             && self.selected_session_id() == Some(selected.session_id.as_str());
@@ -319,7 +335,7 @@ impl App {
         let initial_target = self.initial_progress_target(&selected.session_id);
         expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
         build_checklist_progress_rows(
-            selected,
+            work_sessions,
             delegated,
             plan,
             initial_target.is_some()
@@ -394,7 +410,7 @@ impl App {
         self.progress_rows = rows;
         self.progress_list_state.select(Some(selected_index));
         self.progress_table_state
-            .select(selected_index.checked_sub(1));
+            .select(table_selection_index(&self.progress_rows, selected_index));
     }
 }
 

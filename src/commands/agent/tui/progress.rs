@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
-use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind, user_turns};
-use crate::infra::github::{PrCiState, PrProgressInfo, PrState};
+use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::user_turn::{UserTurn, user_turns};
+use crate::infra::github::PrProgressInfo;
 use crate::shared::config::{AgentConfig, AgentStatusState};
-use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
 use super::progress_batches::ImplementationPlan;
+
+pub(super) mod marks;
+
+use marks::{session_mark, session_stage_marks, stage_marks};
 
 #[derive(Debug)]
 pub(super) struct FetchedProgress {
@@ -156,23 +159,54 @@ pub(super) struct PrProgressRow {
     pub stages: StageMarks,
 }
 
+#[cfg(test)]
 pub(super) fn build_progress_rows(
     selected: &Session,
     delegated: &[FetchedDelegate],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let mut rows = Vec::with_capacity(delegated.len() + 1);
-    rows.push(ProgressRow::Work(work_progress_row(
-        selected,
-        !delegated.is_empty(),
-        agent_config,
-    )));
+    build_task_progress_rows(std::slice::from_ref(selected), delegated, agent_config)
+}
+
+pub(super) fn build_task_progress_rows(
+    work_sessions: &[Session],
+    delegated: &[FetchedDelegate],
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let mut rows = Vec::with_capacity(work_sessions.len() + delegated.len());
+    rows.extend(work_sessions.iter().map(|session| {
+        let has_delegated_work =
+            has_delegated_descendant(session, delegated.iter().map(|delegate| &delegate.session));
+        ProgressRow::Work(work_progress_row(session, has_delegated_work, agent_config))
+    }));
     rows.extend(
         delegated
             .iter()
             .map(|delegate| ProgressRow::PullRequest(pr_progress_row(delegate, agent_config))),
     );
     rows
+}
+
+pub(super) fn has_delegated_descendant<'a>(
+    work_session: &Session,
+    mut delegated: impl Iterator<Item = &'a Session>,
+) -> bool {
+    delegated.any(|session| {
+        session
+            .ancestor_session_ids
+            .iter()
+            .any(|ancestor_id| ancestor_id == &work_session.session_id)
+    })
+}
+
+pub(super) fn work_row_count(rows: &[ProgressRow]) -> usize {
+    rows.iter()
+        .take_while(|row| matches!(row, ProgressRow::Work(_)))
+        .count()
+}
+
+pub(super) fn table_selection_index(rows: &[ProgressRow], selected_index: usize) -> Option<usize> {
+    selected_index.checked_sub(work_row_count(rows))
 }
 
 pub(super) fn work_progress_row(
@@ -255,21 +289,47 @@ fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
     }
 }
 
+#[cfg(test)]
 pub(super) fn refresh_rows_from_sessions(
     selected: &Session,
     delegated: &[Session],
     existing_rows: &[ProgressRow],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let has_delegated_work = !delegated.is_empty()
-        || existing_rows
-            .iter()
-            .any(|row| matches!(row, ProgressRow::PullRequest(_)));
-    let mut rows = vec![ProgressRow::Work(work_progress_row(
-        selected,
-        has_delegated_work,
+    refresh_task_rows_from_sessions(
+        std::slice::from_ref(selected),
+        &selected.session_id,
+        delegated,
+        existing_rows,
         agent_config,
-    ))];
+    )
+}
+
+pub(super) fn refresh_task_rows_from_sessions(
+    work_sessions: &[Session],
+    selected_session_id: &str,
+    delegated: &[Session],
+    existing_rows: &[ProgressRow],
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let has_existing_pr_rows = existing_rows.iter().any(|row| {
+        matches!(
+            row,
+            ProgressRow::PullRequest(_) | ProgressRow::ChecklistPullRequest { .. }
+        )
+    });
+    let mut rows = work_sessions
+        .iter()
+        .map(|work_session| {
+            let has_delegated_work = has_delegated_descendant(work_session, delegated.iter())
+                || (work_session.session_id == selected_session_id && has_existing_pr_rows);
+            ProgressRow::Work(work_progress_row(
+                work_session,
+                has_delegated_work,
+                agent_config,
+            ))
+        })
+        .collect::<Vec<_>>();
     let mut previous = existing_rows
         .iter()
         .filter_map(|row| match row {
@@ -336,142 +396,6 @@ fn user_turn_for<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option
         .next()
 }
 
-fn session_mark(
-    session: &Session,
-    turn: Option<&UserTurn<'_>>,
-    agent_config: &AgentConfig,
-) -> ProgressMark {
-    if session.status == SessionStatus::Ended {
-        return ProgressMark::Done;
-    }
-    if turn.is_some() {
-        return ProgressMark::User;
-    }
-    if session.status != SessionStatus::Running
-        && let Some(status) = session.agent_status.as_ref()
-    {
-        match agent_config.status_state(&status.kind) {
-            AgentStatusState::Done => return ProgressMark::Done,
-            AgentStatusState::Waiting => return ProgressMark::Waiting,
-            AgentStatusState::User => return ProgressMark::User,
-        }
-    }
-    match session.display_status() {
-        DisplayStatus::Running => ProgressMark::Working,
-        DisplayStatus::Background => ProgressMark::Waiting,
-        DisplayStatus::Failed | DisplayStatus::WaitingInput => ProgressMark::User,
-        DisplayStatus::Ended => ProgressMark::Done,
-        DisplayStatus::UnreadStopped | DisplayStatus::Stopped | DisplayStatus::Paused => {
-            ProgressMark::NotStarted
-        }
-    }
-}
-
-fn stage_marks(
-    session: &Session,
-    progress: Option<&PrProgressInfo>,
-    agent_config: &AgentConfig,
-) -> StageMarks {
-    let is_merged = progress.is_some_and(|progress| progress.pull_request.state == PrState::Merged);
-    if is_merged {
-        return completed_stage_marks();
-    }
-
-    let mut stages = session_stage_marks(session, progress.is_some(), agent_config);
-    (stages.ci, stages.merge) = pr_ci_merge_marks(progress);
-    stages
-}
-
-pub(super) fn pr_ci_merge_marks(progress: Option<&PrProgressInfo>) -> (ProgressMark, ProgressMark) {
-    match progress {
-        None => (ProgressMark::NotStarted, ProgressMark::NotStarted),
-        Some(progress) => {
-            let ci = match progress.ci_state {
-                PrCiState::Waiting => ProgressMark::Waiting,
-                PrCiState::InProgress => ProgressMark::Working,
-                PrCiState::Successful => ProgressMark::Done,
-                PrCiState::Unknown => ProgressMark::NotStarted,
-            };
-            let merge = match progress.pull_request.state {
-                PrState::Merged => ProgressMark::Done,
-                PrState::Open if progress.ci_state == PrCiState::Successful => ProgressMark::User,
-                PrState::Open
-                    if matches!(
-                        progress.ci_state,
-                        PrCiState::Waiting | PrCiState::InProgress
-                    ) =>
-                {
-                    ProgressMark::Waiting
-                }
-                PrState::Open | PrState::Closed => ProgressMark::NotStarted,
-            };
-            (ci, merge)
-        }
-    }
-}
-
-pub(super) fn completed_stage_marks() -> StageMarks {
-    StageMarks {
-        implementation: ProgressMark::Done,
-        diff_review: ProgressMark::Done,
-        pr_body: ProgressMark::Done,
-        ci: ProgressMark::Done,
-        merge: ProgressMark::Done,
-    }
-}
-
-fn session_stage_marks(
-    session: &Session,
-    has_pull_request: bool,
-    agent_config: &AgentConfig,
-) -> StageMarks {
-    let turn = user_turn_for(session, agent_config);
-    let current = session_mark(session, turn.as_ref(), agent_config);
-    let has_crit = !session.crit_urls.is_empty();
-    let has_pr_body_review = session
-        .pending_human_review_ids
-        .iter()
-        .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER));
-    let implementation = if has_pull_request || has_crit || has_pr_body_review {
-        ProgressMark::Done
-    } else {
-        current
-    };
-    let diff_review = if has_crit {
-        active_review_mark(turn.as_ref(), UserTurnKind::Crit, current)
-    } else if has_pr_body_review || has_pull_request {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
-    let pr_body = if has_pr_body_review {
-        active_review_mark(turn.as_ref(), UserTurnKind::Body, current)
-    } else if has_pull_request {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
-
-    StageMarks {
-        implementation,
-        diff_review,
-        pr_body,
-        ci: ProgressMark::NotStarted,
-        merge: ProgressMark::NotStarted,
-    }
-}
-
-fn active_review_mark(
-    turn: Option<&UserTurn<'_>>,
-    expected_kind: UserTurnKind,
-    fallback: ProgressMark,
-) -> ProgressMark {
-    match turn {
-        Some(turn) if turn.kind == expected_kind => ProgressMark::User,
-        _ => fallback,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -482,7 +406,9 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::types::{AgentStatus, Engine};
+    use crate::infra::github::{PrCiState, PrState};
     use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use crate::shared::human_in_the_loop::PR_DRAFT_REVIEW_MARKER;
 
     #[fixture]
     fn selected_session() -> Session {
@@ -710,6 +636,79 @@ mod tests {
                     lookup_unavailable: true,
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn refresh_task_rows_keeps_delegated_wait_on_selected_session_when_peer_is_first() {
+        let mut selected = session("selected");
+        selected.status = SessionStatus::Stopped;
+        selected.agent_status = Some(AgentStatus {
+            kind: "external_wait".to_string(),
+            note: "waiting for delegated work".to_string(),
+        });
+        let peer = session("peer");
+        let delegated = delegated_session();
+        let mut agent_config = AgentConfig::default();
+        agent_config.statuses.insert(
+            "external_wait".to_string(),
+            AgentStatusConfig {
+                state: AgentStatusState::Waiting,
+            },
+        );
+        let previous_rows = build_progress_rows(
+            &selected,
+            &[FetchedDelegate {
+                session: delegated,
+                checklist_item_id: None,
+                pull_request: None,
+                lookup_unavailable: false,
+            }],
+            &agent_config,
+        );
+
+        assert_eq!(
+            refresh_task_rows_from_sessions(
+                &[peer, selected],
+                "selected",
+                &[],
+                &previous_rows,
+                &agent_config,
+            ),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "peer".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Waiting,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Example delegated work".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,
                         pr_body: ProgressMark::NotStarted,
                         ci: ProgressMark::NotStarted,
