@@ -435,33 +435,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_vibe_flag(&["a"], Ok(false), None, false, true)]
-    #[case::vibe_enabled(&["a", "--vibe"], Ok(true), None, true, true)]
+    #[case::without_vibe_flag(&["a"], Ok(false), Ok(()), false, true)]
+    #[case::vibe_enabled(&["a", "--vibe"], Ok(true), Ok(()), true, true)]
     #[case::vibe_disabled(
         &["a", "--vibe"],
         Ok(false),
-        Some("Vibe mode must be enabled to use --vibe."),
+        Err("Vibe mode must be enabled to use --vibe."),
         true,
         false
     )]
     #[case::vibe_check_fails(
         &["a", "--vibe"],
         Err("session lookup failed"),
-        None,
+        Err("session lookup failed"),
         true,
         false
     )]
     fn vibe_flag_gates_session_launch(
         #[case] argv: &[&str],
         #[case] vibe_check_result: std::result::Result<bool, &'static str>,
-        #[case] expected_error: Option<&str>,
+        #[case] expected_result: std::result::Result<(), &'static str>,
         #[case] expected_vibe_check: bool,
         #[case] expected_launch: bool,
     ) {
         let args = TestCli::try_parse_from(argv).unwrap().args;
         let vibe_checked = Cell::new(false);
         let launched = Cell::new(false);
-        let expected_error = expected_error.or_else(|| vibe_check_result.as_ref().err().copied());
 
         let result = run_with_vibe_access(
             &args,
@@ -475,14 +474,17 @@ mod tests {
             },
         );
 
-        let expected_result = expected_error.map_or_else(|| Ok(()), |error| Err(error.to_string()));
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
                 vibe_checked.get(),
                 launched.get(),
             ),
-            (expected_result, expected_vibe_check, expected_launch,),
+            (
+                expected_result.map_err(str::to_owned),
+                expected_vibe_check,
+                expected_launch,
+            ),
         );
     }
 
