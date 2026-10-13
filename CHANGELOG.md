@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.413](https://github.com/fohte/armyknife/compare/v0.1.412...v0.1.413) (2026-10-13)
+
+
+### Features
+
+* **gh/pr-merge:** close worktree after merge ([#1159](https://github.com/fohte/armyknife/issues/1159)) ([9a138ea](https://github.com/fohte/armyknife/commit/9a138eafec72aeef427c5a448a56334462cac415))
+
 ## [0.1.412](https://github.com/fohte/armyknife/compare/v0.1.411...v0.1.412) (2026-10-13)
 
 
