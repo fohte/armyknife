@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.409](https://github.com/fohte/armyknife/compare/v0.1.408...v0.1.409) (2026-10-13)
+
+
+### Features
+
+* **agent/watch:** show Batch checklist progress ([#1151](https://github.com/fohte/armyknife/issues/1151)) ([5556ca1](https://github.com/fohte/armyknife/commit/5556ca10dbb5b1c16230ed06d343dab91e5a251a))
+
 ## [0.1.408](https://github.com/fohte/armyknife/compare/v0.1.407...v0.1.408) (2026-10-13)
 
 
