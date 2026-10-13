@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.411](https://github.com/fohte/armyknife/compare/v0.1.410...v0.1.411) (2026-10-13)
+
+
+### Bug Fixes
+
+* **agent/watch:** show PR after worktree removal ([#1155](https://github.com/fohte/armyknife/issues/1155)) ([ff68423](https://github.com/fohte/armyknife/commit/ff684233129bee7dfa0bb870dd9cae28b7f2779a))
+
 ## [0.1.410](https://github.com/fohte/armyknife/compare/v0.1.409...v0.1.410) (2026-10-13)
 
 
