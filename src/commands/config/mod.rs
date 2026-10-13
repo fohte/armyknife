@@ -303,6 +303,17 @@ mod tests {
         "EXAMPLE-ORG/example-repository",
         true
     )]
+    #[case::case_variant_org_blocklist_takes_precedence(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+              EXAMPLE-ORG:
+                vibe: false
+        "},
+        "Example-Org/example-repository",
+        false
+    )]
     #[case::case_variant_repo_blocklist_takes_precedence(
         indoc! {"
             orgs:

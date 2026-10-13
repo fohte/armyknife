@@ -123,27 +123,15 @@ impl Config {
     }
 
     /// Resolve whether vibe mode is allowed for a repository.
-    /// GitHub owner and repository names are compared without case sensitivity.
+    /// GitHub owner and repository names are compared without case sensitivity for this policy.
+    /// Other config lookups retain their existing key matching behavior.
     /// An explicit repository setting overrides its owner's setting.
     pub fn is_vibe_allowed_for_repo(&self, owner: &str, repo: &str) -> bool {
         let repo_id = format!("{owner}/{repo}");
-        // Case-variant blocklist entries must not be overridden by an allow entry.
-        let repo_vibe = self
-            .repos
-            .iter()
-            .filter(|(configured_repo, _)| configured_repo.eq_ignore_ascii_case(&repo_id))
-            .filter_map(|(_, config)| config.vibe)
-            .reduce(|allowed, next| allowed && next);
+        let org_vibe =
+            strictest_vibe(self.orgs.iter(), owner, |config| Some(config.vibe)).unwrap_or(false);
 
-        let org_vibe = self
-            .orgs
-            .iter()
-            .filter(|(configured_owner, _)| configured_owner.eq_ignore_ascii_case(owner))
-            .map(|(_, config)| config.vibe)
-            .reduce(|allowed, next| allowed && next)
-            .unwrap_or(false);
-
-        repo_vibe.unwrap_or(org_vibe)
+        strictest_vibe(self.repos.iter(), &repo_id, |config| config.vibe).unwrap_or(org_vibe)
     }
 
     /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).
@@ -163,6 +151,17 @@ impl Config {
         }
         None
     }
+}
+
+fn strictest_vibe<'a, ConfigType: 'a>(
+    entries: impl Iterator<Item = (&'a String, &'a ConfigType)>,
+    key: &str,
+    vibe: impl Fn(&ConfigType) -> Option<bool>,
+) -> Option<bool> {
+    entries
+        .filter(|(configured_key, _)| configured_key.eq_ignore_ascii_case(key))
+        .filter_map(|(_, config)| vibe(config))
+        .reduce(|allowed, next| allowed && next)
 }
 
 /// Resolve a dot-separated path against a JSON value. Null is treated as
