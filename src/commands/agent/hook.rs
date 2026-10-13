@@ -1231,7 +1231,7 @@ fn build_subtitle(session: &Session) -> Option<String> {
 mod tests {
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
-    use crate::commands::agent::types::{AgentStatus, SessionPrContext};
+    use crate::commands::agent::types::AgentStatus;
     use rstest::{fixture, rstest};
 
     fn process_hook_event_without_instruction(
@@ -3679,24 +3679,61 @@ mod tests {
             let mut side_effects = SideEffects::none();
             side_effects.capture_pr_context = Some(fixed_context_capture);
 
-            process_hook_event_impl(
-                HookEvent::UserPromptSubmit,
-                create_test_input(None),
-                temp_dir.path(),
-                &side_effects,
-            )
-            .expect("user-prompt-submit should succeed");
+            let actual = temp_env::with_vars(
+                [
+                    (EnvVars::session_label_name(), None::<&str>),
+                    (EnvVars::session_work_type_name(), None::<&str>),
+                    (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::ancestor_session_ids_name(), None::<&str>),
+                ],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::UserPromptSubmit,
+                        create_test_input(None),
+                        temp_dir.path(),
+                        &side_effects,
+                    )
+                    .expect("user-prompt-submit should succeed");
 
-            let session = store::load_session_from(temp_dir.path(), "test-123")
-                .expect("session should load")
-                .expect("session should exist");
+                    let session = store::load_session_from(temp_dir.path(), "test-123")
+                        .expect("session should load")
+                        .expect("session should exist");
+                    let mut actual =
+                        serde_json::to_value(session).expect("session should serialize");
+                    actual["created_at"] = serde_json::json!("<timestamp>");
+                    actual["updated_at"] = serde_json::json!("<timestamp>");
+                    actual
+                },
+            );
+
             assert_eq!(
-                session.pr_context,
-                Some(SessionPrContext {
-                    owner: "sample-owner".to_string(),
-                    repo: "sample-repo".to_string(),
-                    branch: "sample-branch".to_string(),
-                    checklist_item_id: Some("sample-item".to_string()),
+                actual,
+                serde_json::json!({
+                    "session_id": "test-123",
+                    "pr_context": {
+                        "owner": "sample-owner",
+                        "repo": "sample-repo",
+                        "branch": "sample-branch",
+                        "checklist_item_id": "sample-item"
+                    },
+                    "cwd": "/tmp/test",
+                    "transcript_path": null,
+                    "tty": null,
+                    "tmux_info": null,
+                    "status": "running",
+                    "created_at": "<timestamp>",
+                    "updated_at": "<timestamp>",
+                    "last_message": null,
+                    "current_tool": null,
+                    "label": null,
+                    "work_type": null,
+                    "ancestor_session_ids": [],
+                    "pending_bg_task_ids": [],
+                    "pending_agent_task_ids": [],
+                    "pending_permission_agent_ids": [],
+                    "read_at": null,
+                    "sweep_signaled": false,
+                    "engine": "claude"
                 }),
             );
         }

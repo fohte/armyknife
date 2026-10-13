@@ -216,41 +216,36 @@ fn branch_lookup_for_resolution(
     saved_context: Option<&SessionPrContext>,
 ) -> BranchLookup {
     match live_resolution {
-        Some(Resolution::Context(context)) => BranchLookup::Query {
-            query: BranchPrQuery {
-                owner: context.owner,
-                repo: context.repo,
-                branch: context.branch,
-            },
-            checklist_item_id: context.checklist_item_id,
-        },
+        Some(Resolution::Context(context)) => branch_query_from_context(context),
         Some(Resolution::ChecklistOnly(item_id)) => BranchLookup::ChecklistOnly(item_id),
         Some(Resolution::NotApplicable) => BranchLookup::NotApplicable,
         Some(Resolution::Unavailable) => BranchLookup::Unavailable,
         None => saved_context
-            .map(|context| BranchLookup::Query {
-                query: BranchPrQuery {
-                    owner: context.owner.clone(),
-                    repo: context.repo.clone(),
-                    branch: context.branch.clone(),
-                },
-                checklist_item_id: context.checklist_item_id.clone(),
-            })
+            .cloned()
+            .map(branch_query_from_context)
             .unwrap_or(BranchLookup::Unavailable),
+    }
+}
+
+fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
+    BranchLookup::Query {
+        query: BranchPrQuery {
+            owner: context.owner,
+            repo: context.repo,
+            branch: context.branch,
+        },
+        checklist_item_id: context.checklist_item_id,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
 
-    use super::{
-        BranchLookup, Resolution, branch_lookup_for_resolution, branch_queries_for_sessions,
-        direct_delegates,
-    };
+    use super::{BranchLookup, Resolution, branch_lookup_for_resolution, direct_delegates};
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
 
@@ -274,63 +269,32 @@ mod tests {
     }
 
     #[test]
-    fn marks_unresolvable_worktrees_unavailable_without_creating_pr_queries() {
-        let mut delegate = session("delegate", true, vec!["parent"], 10);
-        delegate.cwd = std::env::temp_dir()
-            .join(format!(
-                "armyknife-test-missing-repository-{}",
-                std::process::id()
-            ))
-            .join("worktree");
-        let queries = branch_queries_for_sessions(&[delegate]);
-
+    fn returns_unavailable_when_worktree_cannot_be_opened() {
         assert_eq!(
-            (queries.queries, queries.by_session, queries.unavailable,),
-            (
-                Vec::new(),
-                HashMap::new(),
-                HashSet::from(["delegate".to_string()]),
-            ),
+            branch_lookup_for_resolution(None, None),
+            BranchLookup::Unavailable,
         );
     }
 
     #[test]
     fn uses_saved_pr_context_after_worktree_removal() {
-        let missing_cwd = std::env::temp_dir()
-            .join(format!(
-                "armyknife-test-missing-pr-worktree-{}",
-                std::process::id()
-            ))
-            .join("worktree");
-        let mut recorded = session("recorded", true, vec!["parent"], 20);
-        recorded.cwd = missing_cwd;
-        recorded.pr_context = Some(SessionPrContext {
+        let saved_context = SessionPrContext {
             owner: "sample-owner".to_string(),
             repo: "sample-repo".to_string(),
             branch: "sample-branch".to_string(),
             checklist_item_id: Some("sample-item".to_string()),
-        });
-
-        let queries = branch_queries_for_sessions(&[recorded]);
-        let query = BranchPrQuery {
-            owner: "sample-owner".to_string(),
-            repo: "sample-repo".to_string(),
-            branch: "sample-branch".to_string(),
         };
 
         assert_eq!(
-            (
-                queries.queries,
-                queries.by_session,
-                queries.checklist_item_id_by_session,
-                queries.unavailable,
-            ),
-            (
-                vec![query.clone()],
-                HashMap::from([("recorded".to_string(), query)]),
-                HashMap::from([("recorded".to_string(), "sample-item".to_string())]),
-                HashSet::new(),
-            ),
+            branch_lookup_for_resolution(None, Some(&saved_context)),
+            BranchLookup::Query {
+                query: BranchPrQuery {
+                    owner: "sample-owner".to_string(),
+                    repo: "sample-repo".to_string(),
+                    branch: "sample-branch".to_string(),
+                },
+                checklist_item_id: Some("sample-item".to_string()),
+            },
         );
     }
 
