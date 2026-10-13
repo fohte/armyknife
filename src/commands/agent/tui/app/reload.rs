@@ -6,10 +6,10 @@ use crate::commands::agent::types::Engine;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use anyhow::Result;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::super::event::{SessionChange, SessionChangeType};
-use super::super::session_rows::build_session_rows;
+use super::super::session_rows::build_session_rows_with_vibe;
 use super::App;
 
 #[derive(Debug)]
@@ -47,6 +47,7 @@ impl App {
         let selection = self.selection_anchor();
 
         self.sessions = load_sessions()?;
+        self.vibe_enabled_session_ids = load_vibe_enabled_session_ids()?;
 
         // Rebuild title cache for new/changed sessions
         self.rebuild_title_cache();
@@ -74,10 +75,18 @@ impl App {
                     if let Some(session) =
                         session_status::load_session_with_bg_run_status(&change.session_id)?
                     {
+                        if session.vibe_enabled {
+                            self.vibe_enabled_session_ids
+                                .insert(session.session_id.clone());
+                        } else {
+                            self.vibe_enabled_session_ids.remove(&session.session_id);
+                        }
+
                         // Check if session is stale (TTY check)
                         if is_session_stale(&session) {
                             self.remove_session(&change.session_id);
                             store::delete_session(&change.session_id)?;
+                            self.vibe_enabled_session_ids.remove(&change.session_id);
                         } else if session.status == SessionStatus::Ended {
                             // Ended sessions are not displayed; remove from list
                             self.remove_session(&change.session_id);
@@ -87,10 +96,12 @@ impl App {
                     } else {
                         // File was deleted or corrupted
                         self.remove_session(&change.session_id);
+                        self.vibe_enabled_session_ids.remove(&change.session_id);
                     }
                 }
                 SessionChangeType::Deleted => {
                     self.remove_session(&change.session_id);
+                    self.vibe_enabled_session_ids.remove(&change.session_id);
                 }
             }
         }
@@ -143,7 +154,12 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect();
-        let rows = build_session_rows(&filtered, &self.task_by_session, &self.agent_config);
+        let rows = build_session_rows_with_vibe(
+            &filtered,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+        );
         self.row_sessions = rows
             .iter()
             .map(|r| {
@@ -355,6 +371,16 @@ pub(super) fn load_sessions() -> Result<Vec<Session>> {
     session_status::list_sessions_with_bg_run_status()
 }
 
+/// Lists explicitly enabled vibe sessions, including ended ancestors that
+/// remain stored and continue to affect descendant sessions.
+pub(super) fn load_vibe_enabled_session_ids() -> Result<HashSet<String>> {
+    Ok(store::list_all_sessions()?
+        .into_iter()
+        .filter(|session| session.vibe_enabled)
+        .map(|session| session.session_id)
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,6 +430,55 @@ mod tests {
 
     fn create_test_app(sessions: Vec<Session>) -> App {
         App::with_sessions(sessions)
+    }
+
+    #[test]
+    fn test_modified_ancestor_disabling_vibe_clears_inherited_task_marker() {
+        let cache_home = tempfile::tempdir().expect("temp cache home should be created");
+        let cache_home_path = cache_home.path().to_string_lossy().into_owned();
+        let sessions_dir = cache_home
+            .path()
+            .join("armyknife")
+            .join("cc")
+            .join("sessions");
+        let mut ancestor = create_test_session("ancestor-session");
+        ancestor.status = SessionStatus::Ended;
+        store::save_session_to(&sessions_dir, &ancestor).expect("ancestor session should save");
+
+        let mut descendant = create_test_session("descendant-session");
+        descendant
+            .ancestor_session_ids
+            .push(ancestor.session_id.clone());
+        let mut app = create_test_app(vec![descendant]);
+        app.vibe_enabled_session_ids
+            .insert(ancestor.session_id.clone());
+
+        temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home_path.as_str()))], || {
+            app.reload_sessions(Some(&[SessionChange {
+                session_id: ancestor.session_id,
+                change_type: SessionChangeType::Modified,
+            }]))
+            .expect("incremental reload should succeed");
+        });
+
+        let sessions = app.sessions.iter().collect::<Vec<_>>();
+        let rows = build_session_rows_with_vibe(
+            &sessions,
+            &app.task_by_session,
+            &app.agent_config,
+            &app.vibe_enabled_session_ids,
+        );
+        let vibe_modes = rows
+            .into_iter()
+            .filter_map(|row| match row {
+                super::super::super::session_rows::SessionRow::Session(entry) => {
+                    Some(entry.vibe_mode)
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(vibe_modes, vec![None]);
     }
 
     // =========================================================================

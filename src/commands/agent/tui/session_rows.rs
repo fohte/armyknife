@@ -33,6 +33,7 @@ pub(super) struct SectionHeaderRow {
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
     pub mark: TaskMark,
+    pub vibe_mode: Option<VibeMode>,
     pub is_last_sibling: bool,
     /// Whether each non-root ancestor was the last child in its own group.
     /// `None` identifies a root; an empty prefix identifies a direct child.
@@ -43,6 +44,12 @@ pub(super) struct SessionRowEntry<'a> {
     /// The tq task this session is linked to, if any. Drives the task-number
     /// column, the row name, and cursor-relative task-kinship styling.
     pub task: Option<SessionTask>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum VibeMode {
+    Explicit,
+    Inherited,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,10 +104,22 @@ pub(super) struct SessionTask {
 ///
 /// `task_by_session` attaches each row's linked tq task (see [`SessionTask`]);
 /// callers can pass an empty map when tq integration is unavailable.
+#[cfg(test)]
 pub(super) fn build_session_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
     agent_config: &AgentConfig,
+) -> Vec<SessionRow<'a>> {
+    build_session_rows_with_vibe(sessions, task_by_session, agent_config, &HashSet::new())
+}
+
+/// Builds session rows using explicit vibe settings from stored ancestors,
+/// including ancestors that are no longer active.
+pub(super) fn build_session_rows_with_vibe<'a>(
+    sessions: &[&'a Session],
+    task_by_session: &HashMap<String, SessionTask>,
+    agent_config: &AgentConfig,
+    vibe_enabled_session_ids: &HashSet<String>,
 ) -> Vec<SessionRow<'a>> {
     let turns = user_turns(sessions.iter().copied(), agent_config);
     let user_turn_session_ids: HashSet<String> = turns
@@ -114,6 +133,7 @@ pub(super) fn build_session_rows<'a>(
         task_by_session,
         &user_turn_session_ids,
         agent_config,
+        vibe_enabled_session_ids,
     );
     if !task_rows.is_empty() {
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {

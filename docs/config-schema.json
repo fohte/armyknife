@@ -25,6 +25,7 @@
         "merge_notification": null,
         "statuses": {},
         "stop_hook_instruction": null,
+        "vibe_marker": null,
         "work_type_fallback": null,
         "work_types": {},
         "worktree": {
@@ -139,6 +140,18 @@
           ],
           "default": null
         },
+        "vibe_marker": {
+          "description": "Marker shown after the name of a session running in vibe mode.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentWorkTypeConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "work_type_fallback": {
           "description": "Display configuration used in `a agent watch` when a session has no recorded work type.",
           "anyOf": [
@@ -205,7 +218,7 @@
       ]
     },
     "AgentWorkTypeColor": {
-      "description": "A terminal color accepted for an agent work type.",
+      "description": "A terminal color accepted for an agent watch marker.",
       "anyOf": [
         {
           "$ref": "#/$defs/AgentWorkTypeNamedColor"
@@ -230,15 +243,15 @@
       ]
     },
     "AgentWorkTypeConfig": {
-      "description": "Display settings for an agent work type.",
+      "description": "Display settings for an agent watch marker.",
       "type": "object",
       "properties": {
         "color": {
-          "description": "Terminal color for this work type.",
+          "description": "Terminal color used in the agent watch marker.",
           "$ref": "#/$defs/AgentWorkTypeColor"
         },
         "icon": {
-          "description": "Icon shown for this work type.",
+          "description": "Icon shown in the agent watch marker.",
           "type": "string"
         }
       },
@@ -249,7 +262,7 @@
       ]
     },
     "AgentWorkTypeNamedColor": {
-      "description": "A named terminal color accepted for an agent work type.",
+      "description": "A named terminal color accepted for an agent watch marker.",
       "type": "string",
       "enum": [
         "reset",
