@@ -171,10 +171,13 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn pr_table_row(row: &PrProgressRow) -> Row<'static> {
-    let name = match row.number {
+    let mut name = match row.number {
         Some(number) => format!("#{number} {}", row.title),
         None => row.title.clone(),
     };
+    if row.lookup_unavailable {
+        name.push_str(" (PR unavailable)");
+    }
     Row::new(vec![
         Cell::from(name),
         mark_cell(row.stages.implementation),
@@ -245,6 +248,7 @@ mod tests {
                 url: Some("https://example.test/pull/17".to_string()),
                 pane_id: None,
                 is_ended: true,
+                lookup_unavailable: false,
                 stages: StageMarks {
                     implementation: ProgressMark::Done,
                     diff_review: ProgressMark::User,
@@ -253,11 +257,27 @@ mod tests {
                     merge: ProgressMark::NotStarted,
                 },
             }),
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "unavailable-delegate".to_string(),
+                title: "Sample delegate".to_string(),
+                number: None,
+                url: None,
+                pane_id: None,
+                is_ended: false,
+                lookup_unavailable: true,
+                stages: StageMarks {
+                    implementation: ProgressMark::Working,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            }),
         ];
         app.progress_list_state.select(Some(1));
         app.progress_table_state.select(Some(0));
 
-        let backend = TestBackend::new(72, 5);
+        let backend = TestBackend::new(72, 6);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| render_progress(frame, frame.area(), &mut app))
@@ -280,6 +300,7 @@ mod tests {
                 "│  ● builder  implementing",
                 "│                                             実 装  差 分  body  CI  merge",
                 "│› #17 Sample change                          ✓    ◐    ●     ◷   ○",
+                "│  Sample delegate (PR unavailable)           ●    ○    ○     ○   ○",
                 "│",
             ],
         );

@@ -22,12 +22,12 @@ pub(super) async fn fetch_progress(selected_session_id: String) -> Result<Fetche
     .map_err(|error| format!("failed to inspect delegated worktrees: {error}"))?;
 
     let mut github_error = None;
-    let prs = if query_data.0.is_empty() {
+    let prs = if query_data.queries.is_empty() {
         HashMap::new()
     } else {
         match GitHubClient::get() {
             Ok(client) => match client
-                .get_pr_progress_for_branches_batch(&query_data.0)
+                .get_pr_progress_for_branches_batch(&query_data.queries)
                 .await
             {
                 Ok(prs) => prs,
@@ -47,14 +47,16 @@ pub(super) async fn fetch_progress(selected_session_id: String) -> Result<Fetche
         .into_iter()
         .map(|session| {
             let pull_request = query_data
-                .1
+                .by_session
                 .get(&session.session_id)
                 .and_then(|query| prs.get(&query.key()))
                 .and_then(Option::as_ref)
                 .cloned();
+            let lookup_unavailable = query_data.unavailable.contains(&session.session_id);
             FetchedDelegate {
                 session,
                 pull_request,
+                lookup_unavailable,
             }
         })
         .collect();
@@ -66,7 +68,7 @@ pub(super) async fn fetch_progress(selected_session_id: String) -> Result<Fetche
     })
 }
 
-fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Session> {
+pub(super) fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Session> {
     let mut delegated = sessions
         .into_iter()
         .filter(|session| {
@@ -79,37 +81,64 @@ fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Sess
     delegated
 }
 
-fn branch_queries_for_sessions(
-    sessions: &[Session],
-) -> (Vec<BranchPrQuery>, HashMap<String, BranchPrQuery>) {
-    let mut queries = Vec::new();
-    let mut by_session = HashMap::new();
+struct BranchQueries {
+    queries: Vec<BranchPrQuery>,
+    by_session: HashMap<String, BranchPrQuery>,
+    unavailable: HashSet<String>,
+}
+
+enum BranchLookup {
+    Query(BranchPrQuery),
+    NotApplicable,
+    Unavailable,
+}
+
+fn branch_queries_for_sessions(sessions: &[Session]) -> BranchQueries {
+    let mut result = BranchQueries {
+        queries: Vec::new(),
+        by_session: HashMap::new(),
+        unavailable: HashSet::new(),
+    };
     let mut seen = HashSet::new();
 
     for session in sessions {
-        let Some(query) = branch_query_for(session) else {
-            continue;
+        let query = match branch_query_for(session) {
+            BranchLookup::Query(query) => query,
+            BranchLookup::NotApplicable => continue,
+            BranchLookup::Unavailable => {
+                result.unavailable.insert(session.session_id.clone());
+                continue;
+            }
         };
         if seen.insert(query.key()) {
-            queries.push(query.clone());
+            result.queries.push(query.clone());
         }
-        by_session.insert(session.session_id.clone(), query);
+        result.by_session.insert(session.session_id.clone(), query);
     }
 
-    (queries, by_session)
+    result
 }
 
-fn branch_query_for(session: &Session) -> Option<BranchPrQuery> {
-    let repo = GitRepo::open_at(&session.cwd).ok()?;
+fn branch_query_for(session: &Session) -> BranchLookup {
+    let repo = match GitRepo::open_at(&session.cwd) {
+        Ok(repo) => repo,
+        Err(_) => return BranchLookup::Unavailable,
+    };
     if !repo.is_worktree() {
-        return None;
+        return BranchLookup::NotApplicable;
     }
-    let branch = repo.current_branch().ok()?;
+    let branch = match repo.current_branch() {
+        Ok(branch) => branch,
+        Err(_) => return BranchLookup::Unavailable,
+    };
     if branch == "HEAD" {
-        return None;
+        return BranchLookup::NotApplicable;
     }
-    let (owner, repo) = github_owner_and_repo(&repo).ok()?;
-    Some(BranchPrQuery {
+    let (owner, repo) = match github_owner_and_repo(&repo) {
+        Ok(remote) => remote,
+        Err(_) => return BranchLookup::Unavailable,
+    };
+    BranchLookup::Query(BranchPrQuery {
         owner,
         repo,
         branch,
@@ -118,12 +147,12 @@ fn branch_query_for(session: &Session) -> Option<BranchPrQuery> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
 
-    use super::direct_delegates;
+    use super::{branch_queries_for_sessions, direct_delegates};
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
 
     #[test]
@@ -142,6 +171,27 @@ mod tests {
                 .map(|session| session.session_id)
                 .collect::<Vec<_>>(),
             vec!["direct-newer", "direct-older"],
+        );
+    }
+
+    #[test]
+    fn marks_unresolvable_worktrees_unavailable_without_creating_pr_queries() {
+        let mut delegate = session("delegate", true, vec!["parent"], 10);
+        delegate.cwd = std::env::temp_dir()
+            .join(format!(
+                "armyknife-test-missing-repository-{}",
+                std::process::id()
+            ))
+            .join("worktree");
+        let queries = branch_queries_for_sessions(&[delegate]);
+
+        assert_eq!(
+            (queries.queries, queries.by_session, queries.unavailable,),
+            (
+                Vec::new(),
+                HashMap::new(),
+                HashSet::from(["delegate".to_string()]),
+            ),
         );
     }
 

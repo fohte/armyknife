@@ -15,7 +15,7 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     match (key.code, key.modifiers) {
         (KeyCode::Tab, _) => {
             app.clear_error();
-            app.toggle_sidebar_focus();
+            app.cycle_pane_focus();
             Some(KeyEffects::default())
         }
         (KeyCode::Char('b'), KeyModifiers::CONTROL) => {

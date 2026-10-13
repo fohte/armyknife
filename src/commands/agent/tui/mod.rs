@@ -388,10 +388,17 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
         if sessions_changed {
             app.refresh_worktree_session_counts();
+            if let Some(session_id) = app.selected_session_id().map(str::to_owned)
+                && app.progress_session_id.as_deref() == Some(session_id.as_str())
+            {
+                app.refresh_progress_from_sessions(&session_id);
+                if progress_refresh_schedule.in_flight {
+                    progress_refresh_schedule.request(Some(session_id));
+                }
+            }
         }
         let selected_session_after_events = app.selected_session_id().map(str::to_owned);
         if selected_session_before_events != selected_session_after_events
-            || sessions_changed
             || periodic_progress_refresh_due
         {
             progress_refresh_schedule.request(selected_session_after_events.clone());

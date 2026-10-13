@@ -15,6 +15,7 @@ pub(super) struct FetchedProgress {
 pub(super) struct FetchedDelegate {
     pub session: Session,
     pub pull_request: Option<PrProgressInfo>,
+    pub lookup_unavailable: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -105,6 +106,7 @@ pub(super) struct PrProgressRow {
     pub url: Option<String>,
     pub pane_id: Option<String>,
     pub is_ended: bool,
+    pub lookup_unavailable: bool,
     pub stages: StageMarks,
 }
 
@@ -176,9 +178,59 @@ pub(super) fn build_progress_rows(
                 .as_ref()
                 .map(|info| info.pane_id.clone()),
             is_ended: delegate.session.status == SessionStatus::Ended,
+            lookup_unavailable: delegate.lookup_unavailable,
             stages: stage_marks(&delegate.session, pull_request, agent_config),
         })
     }));
+
+    rows
+}
+
+pub(super) fn refresh_rows_from_sessions(
+    selected: &Session,
+    delegated: &[Session],
+    existing_rows: &[ProgressRow],
+    agent_config: &AgentConfig,
+) -> Vec<ProgressRow> {
+    let mut rows = build_progress_rows(selected, &[], agent_config);
+    let mut previous = existing_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProgressRow::PullRequest(row) => Some((row.session_id.clone(), row.clone())),
+            ProgressRow::Work(_) => None,
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for session in delegated {
+        let row = if let Some(mut row) = previous.remove(&session.session_id) {
+            row.pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
+            row.is_ended = session.status == SessionStatus::Ended;
+            if row.number.is_none() {
+                row.title = session_title(session);
+            }
+            let updated_stages = session_stage_marks(session, row.number.is_some(), agent_config);
+            row.stages.implementation = updated_stages.implementation;
+            row.stages.diff_review = updated_stages.diff_review;
+            row.stages.pr_body = updated_stages.pr_body;
+            ProgressRow::PullRequest(row)
+        } else {
+            let Some(row) = build_progress_rows(
+                selected,
+                &[FetchedDelegate {
+                    session: session.clone(),
+                    pull_request: None,
+                    lookup_unavailable: false,
+                }],
+                agent_config,
+            )
+            .into_iter()
+            .nth(1) else {
+                continue;
+            };
+            row
+        };
+        rows.push(row);
+    }
 
     rows
 }
@@ -235,8 +287,6 @@ fn stage_marks(
     progress: Option<&PrProgressInfo>,
     agent_config: &AgentConfig,
 ) -> StageMarks {
-    let turn = user_turn_for(session, agent_config);
-    let current = session_mark(session, turn.as_ref(), agent_config);
     let is_merged = progress.is_some_and(|progress| progress.pull_request.state == PrState::Merged);
     if is_merged {
         return StageMarks {
@@ -248,35 +298,7 @@ fn stage_marks(
         };
     }
 
-    let has_crit = !session.crit_urls.is_empty();
-    let has_pr_body_review = session
-        .pending_human_review_ids
-        .iter()
-        .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER));
-    let ci_state = progress.map(|progress| progress.ci_state);
-    let ci_observed = matches!(
-        ci_state,
-        Some(PrCiState::Waiting | PrCiState::InProgress | PrCiState::Successful)
-    );
-    let implementation = if progress.is_some() || has_crit || has_pr_body_review {
-        ProgressMark::Done
-    } else {
-        current
-    };
-    let diff_review = if has_crit {
-        active_review_mark(turn.as_ref(), UserTurnKind::Crit, current)
-    } else if has_pr_body_review || ci_observed {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
-    let pr_body = if has_pr_body_review {
-        active_review_mark(turn.as_ref(), UserTurnKind::Body, current)
-    } else if ci_observed {
-        ProgressMark::Done
-    } else {
-        ProgressMark::NotStarted
-    };
+    let mut stages = session_stage_marks(session, progress.is_some(), agent_config);
 
     let (ci, merge) = match progress {
         None => (ProgressMark::NotStarted, ProgressMark::NotStarted),
@@ -304,12 +326,49 @@ fn stage_marks(
         }
     };
 
+    stages.ci = ci;
+    stages.merge = merge;
+    stages
+}
+
+fn session_stage_marks(
+    session: &Session,
+    has_pull_request: bool,
+    agent_config: &AgentConfig,
+) -> StageMarks {
+    let turn = user_turn_for(session, agent_config);
+    let current = session_mark(session, turn.as_ref(), agent_config);
+    let has_crit = !session.crit_urls.is_empty();
+    let has_pr_body_review = session
+        .pending_human_review_ids
+        .iter()
+        .any(|id| id.starts_with(PR_DRAFT_REVIEW_MARKER));
+    let implementation = if has_pull_request || has_crit || has_pr_body_review {
+        ProgressMark::Done
+    } else {
+        current
+    };
+    let diff_review = if has_crit {
+        active_review_mark(turn.as_ref(), UserTurnKind::Crit, current)
+    } else if has_pr_body_review || has_pull_request {
+        ProgressMark::Done
+    } else {
+        ProgressMark::NotStarted
+    };
+    let pr_body = if has_pr_body_review {
+        active_review_mark(turn.as_ref(), UserTurnKind::Body, current)
+    } else if has_pull_request {
+        ProgressMark::Done
+    } else {
+        ProgressMark::NotStarted
+    };
+
     StageMarks {
         implementation,
         diff_review,
         pr_body,
-        ci,
-        merge,
+        ci: ProgressMark::NotStarted,
+        merge: ProgressMark::NotStarted,
     }
 }
 
@@ -420,6 +479,7 @@ mod tests {
                 &[FetchedDelegate {
                     session: delegate,
                     pull_request: None,
+                    lookup_unavailable: false,
                 }],
                 &agent_config,
             ),
@@ -439,8 +499,106 @@ mod tests {
                     url: None,
                     pane_id: None,
                     is_ended: false,
+                    lookup_unavailable: false,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn unavailable_worktree_lookup_is_kept_on_the_delegate_row() {
+        let selected = session("selected");
+
+        assert_eq!(
+            build_progress_rows(
+                &selected,
+                &[FetchedDelegate {
+                    session: delegated_session(),
+                    pull_request: None,
+                    lookup_unavailable: true,
+                }],
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Example delegated work".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: true,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                }),
+            ],
+        );
+    }
+
+    #[test]
+    fn session_updates_refresh_rows_without_losing_lookup_state() {
+        let mut selected = session("selected");
+        selected.work_type = Some("updated role".to_string());
+        selected.status = SessionStatus::Ended;
+        let mut delegate = delegated_session();
+        delegate.label = Some("Updated delegated work".to_string());
+        delegate.status = SessionStatus::Ended;
+        let previous_rows = build_progress_rows(
+            &session("selected"),
+            &[FetchedDelegate {
+                session: delegated_session(),
+                pull_request: None,
+                lookup_unavailable: true,
+            }],
+            &AgentConfig::default(),
+        );
+
+        assert_eq!(
+            refresh_rows_from_sessions(
+                &selected,
+                &[delegate],
+                &previous_rows,
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "updated role".to_string(),
+                    mark: ProgressMark::Done,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::PullRequest(PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Updated delegated work".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: true,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
                         diff_review: ProgressMark::NotStarted,
                         pr_body: ProgressMark::NotStarted,
                         ci: ProgressMark::NotStarted,
@@ -455,7 +613,7 @@ mod tests {
     #[case::diff_review(true, false, PrState::Open, PrCiState::Unknown, StageMarks {
         implementation: ProgressMark::Done,
         diff_review: ProgressMark::User,
-        pr_body: ProgressMark::NotStarted,
+        pr_body: ProgressMark::Done,
         ci: ProgressMark::NotStarted,
         merge: ProgressMark::NotStarted,
     })]
@@ -472,6 +630,20 @@ mod tests {
         pr_body: ProgressMark::Done,
         ci: ProgressMark::Working,
         merge: ProgressMark::Waiting,
+    })]
+    #[case::open_without_ci(false, false, PrState::Open, PrCiState::Unknown, StageMarks {
+        implementation: ProgressMark::Done,
+        diff_review: ProgressMark::Done,
+        pr_body: ProgressMark::Done,
+        ci: ProgressMark::NotStarted,
+        merge: ProgressMark::NotStarted,
+    })]
+    #[case::open_and_ready_to_merge(false, false, PrState::Open, PrCiState::Successful, StageMarks {
+        implementation: ProgressMark::Done,
+        diff_review: ProgressMark::Done,
+        pr_body: ProgressMark::Done,
+        ci: ProgressMark::Done,
+        merge: ProgressMark::User,
     })]
     #[case::merged(false, false, PrState::Merged, PrCiState::Successful, StageMarks {
         implementation: ProgressMark::Done,
@@ -510,6 +682,7 @@ mod tests {
                 &[FetchedDelegate {
                     session: delegated_session,
                     pull_request: Some(progress_info(pr_state, ci_state)),
+                    lookup_unavailable: false,
                 }],
                 &AgentConfig::default(),
             ),
@@ -529,6 +702,7 @@ mod tests {
                     url: Some("https://github.com/example-org/example-project/pull/7".to_string()),
                     pane_id: None,
                     is_ended: false,
+                    lookup_unavailable: false,
                     stages: expected_stages,
                 }),
             ],

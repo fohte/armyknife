@@ -12,7 +12,10 @@ use std::path::PathBuf;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
-use super::progress::{FetchedProgress, ProgressRow, build_progress_rows};
+use super::progress::{
+    FetchedProgress, ProgressRow, build_progress_rows, refresh_rows_from_sessions,
+};
+use super::progress_fetch::direct_delegates;
 use super::session_rows::SessionTask;
 use super::tq_sidebar::SidebarSelection;
 use super::tq_snapshot::TqSnapshot;
@@ -306,6 +309,38 @@ impl App {
         self.progress_error = None;
     }
 
+    pub(super) fn refresh_progress_from_sessions(&mut self, session_id: &str) {
+        let Some(selected) = self
+            .selected_session()
+            .filter(|session| session.session_id == session_id)
+            .cloned()
+        else {
+            return;
+        };
+        let selected_row_id = self
+            .progress_list_state
+            .selected()
+            .and_then(|index| self.progress_rows.get(index))
+            .map(|row| row.session_id().to_string());
+        let delegated = direct_delegates(self.sessions.clone(), session_id);
+        self.progress_rows = refresh_rows_from_sessions(
+            &selected,
+            &delegated,
+            &self.progress_rows,
+            &self.agent_config,
+        );
+        let selected_index = selected_row_id
+            .and_then(|selected_id| {
+                self.progress_rows
+                    .iter()
+                    .position(|row| row.session_id() == selected_id)
+            })
+            .unwrap_or(0);
+        self.progress_list_state.select(Some(selected_index));
+        self.progress_table_state
+            .select(selected_index.checked_sub(1));
+    }
+
     pub(super) fn apply_progress_result(
         &mut self,
         session_id: &str,
@@ -448,7 +483,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::commands::agent::types::AgentStatus;
-    use chrono::TimeDelta;
+    use chrono::{TimeDelta, TimeZone};
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
 
@@ -460,7 +495,11 @@ mod tests {
 
     fn create_test_session(id: &str) -> Session {
         let offset = TEST_SESSION_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let now = Utc::now();
+        let timestamp = Utc::now() - TimeDelta::seconds(offset);
+        create_test_session_at(id, timestamp)
+    }
+
+    fn create_test_session_at(id: &str, timestamp: chrono::DateTime<Utc>) -> Session {
         Session {
             session_id: id.to_string(),
             work_type: None,
@@ -474,8 +513,8 @@ mod tests {
             tty: None,
             tmux_info: None,
             status: SessionStatus::Running,
-            created_at: now - TimeDelta::seconds(offset),
-            updated_at: now - TimeDelta::seconds(offset),
+            created_at: timestamp,
+            updated_at: timestamp,
             last_message: None,
             current_tool: None,
             label: None,
@@ -518,6 +557,61 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("second")
+        );
+    }
+
+    #[test]
+    fn stale_progress_response_keeps_the_new_selection_state() {
+        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let mut app = create_test_app(vec![
+            create_test_session_at("first", timestamp),
+            create_test_session_at("second", timestamp),
+        ]);
+        let first = app.sessions[0].clone();
+        app.progress_rows = build_progress_rows(&first, &[], &AgentConfig::default());
+        app.progress_session_id = Some("first".to_string());
+        app.progress_loading = true;
+        app.progress_error = Some("pending progress state".to_string());
+        app.progress_list_state.select(Some(0));
+        app.progress_table_state.select(None);
+        app.list_state.select(Some(2));
+        let before = (
+            app.progress_session_id.clone(),
+            app.progress_rows.clone(),
+            app.progress_loading,
+            app.progress_error.clone(),
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        );
+
+        app.apply_progress_result(
+            "first",
+            Ok(FetchedProgress {
+                selected_session_id: "first".to_string(),
+                delegated: Vec::new(),
+                github_error: None,
+            }),
+        );
+
+        assert_eq!(
+            (
+                app.selected_session_id(),
+                app.progress_session_id.as_deref(),
+                app.progress_rows.clone(),
+                app.progress_loading,
+                app.progress_error.clone(),
+                app.progress_list_state.selected(),
+                app.progress_table_state.selected(),
+            ),
+            (
+                Some("second"),
+                before.0.as_deref(),
+                before.1,
+                before.2,
+                before.3,
+                before.4,
+                before.5,
+            ),
         );
     }
 

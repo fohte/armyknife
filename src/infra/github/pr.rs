@@ -439,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn batch_progress_lookup_returns_latest_commit_check_state() {
         let mock = crate::infra::github::mock::GitHubMockServer::start().await;
-        mock.graphql_batch_pull_request(json!({
+        mock.graphql_batch_pull_request_with_ci(json!({
             "number": 7,
             "title": "Example change",
             "state": "OPEN",

@@ -119,7 +119,7 @@ impl App {
         }
     }
 
-    pub fn toggle_sidebar_focus(&mut self) {
+    pub fn cycle_pane_focus(&mut self) {
         let has_sidebar = self.sidebar_visible && self.sidebar_available;
         if has_sidebar && self.sidebar_focused {
             self.move_session_cursor_to_sidebar_cursor();
