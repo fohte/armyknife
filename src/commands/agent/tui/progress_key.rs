@@ -173,6 +173,24 @@ mod tests {
     }
 
     #[test]
+    fn narrow_layout_tab_reaches_sidebar_when_hidden_in_wide_layout() {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.narrow_layout = true;
+
+        app.cycle_pane_focus();
+        let after_progress = (app.sidebar_focused, app.progress_focused);
+        app.cycle_pane_focus();
+        let after_sidebar = (app.sidebar_focused, app.progress_focused);
+        app.cycle_pane_focus();
+        let after_tasks = (app.sidebar_focused, app.progress_focused);
+
+        assert_eq!(
+            [after_progress, after_sidebar, after_tasks],
+            [(false, true), (true, false), (false, false)],
+        );
+    }
+
+    #[test]
     fn stale_rows_cannot_be_navigated_or_opened() {
         let mut app = App::with_sessions(vec![session("previous"), session("selected")]);
         if app.selected_session_id() != Some("selected") {
