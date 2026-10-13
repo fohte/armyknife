@@ -123,12 +123,27 @@ impl Config {
     }
 
     /// Resolve whether vibe mode is allowed for a repository.
+    /// GitHub owner and repository names are compared without case sensitivity.
     /// An explicit repository setting overrides its owner's setting.
     pub fn is_vibe_allowed_for_repo(&self, owner: &str, repo: &str) -> bool {
-        self.repos
-            .get(&format!("{owner}/{repo}"))
-            .and_then(|config| config.vibe)
-            .unwrap_or_else(|| self.orgs.get(owner).is_some_and(|config| config.vibe))
+        let repo_id = format!("{owner}/{repo}");
+        // Case-variant blocklist entries must not be overridden by an allow entry.
+        let repo_vibe = self
+            .repos
+            .iter()
+            .filter(|(configured_repo, _)| configured_repo.eq_ignore_ascii_case(&repo_id))
+            .filter_map(|(_, config)| config.vibe)
+            .reduce(|allowed, next| allowed && next);
+
+        let org_vibe = self
+            .orgs
+            .iter()
+            .filter(|(configured_owner, _)| configured_owner.eq_ignore_ascii_case(owner))
+            .map(|(_, config)| config.vibe)
+            .reduce(|allowed, next| allowed && next)
+            .unwrap_or(false);
+
+        repo_vibe.unwrap_or(org_vibe)
     }
 
     /// Resolve the list of reviewers to wait for, given a repo identifier (`owner/repo`).

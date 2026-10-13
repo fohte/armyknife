@@ -248,13 +248,14 @@ mod tests {
     }
 
     #[rstest]
-    #[case::denied_by_default("{}", false)]
+    #[case::denied_by_default("{}", "example-org/example-repo", false)]
     #[case::org_value_falls_back(
         indoc! {"
             orgs:
               example-org:
                 vibe: true
         "},
+        "example-org/example-repo",
         true
     )]
     #[case::repo_false_overrides_org_true(
@@ -266,6 +267,7 @@ mod tests {
               example-org/example-repo:
                 vibe: false
         "},
+        "example-org/example-repo",
         false
     )]
     #[case::repo_true_overrides_org_false(
@@ -277,13 +279,53 @@ mod tests {
               example-org/example-repo:
                 vibe: true
         "},
+        "example-org/example-repo",
         true
     )]
-    fn get_value_repo_vibe_resolves_effective_value(#[case] yaml: &str, #[case] expected: bool) {
+    #[case::mixed_case_repo_blocklist_overrides_org_allow(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/restricted-repository:
+                vibe: false
+        "},
+        "EXAMPLE-ORG/Restricted-Repository",
+        false
+    )]
+    #[case::mixed_case_org_uses_configured_owner(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+        "},
+        "EXAMPLE-ORG/example-repository",
+        true
+    )]
+    #[case::case_variant_repo_blocklist_takes_precedence(
+        indoc! {"
+            orgs:
+              example-org:
+                vibe: true
+            repos:
+              example-org/restricted-repository:
+                vibe: true
+              EXAMPLE-ORG/RESTRICTED-REPOSITORY:
+                vibe: false
+        "},
+        "Example-Org/Restricted-Repository",
+        false
+    )]
+    fn get_value_repo_vibe_resolves_effective_value(
+        #[case] yaml: &str,
+        #[case] repo_id: &str,
+        #[case] expected: bool,
+    ) {
         let cfg = config_from_yaml(yaml);
 
         assert_eq!(
-            cfg.get_value("repo.vibe", Some("example-org/example-repo")),
+            cfg.get_value("repo.vibe", Some(repo_id)),
             Some(serde_json::Value::Bool(expected)),
         );
     }
