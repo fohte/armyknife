@@ -16,6 +16,7 @@ use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
 use crate::shared::config::load_config;
+use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
@@ -51,7 +52,7 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         current_worktree_root,
     )? {
         DefaultTarget::Session(session) => close_session_value(&session, args).await,
-        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args).await,
+        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args, false).await,
     }
 }
 
@@ -96,7 +97,7 @@ async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
     )?;
     let worktree_path = PathBuf::from(worktree_path);
     let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
-    close_worktree(&worktree_root, args).await
+    close_worktree(&worktree_root, args, false).await
 }
 
 async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> {
@@ -106,26 +107,140 @@ async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> 
 
     close_with_worktree_plan(
         worktree_delete::prepare(&worktree_root, args.force),
-        || close_worktree_session(session, args.force),
+        || {
+            let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
+            close_worktree_session(session, args.force, current_pane_id.as_deref())
+        },
         |plan| worktree_delete::execute(plan, args.skip_hooks),
     )
     .await
 }
 
-async fn close_worktree(worktree_root: &Path, args: &CloseArgs) -> Result<()> {
+async fn close_worktree(
+    worktree_root: &Path,
+    args: &CloseArgs,
+    refuse_current_session: bool,
+) -> Result<()> {
     let sessions = super::store::list_sessions()?;
     let session = select_worktree_session(&sessions, worktree_root)?;
-    close_with_worktree_plan(
+    let caller_pane_id = if session.is_some() {
+        crate::shared::caller_pane::resolve_caller_pane_id()
+    } else {
+        None
+    };
+    let caller_session_id = if refuse_current_session {
+        EnvVars::load().own_session_id()
+    } else {
+        None
+    };
+    let context = WorktreeCloseContext {
+        args,
+        session,
+        caller_session_id: caller_session_id.as_deref(),
+        caller_pane_id: caller_pane_id.as_deref(),
+    };
+    let skip_hooks = args.skip_hooks;
+    close_worktree_with(
+        context,
+        refuse_current_session,
         worktree_delete::prepare(worktree_root, args.force),
+        close_worktree_session,
+        |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
+    )
+    .await
+}
+
+pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Result<()> {
+    let args = CloseArgs {
+        target: None,
+        force,
+        skip_hooks: false,
+    };
+    let sessions = super::store::list_sessions()?;
+    let session = select_worktree_session(&sessions, worktree_path)?;
+    let caller_pane_id = if session.is_some() {
+        crate::shared::caller_pane::resolve_caller_pane_id()
+    } else {
+        None
+    };
+    let caller_session_id = EnvVars::load().own_session_id();
+    let context = WorktreeCloseContext {
+        args: &args,
+        session,
+        caller_session_id: caller_session_id.as_deref(),
+        caller_pane_id: caller_pane_id.as_deref(),
+    };
+    let skip_hooks = args.skip_hooks;
+    close_worktree_path_with(
+        context,
+        worktree_delete::prepare(worktree_path, args.force),
+        close_worktree_session,
+        |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
+    )
+    .await
+}
+
+struct WorktreeCloseContext<'a> {
+    args: &'a CloseArgs,
+    session: Option<&'a Session>,
+    caller_session_id: Option<&'a str>,
+    caller_pane_id: Option<&'a str>,
+}
+
+async fn close_worktree_path_with<P, F>(
+    context: WorktreeCloseContext<'_>,
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    close_worktree_with(context, true, prepare, close_session, remove_worktree).await
+}
+
+async fn close_worktree_with<P, F>(
+    context: WorktreeCloseContext<'_>,
+    refuse_current_session: bool,
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    if refuse_current_session {
+        ensure_not_closing_current_session(
+            context.session,
+            context.caller_session_id,
+            context.caller_pane_id,
+        )?;
+    }
+    close_with_worktree_plan(
+        prepare,
         || {
-            if let Some(session) = session {
-                close_worktree_session(session, args.force)?;
+            if let Some(session) = context.session {
+                close_session(session, context.args.force, context.caller_pane_id)?;
             }
             Ok(())
         },
-        |plan| worktree_delete::execute(plan, args.skip_hooks),
+        remove_worktree,
     )
     .await
+}
+
+fn ensure_not_closing_current_session(
+    session: Option<&Session>,
+    caller_session_id: Option<&str>,
+    current_pane_id: Option<&str>,
+) -> Result<()> {
+    if session.is_some_and(|session| {
+        caller_session_id == Some(session.session_id.as_str())
+            || is_caller_pane_session(session, current_pane_id)
+    }) {
+        bail!("The target worktree contains the caller's current session; skipping close");
+    }
+    Ok(())
 }
 
 async fn close_with_worktree_plan<P, F>(
@@ -147,9 +262,12 @@ fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
     close_session(&session, force, &LiveCloseRuntime)
 }
 
-fn close_worktree_session(session: &Session, force: bool) -> Result<()> {
-    let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
-    if !should_gracefully_close_worktree_session(session, current_pane_id.as_deref()) {
+fn close_worktree_session(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+) -> Result<()> {
+    if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
     }
     close_tracked_session(session, force)
@@ -159,10 +277,14 @@ fn should_gracefully_close_worktree_session(
     session: &Session,
     current_pane_id: Option<&str>,
 ) -> bool {
+    session.tmux_info.is_some() && !is_caller_pane_session(session, current_pane_id)
+}
+
+fn is_caller_pane_session(session: &Session, current_pane_id: Option<&str>) -> bool {
     session
         .tmux_info
         .as_ref()
-        .is_some_and(|info| current_pane_id != Some(info.pane_id.as_str()))
+        .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
 }
 
 fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
@@ -971,6 +1093,75 @@ mod tests {
         assert_eq!(
             should_gracefully_close_worktree_session(&session, current_pane_id),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::same_pane(None, Some("%42"), false, Err("The target worktree contains the caller's current session; skipping close".to_string()))]
+    #[case::same_session_id_without_pane(Some("session-1"), None, true, Err("The target worktree contains the caller's current session; skipping close".to_string()))]
+    #[case::different_session_and_pane(Some("session-2"), Some("%99"), false, Ok(()))]
+    #[case::no_caller_context(None, None, false, Ok(()))]
+    #[case::untracked_session(None, None, true, Ok(()))]
+    fn refuses_to_close_the_callers_current_session(
+        mut session: Session,
+        #[case] caller_session_id: Option<&str>,
+        #[case] current_pane_id: Option<&str>,
+        #[case] without_tmux_info: bool,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        if without_tmux_info {
+            session.tmux_info = None;
+        }
+        assert_eq!(
+            ensure_not_closing_current_session(Some(&session), caller_session_id, current_pane_id,)
+                .map_err(|error| error.to_string()),
+            expected,
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_merge_path_refuses_the_callers_session_before_prepare_with_force() {
+        let target_session = session();
+        let args = CloseArgs {
+            target: None,
+            force: true,
+            skip_hooks: false,
+        };
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: Some(&target_session),
+            caller_session_id: Some("session-1"),
+            caller_pane_id: None,
+        };
+        let result = close_worktree_path_with(
+            context,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (
+                Err(
+                    "The target worktree contains the caller's current session; skipping close"
+                        .to_string()
+                ),
+                vec![],
+            ),
         );
     }
 

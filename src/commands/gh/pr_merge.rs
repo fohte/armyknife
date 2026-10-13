@@ -1,15 +1,21 @@
-use std::process::Output;
-use std::time::Duration;
+use std::{future::Future, io::Write, path::PathBuf, process::Output, time::Duration};
 
 use anyhow::{Context, bail};
 use clap::Args;
 
-use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::infra::{external_tool::ExternalTool, git, github::PrState, process};
+use crate::commands::agent::{close_worktree_path, ensure_repo_vibe_access, is_vibe_enabled};
+use crate::infra::{
+    external_tool::ExternalTool,
+    git::{self, GitRepo, github_owner_and_repo},
+    github::PrState,
+    process,
+};
 use crate::shared::{
     config::{Config, load_config},
     env_var::EnvVars,
     hooks,
+    repos_root::{discover_repos_with_worktrees, resolve_repos_root},
+    worktree::{LinkedWorktree, list_linked_worktrees},
 };
 
 const REQUIRED_CHECKS_TIMEOUT: Duration = Duration::from_secs(300);
@@ -22,9 +28,13 @@ pub struct PrMergeArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
+
+    /// Skip normal close safety checks while keeping the caller's current session open
+    #[arg(long)]
+    pub force_close: bool,
 }
 
-pub fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
+pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     let in_agent_session = EnvVars::load().own_session_id().is_some();
     let vibe_enabled = in_agent_session && is_vibe_enabled()?;
     ensure_vibe_access(in_agent_session, vibe_enabled)?;
@@ -33,14 +43,16 @@ pub fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_repo_vibe_access_for_session(in_agent_session, load_config, &owner, &repo)?;
 
     let client = GhCli;
-    run_merge(
+    let force_close = args.force_close;
+    run_merge_and_close(
         &client,
         &mut |env| hooks::run_hook("pre-pr-merge", env),
         &owner,
         &repo,
         args.pr_number,
-    )?;
-    println!("PR #{} merged.", args.pr_number);
+        |merged_pr| async move { close_merged_head_worktree(&merged_pr, force_close).await },
+    )
+    .await?;
     Ok(())
 }
 
@@ -84,6 +96,8 @@ trait PrMergeClient {
 struct PrSnapshot {
     state: PrState,
     head_sha: String,
+    head_ref_name: String,
+    head_repository: Option<String>,
     merge_state_status: String,
     url: String,
 }
@@ -94,7 +108,7 @@ fn run_merge(
     owner: &str,
     repo: &str,
     pr_number: u64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PrSnapshot> {
     let initial = client.view_pr(owner, repo, pr_number)?;
     ensure_pr_is_open_and_safe(&initial, pr_number, None)?;
 
@@ -114,11 +128,10 @@ fn run_merge(
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
     if let Err(merge_error) = client.squash_merge(owner, repo, pr_number, &initial.head_sha) {
-        if client
-            .view_pr(owner, repo, pr_number)
-            .is_ok_and(|pr| pr.state == PrState::Merged)
+        if let Ok(merged) = client.view_pr(owner, repo, pr_number)
+            && merged.state == PrState::Merged
         {
-            return Ok(());
+            return Ok(merged);
         }
         return Err(merge_error);
     }
@@ -131,7 +144,162 @@ fn run_merge(
         );
     }
 
+    Ok(merged)
+}
+
+async fn run_merge_and_close<C, F>(
+    client: &impl PrMergeClient,
+    hook_runner: &mut impl FnMut(&[(&str, &str)]) -> anyhow::Result<()>,
+    owner: &str,
+    repo: &str,
+    pr_number: u64,
+    close_worktree: C,
+) -> anyhow::Result<()>
+where
+    C: FnOnce(PrSnapshot) -> F,
+    F: Future<Output = anyhow::Result<()>>,
+{
+    let merged = run_merge(client, hook_runner, owner, repo, pr_number)?;
+    println!("PR #{pr_number} merged.");
+    let _ = std::io::stdout().flush();
+    if let Err(error) = close_worktree(merged.clone()).await {
+        eprintln!(
+            "Could not close worktree for merged PR #{pr_number} (branch `{}`): {error:#}",
+            merged.head_ref_name,
+        );
+    }
     Ok(())
+}
+
+async fn close_merged_head_worktree(
+    merged_pr: &PrSnapshot,
+    force_close: bool,
+) -> anyhow::Result<()> {
+    let Some((owner, repo_name)) = merged_pr
+        .head_repository
+        .as_deref()
+        .and_then(|repository| git::parse_repo(repository).ok())
+    else {
+        return Ok(());
+    };
+    let config = load_config()?;
+    match find_local_head_worktree(&owner, &repo_name, &merged_pr.head_ref_name, &config) {
+        HeadWorktreeSelection::NotFound => Ok(()),
+        HeadWorktreeSelection::Unique(worktree_path) => {
+            close_worktree_path(&worktree_path, force_close).await
+        }
+        HeadWorktreeSelection::Ambiguous(count) => {
+            eprintln!(
+                "Multiple local worktrees match merged PR head branch `{}` ({count} matches); skipping close.",
+                merged_pr.head_ref_name,
+            );
+            Ok(())
+        }
+    }
+}
+
+fn find_local_head_worktree(
+    owner: &str,
+    repo_name: &str,
+    head_branch: &str,
+    config: &Config,
+) -> HeadWorktreeSelection {
+    let mut repositories = Vec::new();
+    let mut visited_repos = Vec::<PathBuf>::new();
+
+    if let Ok(current_repo) = GitRepo::open_from_env() {
+        collect_repository_worktrees(&current_repo, &mut visited_repos, &mut repositories);
+    }
+
+    let Some(repos_root) = resolve_repos_root(config.agent.worktree.repos_root.as_deref()).ok()
+    else {
+        return select_head_worktree(repositories, owner, repo_name, head_branch);
+    };
+    for repo_path in discover_repos_with_worktrees(&repos_root, &config.agent.worktree.dir) {
+        let Ok(repo) = GitRepo::open_at(&repo_path) else {
+            continue;
+        };
+        collect_repository_worktrees(&repo, &mut visited_repos, &mut repositories);
+    }
+
+    select_head_worktree(repositories, owner, repo_name, head_branch)
+}
+
+#[derive(Debug, Clone)]
+struct LocalRepositoryWorktrees {
+    repository: Option<(String, String)>,
+    worktrees: Vec<LinkedWorktree>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum HeadWorktreeSelection {
+    NotFound,
+    Unique(PathBuf),
+    Ambiguous(usize),
+}
+
+fn collect_repository_worktrees(
+    repo: &GitRepo,
+    visited_repos: &mut Vec<PathBuf>,
+    repositories: &mut Vec<LocalRepositoryWorktrees>,
+) {
+    let Ok(main_repo) = repo.main_repo() else {
+        return;
+    };
+    if visited_repos.iter().any(|path| path == main_repo.workdir()) {
+        return;
+    }
+    visited_repos.push(main_repo.workdir().to_path_buf());
+
+    let repository = github_owner_and_repo(&main_repo).ok();
+    let worktrees = if repository.is_some() {
+        list_linked_worktrees(&main_repo)
+            .map(existing_worktrees)
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    repositories.push(LocalRepositoryWorktrees {
+        repository,
+        worktrees,
+    });
+}
+
+fn select_head_worktree(
+    repositories: Vec<LocalRepositoryWorktrees>,
+    owner: &str,
+    repo_name: &str,
+    head_branch: &str,
+) -> HeadWorktreeSelection {
+    let worktrees = repositories
+        .into_iter()
+        .filter(|repository| {
+            repository.repository.as_ref().is_some_and(|id| {
+                id.0.eq_ignore_ascii_case(owner) && id.1.eq_ignore_ascii_case(repo_name)
+            })
+        })
+        .flat_map(|repository| repository.worktrees)
+        .filter(|worktree| worktree.branch == head_branch)
+        .map(|worktree| worktree.path)
+        .collect();
+    unique_worktree_path(worktrees)
+}
+
+fn existing_worktrees(worktrees: Vec<LinkedWorktree>) -> Vec<LinkedWorktree> {
+    worktrees
+        .into_iter()
+        .filter(|worktree| worktree.path.is_dir())
+        .collect()
+}
+
+fn unique_worktree_path(mut worktrees: Vec<PathBuf>) -> HeadWorktreeSelection {
+    worktrees.sort();
+    worktrees.dedup();
+    match worktrees.len() {
+        0 => HeadWorktreeSelection::NotFound,
+        1 => HeadWorktreeSelection::Unique(worktrees.remove(0)),
+        count => HeadWorktreeSelection::Ambiguous(count),
+    }
 }
 
 fn ensure_pr_is_open_and_safe(
@@ -167,7 +335,7 @@ impl PrMergeClient for GhCli {
             "--repo",
             repository.as_str(),
             "--json",
-            "state,headRefOid,mergeStateStatus,url",
+            "state,headRefOid,headRefName,headRepository,mergeStateStatus,url",
         ];
         let output = run_gh(&args)?;
         let response: GhPrResponse = serde_json::from_slice(&output.stdout)
@@ -175,6 +343,10 @@ impl PrMergeClient for GhCli {
         Ok(PrSnapshot {
             state: parse_pr_state(&response.state)?,
             head_sha: response.head_ref_oid,
+            head_ref_name: response.head_ref_name,
+            head_repository: response
+                .head_repository
+                .map(|repository| repository.name_with_owner),
             merge_state_status: response.merge_state_status.unwrap_or_default(),
             url: response.url,
         })
@@ -254,8 +426,16 @@ impl PrMergeClient for GhCli {
 struct GhPrResponse {
     state: String,
     head_ref_oid: String,
+    head_ref_name: String,
+    head_repository: Option<GhRepository>,
     merge_state_status: Option<String>,
     url: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GhRepository {
+    name_with_owner: String,
 }
 
 fn run_gh(args: &[&str]) -> anyhow::Result<Output> {
@@ -355,8 +535,10 @@ mod tests {
         PrSnapshot {
             state,
             head_sha: head_sha.to_string(),
+            head_ref_name: "topic/example-branch".to_string(),
+            head_repository: Some("sample-org/sample-repo".to_string()),
             merge_state_status: merge_state_status.to_string(),
-            url: "https://github.com/example-org/example-repo/pull/42".to_string(),
+            url: "https://github.com/sample-org/sample-repo/pull/42".to_string(),
         }
     }
 
@@ -399,13 +581,94 @@ mod tests {
                 true,
                 vec![
                     "view".to_string(),
-                    "hook:[(\"ARMYKNIFE_PR_NUMBER\", \"42\"), (\"ARMYKNIFE_PR_OWNER\", \"example-org\"), (\"ARMYKNIFE_PR_REPO\", \"example-repo\"), (\"ARMYKNIFE_PR_URL\", \"https://github.com/example-org/example-repo/pull/42\"), (\"ARMYKNIFE_PR_HEAD_SHA\", \"head-a\")]".to_string(),
+                    "hook:[(\"ARMYKNIFE_PR_NUMBER\", \"42\"), (\"ARMYKNIFE_PR_OWNER\", \"example-org\"), (\"ARMYKNIFE_PR_REPO\", \"example-repo\"), (\"ARMYKNIFE_PR_URL\", \"https://github.com/sample-org/sample-repo/pull/42\"), (\"ARMYKNIFE_PR_HEAD_SHA\", \"head-a\")]".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
                     "merge:head-a".to_string(),
                     "view".to_string(),
                 ],
             ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_and_close_closes_the_confirmed_head_and_ignores_close_errors(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+        let force_close = true;
+        let close = |merged_pr: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events.borrow_mut().push(format!(
+                    "close:{}:{}:{}",
+                    merged_pr.head_ref_name,
+                    merged_pr.head_repository.unwrap_or_default(),
+                    force_close,
+                ));
+                anyhow::bail!("fake close failed")
+            }
+        };
+
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
+
+        assert_eq!(
+            (result.is_ok(), events.borrow().clone()),
+            (
+                true,
+                vec![
+                    "view".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "close:topic/example-branch:sample-org/sample-repo:true".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_and_close_does_not_close_when_merge_stops_before_confirmation(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[snapshot(PrState::Open, "head-a", "CLEAN")],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            anyhow::bail!("fake hook failed");
+        };
+        let close = |_: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events.borrow_mut().push("close".to_string());
+                Ok(())
+            }
+        };
+
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
+
+        assert_eq!(
+            (result.is_err(), events.borrow().clone()),
+            (true, vec!["view".to_string(), "hook".to_string()]),
         );
     }
 
@@ -506,7 +769,10 @@ mod tests {
     }
 
     #[rstest]
-    fn run_merge_accepts_merge_error_when_pr_is_already_merged(events: Rc<RefCell<Vec<String>>>) {
+    #[tokio::test]
+    async fn run_merge_and_close_accepts_merge_error_when_pr_is_already_merged(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
         let client = fake_client(
             &[
                 snapshot(PrState::Open, "head-a", "CLEAN"),
@@ -518,8 +784,19 @@ mod tests {
             true,
         );
         let mut hook = |_: &[(&str, &str)]| Ok(());
+        let force_close = false;
+        let close = |merged_pr: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events
+                    .borrow_mut()
+                    .push(format!("close:{}:{}", merged_pr.head_ref_name, force_close));
+                Ok(())
+            }
+        };
 
-        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42);
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
 
         assert_eq!(
             (result.is_ok(), events.borrow().clone()),
@@ -531,6 +808,7 @@ mod tests {
                     "view".to_string(),
                     "merge:head-a".to_string(),
                     "view".to_string(),
+                    "close:topic/example-branch:false".to_string(),
                 ],
             ),
         );
@@ -597,6 +875,133 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(required_checks_succeeded(status_success, output), expected);
+    }
+
+    #[test]
+    fn pr_merge_force_close_flag_defaults_to_false_and_can_be_enabled() {
+        use clap::Parser;
+
+        let defaults = crate::cli::Cli::try_parse_from(["a", "gh", "pr-merge", "42"])
+            .expect("pr-merge arguments should parse");
+        let forced =
+            crate::cli::Cli::try_parse_from(["a", "gh", "pr-merge", "42", "--force-close"])
+                .expect("--force-close should parse");
+
+        let force_values = [defaults, forced].map(|cli| match cli.command {
+            crate::cli::Commands::Gh(crate::commands::gh::GhCommands::PrMerge(args)) => {
+                args.force_close
+            }
+            _ => false,
+        });
+
+        assert_eq!(force_values, [false, true]);
+    }
+
+    #[rstest]
+    #[case::no_candidates(vec![], HeadWorktreeSelection::NotFound)]
+    #[case::repository_mismatch(
+        vec![repository_candidate(
+            Some(("other-org", "sample-repo")),
+            &[("topic/example-branch", "/tmp/worktree-a")],
+        )],
+        HeadWorktreeSelection::NotFound,
+    )]
+    #[case::branch_mismatch(
+        vec![repository_candidate(
+            Some(("sample-org", "sample-repo")),
+            &[("topic/another-branch", "/tmp/worktree-a")],
+        )],
+        HeadWorktreeSelection::NotFound,
+    )]
+    #[case::single_match(
+        vec![repository_candidate(
+            Some(("sample-org", "sample-repo")),
+            &[("topic/example-branch", "/tmp/worktree-a")],
+        )],
+        HeadWorktreeSelection::Unique(PathBuf::from("/tmp/worktree-a")),
+    )]
+    #[case::repository_name_case_differs(
+        vec![repository_candidate(
+            Some(("Sample-Org", "Sample-Repo")),
+            &[("topic/example-branch", "/tmp/worktree-a")],
+        )],
+        HeadWorktreeSelection::Unique(PathBuf::from("/tmp/worktree-a")),
+    )]
+    #[case::ambiguous_matches(
+        vec![
+            repository_candidate(
+                Some(("sample-org", "sample-repo")),
+                &[("topic/example-branch", "/tmp/worktree-a")],
+            ),
+            repository_candidate(
+                Some(("sample-org", "sample-repo")),
+                &[("topic/example-branch", "/tmp/worktree-b")],
+            ),
+        ],
+        HeadWorktreeSelection::Ambiguous(2),
+    )]
+    fn select_head_worktree_cases(
+        #[case] candidates: Vec<LocalRepositoryWorktrees>,
+        #[case] expected: HeadWorktreeSelection,
+    ) {
+        assert_eq!(
+            select_head_worktree(
+                candidates,
+                "sample-org",
+                "sample-repo",
+                "topic/example-branch",
+            ),
+            expected,
+        );
+    }
+
+    fn repository_candidate(
+        repository: Option<(&str, &str)>,
+        worktrees: &[(&str, &str)],
+    ) -> LocalRepositoryWorktrees {
+        LocalRepositoryWorktrees {
+            repository: repository.map(|(owner, name)| (owner.to_string(), name.to_string())),
+            worktrees: worktrees
+                .iter()
+                .enumerate()
+                .map(|(index, (branch, path))| LinkedWorktree {
+                    name: format!("worktree-{index}"),
+                    path: PathBuf::from(path),
+                    branch: (*branch).to_string(),
+                    commit: format!("commit-{index}"),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn existing_worktrees_skips_paths_that_are_not_local() {
+        let root = tempfile::tempdir().unwrap();
+        let existing_path = root.path().join("worktree");
+        std::fs::create_dir_all(&existing_path).unwrap();
+
+        let result = existing_worktrees(vec![
+            LinkedWorktree {
+                name: "exact".to_string(),
+                path: existing_path.clone(),
+                branch: "topic/example-branch".to_string(),
+                commit: "commit-a".to_string(),
+            },
+            LinkedWorktree {
+                name: "missing".to_string(),
+                path: root.path().join("missing"),
+                branch: "topic/example-branch".to_string(),
+                commit: "commit-c".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            result
+                .into_iter()
+                .map(|worktree| (worktree.branch, worktree.path))
+                .collect::<Vec<_>>(),
+            vec![("topic/example-branch".to_string(), existing_path)],
+        );
     }
 
     #[rstest]

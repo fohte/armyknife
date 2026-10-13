@@ -37,7 +37,7 @@ impl GhCommands {
                 pr_review_cmd.run().await
             }
             Self::PrReview { command } => command.run().await,
-            Self::PrMerge(args) => pr_merge::run(args),
+            Self::PrMerge(args) => pr_merge::run(args).await,
             Self::IssueAgent { command } => command.run().await,
         }
     }
