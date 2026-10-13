@@ -50,6 +50,7 @@ mod filter;
 mod navigation;
 mod progress;
 mod progress_scope;
+mod progress_selection;
 mod reload;
 mod tq;
 mod worktree;
