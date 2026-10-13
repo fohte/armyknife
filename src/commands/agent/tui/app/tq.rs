@@ -8,7 +8,11 @@ impl App {
         self.tq_snapshot.is_none() && self.tq_refreshing
     }
 
-    pub fn set_tq_snapshot(&mut self, mut snapshot: TqSnapshot) {
+    pub fn set_tq_snapshot(&mut self, mut snapshot: TqSnapshot) -> bool {
+        let selected_session_id = self.selected_session_id().map(str::to_owned);
+        let previous_scope = selected_session_id
+            .as_deref()
+            .and_then(|session_id| self.progress_scope_for_session(session_id));
         let session_ids = self
             .sessions
             .iter()
@@ -28,6 +32,10 @@ impl App {
             })
             .collect();
         self.tq_snapshot = Some(snapshot);
+        let current_scope = selected_session_id
+            .as_deref()
+            .and_then(|session_id| self.progress_scope_for_session(session_id));
+        previous_scope != current_scope
     }
 
     pub fn tq_refresh_started(&mut self) {

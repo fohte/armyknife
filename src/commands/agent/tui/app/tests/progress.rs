@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use super::super::{App, ProgressScopeKind};
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
-    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
-    WorkProgressRow, build_progress_rows,
+    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressFetchScope, ProgressMark, ProgressRow,
+    ProgressSelectionKey, StageMarks, WorkProgressRow, build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
     ImplementationPlan, build_implementation_plan,
@@ -34,6 +34,44 @@ fn delegated_session(timestamp: DateTime<Utc>) -> Session {
 #[fixture]
 fn selected_task_session(timestamp: DateTime<Utc>) -> Session {
     create_test_session_at("selected", timestamp)
+}
+
+fn progress_delegate(id: &str, timestamp: DateTime<Utc>) -> Session {
+    let mut session = create_test_session_at(id, timestamp);
+    session.is_delegated = true;
+    session.ancestor_session_ids = vec!["selected".to_string()];
+    session
+}
+
+fn fetched_progress_delegate(session: Session) -> FetchedDelegate {
+    FetchedDelegate {
+        pull_request: Some(PrProgressInfo {
+            pull_request: PrInfo {
+                number: 42,
+                title: format!("{} change", session.session_id),
+                state: PrState::Open,
+                url: format!("https://example.test/pull/{}", session.session_id),
+            },
+            ci_state: PrCiState::InProgress,
+        }),
+        session,
+        checklist_item_id: None,
+        lookup_unavailable: false,
+    }
+}
+
+fn unmatched_progress_plan(delegates: &[FetchedDelegate]) -> ImplementationPlan {
+    build_implementation_plan(
+        &TqChecklist {
+            id: "checklist-test".to_string(),
+            name: "Implementation".to_string(),
+            items: Vec::new(),
+        },
+        &[],
+        delegates,
+        &HashMap::new(),
+        false,
+    )
 }
 
 #[fixture]
@@ -81,6 +119,12 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
         ProgressRow::ImplementationHeader {
             merged_pr_count: 0,
             total_pr_count: 1,
+            collapsed: false,
+        },
+        ProgressRow::BatchHeader {
+            batch_id: "batch-a".to_string(),
+            title: "Batch 1".to_string(),
+            merged_pr_count: 0,
             collapsed: false,
         },
         ProgressRow::ChecklistPullRequest {
@@ -170,6 +214,7 @@ fn stale_progress_response_keeps_the_new_selection_state(timestamp: DateTime<Utc
         "first",
         Ok(FetchedProgress {
             selected_session_id: "first".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: None,
             github_error: None,
@@ -243,6 +288,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     app.list_state.select(Some(2));
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("selected".to_string(), vec![task_link("task-a")]),
+        ("delegate".to_string(), vec![task_link("task-a")]),
         (
             "same-task-child".to_string(),
             vec![task_link("task-b"), task_link("task-a")],
@@ -255,6 +301,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: vec![
                 FetchedDelegate {
                     session: delegate,
@@ -293,9 +340,161 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
                 expected_unlinked_delegate_row("nested-delegate"),
             ],
             Some(1),
-            Some("selected"),
+            Some(ProgressSelectionKey::Session("selected".to_string())),
             None,
         ),
+    );
+}
+
+#[rstest]
+fn task_linked_delegate_stays_visible_when_its_parent_is_absent(timestamp: DateTime<Utc>) {
+    let selected = create_test_session_at("selected", timestamp);
+    let mut delegate = create_test_session_at("orphan-delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec!["closed-parent".to_string()];
+    let mut app = create_test_app(vec![selected, delegate]);
+    app.update_row_order(&[None, Some("selected"), Some("orphan-delegate")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("selected".to_string(), vec![task_link("task-a")]),
+        ("orphan-delegate".to_string(), vec![task_link("task-a")]),
+    ])));
+
+    app.begin_progress_refresh("selected");
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            expected_work_row("selected", "session"),
+            expected_unlinked_delegate_row("orphan-delegate"),
+        ],
+    );
+}
+
+#[rstest]
+fn task_linked_delegate_without_work_rows_stays_in_the_checklist(timestamp: DateTime<Utc>) {
+    let mut delegate = create_test_session_at("orphan-delegate", timestamp);
+    delegate.is_delegated = true;
+    delegate.ancestor_session_ids = vec!["closed-parent".to_string()];
+    let mut app = create_test_app(vec![delegate.clone()]);
+    app.update_row_order(&[None, Some("orphan-delegate")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([(
+        "orphan-delegate".to_string(),
+        vec![task_link("task-a")],
+    )])));
+    let fetched_delegate = FetchedDelegate {
+        session: delegate,
+        checklist_item_id: None,
+        pull_request: None,
+        lookup_unavailable: false,
+    };
+    let plan = build_implementation_plan(
+        &TqChecklist {
+            id: "checklist-a".to_string(),
+            name: "実装".to_string(),
+            items: Vec::new(),
+        },
+        &[],
+        std::slice::from_ref(&fetched_delegate),
+        &HashMap::new(),
+        false,
+    );
+
+    app.apply_progress_result(
+        "orphan-delegate",
+        Ok(FetchedProgress {
+            selected_session_id: "orphan-delegate".to_string(),
+            request_scope: None,
+            delegated: vec![fetched_delegate],
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
+            expected_unlinked_delegate_row("orphan-delegate"),
+        ],
+    );
+}
+
+#[rstest]
+fn task_progress_applies_fetched_delegates_missing_from_the_live_scope(timestamp: DateTime<Utc>) {
+    let selected = create_test_session_at("selected", timestamp);
+    let mut live_delegate = create_test_session_at("live-delegate", timestamp);
+    live_delegate.is_delegated = true;
+    live_delegate.ancestor_session_ids = vec!["selected".to_string()];
+    let mut fetched_delegate = create_test_session_at("fetched-delegate", timestamp);
+    fetched_delegate.is_delegated = true;
+    fetched_delegate.ancestor_session_ids = vec!["selected".to_string()];
+    let mut app = create_test_app(vec![selected, live_delegate.clone()]);
+    app.update_row_order(&[None, Some("selected"), Some("live-delegate")]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([(
+        "selected".to_string(),
+        vec![task_link("task-a")],
+    )])));
+    let fetched_delegates = vec![
+        FetchedDelegate {
+            session: live_delegate,
+            checklist_item_id: None,
+            pull_request: None,
+            lookup_unavailable: false,
+        },
+        FetchedDelegate {
+            session: fetched_delegate,
+            checklist_item_id: None,
+            pull_request: None,
+            lookup_unavailable: false,
+        },
+    ];
+    let plan = build_implementation_plan(
+        &TqChecklist {
+            id: "checklist-a".to_string(),
+            name: "実装".to_string(),
+            items: Vec::new(),
+        },
+        &[],
+        &fetched_delegates,
+        &HashMap::new(),
+        false,
+    );
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: Some(ProgressFetchScope {
+                task_id: Some("task-a".to_string()),
+                session_ids: Some(vec!["selected".to_string()]),
+            }),
+            delegated: fetched_delegates,
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            expected_work_row("selected", "session"),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
+            expected_unlinked_delegate_row("live-delegate"),
+            expected_unlinked_delegate_row("fetched-delegate"),
+        ],
     );
 }
 
@@ -319,6 +518,7 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: Some(linked_checklist_plan),
             github_error: None,
@@ -341,6 +541,7 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
                     collapsed: false,
                 },
                 expected_unavailable_checklist_rows("selected")[2].clone(),
+                expected_unavailable_checklist_rows("selected")[3].clone(),
             ],
             Some(0),
             None,
@@ -382,12 +583,13 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
         ])));
     }
 
-    let fetch_scope = app.progress_fetch_scope("project-manager");
+    let fetch_scope = app.progress_scope_for_session("project-manager");
 
     app.apply_progress_result(
         "project-manager",
         Ok(FetchedProgress {
             selected_session_id: "project-manager".to_string(),
+            request_scope: None,
             delegated: vec![FetchedDelegate {
                 session: child_delegate,
                 checklist_item_id: None,
@@ -427,7 +629,7 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
 }
 
 #[rstest]
-fn local_progress_refresh_preserves_the_selected_delegate_row(
+fn local_progress_refresh_uses_current_delegate_state(
     timestamp: DateTime<Utc>,
     delegated_session: Session,
 ) {
@@ -440,10 +642,19 @@ fn local_progress_refresh_preserves_the_selected_delegate_row(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: vec![FetchedDelegate {
                 session: delegated_session,
                 checklist_item_id: None,
-                pull_request: None,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 42,
+                        title: "Finished change".to_string(),
+                        state: PrState::Open,
+                        url: "https://example.test/pull/42".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
                 lookup_unavailable: false,
             }],
             implementation: None,
@@ -480,18 +691,18 @@ fn local_progress_refresh_preserves_the_selected_delegate_row(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
-                    title: "Updated delegated work".to_string(),
-                    number: None,
-                    url: None,
+                    title: "Finished change".to_string(),
+                    number: Some(42),
+                    url: Some("https://example.test/pull/42".to_string()),
                     pane_id: None,
                     is_ended: true,
                     lookup_unavailable: false,
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
-                        diff_review: ProgressMark::NotStarted,
-                        pr_body: ProgressMark::NotStarted,
-                        ci: ProgressMark::NotStarted,
-                        merge: ProgressMark::NotStarted,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Working,
+                        merge: ProgressMark::Waiting,
                     },
                 }),
             ],
@@ -525,7 +736,12 @@ fn initial_focus_selects_the_delegated_pr_row(
                 .and_then(|index| app.progress_rows.get(index))
                 .and_then(ProgressRow::selection_key),
         ),
-        (Some("selected"), true, Some(1), Some("delegate")),
+        (
+            Some("selected"),
+            true,
+            Some(1),
+            Some(ProgressSelectionKey::Session("delegate".to_string())),
+        ),
     );
 }
 
@@ -563,7 +779,13 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
                 .and_then(|index| app.progress_rows.get(index))
                 .and_then(ProgressRow::selection_key),
         ),
-        (Some("task"), true, Some("intermediate-delegate")),
+        (
+            Some("task"),
+            true,
+            Some(ProgressSelectionKey::Session(
+                "intermediate-delegate".to_string(),
+            )),
+        ),
     );
 }
 
@@ -624,6 +846,7 @@ fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: fetched_delegates,
             implementation: Some(implementation),
             github_error: None,
@@ -640,7 +863,12 @@ fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
             app.progress_implementation_expanded,
             app.progress_batch_expanded.get("batch-a").copied(),
         ),
-        (Some(2), Some("delegate"), true, Some(true)),
+        (
+            Some(3),
+            Some(ProgressSelectionKey::Session("delegate".to_string())),
+            true,
+            Some(true),
+        ),
     );
 }
 
@@ -734,6 +962,7 @@ fn reuses_cached_progress_when_returning_to_a_session(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: vec![FetchedDelegate {
                 session: delegated_session,
                 checklist_item_id: None,
@@ -814,6 +1043,7 @@ fn keeps_fetched_progress_for_ended_delegates_after_local_refresh(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: vec![FetchedDelegate {
                 session: delegated_session,
                 checklist_item_id: None,
@@ -871,6 +1101,296 @@ fn keeps_fetched_progress_for_ended_delegates_after_local_refresh(
             None,
             Some("selected"),
         ),
+    );
+}
+
+#[rstest]
+fn keeps_fetched_checklist_rows_while_a_session_reload_is_incomplete(
+    timestamp: DateTime<Utc>,
+    delegated_session: Session,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let fetched_delegate = FetchedDelegate {
+        session: delegated_session.clone(),
+        checklist_item_id: None,
+        pull_request: None,
+        lookup_unavailable: true,
+    };
+    let plan = build_implementation_plan(
+        &TqChecklist {
+            id: "checklist-a".to_string(),
+            name: "実装".to_string(),
+            items: Vec::new(),
+        },
+        &[],
+        std::slice::from_ref(&fetched_delegate),
+        &HashMap::new(),
+        false,
+    );
+    let mut app = create_test_app(vec![selected, delegated_session]);
+    app.update_row_order(&[None, Some("selected"), Some("delegate")]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: vec![fetched_delegate],
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+    let before = (
+        app.progress_rows.clone(),
+        app.progress_list_state.selected(),
+        app.progress_table_state.selected(),
+    );
+
+    app.sessions
+        .retain(|session| session.session_id == "selected");
+    app.refresh_progress_from_sessions("selected");
+
+    assert_eq!(
+        (
+            app.progress_rows,
+            app.progress_list_state.selected(),
+            app.progress_table_state.selected(),
+        ),
+        before,
+    );
+}
+
+#[rstest]
+fn reopening_unmatched_delegates_keeps_cached_rows_after_session_reload_is_incomplete(
+    timestamp: DateTime<Utc>,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let alpha = progress_delegate("alpha", timestamp);
+    let bravo = progress_delegate("bravo", timestamp);
+    let charlie = progress_delegate("charlie", timestamp);
+    let fetched = vec![
+        fetched_progress_delegate(alpha.clone()),
+        fetched_progress_delegate(bravo.clone()),
+        fetched_progress_delegate(charlie.clone()),
+    ];
+    let plan = unmatched_progress_plan(&fetched);
+    let mut app = create_test_app(vec![selected, alpha, bravo, charlie]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("alpha"),
+        Some("bravo"),
+        Some("charlie"),
+    ]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: fetched,
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+    app.sessions
+        .retain(|session| session.session_id == "selected" || session.session_id == "alpha");
+    app.refresh_progress_from_sessions("selected");
+    let header_index = app
+        .progress_rows
+        .iter()
+        .position(|row| matches!(row, ProgressRow::UnmatchedDelegatesHeader { .. }))
+        .unwrap();
+    app.progress_list_state.select(Some(header_index));
+
+    app.set_progress_batch_collapsed(true);
+    app.toggle_selected_progress_heading();
+
+    let delegate_ids = app
+        .progress_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProgressRow::PullRequest(row) => Some(row.session_id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(delegate_ids, vec!["alpha", "bravo", "charlie"]);
+}
+
+#[rstest]
+fn progress_refresh_keeps_cached_delegate_order_and_uses_current_session_state(
+    timestamp: DateTime<Utc>,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let alpha = progress_delegate("alpha", timestamp);
+    let bravo = progress_delegate("bravo", timestamp);
+    let charlie = progress_delegate("charlie", timestamp);
+    let delta = progress_delegate("delta", timestamp);
+    let initial = vec![
+        fetched_progress_delegate(alpha.clone()),
+        fetched_progress_delegate(bravo.clone()),
+        fetched_progress_delegate(charlie.clone()),
+    ];
+    let initial_plan = unmatched_progress_plan(&initial);
+    let mut app = create_test_app(vec![
+        selected,
+        alpha.clone(),
+        bravo.clone(),
+        charlie.clone(),
+        delta.clone(),
+    ]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("alpha"),
+        Some("bravo"),
+        Some("charlie"),
+        Some("delta"),
+    ]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: initial,
+            implementation: Some(initial_plan),
+            github_error: None,
+        }),
+    );
+    app.sessions
+        .iter_mut()
+        .find(|session| session.session_id == "alpha")
+        .unwrap()
+        .status = SessionStatus::Ended;
+    let refreshed = vec![
+        fetched_progress_delegate(charlie),
+        fetched_progress_delegate(alpha),
+        fetched_progress_delegate(bravo),
+        fetched_progress_delegate(delta),
+    ];
+    let refreshed_plan = unmatched_progress_plan(&refreshed);
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: refreshed,
+            implementation: Some(refreshed_plan),
+            github_error: None,
+        }),
+    );
+
+    let rows = app
+        .progress_rows
+        .iter()
+        .filter_map(|row| match row {
+            ProgressRow::PullRequest(row) => Some((row.session_id.as_str(), row.is_ended)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rows,
+        vec![
+            ("alpha", true),
+            ("bravo", false),
+            ("charlie", false),
+            ("delta", false),
+        ],
+    );
+}
+
+#[rstest]
+#[case::task_id_changed("task-b", false, vec!["delegate", "selected"])]
+#[case::task_membership_changed("task-a", true, vec!["delegate", "selected"])]
+fn ignores_progress_results_from_an_outdated_task_scope(
+    timestamp: DateTime<Utc>,
+    delegated_session: Session,
+    #[case] stale_task_id: &str,
+    #[case] add_linked_session: bool,
+    #[case] stale_session_ids: Vec<&str>,
+) {
+    let selected = create_test_session_at("selected", timestamp);
+    let linked_later = create_test_session_at("linked-later", timestamp);
+    let mut app = create_test_app(vec![selected, delegated_session, linked_later]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("delegate"),
+        Some("linked-later"),
+    ]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("selected".to_string(), vec![task_link("task-a")]),
+        ("delegate".to_string(), vec![task_link("task-a")]),
+    ])));
+    app.begin_progress_refresh("selected");
+    if add_linked_session {
+        app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+            ("selected".to_string(), vec![task_link("task-a")]),
+            ("delegate".to_string(), vec![task_link("task-a")]),
+            ("linked-later".to_string(), vec![task_link("task-a")]),
+        ])));
+        app.refresh_progress_from_sessions("selected");
+    }
+    let before = app.progress_rows.clone();
+
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: Some(ProgressFetchScope {
+                task_id: Some(stale_task_id.to_string()),
+                session_ids: Some(
+                    stale_session_ids
+                        .iter()
+                        .map(|session_id| session_id.to_string())
+                        .collect(),
+                ),
+            }),
+            delegated: Vec::new(),
+            implementation: None,
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(app.progress_rows, before);
+}
+
+#[rstest]
+fn omits_ended_delegates_without_pull_request_info(
+    timestamp: DateTime<Utc>,
+    mut delegated_session: Session,
+) {
+    delegated_session.status = SessionStatus::Ended;
+    let selected = create_test_session_at("selected", timestamp);
+    let mut app = create_test_app(vec![selected, delegated_session.clone()]);
+    app.update_row_order(&[None, Some("selected"), Some("delegate")]);
+    app.list_state.select(Some(1));
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: None,
+            delegated: vec![FetchedDelegate {
+                session: delegated_session,
+                checklist_item_id: None,
+                pull_request: None,
+                lookup_unavailable: true,
+            }],
+            implementation: None,
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        vec![expected_work_row("selected", "session")]
     );
 }
 
@@ -952,6 +1472,7 @@ fn restores_checklist_progress_when_returning_to_a_session(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: Some(linked_checklist_plan),
             github_error: None,
@@ -985,6 +1506,7 @@ fn resets_checklist_folds_when_selection_changes_during_refresh(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: Some(linked_checklist_plan.clone()),
             github_error: None,
@@ -999,6 +1521,7 @@ fn resets_checklist_folds_when_selection_changes_during_refresh(
         "other",
         Ok(FetchedProgress {
             selected_session_id: "other".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: Some(linked_checklist_plan),
             github_error: None,
@@ -1022,6 +1545,7 @@ fn keeps_linked_pr_lookup_error_when_checklist_has_no_delegates(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: Vec::new(),
             implementation: Some(linked_checklist_plan),
             github_error: Some("GitHub unavailable".to_string()),
@@ -1095,6 +1619,7 @@ fn falls_back_to_delegate_rows_when_checklist_progress_is_unavailable(
         "selected",
         Ok(FetchedProgress {
             selected_session_id: "selected".to_string(),
+            request_scope: None,
             delegated: vec![fetched_delegate],
             implementation: None,
             github_error: None,

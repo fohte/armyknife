@@ -49,11 +49,14 @@ mod delete;
 mod filter;
 mod navigation;
 mod progress;
+mod progress_cache;
 mod progress_scope;
+mod progress_selection;
 mod reload;
 mod tq;
 mod worktree;
 
+#[cfg(test)]
 pub(super) use progress_scope::ProgressScopeKind;
 
 use reload::{
@@ -172,6 +175,7 @@ pub struct App {
     pub(super) progress_table_state: TableState,
     pub(super) progress_rows: Vec<ProgressRow>,
     pub(super) progress_implementation_expanded: bool,
+    pub(super) progress_unmatched_expanded: bool,
     pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
     pub(super) initial_progress_selection: Option<InitialProgressSelection>,
@@ -272,6 +276,7 @@ impl App {
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),
             progress_implementation_expanded: true,
+            progress_unmatched_expanded: true,
             progress_batch_expanded: HashMap::new(),
             progress_session_id: None,
             initial_progress_selection: None,

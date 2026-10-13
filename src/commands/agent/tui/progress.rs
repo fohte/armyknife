@@ -14,9 +14,16 @@ use marks::{session_mark, session_stage_marks, stage_marks};
 #[derive(Debug)]
 pub(super) struct FetchedProgress {
     pub selected_session_id: String,
+    pub request_scope: Option<ProgressFetchScope>,
     pub delegated: Vec<FetchedDelegate>,
     pub implementation: Option<ImplementationPlan>,
     pub github_error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ProgressFetchScope {
+    pub task_id: Option<String>,
+    pub session_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -66,6 +73,9 @@ pub(super) enum ProgressRow {
         total_pr_count: usize,
         collapsed: bool,
     },
+    UnmatchedDelegatesHeader {
+        collapsed: bool,
+    },
     BatchHeader {
         batch_id: String,
         title: String,
@@ -84,6 +94,14 @@ pub(super) enum ProgressRow {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProgressSelectionKey {
+    Session(String),
+    Implementation,
+    UnmatchedDelegates,
+    Batch(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProgressOpenTarget {
     FocusPane(String),
     OpenUrl(String),
@@ -99,6 +117,7 @@ pub(super) fn open_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
             open_pull_request_target(row)
         }
         ProgressRow::ImplementationHeader { .. }
+        | ProgressRow::UnmatchedDelegatesHeader { .. }
         | ProgressRow::BatchHeader { .. }
         | ProgressRow::PlannedPullRequest { .. } => None,
     }
@@ -116,23 +135,19 @@ fn open_pull_request_target(row: &PrProgressRow) -> Option<ProgressOpenTarget> {
 }
 
 impl ProgressRow {
-    pub(super) fn selection_key(&self) -> Option<&str> {
+    pub(super) fn selection_key(&self) -> Option<ProgressSelectionKey> {
         match self {
-            Self::Work(row) => Some(&row.session_id),
-            Self::PullRequest(row) => Some(&row.session_id),
-            Self::ChecklistPullRequest { row, .. } => Some(&row.session_id),
-            Self::ImplementationHeader { .. }
-            | Self::BatchHeader { .. }
-            | Self::PlannedPullRequest { .. } => None,
-        }
-    }
-
-    pub(super) fn batch_id(&self) -> Option<&str> {
-        match self {
-            Self::BatchHeader { batch_id, .. }
-            | Self::ChecklistPullRequest { batch_id, .. }
-            | Self::PlannedPullRequest { batch_id, .. } => Some(batch_id),
-            Self::Work(_) | Self::PullRequest(_) | Self::ImplementationHeader { .. } => None,
+            Self::Work(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
+            Self::PullRequest(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
+            Self::ChecklistPullRequest { row, .. } => {
+                Some(ProgressSelectionKey::Session(row.session_id.clone()))
+            }
+            Self::ImplementationHeader { .. } => Some(ProgressSelectionKey::Implementation),
+            Self::UnmatchedDelegatesHeader { .. } => Some(ProgressSelectionKey::UnmatchedDelegates),
+            Self::BatchHeader { batch_id, .. } => {
+                Some(ProgressSelectionKey::Batch(batch_id.clone()))
+            }
+            Self::PlannedPullRequest { .. } => None,
         }
     }
 }
@@ -173,18 +188,33 @@ pub(super) fn build_task_progress_rows(
     delegated: &[FetchedDelegate],
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
-    let mut rows = Vec::with_capacity(work_sessions.len() + delegated.len());
+    let visible_delegates = delegated
+        .iter()
+        .filter_map(|delegate| {
+            let row = pr_progress_row(delegate, agent_config);
+            delegate_row_is_displayable(&row).then_some((delegate, row))
+        })
+        .collect::<Vec<_>>();
+    let mut rows = Vec::with_capacity(work_sessions.len() + visible_delegates.len());
     rows.extend(work_sessions.iter().map(|session| {
-        let has_delegated_work =
-            has_delegated_descendant(session, delegated.iter().map(|delegate| &delegate.session));
+        let has_delegated_work = has_delegated_descendant(
+            session,
+            visible_delegates
+                .iter()
+                .map(|(delegate, _)| &delegate.session),
+        );
         ProgressRow::Work(work_progress_row(session, has_delegated_work, agent_config))
     }));
     rows.extend(
-        delegated
+        visible_delegates
             .iter()
-            .map(|delegate| ProgressRow::PullRequest(pr_progress_row(delegate, agent_config))),
+            .map(|(_, row)| ProgressRow::PullRequest(row.clone())),
     );
     rows
+}
+
+pub(super) fn delegate_row_is_displayable(row: &PrProgressRow) -> bool {
+    !row.is_ended || row.number.is_some() || row.url.is_some()
 }
 
 pub(super) fn has_delegated_descendant<'a>(
@@ -339,6 +369,7 @@ pub(super) fn refresh_task_rows_from_sessions(
             }
             ProgressRow::Work(_)
             | ProgressRow::ImplementationHeader { .. }
+            | ProgressRow::UnmatchedDelegatesHeader { .. }
             | ProgressRow::BatchHeader { .. }
             | ProgressRow::PlannedPullRequest { .. } => None,
         })
@@ -363,12 +394,15 @@ pub(super) fn refresh_task_rows_from_sessions(
             row.stages.diff_review = updated_stages.diff_review;
             row.stages.pr_body = updated_stages.pr_body;
         }
-        rows.push(ProgressRow::PullRequest(row));
+        if delegate_row_is_displayable(&row) {
+            rows.push(ProgressRow::PullRequest(row));
+        }
     }
 
     // Ended delegates leave the live session list before their PR is resolved.
     for row in existing_rows {
         if let ProgressRow::PullRequest(row) = row
+            && delegate_row_is_displayable(row)
             && !delegated
                 .iter()
                 .any(|session| session.session_id == row.session_id)
@@ -617,32 +651,14 @@ mod tests {
                 &previous_rows,
                 &AgentConfig::default(),
             ),
-            vec![
-                ProgressRow::Work(WorkProgressRow {
-                    session_id: "selected".to_string(),
-                    role: "updated role".to_string(),
-                    mark: ProgressMark::Done,
-                    status_label: None,
-                    note: None,
-                    pane_id: None,
-                }),
-                ProgressRow::PullRequest(PrProgressRow {
-                    session_id: "delegate".to_string(),
-                    title: "Updated delegated work".to_string(),
-                    number: None,
-                    url: None,
-                    pane_id: None,
-                    is_ended: true,
-                    lookup_unavailable: true,
-                    stages: StageMarks {
-                        implementation: ProgressMark::Done,
-                        diff_review: ProgressMark::NotStarted,
-                        pr_body: ProgressMark::NotStarted,
-                        ci: ProgressMark::NotStarted,
-                        merge: ProgressMark::NotStarted,
-                    },
-                }),
-            ],
+            vec![ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "updated role".to_string(),
+                mark: ProgressMark::Done,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),],
         );
     }
 

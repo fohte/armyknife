@@ -7,21 +7,20 @@ use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
 use super::super::session_pr_context::{self, Resolution};
-use super::progress::{FetchedDelegate, FetchedProgress};
+use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::progress_batches::{build_implementation_plan, pull_request_queries};
 
 pub(super) async fn fetch_progress(
     selected_session_id: String,
-    task_id: Option<String>,
-    task_session_ids: Option<Vec<String>>,
+    request_scope: ProgressFetchScope,
 ) -> Result<FetchedProgress, String> {
     let sessions = tokio::task::spawn_blocking(store::list_all_sessions)
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
-    let delegated = match task_session_ids {
+    let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
-            let session_ids = session_ids.into_iter().collect::<HashSet<_>>();
+            let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
             task_descendant_delegates(&sessions, &session_ids)
         }
         None => direct_delegates(sessions, &selected_session_id),
@@ -34,7 +33,8 @@ pub(super) async fn fetch_progress(
     .await
     .map_err(|error| format!("failed to inspect delegated worktrees: {error}"))?;
 
-    let implementation_checklist = fetch_implementation_checklist(task_id.as_deref()).await;
+    let implementation_checklist =
+        fetch_implementation_checklist(request_scope.task_id.as_deref()).await;
     let linked_pr_queries = implementation_checklist
         .as_ref()
         .map(|(checklist, github_links)| pull_request_queries(checklist, github_links))
@@ -114,6 +114,7 @@ pub(super) async fn fetch_progress(
 
     Ok(FetchedProgress {
         selected_session_id,
+        request_scope: Some(request_scope),
         delegated,
         implementation,
         github_error,
@@ -161,16 +162,17 @@ pub(super) fn task_descendant_delegates(
         .iter()
         .filter(|session| {
             session.is_delegated
-                && session
-                    .ancestor_session_ids
-                    .iter()
-                    .rev()
-                    .find(|ancestor_id| {
-                        sessions_by_id
-                            .get(ancestor_id.as_str())
-                            .is_none_or(|ancestor| !ancestor.is_delegated)
-                    })
-                    .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id))
+                && (task_session_ids.contains(&session.session_id)
+                    || session
+                        .ancestor_session_ids
+                        .iter()
+                        .rev()
+                        .find(|ancestor_id| {
+                            sessions_by_id
+                                .get(ancestor_id.as_str())
+                                .is_none_or(|ancestor| !ancestor.is_delegated)
+                        })
+                        .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id)))
         })
         .cloned()
         .collect::<Vec<_>>();

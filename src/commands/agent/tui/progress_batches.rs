@@ -8,7 +8,7 @@ use crate::shared::config::AgentConfig;
 use super::progress::marks::{completed_stage_marks, pr_ci_merge_marks};
 use super::progress::{
     FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks,
-    has_delegated_descendant, pr_progress_row, work_progress_row,
+    delegate_row_is_displayable, has_delegated_descendant, pr_progress_row, work_progress_row,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +206,7 @@ pub(super) fn build_progress_rows(
         delegates,
         plan,
         implementation_expanded,
+        true,
         expanded_batches,
         agent_config,
     )
@@ -216,6 +217,7 @@ pub(super) fn build_task_progress_rows(
     delegates: &[Session],
     plan: &ImplementationPlan,
     implementation_expanded: bool,
+    unmatched_expanded: bool,
     expanded_batches: &HashMap<String, bool>,
     agent_config: &AgentConfig,
 ) -> Vec<ProgressRow> {
@@ -243,7 +245,13 @@ pub(super) fn build_task_progress_rows(
         collapsed: !implementation_expanded,
     });
     if !implementation_expanded {
-        append_unmatched_delegate_rows(&mut rows, delegates, plan, agent_config);
+        append_unmatched_delegate_rows(
+            &mut rows,
+            delegates,
+            plan,
+            unmatched_expanded,
+            agent_config,
+        );
         return rows;
     }
 
@@ -255,15 +263,12 @@ pub(super) fn build_task_progress_rows(
             .copied()
             .unwrap_or(!collapsed_by_default);
         let collapsed = !expanded;
-        let show_batch_header = plan.batches.len() > 1 || collapsed;
-        if show_batch_header {
-            rows.push(ProgressRow::BatchHeader {
-                batch_id: batch.id.clone(),
-                title: batch.title.clone(),
-                merged_pr_count: merged_count,
-                collapsed,
-            });
-        }
+        rows.push(ProgressRow::BatchHeader {
+            batch_id: batch.id.clone(),
+            title: batch.title.clone(),
+            merged_pr_count: merged_count,
+            collapsed,
+        });
         if collapsed {
             continue;
         }
@@ -307,7 +312,7 @@ pub(super) fn build_task_progress_rows(
         }
     }
 
-    append_unmatched_delegate_rows(&mut rows, delegates, plan, agent_config);
+    append_unmatched_delegate_rows(&mut rows, delegates, plan, unmatched_expanded, agent_config);
     rows
 }
 
@@ -315,6 +320,7 @@ fn append_unmatched_delegate_rows(
     rows: &mut Vec<ProgressRow>,
     delegates: &[Session],
     plan: &ImplementationPlan,
+    expanded: bool,
     agent_config: &AgentConfig,
 ) {
     let mapped_sessions = plan
@@ -323,23 +329,34 @@ fn append_unmatched_delegate_rows(
         .flat_map(|batch| &batch.items)
         .filter_map(|item| item.delegate_session_id.as_deref())
         .collect::<HashSet<_>>();
-    for session in delegates
+    let unmatched_rows = delegates
         .iter()
         .filter(|session| !mapped_sessions.contains(session.session_id.as_str()))
-    {
-        let fetched = plan
-            .unmatched_delegates
-            .iter()
-            .find(|delegate| delegate.session_id == session.session_id);
-        rows.push(ProgressRow::PullRequest(pr_progress_row(
-            &FetchedDelegate {
-                session: session.clone(),
-                checklist_item_id: None,
-                pull_request: fetched.and_then(|delegate| delegate.pull_request.clone()),
-                lookup_unavailable: fetched.is_some_and(|delegate| delegate.lookup_unavailable),
-            },
-            agent_config,
-        )));
+        .filter_map(|session| {
+            let fetched = plan
+                .unmatched_delegates
+                .iter()
+                .find(|delegate| delegate.session_id == session.session_id);
+            let row = pr_progress_row(
+                &FetchedDelegate {
+                    session: session.clone(),
+                    checklist_item_id: None,
+                    pull_request: fetched.and_then(|delegate| delegate.pull_request.clone()),
+                    lookup_unavailable: fetched.is_some_and(|delegate| delegate.lookup_unavailable),
+                },
+                agent_config,
+            );
+            delegate_row_is_displayable(&row).then_some(row)
+        })
+        .collect::<Vec<_>>();
+    if unmatched_rows.is_empty() {
+        return;
+    }
+    rows.push(ProgressRow::UnmatchedDelegatesHeader {
+        collapsed: !expanded,
+    });
+    if expanded {
+        rows.extend(unmatched_rows.into_iter().map(ProgressRow::PullRequest));
     }
 }
 
@@ -431,7 +448,9 @@ fn pull_request_title(content: &str) -> Option<String> {
 mod tests {
     use std::collections::HashMap;
 
+    use crate::commands::agent::tui::progress::ProgressSelectionKey;
     use crate::commands::agent::tui::ui::test_support::create_test_session;
+    use crate::commands::agent::types::SessionStatus;
     use crate::infra::github::{PrCiState, PrInfo, PrState};
 
     use super::*;
@@ -624,7 +643,13 @@ mod tests {
                         title: "Add another sample feature".to_string(),
                     },
                 ],
-                vec![Some("selected"), None, None, None, None],
+                vec![
+                    Some(ProgressSelectionKey::Session("selected".to_string())),
+                    Some(ProgressSelectionKey::Implementation),
+                    Some(ProgressSelectionKey::Batch("batch-1".to_string())),
+                    Some(ProgressSelectionKey::Batch("batch-2".to_string())),
+                    None,
+                ],
             ),
         );
     }
@@ -677,6 +702,7 @@ mod tests {
                     total_pr_count: 2,
                     collapsed: true,
                 },
+                ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
                 ProgressRow::PullRequest(super::super::progress::PrProgressRow {
                     session_id: "unmapped-delegate".to_string(),
                     title: "Unplanned delegated change".to_string(),
@@ -727,6 +753,7 @@ mod tests {
                     total_pr_count: 2,
                     collapsed: true,
                 },
+                ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
                 ProgressRow::PullRequest(super::super::progress::PrProgressRow {
                     session_id: "new-delegate".to_string(),
                     title: "New delegated work".to_string(),
@@ -813,6 +840,12 @@ mod tests {
                     total_pr_count: 1,
                     collapsed: false,
                 },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-1".to_string(),
+                    title: "Batch 1".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
                 ProgressRow::ChecklistPullRequest {
                     batch_id: "batch-1".to_string(),
                     row: super::super::progress::PrProgressRow {
@@ -839,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn omits_batch_heading_when_the_plan_has_one_batch() {
+    fn includes_batch_heading_when_the_plan_has_one_batch() {
         let plan = ImplementationPlan {
             batches: vec![ImplementationBatch {
                 id: "batch-1".to_string(),
@@ -877,6 +910,12 @@ mod tests {
                 ProgressRow::ImplementationHeader {
                     merged_pr_count: 0,
                     total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-1".to_string(),
+                    title: "Batch 1".to_string(),
+                    merged_pr_count: 0,
                     collapsed: false,
                 },
                 ProgressRow::PlannedPullRequest {
@@ -969,6 +1008,50 @@ mod tests {
                     batch_id: "batch-1".to_string(),
                     title: "Batch 1".to_string(),
                     merged_pr_count: 1,
+                    collapsed: true,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn omits_ended_unmatched_delegates_without_a_pull_request() {
+        let mut delegate_session = create_test_session("ended-delegate");
+        delegate_session.status = SessionStatus::Ended;
+        let plan = build_implementation_plan(
+            &checklist(),
+            &[github_link()],
+            &[FetchedDelegate {
+                session: delegate_session.clone(),
+                checklist_item_id: None,
+                pull_request: None,
+                lookup_unavailable: true,
+            }],
+            &HashMap::new(),
+            false,
+        );
+
+        assert_eq!(
+            build_progress_rows(
+                &create_test_session("selected"),
+                &[delegate_session],
+                &plan,
+                false,
+                &HashMap::new(),
+                &AgentConfig::default(),
+            ),
+            vec![
+                ProgressRow::Work(super::super::progress::WorkProgressRow {
+                    session_id: "selected".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 1,
+                    total_pr_count: 2,
                     collapsed: true,
                 },
             ],

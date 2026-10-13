@@ -29,14 +29,16 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
             app.set_progress_batch_collapsed(false);
         }
         (KeyCode::Enter, _) if current_rows => {
-            return Some(KeyEffects {
-                open_progress_target: app
-                    .progress_list_state
-                    .selected()
-                    .and_then(|index| app.progress_rows.get(index))
-                    .and_then(open_target),
-                ..Default::default()
-            });
+            if !app.toggle_selected_progress_heading() {
+                return Some(KeyEffects {
+                    open_progress_target: app
+                        .progress_list_state
+                        .selected()
+                        .and_then(|index| app.progress_rows.get(index))
+                        .and_then(open_target),
+                    ..Default::default()
+                });
+            }
         }
         (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
         (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
@@ -55,12 +57,12 @@ mod tests {
 
     use chrono::Utc;
     use crossterm::event::KeyCode;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
     use crate::commands::agent::tui::progress::{
         FetchedDelegate, FetchedProgress, PrProgressRow, ProgressMark, ProgressOpenTarget,
-        ProgressRow, StageMarks, WorkProgressRow,
+        ProgressRow, ProgressSelectionKey, StageMarks, WorkProgressRow,
     };
     use crate::commands::agent::tui::progress_batches::build_implementation_plan;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
@@ -132,8 +134,95 @@ mod tests {
     }
 
     #[test]
-    fn batch_keys_collapse_and_expand_without_selecting_headings_or_planned_rows() {
-        let selected = session("selected");
+    fn j_and_k_select_headings_and_skip_planned_rows() {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![
+            work_row(),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 1,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-1".to_string(),
+                title: "Batch 1".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            pull_request_row(false, None, None),
+            ProgressRow::PlannedPullRequest {
+                batch_id: "batch-1".to_string(),
+                checklist_item_id: "item-1".to_string(),
+                title: "Future change".to_string(),
+            },
+        ];
+        app.progress_list_state.select(Some(0));
+
+        let mut actual = Vec::new();
+        for code in [
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Char('j'),
+            KeyCode::Char('k'),
+            KeyCode::Char('k'),
+            KeyCode::Char('k'),
+        ] {
+            handle(
+                &mut app,
+                KeyEvent {
+                    code,
+                    modifiers: KeyModifiers::NONE,
+                },
+            );
+            let index = app.progress_list_state.selected();
+            actual.push((
+                index.and_then(|index| app.progress_rows[index].selection_key()),
+                index,
+                app.progress_table_state.selected(),
+            ));
+        }
+
+        assert_eq!(
+            actual,
+            vec![
+                (Some(ProgressSelectionKey::Implementation), Some(1), Some(0),),
+                (
+                    Some(ProgressSelectionKey::Batch("batch-1".to_string())),
+                    Some(2),
+                    Some(1),
+                ),
+                (
+                    Some(ProgressSelectionKey::Session("delegate".to_string())),
+                    Some(3),
+                    Some(2),
+                ),
+                (
+                    Some(ProgressSelectionKey::Session("delegate".to_string())),
+                    Some(3),
+                    Some(2),
+                ),
+                (
+                    Some(ProgressSelectionKey::Batch("batch-1".to_string())),
+                    Some(2),
+                    Some(1),
+                ),
+                (Some(ProgressSelectionKey::Implementation), Some(1), Some(0),),
+                (
+                    Some(ProgressSelectionKey::Session("selected".to_string())),
+                    Some(0),
+                    None,
+                ),
+            ],
+        );
+    }
+
+    #[fixture]
+    fn checklist_progress_app() -> App {
+        let mut selected = session("selected");
+        selected.work_type = Some("design".to_string());
         let mut delegate = session("delegate");
         delegate.is_delegated = true;
         delegate.ancestor_session_ids = vec!["selected".to_string()];
@@ -184,6 +273,7 @@ mod tests {
             "selected",
             Ok(FetchedProgress {
                 selected_session_id: "selected".to_string(),
+                request_scope: None,
                 delegated: fetched_delegates,
                 implementation: Some(plan),
                 github_error: None,
@@ -191,58 +281,63 @@ mod tests {
         );
         app.progress_list_state.select(Some(2));
         app.progress_table_state.select(Some(1));
+        app
+    }
 
-        let send_key = |app: &mut App, code| {
-            handle(
-                app,
-                KeyEvent {
-                    code,
-                    modifiers: KeyModifiers::NONE,
-                },
-            );
+    #[fixture]
+    fn unmatched_progress_app() -> App {
+        let mut selected = session("selected");
+        selected.work_type = Some("design".to_string());
+        let mut delegate = session("unmapped-delegate");
+        delegate.is_delegated = true;
+        delegate.ancestor_session_ids = vec!["selected".to_string()];
+        delegate.label = Some("Unmapped delegated work".to_string());
+        let fetched_delegate = FetchedDelegate {
+            session: delegate.clone(),
+            checklist_item_id: None,
+            pull_request: None,
+            lookup_unavailable: false,
         };
-        send_key(&mut app, KeyCode::Char('h'));
-        let collapsed = (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
+        let plan = build_implementation_plan(
+            &TqChecklist {
+                id: "checklist-1".to_string(),
+                name: "実装".to_string(),
+                items: Vec::new(),
+            },
+            &[],
+            std::slice::from_ref(&fetched_delegate),
+            &Default::default(),
+            false,
         );
-        send_key(&mut app, KeyCode::Char('l'));
-        let expanded = (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
+        let mut app = App::with_sessions(vec![selected, delegate]);
+        app.progress_focused = true;
+        app.update_row_order(&[None, Some("selected"), Some("unmapped-delegate")]);
+        app.list_state.select(Some(1));
+        app.apply_progress_result(
+            "selected",
+            Ok(FetchedProgress {
+                selected_session_id: "selected".to_string(),
+                request_scope: None,
+                delegated: vec![fetched_delegate],
+                implementation: Some(plan),
+                github_error: None,
+            }),
         );
-        send_key(&mut app, KeyCode::Char('j'));
-        send_key(&mut app, KeyCode::Char('j'));
-        let navigated = (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
-        );
-        send_key(&mut app, KeyCode::Char('h'));
-        send_key(&mut app, KeyCode::Char('h'));
-        let implementation_collapsed = (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
-        );
-        send_key(&mut app, KeyCode::Char('l'));
-        let implementation_expanded = (
-            app.progress_rows.clone(),
-            app.progress_list_state.selected(),
-            app.progress_table_state.selected(),
-        );
+        app
+    }
 
-        let work = ProgressRow::Work(WorkProgressRow {
-            session_id: "selected".to_string(),
-            role: "session".to_string(),
-            mark: ProgressMark::Working,
-            status_label: None,
-            note: None,
-            pane_id: None,
-        });
-        let active_pr = ProgressRow::ChecklistPullRequest {
+    fn send_progress_key(app: &mut App, code: KeyCode) {
+        handle(
+            app,
+            KeyEvent {
+                code,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+    }
+
+    fn active_pr_row() -> ProgressRow {
+        ProgressRow::ChecklistPullRequest {
             batch_id: "batch-1".to_string(),
             row: PrProgressRow {
                 session_id: "delegate".to_string(),
@@ -260,101 +355,256 @@ mod tests {
                     merge: ProgressMark::NotStarted,
                 },
             },
-        };
-        let unstarted_pr = ProgressRow::PlannedPullRequest {
+        }
+    }
+
+    fn batch_header(collapsed: bool) -> ProgressRow {
+        ProgressRow::BatchHeader {
             batch_id: "batch-1".to_string(),
-            checklist_item_id: "item-2".to_string(),
-            title: "Future change".to_string(),
-        };
-        let implementation_header = ProgressRow::ImplementationHeader {
+            title: "Batch 1".to_string(),
+            merged_pr_count: 0,
+            collapsed,
+        }
+    }
+
+    fn implementation_header(collapsed: bool) -> ProgressRow {
+        ProgressRow::ImplementationHeader {
             merged_pr_count: 0,
             total_pr_count: 2,
-            collapsed: false,
-        };
+            collapsed,
+        }
+    }
+
+    fn collapsed_batch_rows() -> Vec<ProgressRow> {
+        vec![work_row(), implementation_header(false), batch_header(true)]
+    }
+
+    fn expanded_batch_rows() -> Vec<ProgressRow> {
+        vec![
+            work_row(),
+            implementation_header(false),
+            batch_header(false),
+            active_pr_row(),
+            ProgressRow::PlannedPullRequest {
+                batch_id: "batch-1".to_string(),
+                checklist_item_id: "item-2".to_string(),
+                title: "Future change".to_string(),
+            },
+        ]
+    }
+
+    fn collapsed_implementation_rows() -> Vec<ProgressRow> {
+        vec![work_row(), implementation_header(true)]
+    }
+
+    fn expanded_implementation_rows() -> Vec<ProgressRow> {
+        expanded_batch_rows()
+    }
+
+    fn unmatched_header(collapsed: bool) -> ProgressRow {
+        ProgressRow::UnmatchedDelegatesHeader { collapsed }
+    }
+
+    fn unmatched_delegate_row() -> ProgressRow {
+        ProgressRow::PullRequest(PrProgressRow {
+            session_id: "unmapped-delegate".to_string(),
+            title: "Unmapped delegated work".to_string(),
+            number: None,
+            url: None,
+            pane_id: None,
+            is_ended: false,
+            lookup_unavailable: false,
+            stages: StageMarks {
+                implementation: ProgressMark::Working,
+                diff_review: ProgressMark::NotStarted,
+                pr_body: ProgressMark::NotStarted,
+                ci: ProgressMark::NotStarted,
+                merge: ProgressMark::NotStarted,
+            },
+        })
+    }
+
+    fn unmatched_rows(collapsed: bool) -> Vec<ProgressRow> {
+        let mut rows = vec![
+            work_row(),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 0,
+                collapsed: false,
+            },
+            unmatched_header(collapsed),
+        ];
+        if !collapsed {
+            rows.push(unmatched_delegate_row());
+        }
+        rows
+    }
+
+    #[rstest]
+    fn batch_heading_keys_fold_and_unfold_the_selected_batch(mut checklist_progress_app: App) {
+        let mut actual = Vec::new();
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ] {
+            send_progress_key(&mut checklist_progress_app, code);
+            actual.push((
+                checklist_progress_app.progress_rows.clone(),
+                checklist_progress_app.progress_list_state.selected(),
+                checklist_progress_app.progress_table_state.selected(),
+            ));
+        }
 
         assert_eq!(
-            [
-                collapsed,
-                expanded,
-                navigated,
-                implementation_collapsed,
-                implementation_expanded,
+            actual,
+            vec![
+                (collapsed_batch_rows(), Some(2), Some(1)),
+                (expanded_batch_rows(), Some(2), Some(1)),
+                (collapsed_batch_rows(), Some(2), Some(1)),
+                (expanded_batch_rows(), Some(2), Some(1)),
             ],
-            [
+        );
+    }
+
+    #[rstest]
+    fn h_on_a_checklist_pr_collapses_its_batch_and_selects_the_heading(
+        mut checklist_progress_app: App,
+    ) {
+        send_progress_key(&mut checklist_progress_app, KeyCode::Char('j'));
+        send_progress_key(&mut checklist_progress_app, KeyCode::Char('h'));
+
+        assert_eq!(
+            (
+                checklist_progress_app.progress_rows,
+                checklist_progress_app.progress_list_state.selected(),
+                checklist_progress_app.progress_table_state.selected(),
+            ),
+            (collapsed_batch_rows(), Some(2), Some(1)),
+        );
+    }
+
+    #[rstest]
+    fn implementation_heading_keys_fold_and_unfold_the_section(mut checklist_progress_app: App) {
+        checklist_progress_app.progress_list_state.select(Some(1));
+        checklist_progress_app.progress_table_state.select(Some(0));
+        let expected_collapsed = collapsed_implementation_rows();
+        let expected_expanded = expanded_implementation_rows();
+        let mut actual = Vec::new();
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ] {
+            send_progress_key(&mut checklist_progress_app, code);
+            actual.push((
+                checklist_progress_app.progress_rows.clone(),
+                checklist_progress_app.progress_list_state.selected(),
+                checklist_progress_app.progress_table_state.selected(),
+            ));
+        }
+
+        assert_eq!(
+            actual,
+            vec![
+                (expected_collapsed.clone(), Some(1), Some(0)),
+                (expected_expanded.clone(), Some(1), Some(0)),
+                (expected_collapsed, Some(1), Some(0)),
+                (expected_expanded, Some(1), Some(0)),
+            ],
+        );
+    }
+
+    #[rstest]
+    fn checklist_out_heading_is_selectable_and_toggles_its_rows(mut unmatched_progress_app: App) {
+        unmatched_progress_app.progress_list_state.select(Some(1));
+        unmatched_progress_app.progress_table_state.select(Some(0));
+        send_progress_key(&mut unmatched_progress_app, KeyCode::Char('j'));
+        let selected_heading = (
+            unmatched_progress_app.progress_rows.clone(),
+            unmatched_progress_app.progress_list_state.selected(),
+            unmatched_progress_app
+                .progress_rows
+                .get(
+                    unmatched_progress_app
+                        .progress_list_state
+                        .selected()
+                        .unwrap_or(0),
+                )
+                .and_then(ProgressRow::selection_key),
+        );
+        let mut actual = vec![selected_heading];
+        for code in [
+            KeyCode::Char('h'),
+            KeyCode::Char('l'),
+            KeyCode::Enter,
+            KeyCode::Enter,
+        ] {
+            send_progress_key(&mut unmatched_progress_app, code);
+            actual.push((
+                unmatched_progress_app.progress_rows.clone(),
+                unmatched_progress_app.progress_list_state.selected(),
+                unmatched_progress_app
+                    .progress_rows
+                    .get(
+                        unmatched_progress_app
+                            .progress_list_state
+                            .selected()
+                            .unwrap_or(0),
+                    )
+                    .and_then(ProgressRow::selection_key),
+            ));
+        }
+
+        assert_eq!(
+            actual,
+            vec![
                 (
-                    vec![
-                        work.clone(),
-                        implementation_header.clone(),
-                        ProgressRow::BatchHeader {
-                            batch_id: "batch-1".to_string(),
-                            title: "Batch 1".to_string(),
-                            merged_pr_count: 0,
-                            collapsed: true,
-                        },
-                    ],
-                    Some(0),
-                    None,
-                ),
-                (
-                    vec![
-                        work.clone(),
-                        implementation_header.clone(),
-                        active_pr.clone(),
-                        unstarted_pr.clone(),
-                    ],
-                    Some(0),
-                    None,
-                ),
-                (
-                    vec![work, implementation_header, active_pr, unstarted_pr],
+                    unmatched_rows(false),
                     Some(2),
-                    Some(1),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
                 ),
                 (
-                    vec![
-                        ProgressRow::Work(WorkProgressRow {
-                            session_id: "selected".to_string(),
-                            role: "session".to_string(),
-                            mark: ProgressMark::Working,
-                            status_label: None,
-                            note: None,
-                            pane_id: None,
-                        }),
-                        ProgressRow::ImplementationHeader {
-                            merged_pr_count: 0,
-                            total_pr_count: 2,
-                            collapsed: true,
-                        },
-                    ],
-                    Some(0),
-                    None,
+                    unmatched_rows(true),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
                 ),
                 (
-                    vec![
-                        ProgressRow::Work(WorkProgressRow {
-                            session_id: "selected".to_string(),
-                            role: "session".to_string(),
-                            mark: ProgressMark::Working,
-                            status_label: None,
-                            note: None,
-                            pane_id: None,
-                        }),
-                        ProgressRow::ImplementationHeader {
-                            merged_pr_count: 0,
-                            total_pr_count: 2,
-                            collapsed: false,
-                        },
-                        ProgressRow::BatchHeader {
-                            batch_id: "batch-1".to_string(),
-                            title: "Batch 1".to_string(),
-                            merged_pr_count: 0,
-                            collapsed: true,
-                        },
-                    ],
-                    Some(0),
-                    None,
+                    unmatched_rows(false),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(true),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
+                ),
+                (
+                    unmatched_rows(false),
+                    Some(2),
+                    Some(ProgressSelectionKey::UnmatchedDelegates),
                 ),
             ],
+        );
+    }
+
+    #[rstest]
+    fn h_on_a_checklist_out_pr_collapses_its_group_and_selects_the_heading(
+        mut unmatched_progress_app: App,
+    ) {
+        unmatched_progress_app.progress_list_state.select(Some(3));
+        unmatched_progress_app.progress_table_state.select(Some(2));
+        send_progress_key(&mut unmatched_progress_app, KeyCode::Char('h'));
+
+        assert_eq!(
+            (
+                unmatched_progress_app.progress_rows,
+                unmatched_progress_app.progress_list_state.selected(),
+                unmatched_progress_app.progress_table_state.selected(),
+            ),
+            (unmatched_rows(true), Some(2), Some(1)),
         );
     }
 

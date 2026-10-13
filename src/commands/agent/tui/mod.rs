@@ -34,7 +34,10 @@ use self::app::App;
 use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler, SessionChange, SessionChangeType};
 use self::progress::ProgressOpenTarget;
-use self::progress_refresh::start_progress_refresh;
+use self::progress_refresh::{
+    apply_tq_snapshot_and_schedule_progress_refresh, start_pending_progress_refresh,
+    start_progress_refresh,
+};
 use self::session_key::handle_key_event;
 use self::session_preview::PreviewError;
 use crate::shared::command;
@@ -209,7 +212,9 @@ const MAX_DRAIN_PER_ITERATION: usize = 100;
 fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut app = App::new()?;
     match tq_cache::load() {
-        Ok(Some(snapshot)) => app.set_tq_snapshot(snapshot),
+        Ok(Some(snapshot)) => {
+            app.set_tq_snapshot(snapshot);
+        }
         Ok(None) => {}
         Err(error) => tracing::warn!("failed to load tq task cache: {error}"),
     }
@@ -224,9 +229,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     app.tq_refresh_started();
     event_handler.start_tq_task_fetch(local_session_ids);
     let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
-    if let Some(session_id) = progress_refresh_schedule.start_pending() {
-        start_progress_refresh(&mut app, &event_handler, session_id);
-    }
+    start_pending_progress_refresh(&mut progress_refresh_schedule, |session_id| {
+        start_progress_refresh(&mut app, &event_handler, session_id)
+    });
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -297,7 +302,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                     if let Err(error) = tq_cache::store(&snapshot) {
                         tracing::warn!("failed to store tq task cache: {error}");
                     }
-                    app.set_tq_snapshot(snapshot);
+                    apply_tq_snapshot_and_schedule_progress_refresh(
+                        &mut app,
+                        &mut progress_refresh_schedule,
+                        snapshot,
+                    );
                     if let Some(snapshot) = app.tq_snapshot.as_ref() {
                         tq_pane_options::sync(snapshot);
                     }
@@ -427,9 +436,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             event_handler.start_tq_task_fetch(local_session_ids);
         }
 
-        if let Some(session_id) = progress_refresh_schedule.start_pending() {
-            start_progress_refresh(&mut app, &event_handler, session_id);
-        }
+        start_pending_progress_refresh(&mut progress_refresh_schedule, |session_id| {
+            start_progress_refresh(&mut app, &event_handler, session_id)
+        });
 
         if app.should_quit {
             break;
@@ -907,6 +916,64 @@ mod tests {
         assert_eq!(
             (first_refresh, repeated_refresh),
             (Some("session-0".to_string()), None),
+        );
+    }
+
+    #[test]
+    fn tq_scope_change_queues_refresh_after_an_in_flight_fetch() {
+        let now = Instant::now();
+        let mut app = create_test_app_with_sessions(2);
+        app.list_state.select(Some(1));
+        let _ = app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::from([(
+            "session-0".to_string(),
+            vec![test_task("task-1")],
+        )])));
+        let mut schedule = ProgressRefreshSchedule::new(now);
+        schedule.request(Some("session-0".to_string()));
+        assert_eq!(schedule.start_pending(), Some("session-0".to_string()));
+
+        let scope_changed = apply_tq_snapshot_and_schedule_progress_refresh(
+            &mut app,
+            &mut schedule,
+            super::tq_snapshot::TqSnapshot::new(HashMap::from([
+                ("session-0".to_string(), vec![test_task("task-1")]),
+                ("session-1".to_string(), vec![test_task("task-1")]),
+            ])),
+        );
+        let next_scope = app.progress_scope_for_session("session-0");
+        schedule.fetch_completed();
+        let next_refresh = schedule.start_pending();
+
+        assert_eq!(
+            (scope_changed, next_scope, next_refresh),
+            (
+                true,
+                Some(super::app::ProgressScopeKind::Task {
+                    task_id: "task-1".to_string(),
+                    session_ids: vec!["session-0".to_string(), "session-1".to_string()],
+                }),
+                Some("session-0".to_string()),
+            ),
+        );
+    }
+
+    #[test]
+    fn skipped_progress_fetch_leaves_schedule_ready() {
+        let mut schedule = ProgressRefreshSchedule::new(Instant::now());
+        schedule.request(Some("project-manager".to_string()));
+        start_pending_progress_refresh(&mut schedule, |_| false);
+        let skipped_state = (schedule.in_flight, schedule.pending_session_id.clone());
+
+        schedule.request(Some("session-0".to_string()));
+        start_pending_progress_refresh(&mut schedule, |_| true);
+
+        assert_eq!(
+            (
+                skipped_state,
+                schedule.in_flight,
+                schedule.pending_session_id
+            ),
+            ((false, None), true, None),
         );
     }
 
