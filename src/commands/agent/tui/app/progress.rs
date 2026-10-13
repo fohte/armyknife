@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::progress::{
     FetchedProgress, ProgressRow, build_task_progress_rows, refresh_task_rows_from_sessions,
+    table_selection_index,
 };
 use super::super::progress_batches::{
     ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
@@ -243,13 +244,8 @@ impl App {
             .min(selectable.len() - 1);
         let next_index = selectable[next_position];
         self.progress_list_state.select(Some(next_index));
-        let work_row_count = self
-            .progress_rows
-            .iter()
-            .take_while(|row| matches!(row, ProgressRow::Work(_)))
-            .count();
         self.progress_table_state
-            .select(next_index.checked_sub(work_row_count));
+            .select(table_selection_index(&self.progress_rows, next_index));
     }
 
     pub(in crate::commands::agent::tui) fn set_progress_batch_collapsed(
@@ -390,13 +386,8 @@ impl App {
             .unwrap_or(0);
         self.progress_rows = rows;
         self.progress_list_state.select(Some(selected_index));
-        let work_row_count = self
-            .progress_rows
-            .iter()
-            .take_while(|row| matches!(row, ProgressRow::Work(_)))
-            .count();
         self.progress_table_state
-            .select(selected_index.checked_sub(work_row_count));
+            .select(table_selection_index(&self.progress_rows, selected_index));
     }
 }
 

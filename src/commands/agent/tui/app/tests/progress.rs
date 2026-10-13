@@ -99,21 +99,34 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
     ]
 }
 
-fn row_identities(rows: &[ProgressRow]) -> Vec<(&'static str, String)> {
-    rows.iter()
-        .map(|row| match row {
-            ProgressRow::Work(row) => ("work", row.session_id.clone()),
-            ProgressRow::PullRequest(row) => ("pr", row.session_id.clone()),
-            ProgressRow::ImplementationHeader { .. } => ("implementation", String::new()),
-            ProgressRow::BatchHeader { batch_id, .. } => ("batch", batch_id.clone()),
-            ProgressRow::ChecklistPullRequest { row, .. } => {
-                ("checklist-pr", row.session_id.clone())
-            }
-            ProgressRow::PlannedPullRequest {
-                checklist_item_id, ..
-            } => ("planned-pr", checklist_item_id.clone()),
-        })
-        .collect()
+fn expected_work_row(session_id: &str, role: &str) -> ProgressRow {
+    ProgressRow::Work(WorkProgressRow {
+        session_id: session_id.to_string(),
+        role: role.to_string(),
+        mark: ProgressMark::Working,
+        status_label: None,
+        note: None,
+        pane_id: None,
+    })
+}
+
+fn expected_unlinked_delegate_row(session_id: &str) -> ProgressRow {
+    ProgressRow::PullRequest(PrProgressRow {
+        session_id: session_id.to_string(),
+        title: session_id.to_string(),
+        number: None,
+        url: None,
+        pane_id: None,
+        is_ended: false,
+        lookup_unavailable: false,
+        stages: StageMarks {
+            implementation: ProgressMark::Working,
+            diff_review: ProgressMark::NotStarted,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        },
+    })
 }
 
 fn task_link(task_id: &str) -> SessionTask {
@@ -224,7 +237,10 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     app.list_state.select(Some(1));
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("selected".to_string(), vec![task_link("task-a")]),
-        ("same-task-child".to_string(), vec![task_link("task-a")]),
+        (
+            "same-task-child".to_string(),
+            vec![task_link("task-b"), task_link("task-a")],
+        ),
         ("other-task-child".to_string(), vec![task_link("task-b")]),
         ("unrelated-same-task".to_string(), vec![task_link("task-a")]),
     ])));
@@ -254,17 +270,17 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
 
     assert_eq!(
         (
-            row_identities(&app.progress_rows),
+            app.progress_rows.clone(),
             app.progress_list_state.selected(),
             app.progress_table_state.selected(),
         ),
         (
             vec![
-                ("work", "selected".to_string()),
-                ("work", "same-task-child".to_string()),
-                ("work", "unrelated-same-task".to_string()),
-                ("pr", "delegate".to_string()),
-                ("pr", "nested-delegate".to_string()),
+                expected_work_row("selected", "design"),
+                expected_work_row("same-task-child", "session"),
+                expected_work_row("unrelated-same-task", "session"),
+                expected_unlinked_delegate_row("delegate"),
+                expected_unlinked_delegate_row("nested-delegate"),
             ],
             Some(0),
             None,
@@ -300,16 +316,20 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
 
     assert_eq!(
         (
-            row_identities(&app.progress_rows),
+            app.progress_rows.clone(),
             app.progress_list_state.selected(),
             app.progress_table_state.selected(),
         ),
         (
             vec![
-                ("work", "selected".to_string()),
-                ("work", "same-task".to_string()),
-                ("implementation", String::new()),
-                ("checklist-pr", "checklist-item:item-a".to_string()),
+                expected_work_row("selected", "session"),
+                expected_work_row("same-task", "session"),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                expected_unavailable_checklist_rows("selected")[2].clone(),
             ],
             Some(0),
             None,
@@ -355,11 +375,15 @@ fn project_manager_progress_stays_outside_child_task_scope(timestamp: DateTime<U
 
     assert_eq!(
         (
-            row_identities(&app.progress_rows),
+            app.progress_rows.clone(),
             app.progress_list_state.selected(),
             app.progress_table_state.selected(),
         ),
-        (vec![("work", "project-manager".to_string())], Some(0), None,),
+        (
+            vec![expected_work_row("project-manager", "project-manager")],
+            Some(0),
+            None,
+        ),
     );
 }
 

@@ -172,13 +172,8 @@ pub(super) fn build_task_progress_rows(
 ) -> Vec<ProgressRow> {
     let mut rows = Vec::with_capacity(work_sessions.len() + delegated.len());
     rows.extend(work_sessions.iter().map(|session| {
-        let has_delegated_work = delegated.iter().any(|delegate| {
-            delegate
-                .session
-                .ancestor_session_ids
-                .iter()
-                .any(|ancestor_id| ancestor_id == &session.session_id)
-        });
+        let has_delegated_work =
+            has_delegated_descendant(session, delegated.iter().map(|delegate| &delegate.session));
         ProgressRow::Work(work_progress_row(session, has_delegated_work, agent_config))
     }));
     rows.extend(
@@ -187,6 +182,28 @@ pub(super) fn build_task_progress_rows(
             .map(|delegate| ProgressRow::PullRequest(pr_progress_row(delegate, agent_config))),
     );
     rows
+}
+
+pub(super) fn has_delegated_descendant<'a>(
+    work_session: &Session,
+    mut delegated: impl Iterator<Item = &'a Session>,
+) -> bool {
+    delegated.any(|session| {
+        session
+            .ancestor_session_ids
+            .iter()
+            .any(|ancestor_id| ancestor_id == &work_session.session_id)
+    })
+}
+
+pub(super) fn work_row_count(rows: &[ProgressRow]) -> usize {
+    rows.iter()
+        .take_while(|row| matches!(row, ProgressRow::Work(_)))
+        .count()
+}
+
+pub(super) fn table_selection_index(rows: &[ProgressRow], selected_index: usize) -> Option<usize> {
+    selected_index.checked_sub(work_row_count(rows))
 }
 
 pub(super) fn work_progress_row(
@@ -300,12 +317,8 @@ pub(super) fn refresh_task_rows_from_sessions(
         .iter()
         .enumerate()
         .map(|(index, work_session)| {
-            let has_delegated_work = delegated.iter().any(|session| {
-                session
-                    .ancestor_session_ids
-                    .iter()
-                    .any(|ancestor_id| ancestor_id == &work_session.session_id)
-            }) || (index == 0 && has_existing_pr_rows);
+            let has_delegated_work = has_delegated_descendant(work_session, delegated.iter())
+                || (index == 0 && has_existing_pr_rows);
             ProgressRow::Work(work_progress_row(
                 work_session,
                 has_delegated_work,

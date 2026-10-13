@@ -7,7 +7,7 @@ use crate::shared::config::AgentConfig;
 
 use super::progress::{
     FetchedDelegate, PrProgressRow, ProgressMark, ProgressRow, StageMarks, completed_stage_marks,
-    pr_ci_merge_marks, pr_progress_row, work_progress_row,
+    has_delegated_descendant, pr_ci_merge_marks, pr_progress_row, work_progress_row,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -209,12 +209,7 @@ pub(super) fn build_task_progress_rows(
     let mut rows = work_sessions
         .iter()
         .map(|work_session| {
-            let has_delegated_work = delegates.iter().any(|session| {
-                session
-                    .ancestor_session_ids
-                    .iter()
-                    .any(|ancestor_id| ancestor_id == &work_session.session_id)
-            });
+            let has_delegated_work = has_delegated_descendant(work_session, delegates.iter());
             ProgressRow::Work(work_progress_row(
                 work_session,
                 has_delegated_work,

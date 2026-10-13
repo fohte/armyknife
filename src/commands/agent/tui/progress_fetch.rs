@@ -164,11 +164,10 @@ pub(super) fn task_descendant_delegates(
                     .ancestor_session_ids
                     .iter()
                     .rev()
-                    .find_map(|ancestor_id| {
+                    .find(|ancestor_id| {
                         sessions_by_id
                             .get(ancestor_id.as_str())
-                            .filter(|ancestor| !ancestor.is_delegated)
-                            .map(|ancestor| ancestor.session_id.as_str())
+                            .is_none_or(|ancestor| !ancestor.is_delegated)
                     })
                     .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id))
         })
@@ -321,6 +320,12 @@ mod tests {
                 true,
                 vec!["task-root", "other-task-child"],
                 6,
+            ),
+            session(
+                "orphan-task-delegate",
+                true,
+                vec!["task-root", "removed-task-child"],
+                7,
             ),
         ];
 

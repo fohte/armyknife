@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::commands::agent::tui::{
     app::App,
-    progress::{PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow},
+    progress::{PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow, work_row_count},
 };
 
 pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
@@ -48,16 +48,16 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         return;
     }
 
+    let work_row_count = work_row_count(&app.progress_rows);
     let work_rows = app
         .progress_rows
         .iter()
-        .take_while(|row| matches!(row, ProgressRow::Work(_)))
+        .take(work_row_count)
         .filter_map(|row| match row {
             ProgressRow::Work(work) => Some(work.clone()),
             _ => None,
         })
         .collect::<Vec<_>>();
-    let work_row_count = work_rows.len();
     if work_row_count == 0 {
         frame.render_widget(
             Paragraph::new("No progress available").style(Style::default().fg(Color::DarkGray)),
@@ -105,14 +105,27 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
 }
 
 fn render_work_rows(frame: &mut Frame, area: Rect, rows: &[WorkProgressRow], app: &App) {
-    for (index, row) in rows.iter().enumerate() {
+    let visible_count = usize::from(area.height);
+    let max_start = rows.len().saturating_sub(visible_count);
+    let start = app
+        .progress_list_state
+        .selected()
+        .filter(|selected_index| *selected_index < rows.len())
+        .map(|selected_index| {
+            selected_index
+                .saturating_sub(visible_count.saturating_sub(1))
+                .min(max_start)
+        })
+        .unwrap_or(0);
+    for (visible_index, row) in rows.iter().skip(start).take(visible_count).enumerate() {
+        let row_index = start + visible_index;
         let row_area = Rect {
             x: area.x,
-            y: area.y.saturating_add(index.min(u16::MAX as usize) as u16),
+            y: area.y.saturating_add(visible_index as u16),
             width: area.width,
             height: 1,
         };
-        render_work_row(frame, row_area, row, app, index);
+        render_work_row(frame, row_area, row, app, row_index);
     }
 }
 
@@ -459,6 +472,124 @@ mod tests {
                 "│› #17 Sample change                          ✓    ◐    ●     ◷   ○",
                 "│  Sample delegate (PR unavailable)           ●    ○    ○     ○   ○",
                 "│",
+            ],
+        );
+    }
+
+    #[test]
+    fn renders_multiple_task_work_rows_before_their_delegate_pr() {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![
+            ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "planner".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),
+            ProgressRow::Work(WorkProgressRow {
+                session_id: "same-task".to_string(),
+                role: "builder".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "delegate".to_string(),
+                title: "Example task change".to_string(),
+                number: Some(17),
+                url: Some("https://example.test/pull/17".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::User,
+                    pr_body: ProgressMark::Working,
+                    ci: ProgressMark::Waiting,
+                    merge: ProgressMark::NotStarted,
+                },
+            }),
+        ];
+        app.progress_list_state.select(Some(1));
+        app.progress_table_state.select(None);
+
+        let backend = TestBackend::new(72, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let actual = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                "│PROGRESS: project",
+                "│  ● planner",
+                "│› ● builder",
+                "│                                             実 装  差 分  body  CI  merge",
+                "│#17 Example task change                      ✓    ◐    ●     ◷   ○",
+                "│",
+            ],
+        );
+    }
+
+    #[test]
+    fn keeps_the_selected_work_row_visible_when_rows_exceed_the_pane() {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = ["worker-one", "worker-two", "worker-three", "worker-four"]
+            .into_iter()
+            .map(|session_id| {
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: session_id.to_string(),
+                    role: session_id.to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: None,
+                })
+            })
+            .collect();
+        app.progress_list_state.select(Some(3));
+
+        let backend = TestBackend::new(40, 4);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let actual = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                "│PROGRESS: project",
+                "│  ● worker-two",
+                "│  ● worker-three",
+                "│› ● worker-four",
             ],
         );
     }
