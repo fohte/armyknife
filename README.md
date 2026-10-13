@@ -63,6 +63,9 @@ agent:
     work_finished: { state: done }
   # Returned when the Stop hook cannot infer why the agent stopped; only active when statuses are configured.
   stop_hook_instruction: 'Summarize the result before stopping.'
+  work_type_fallback: # icon and color for watch rows without a recorded type
+    icon: '?'
+    color: gray
   work_types: # per-skill icon and color metadata
     example-workflow:
       icon: '◇'
@@ -107,7 +110,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
 ```
 
-`agent.work_types` associates exact skill names with icon and color metadata. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
+`agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
 ### Splitting public and private config
 

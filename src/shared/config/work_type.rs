@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Display settings for a skill-backed agent work type.
+/// Display settings for an agent work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

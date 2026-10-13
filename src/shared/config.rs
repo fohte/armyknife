@@ -175,6 +175,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub work_types: HashMap<String, AgentWorkTypeConfig>,
 
+    /// Display configuration used in `a agent watch` when a session has no recorded work type.
+    #[serde(default)]
+    pub work_type_fallback: Option<AgentWorkTypeConfig>,
+
     /// User-defined status names and the state each name represents.
     #[serde(default)]
     pub statuses: HashMap<String, AgentStatusConfig>,
@@ -196,6 +200,14 @@ impl AgentConfig {
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)
+    }
+
+    /// Look up the work type displayed in `a agent watch`, including its fallback.
+    pub fn watch_work_type(&self, skill_name: Option<&str>) -> Option<&AgentWorkTypeConfig> {
+        match skill_name {
+            Some(skill_name) => self.work_type(skill_name),
+            None => self.work_type_fallback.as_ref(),
+        }
     }
 }
 
@@ -806,6 +818,7 @@ mod tests {
                         reasoning_effort: None,
                     },
                     work_types: HashMap::new(),
+                    work_type_fallback: None,
                     statuses: HashMap::new(),
                     worktree: WorktreeConfig {
                         dir: ".worktrees".to_string(),
@@ -954,13 +967,19 @@ mod tests {
     fn parse_agent_without_work_types_defaults_to_empty_mapping() {
         let config: Config = serde_yaml::from_str("agent: {}\n").unwrap();
 
-        assert_eq!(config.agent.work_types, HashMap::new());
+        assert_eq!(
+            (config.agent.work_types, config.agent.work_type_fallback),
+            (HashMap::new(), None)
+        );
     }
 
     #[test]
-    fn parse_agent_work_types_yaml() {
+    fn parse_agent_work_type_display_yaml() {
         let yaml = indoc! {"
             agent:
+              work_type_fallback:
+                icon: ∅
+                color: yellow
               work_types:
                 sample-flow:
                   icon: ◇
@@ -975,30 +994,36 @@ mod tests {
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
         assert_eq!(
-            config.agent.work_types,
-            HashMap::from([
-                (
-                    "sample-flow".to_string(),
-                    AgentWorkTypeConfig {
-                        icon: "◇".to_string(),
-                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
-                    },
-                ),
-                (
-                    "rgb-flow".to_string(),
-                    AgentWorkTypeConfig {
-                        icon: "◆".to_string(),
-                        color: AgentWorkTypeColor::Rgb([12, 34, 56]),
-                    },
-                ),
-                (
-                    "indexed-flow".to_string(),
-                    AgentWorkTypeConfig {
-                        icon: "○".to_string(),
-                        color: AgentWorkTypeColor::Indexed(123),
-                    },
-                ),
-            ])
+            (config.agent.work_type_fallback, config.agent.work_types,),
+            (
+                Some(AgentWorkTypeConfig {
+                    icon: "∅".to_string(),
+                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                }),
+                HashMap::from([
+                    (
+                        "sample-flow".to_string(),
+                        AgentWorkTypeConfig {
+                            icon: "◇".to_string(),
+                            color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                        },
+                    ),
+                    (
+                        "rgb-flow".to_string(),
+                        AgentWorkTypeConfig {
+                            icon: "◆".to_string(),
+                            color: AgentWorkTypeColor::Rgb([12, 34, 56]),
+                        },
+                    ),
+                    (
+                        "indexed-flow".to_string(),
+                        AgentWorkTypeConfig {
+                            icon: "○".to_string(),
+                            color: AgentWorkTypeColor::Indexed(123),
+                        },
+                    ),
+                ])
+            )
         );
     }
 
@@ -1011,18 +1036,31 @@ mod tests {
         ))
     )]
     #[case::unconfigured("unknown-flow", None)]
+    #[case::default_named_skill(
+        "default",
+        Some(("∅", AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow)))
+    )]
     fn agent_work_type_looks_up_by_skill_name(
         #[case] skill_name: &str,
         #[case] expected: Option<(&str, AgentWorkTypeColor)>,
     ) {
         let config = AgentConfig {
-            work_types: HashMap::from([(
-                "sample-flow".to_string(),
-                AgentWorkTypeConfig {
-                    icon: "◇".to_string(),
-                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
-                },
-            )]),
+            work_types: HashMap::from([
+                (
+                    "sample-flow".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "◇".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                    },
+                ),
+                (
+                    "default".to_string(),
+                    AgentWorkTypeConfig {
+                        icon: "∅".to_string(),
+                        color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                    },
+                ),
+            ]),
             ..Default::default()
         };
         let actual = config

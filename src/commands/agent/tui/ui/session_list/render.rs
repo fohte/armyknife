@@ -287,24 +287,41 @@ mod tests {
         assert_eq!(output, expected);
     }
 
-    #[test]
-    fn test_render_work_type_icon_uses_configured_color() {
+    #[rstest]
+    #[case::configured_work_type(
+        Some("sample-flow"),
+        Some("sample-flow"),
+        "\u{e0b1}",
+        Color::LightBlue
+    )]
+    #[case::fallback_for_missing_work_type(None, None, "\u{e0b1}", Color::LightBlue)]
+    #[case::unknown_work_type_keeps_blank(Some("unknown-flow"), None, " ", Color::Reset)]
+    fn test_render_work_type_icon_uses_configured_color(
+        #[case] work_type: Option<&str>,
+        #[case] configured_work_type: Option<&str>,
+        #[case] expected_icon: &str,
+        #[case] expected_color: Color,
+    ) {
         let now = Utc::now();
         let mut session = create_test_session("configured");
         session.updated_at = now;
         session.status = SessionStatus::Running;
-        session.work_type = Some("demo-skill".to_string());
+        session.work_type = work_type.map(str::to_owned);
 
         let buffer = render_buffer_with(&[session], Some(1), now, 80, 9, |app| {
-            app.agent_config.work_types.insert(
-                "demo-skill".to_string(),
-                AgentWorkTypeConfig {
-                    icon: "\u{e0b1}".to_string(),
-                    color: AgentWorkTypeColor::Named(
-                        crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
-                    ),
-                },
-            );
+            let config = AgentWorkTypeConfig {
+                icon: "\u{e0b1}".to_string(),
+                color: AgentWorkTypeColor::Named(
+                    crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                ),
+            };
+            if let Some(work_type) = configured_work_type {
+                app.agent_config
+                    .work_types
+                    .insert(work_type.to_string(), config);
+            } else {
+                app.agent_config.work_type_fallback = Some(config);
+            }
         });
 
         let icon_column = (WAITING_QUESTION_INDENT - MIN_WORK_TYPE_COLUMN_WIDTH) as u16;
@@ -313,7 +330,7 @@ mod tests {
                 buffer[(icon_column, 2)].symbol(),
                 buffer[(icon_column, 2)].fg
             ),
-            ("\u{e0b1}", Color::LightBlue)
+            (expected_icon, expected_color)
         );
     }
 
