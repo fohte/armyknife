@@ -16,6 +16,18 @@ pub(super) struct ImplementationPlan {
     unmatched_delegates: Vec<UnmatchedDelegate>,
 }
 
+impl ImplementationPlan {
+    pub(super) fn batch_id_for_delegate(&self, session_id: &str) -> Option<&str> {
+        self.batches.iter().find_map(|batch| {
+            batch
+                .items
+                .iter()
+                .any(|item| item.delegate_session_id.as_deref() == Some(session_id))
+                .then_some(batch.id.as_str())
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImplementationBatch {
     id: String,
