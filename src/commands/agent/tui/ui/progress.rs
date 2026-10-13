@@ -76,11 +76,6 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     } else if has_delegates {
         render_stage_header(frame, header_area, inner.width);
         render_pr_rows(frame, rows_area, app);
-    } else if app.progress_loading {
-        frame.render_widget(
-            Paragraph::new("Loading delegated PRs...").style(Style::default().fg(Color::DarkGray)),
-            rows_area,
-        );
     } else if let Some(error) = app.progress_error.as_deref() {
         frame.render_widget(
             Paragraph::new(error).style(Style::default().fg(Color::DarkGray)),
@@ -314,6 +309,45 @@ mod tests {
         progress::{ProgressRow, StageMarks},
         ui::test_support::create_test_session,
     };
+
+    #[test]
+    fn renders_no_delegates_without_a_loading_message() {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![ProgressRow::Work(WorkProgressRow {
+            session_id: "selected".to_string(),
+            role: "session".to_string(),
+            mark: ProgressMark::Working,
+            status_label: None,
+            note: None,
+            pane_id: None,
+        })];
+
+        let backend = TestBackend::new(48, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let actual = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            actual,
+            vec![
+                "│PROGRESS: project",
+                "│  ● session",
+                "│No delegated sessions",
+            ],
+        );
+    }
 
     #[test]
     fn renders_work_and_delegated_pr_stages() {

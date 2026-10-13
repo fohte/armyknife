@@ -18,6 +18,8 @@ use super::session_rows::SessionTask;
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
+use progress::CachedProgress;
+
 mod clean;
 mod delete;
 mod filter;
@@ -146,8 +148,8 @@ pub struct App {
     pub(super) progress_implementation_expanded: bool,
     pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
-    pub(super) progress_loading: bool,
     pub(super) progress_error: Option<String>,
+    progress_cache: HashMap<String, CachedProgress>,
     /// Whether the PROGRESS pane currently receives keyboard input.
     pub progress_focused: bool,
 }
@@ -246,8 +248,8 @@ impl App {
             progress_implementation_expanded: true,
             progress_batch_expanded: HashMap::new(),
             progress_session_id: None,
-            progress_loading: false,
             progress_error: None,
+            progress_cache: HashMap::new(),
             progress_focused: false,
         };
         app.rebuild_row_order();
