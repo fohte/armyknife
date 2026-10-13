@@ -76,6 +76,12 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
             ProgressRow::PullRequest(_) | ProgressRow::ChecklistPullRequest { .. }
         )
     });
+    let plain_pr_row_count = app
+        .progress_rows
+        .iter()
+        .skip(work_row_count)
+        .filter(|row| matches!(row, ProgressRow::PullRequest(_)))
+        .count();
     let header_height = usize::from(has_pr_rows && !has_implementation) as u16;
     let first_checklist_pr_row = first_checklist_pr_row_index(&app.progress_rows, work_row_count);
     let minimum_data_height = if has_implementation {
@@ -84,7 +90,7 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
             |index| index + 1,
         )
     } else {
-        usize::from(has_pr_rows)
+        usize::from(has_pr_rows).max(plain_pr_row_count.min(3))
     };
     let available_data_height = inner.height.saturating_sub(header_height);
     let minimum_data_height =
@@ -775,6 +781,46 @@ mod tests {
                         .to_string(),
                     vec![],
                 ),
+            ],
+        );
+    }
+
+    #[rstest]
+    fn keeps_three_pr_rows_visible_when_work_rows_fill_the_pane(
+        task_work_rows: Vec<WorkProgressRow>,
+        delegate_pr_row: PrProgressRow,
+    ) {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = task_work_rows
+            .into_iter()
+            .map(ProgressRow::Work)
+            .chain((0..4).map(|index| {
+                let mut row = delegate_pr_row.clone();
+                row.session_id = format!("delegate-{index}");
+                row.title = format!("Change {index}");
+                row.number = Some(17 + index);
+                ProgressRow::PullRequest(row)
+            }))
+            .collect();
+        app.progress_list_state.select(Some(4));
+        app.progress_table_state.select(Some(0));
+
+        let mut terminal = Terminal::new(TestBackend::new(72, 7)).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+
+        assert_eq!(
+            buffer_snapshot(terminal.backend().buffer()),
+            vec![
+                "│PROGRESS: project",
+                "│  ● helper",
+                "│> ● builder",
+                "│                                             実 装  差 分  body  CI  merge",
+                "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
+                "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
+                "│  #19 Change 2                               ✓    ◐    ●     ◷   ○",
             ],
         );
     }
