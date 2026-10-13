@@ -558,19 +558,51 @@ mod tests {
     }
 
     #[rstest]
-    fn test_render_your_turn_row_truncates_note_before_session_name(
+    #[case::truncated_note(
+        "you",
+        "session-name",
+        36,
+        indoc! {"
+             agent watch1 needs you · 0 running
+             ── YOUR TURN ──────────────────────
+            >◐  you     session-name ch just now
+             ?: keys   /: search   Esc: tasks"}
+    )]
+    #[case::omitted_note(
+        "needs_attention",
+        "session-name",
+        43,
+        indoc! {"
+             agent watch1 needs you · 0 running · 0 idl
+             ── YOUR TURN ─────────────────────────────
+            >◐  needs_attention  session-name  just now
+             ?: keys   /: search   Esc: tasks   q: quit"}
+    )]
+    #[case::long_session_name_keeps_time_column(
+        "needs_attention",
+        "a-long-session-name",
+        43,
+        indoc! {"
+             agent watch1 needs you · 0 running · 0 idl
+             ── YOUR TURN ─────────────────────────────
+            >◐  needs_attention  a-long-ses... just now
+             ?: keys   /: search   Esc: tasks   q: quit"}
+    )]
+    fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
         mut you_user_turn_session: Session,
+        #[case] status_label: &str,
+        #[case] session_name: &str,
+        #[case] term_width: u16,
+        #[case] expected: &str,
     ) {
         let now = Utc::now();
         you_user_turn_session.updated_at = now;
+        you_user_turn_session.label = Some(session_name.to_string());
+        if let Some(status) = &mut you_user_turn_session.agent_status {
+            status.kind = status_label.to_string();
+        }
 
-        let output = render_to_string(&[you_user_turn_session], Some(1), now, 36, 4);
-
-        let expected = indoc! {"
-             agent watch1 needs you · 0 running
-             ── YOUR TURN ──────────────────────
-            >◐ session-name choose a... just now
-             ?: keys   /: search   Esc: tasks"};
+        let output = render_to_string(&[you_user_turn_session], Some(1), now, term_width, 4);
 
         assert_eq!(output, expected);
     }

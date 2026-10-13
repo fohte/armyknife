@@ -11,7 +11,7 @@ use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
     Section, SectionHeaderRow, SessionRowEntry, TaskMark, is_related_task, kin_relation,
 };
-use crate::commands::agent::user_turn::{UserTurn, UserTurnKind};
+use crate::commands::agent::user_turn::UserTurn;
 
 use super::super::helpers::{
     DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
@@ -132,23 +132,11 @@ pub(super) fn build_user_turn_item(
     let time_text = format_compact_time(turn.session.updated_at, now);
     let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
     let line_width = term_width.saturating_sub(MARKER_WIDTH);
-    let mut label = turn.label.map(|label| {
+    let label = turn.label.map(|label| {
         let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
         let padding = " ".repeat(label_width.saturating_sub(label.width()));
         format!(" {label}{padding} ")
     });
-    let status_label_hides_note = turn.kind == UserTurnKind::AgentStatus
-        && note.as_ref().is_some_and(|note| {
-            let fixed_width = STATUS_COLUMN_WIDTH
-                + label.as_ref().map_or(0, |label| label.width() + 1)
-                + TIME_COLUMN_WIDTH;
-            let description_width = line_width.saturating_sub(fixed_width);
-            let required_width = title.width() + 1 + note.width();
-            required_width > description_width
-        });
-    if status_label_hides_note {
-        label = None;
-    }
     let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
     let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
     let description_width = line_width.saturating_sub(fixed_width);
@@ -156,8 +144,11 @@ pub(super) fn build_user_turn_item(
     if let Some(note) = note {
         let note_width = description_width.saturating_sub(description.width() + 1);
         if note_width > 0 {
-            description.push(' ');
-            description.push_str(&truncate(&note, note_width));
+            let note = truncate(&note, note_width);
+            if !note.is_empty() {
+                description.push(' ');
+                description.push_str(&note);
+            }
         }
     }
     let description_padding = " ".repeat(description_width.saturating_sub(description.width()));
