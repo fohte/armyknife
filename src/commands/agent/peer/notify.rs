@@ -257,9 +257,10 @@ fn notify_readiness(status: SessionStatus) -> NotifyReadiness {
     match status {
         SessionStatus::Ended => NotifyReadiness::Refused,
         SessionStatus::Paused => NotifyReadiness::NeedsWake,
-        SessionStatus::Running | SessionStatus::WaitingInput | SessionStatus::Stopped => {
-            NotifyReadiness::Ready
-        }
+        SessionStatus::Running
+        | SessionStatus::WaitingInput
+        | SessionStatus::Stopped
+        | SessionStatus::Failed => NotifyReadiness::Ready,
     }
 }
 
@@ -313,6 +314,7 @@ mod tests {
     #[case::running(SessionStatus::Running, NotifyReadiness::Ready)]
     #[case::waiting_input(SessionStatus::WaitingInput, NotifyReadiness::Ready)]
     #[case::stopped(SessionStatus::Stopped, NotifyReadiness::Ready)]
+    #[case::failed(SessionStatus::Failed, NotifyReadiness::Ready)]
     #[case::paused(SessionStatus::Paused, NotifyReadiness::NeedsWake)]
     #[case::ended(SessionStatus::Ended, NotifyReadiness::Refused)]
     fn notify_readiness_cases(#[case] status: SessionStatus, #[case] expected: NotifyReadiness) {

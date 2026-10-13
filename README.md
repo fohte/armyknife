@@ -569,6 +569,11 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         "hooks": [{ "type": "command", "command": "a agent hook stop" }]
       }
     ],
+    "StopFailure": [
+      {
+        "hooks": [{ "type": "command", "command": "a agent hook stop-failure" }]
+      }
+    ],
     "SessionEnd": [
       {
         "hooks": [{ "type": "command", "command": "a agent hook session-end" }]
@@ -578,7 +583,7 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 }
 ```
 
-These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, or stopped). An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
+These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
 
@@ -745,7 +750,7 @@ Stopped sessions that have not been focused since their most recent Stop render 
 
 #### Window status
 
-`a agent hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input or stopped with pending work and a linked crit or Human-in-the-Loop review, `◎` main loop idle with only a background task/subagent still in flight and no review waiting for user input, `✱` stopped & unread, `○` stopped & read, `⏸` paused) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw. `a agent bg run` workers also use `◎` while the main loop is stopped and no review is waiting for user input.
+`a agent hook` keeps each tmux window's aggregated Claude Code status in the window-scoped user option `@armyknife-cc-window-status`. On every session state change it recomputes the status symbols (`●` running, `◐` waiting for input or stopped with pending work and a linked crit or Human-in-the-Loop review, `◎` main loop idle with only a background task/subagent still in flight and no review waiting for user input, `✱` stopped & unread, `○` stopped & read, `⏸` paused, `✗` failed) of every Claude Code session in the window's panes, concatenates them without a separator, writes the result to `@armyknife-cc-window-status`, and refreshes the status bar — but only when the rendered value actually changed, so no-op transitions cause no redraw. `a agent bg run` workers also use `◎` while the main loop is stopped and no review is waiting for user input.
 
 The same sync also mirrors a session title into the window-scoped `@armyknife-cc-window-title` option: the `label` of the first session in the window (in pane order) that has one set, or an empty string if none do — titles are not concatenated across sessions in the same window. Press `e` in `a agent watch` to rename the selected session's title, persisting it as `label`; the tmux option is refreshed best-effort on confirm (skipped silently if the pane has no resolvable window), and otherwise catches up on the next status-changing hook event for that window. While renaming, press `Ctrl+g` to generate a title from the session's transcript (its first user message and latest assistant message) — this returns you to the session list immediately, no waiting: generation runs in a fully detached background process that keeps going even if `agent watch` is closed entirely, and applies the generated title directly once it lands, but only if you haven't renamed the session again in the meantime. Generation shells out to the same backend as `a agent new` (the `claude` CLI, falling back to `opencode`), so it requires one of those to be installed and authenticated.
 
@@ -769,7 +774,7 @@ set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-cc-pane-work
 
 #### Pane has-paused flag
 
-`a agent hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a agent pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.
+`a agent hook` also materializes a per-pane paused flag as a marker file at `${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-<pane_id>` (e.g. `/tmp/armyknife-cc-paused-fohte-%17`). The file exists exactly while the pane's Claude Code session is `Paused` (e.g. SIGTERMed by `auto_pause`); every other state (`Running` / `WaitingInput` / `Stopped` / `Failed` / `Ended`) removes it. The `${USER:-unknown}` segment prevents collisions on multi-user hosts where `TMPDIR` falls back to a shared `/tmp` and tmux pane IDs clash across users. Downstream prompt renderers (e.g. starship) can surface a resumable-session label with a `test -e "${TMPDIR:-/tmp}/armyknife-cc-paused-${USER:-unknown}-${TMUX_PANE}"` check, which avoids the tmux client round trip a pane user option would require on every prompt. A file-existence flag is used rather than the session name so the prompt distinguishes an armyknife-paused session (file exists) from a user-driven Ctrl-C exit (no file). `a agent pane-has-paused <pane_id>` prints `1` / empty on demand from the session state and is intended for manual inspection; prompt renderers on the hot path should read the file instead.
 
 #### Task linking (tq)
 

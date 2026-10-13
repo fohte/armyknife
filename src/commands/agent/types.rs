@@ -128,6 +128,7 @@ pub enum SessionStatus {
     Running,
     WaitingInput,
     Stopped,
+    Failed,
     /// Stopped session that was automatically terminated after the
     /// `auto_pause` timeout elapsed. The session file is preserved so that
     /// `agent resume` can restore the conversation.
@@ -149,6 +150,7 @@ pub enum StatusColor {
     Green,
     Yellow,
     Cyan,
+    Red,
     Gray,
     Dim,
 }
@@ -164,6 +166,7 @@ pub enum DisplayStatus {
     Running,
     WaitingInput,
     Stopped,
+    Failed,
     /// `Stopped` session that hasn't been focused since its most recent
     /// transition into `Stopped`. See `Session::is_unread_stopped`.
     UnreadStopped,
@@ -240,10 +243,10 @@ pub struct HookInput {
     #[serde(default)]
     pub stop_hook_active: bool,
 
-    /// The `Stop` hook payload's final assistant message of the turn, which
-    /// avoids re-reading the transcript (see `hook.rs`'s `last_message`
-    /// update). Always present for Codex; absent for older Claude Code
-    /// versions, which fall back to the transcript.
+    /// The `Stop` or `StopFailure` hook payload's final assistant message of
+    /// the turn, which avoids re-reading the transcript (see `hook.rs`'s
+    /// `last_message` update). Always present for Codex; absent for older
+    /// Claude Code versions.
     #[serde(default)]
     pub last_assistant_message: Option<String>,
 
@@ -329,6 +332,7 @@ pub enum HookEvent {
     PermissionRequest,
     Notification,
     Stop,
+    StopFailure,
     SessionEnd,
 }
 
@@ -342,6 +346,7 @@ impl HookEvent {
             "permission-request" => Ok(Self::PermissionRequest),
             "notification" => Ok(Self::Notification),
             "stop" => Ok(Self::Stop),
+            "stop-failure" => Ok(Self::StopFailure),
             "session-end" => Ok(Self::SessionEnd),
             _ => Err(CcError::UnknownHookEvent(s.to_string()).into()),
         }

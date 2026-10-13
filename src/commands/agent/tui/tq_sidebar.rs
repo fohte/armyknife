@@ -383,13 +383,14 @@ fn count_sessions(
 
 fn status_order(status: DisplayStatus) -> u8 {
     match status {
-        DisplayStatus::WaitingInput => 0,
-        DisplayStatus::Running => 1,
-        DisplayStatus::Background => 2,
-        DisplayStatus::UnreadStopped => 3,
-        DisplayStatus::Stopped => 4,
-        DisplayStatus::Paused => 5,
-        DisplayStatus::Ended => 6,
+        DisplayStatus::Failed => 0,
+        DisplayStatus::WaitingInput => 1,
+        DisplayStatus::Running => 2,
+        DisplayStatus::Background => 3,
+        DisplayStatus::UnreadStopped => 4,
+        DisplayStatus::Stopped => 5,
+        DisplayStatus::Paused => 6,
+        DisplayStatus::Ended => 7,
     }
 }
 

@@ -248,6 +248,7 @@ mod tests {
     #[case::waiting(SessionStatus::WaitingInput, None, Some("\u{25d0}"))]
     #[case::stopped_unread(SessionStatus::Stopped, None, Some("\u{2731}"))]
     #[case::stopped_read(SessionStatus::Stopped, Some(Utc::now()), Some("\u{25cb}"))]
+    #[case::failed(SessionStatus::Failed, None, Some("\u{2717}"))]
     #[case::paused(SessionStatus::Paused, None, Some("\u{23f8}"))]
     #[case::ended(SessionStatus::Ended, None, None)]
     fn test_format_window_symbol(
@@ -272,6 +273,7 @@ mod tests {
     #[case::empty(&[], "")]
     #[case::single_running(&[SessionStatus::Running], "\u{25cf} ")]
     #[case::paused(&[SessionStatus::Paused], "\u{23f8} ")]
+    #[case::failed(&[SessionStatus::Failed], "\u{2717} ")]
     #[case::running_waiting_stopped(
         &[SessionStatus::Running, SessionStatus::WaitingInput, SessionStatus::Stopped],
         "\u{25cf}\u{25d0}\u{2731} "

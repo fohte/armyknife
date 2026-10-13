@@ -161,7 +161,10 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
 /// still expected to be alive.
 fn should_sigterm_session(status: SessionStatus) -> bool {
     match status {
-        SessionStatus::Running | SessionStatus::WaitingInput | SessionStatus::Stopped => true,
+        SessionStatus::Running
+        | SessionStatus::WaitingInput
+        | SessionStatus::Stopped
+        | SessionStatus::Failed => true,
         SessionStatus::Paused | SessionStatus::Ended => false,
     }
 }
@@ -476,6 +479,7 @@ mod tests {
     #[case::running(SessionStatus::Running, true)]
     #[case::waiting(SessionStatus::WaitingInput, true)]
     #[case::stopped(SessionStatus::Stopped, true)]
+    #[case::failed(SessionStatus::Failed, true)]
     #[case::paused(SessionStatus::Paused, false)]
     #[case::ended(SessionStatus::Ended, false)]
     fn should_sigterm_session_by_status(#[case] status: SessionStatus, #[case] expected: bool) {

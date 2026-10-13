@@ -74,6 +74,7 @@ pub(super) fn status_color(status: DisplayStatus) -> Color {
         DisplayStatus::Running => Color::Green,
         DisplayStatus::WaitingInput => Color::Yellow,
         DisplayStatus::Background => Color::Cyan,
+        DisplayStatus::Failed => Color::Red,
         DisplayStatus::Paused
         | DisplayStatus::Stopped
         | DisplayStatus::UnreadStopped
@@ -95,9 +96,10 @@ pub(super) fn count_statuses<'a>(
             DisplayStatus::Running | DisplayStatus::Background => running += 1,
             DisplayStatus::WaitingInput => {}
             DisplayStatus::Paused => paused += 1,
-            DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
-                stopped += 1
-            }
+            DisplayStatus::Failed
+            | DisplayStatus::Stopped
+            | DisplayStatus::UnreadStopped
+            | DisplayStatus::Ended => stopped += 1,
         }
     }
 
@@ -301,9 +303,14 @@ mod tests {
                 s.status = SessionStatus::Stopped;
                 s
             },
+            {
+                let mut s = create_test_session("5");
+                s.status = SessionStatus::Failed;
+                s
+            },
         ];
 
-        assert_eq!(count_statuses(&sessions), (2, 1, 0));
+        assert_eq!(count_statuses(&sessions), (2, 2, 0));
     }
 
     #[test]
@@ -383,6 +390,7 @@ mod tests {
     #[case::running(DisplayStatus::Running, Color::Green)]
     #[case::waiting_input(DisplayStatus::WaitingInput, Color::Yellow)]
     #[case::background(DisplayStatus::Background, Color::Cyan)]
+    #[case::failed(DisplayStatus::Failed, Color::Red)]
     #[case::paused(DisplayStatus::Paused, DIM_FG)]
     #[case::stopped(DisplayStatus::Stopped, DIM_FG)]
     #[case::unread_stopped(DisplayStatus::UnreadStopped, DIM_FG)]
