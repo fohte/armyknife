@@ -49,6 +49,7 @@ mod delete;
 mod filter;
 mod navigation;
 mod progress;
+mod progress_cache;
 mod progress_scope;
 mod progress_selection;
 mod reload;
