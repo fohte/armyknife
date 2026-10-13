@@ -116,7 +116,7 @@ async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> 
     .await
 }
 
-pub(crate) async fn close_worktree(
+async fn close_worktree(
     worktree_root: &Path,
     args: &CloseArgs,
     refuse_current_session: bool,
@@ -133,41 +133,100 @@ pub(crate) async fn close_worktree(
     } else {
         None
     };
-    if refuse_current_session {
-        ensure_not_closing_current_session(
-            session,
-            caller_session_id.as_deref(),
-            caller_pane_id.as_deref(),
-        )?;
-    }
-    close_with_worktree_plan(
+    let context = WorktreeCloseContext {
+        args,
+        session,
+        caller_session_id: caller_session_id.as_deref(),
+        caller_pane_id: caller_pane_id.as_deref(),
+    };
+    let skip_hooks = args.skip_hooks;
+    close_worktree_with(
+        context,
+        refuse_current_session,
         worktree_delete::prepare(worktree_root, args.force),
-        || {
-            if let Some(session) = session {
-                close_worktree_session(session, args.force, caller_pane_id.as_deref())?;
-            }
-            Ok(())
-        },
-        |plan| worktree_delete::execute(plan, args.skip_hooks),
+        close_worktree_session,
+        |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
     )
     .await
 }
 
-pub(crate) async fn close_worktree_path<C, F>(
-    worktree_path: &Path,
-    force: bool,
-    close: C,
-) -> Result<()>
-where
-    C: FnOnce(&Path, &CloseArgs, bool) -> F,
-    F: Future<Output = Result<()>>,
-{
+pub(crate) async fn close_worktree_path(worktree_path: &Path, force: bool) -> Result<()> {
     let args = CloseArgs {
         target: None,
         force,
         skip_hooks: false,
     };
-    close(worktree_path, &args, true).await
+    let sessions = super::store::list_sessions()?;
+    let session = select_worktree_session(&sessions, worktree_path)?;
+    let caller_pane_id = if session.is_some() {
+        crate::shared::caller_pane::resolve_caller_pane_id()
+    } else {
+        None
+    };
+    let caller_session_id = EnvVars::load().own_session_id();
+    let context = WorktreeCloseContext {
+        args: &args,
+        session,
+        caller_session_id: caller_session_id.as_deref(),
+        caller_pane_id: caller_pane_id.as_deref(),
+    };
+    let skip_hooks = args.skip_hooks;
+    close_worktree_path_with(
+        context,
+        worktree_delete::prepare(worktree_path, args.force),
+        close_worktree_session,
+        |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
+    )
+    .await
+}
+
+struct WorktreeCloseContext<'a> {
+    args: &'a CloseArgs,
+    session: Option<&'a Session>,
+    caller_session_id: Option<&'a str>,
+    caller_pane_id: Option<&'a str>,
+}
+
+async fn close_worktree_path_with<P, F>(
+    context: WorktreeCloseContext<'_>,
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    close_worktree_with(context, true, prepare, close_session, remove_worktree).await
+}
+
+async fn close_worktree_with<P, F>(
+    context: WorktreeCloseContext<'_>,
+    refuse_current_session: bool,
+    prepare: impl Future<Output = Result<P>>,
+    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
+    remove_worktree: impl FnOnce(P) -> F,
+) -> Result<()>
+where
+    F: Future<Output = Result<()>>,
+{
+    if refuse_current_session {
+        ensure_not_closing_current_session(
+            context.session,
+            context.caller_session_id,
+            context.caller_pane_id,
+        )?;
+    }
+    close_with_worktree_plan(
+        prepare,
+        || {
+            if let Some(session) = context.session {
+                close_session(session, context.args.force, context.caller_pane_id)?;
+            }
+            Ok(())
+        },
+        remove_worktree,
+    )
+    .await
 }
 
 fn ensure_not_closing_current_session(
@@ -1059,44 +1118,48 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::without_force(false)]
-    #[case::with_force(true)]
     #[tokio::test]
-    async fn close_worktree_path_always_refuses_the_callers_session(#[case] force: bool) {
-        let worktree_path = Path::new("/tmp/test-worktree");
-        let called_with = RefCell::new(None);
-
-        let result = close_worktree_path(
-            worktree_path,
-            force,
-            |path, args, refuse_current_session| {
-                called_with.replace(Some((
-                    path.to_path_buf(),
-                    args.target.clone(),
-                    args.force,
-                    args.skip_hooks,
-                    refuse_current_session,
-                )));
-                std::future::ready(Ok(()))
+    async fn pr_merge_path_refuses_the_callers_session_before_prepare_with_force() {
+        let target_session = session();
+        let args = CloseArgs {
+            target: None,
+            force: true,
+            skip_hooks: false,
+        };
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: Some(&target_session),
+            caller_session_id: Some("session-1"),
+            caller_pane_id: None,
+        };
+        let result = close_worktree_path_with(
+            context,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
             },
         )
         .await;
-
         assert_eq!(
             (
                 result.map_err(|error| error.to_string()),
-                called_with.into_inner()
+                calls.into_inner(),
             ),
             (
-                Ok(()),
-                Some((
-                    PathBuf::from("/tmp/test-worktree"),
-                    None,
-                    force,
-                    false,
-                    true,
-                )),
+                Err(
+                    "The target worktree contains the caller's current session; skipping close"
+                        .to_string()
+                ),
+                vec![],
             ),
         );
     }
