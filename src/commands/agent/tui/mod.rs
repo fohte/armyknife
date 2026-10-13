@@ -47,6 +47,7 @@ const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 struct TqRefreshSchedule {
     in_flight: bool,
     pending: bool,
+    first_snapshot_applied: bool,
     next_periodic_refresh: Instant,
 }
 
@@ -55,6 +56,7 @@ impl TqRefreshSchedule {
         Self {
             in_flight: true,
             pending: false,
+            first_snapshot_applied: false,
             next_periodic_refresh: now + TQ_SESSION_TASKS_REFRESH_INTERVAL,
         }
     }
@@ -69,6 +71,10 @@ impl TqRefreshSchedule {
 
     fn fetch_completed(&mut self) {
         self.in_flight = false;
+    }
+
+    fn mark_snapshot_applied(&mut self) -> bool {
+        !std::mem::replace(&mut self.first_snapshot_applied, true)
     }
 
     fn request(&mut self) {
@@ -296,6 +302,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                         tq_pane_options::sync(snapshot);
                     }
                     app.tq_refresh_finished();
+                    schedule_progress_after_first_tq_snapshot(
+                        &app,
+                        &mut tq_refresh_schedule,
+                        &mut progress_refresh_schedule,
+                    );
                 }
                 AppEvent::TqTasksFetched(Ok(None)) => {
                     tq_refresh_schedule.fetch_completed();
@@ -460,6 +471,16 @@ fn open_url(app: &mut App, url: &str) {
     };
     if let Err(e) = command::new(opener).arg(url).spawn() {
         app.set_error(format!("Failed to open task: {e}"));
+    }
+}
+
+fn schedule_progress_after_first_tq_snapshot(
+    app: &App,
+    tq_refresh_schedule: &mut TqRefreshSchedule,
+    progress_refresh_schedule: &mut ProgressRefreshSchedule,
+) {
+    if tq_refresh_schedule.mark_snapshot_applied() {
+        progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
     }
 }
 
@@ -846,6 +867,47 @@ mod tests {
         app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::new()));
 
         assert_eq!(app.task_by_session, HashMap::new());
+    }
+
+    #[test]
+    fn test_first_tq_snapshot_queues_progress_refresh_after_initial_fetch() {
+        let now = Instant::now();
+        let mut app = create_test_app_with_sessions(1);
+        let mut tq_refresh_schedule = TqRefreshSchedule::new(now);
+        let mut progress_refresh_schedule = ProgressRefreshSchedule::new(now);
+
+        progress_refresh_schedule.request(Some("session-0".to_string()));
+        let _ = progress_refresh_schedule.start_pending();
+
+        tq_refresh_schedule.fetch_completed();
+        app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::from([(
+            "session-0".to_string(),
+            vec![test_task("task-1")],
+        )])));
+        schedule_progress_after_first_tq_snapshot(
+            &app,
+            &mut tq_refresh_schedule,
+            &mut progress_refresh_schedule,
+        );
+        progress_refresh_schedule.fetch_completed();
+        let first_refresh = progress_refresh_schedule.start_pending();
+
+        app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::from([(
+            "session-0".to_string(),
+            vec![test_task("task-1")],
+        )])));
+        schedule_progress_after_first_tq_snapshot(
+            &app,
+            &mut tq_refresh_schedule,
+            &mut progress_refresh_schedule,
+        );
+        progress_refresh_schedule.fetch_completed();
+        let repeated_refresh = progress_refresh_schedule.start_pending();
+
+        assert_eq!(
+            (first_refresh, repeated_refresh),
+            (Some("session-0".to_string()), None),
+        );
     }
 
     // =========================================================================

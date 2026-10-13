@@ -200,10 +200,10 @@ fn stale_progress_response_keeps_the_new_selection_state(timestamp: DateTime<Utc
 fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     timestamp: DateTime<Utc>,
 ) {
-    let mut selected = create_test_session_at("selected", timestamp);
-    selected.work_type = Some("design".to_string());
     let mut same_task_child = create_test_session_at("same-task-child", timestamp);
     same_task_child.ancestor_session_ids = vec!["selected".to_string()];
+    let mut selected = create_test_session_at("selected", timestamp);
+    selected.work_type = Some("design".to_string());
     let mut other_task_child = create_test_session_at("other-task-child", timestamp);
     other_task_child.ancestor_session_ids = vec!["selected".to_string()];
     let mut delegate = create_test_session_at("delegate", timestamp);
@@ -222,8 +222,8 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
         vec!["selected".to_string(), "other-task-child".to_string()];
     let unrelated_same_task = create_test_session_at("unrelated-same-task", timestamp);
     let mut app = create_test_app(vec![
-        selected,
         same_task_child,
+        selected,
         other_task_child,
         delegate.clone(),
         nested_delegate.clone(),
@@ -232,15 +232,15 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     ]);
     app.update_row_order(&[
         None,
-        Some("selected"),
         Some("same-task-child"),
+        Some("selected"),
         Some("other-task-child"),
         Some("delegate"),
         Some("nested-delegate"),
         Some("other-task-delegate"),
         Some("unrelated-same-task"),
     ]);
-    app.list_state.select(Some(1));
+    app.list_state.select(Some(2));
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("selected".to_string(), vec![task_link("task-a")]),
         (
@@ -278,17 +278,22 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
         (
             app.progress_rows.clone(),
             app.progress_list_state.selected(),
+            app.progress_list_state
+                .selected()
+                .and_then(|index| app.progress_rows.get(index))
+                .and_then(ProgressRow::selection_key),
             app.progress_table_state.selected(),
         ),
         (
             vec![
-                expected_work_row("selected", "design"),
                 expected_work_row("same-task-child", "session"),
+                expected_work_row("selected", "design"),
                 expected_work_row("unrelated-same-task", "session"),
                 expected_unlinked_delegate_row("delegate"),
                 expected_unlinked_delegate_row("nested-delegate"),
             ],
-            Some(0),
+            Some(1),
+            Some("selected"),
             None,
         ),
     );
@@ -344,7 +349,9 @@ fn task_progress_keeps_the_checklist_after_all_work_rows(
 }
 
 #[rstest]
-fn project_manager_progress_stays_outside_child_task_scope(timestamp: DateTime<Utc>) {
+fn project_manager_progress_shows_only_its_work_row_when_children_share_task(
+    timestamp: DateTime<Utc>,
+) {
     let mut project_manager = create_test_session_at("project-manager", timestamp);
     project_manager.work_type = Some("project-manager".to_string());
     let mut child_task = create_test_session_at("child-task", timestamp);
@@ -366,7 +373,7 @@ fn project_manager_progress_stays_outside_child_task_scope(timestamp: DateTime<U
             "project-manager".to_string(),
             vec![task_link("parent-task")],
         ),
-        ("child-task".to_string(), vec![task_link("child-task")]),
+        ("child-task".to_string(), vec![task_link("parent-task")]),
     ])));
 
     app.apply_progress_result(

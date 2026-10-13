@@ -134,25 +134,24 @@ impl App {
             };
         };
 
+        if selected.work_type.as_deref() == Some("project-manager") {
+            return ProgressScope {
+                work_sessions: vec![selected.clone()],
+                delegated: Vec::new(),
+            };
+        }
+
         let mut task_session_ids = self
             .progress_task_session_ids(task_id)
             .into_iter()
             .collect::<HashSet<_>>();
         task_session_ids.insert(selected.session_id.clone());
-        let mut work_sessions = self
+        let work_sessions = self
             .sessions
             .iter()
             .filter(|session| task_session_ids.contains(&session.session_id))
             .cloned()
             .collect::<Vec<_>>();
-        if let Some(selected_index) = work_sessions
-            .iter()
-            .position(|session| session.session_id == selected.session_id)
-        {
-            work_sessions.swap(0, selected_index);
-        } else {
-            work_sessions.insert(0, selected.clone());
-        }
 
         ProgressScope {
             work_sessions,
@@ -256,7 +255,12 @@ impl App {
         } else if self.progress_session_id.as_deref() == Some(session_id) {
             self.current_progress_selection()
         } else {
-            (0, None)
+            snapshot
+                .rows
+                .iter()
+                .position(|row| row.selection_key() == Some(session_id))
+                .map(|index| (index, Some(session_id.to_string())))
+                .unwrap_or((0, None))
         };
         self.resolve_initial_progress_selection(
             session_id,
