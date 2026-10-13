@@ -131,6 +131,7 @@ mod tests {
 
     fn session(session_id: &str, ancestors: &[&str], vibe_enabled: bool) -> Session {
         Session {
+            pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
             pending_human_review_ids: BTreeSet::new(),

@@ -55,7 +55,9 @@ Shared modules are extracted when reusable (e.g., `human_in_the_loop/`).
 
 At sufficient terminal width, the session view renders the YOUR TURN/TASKS list and PROGRESS side by side. `Tab` switches focus between TASKS and PROGRESS; narrow terminals show only the focused pane. A disk snapshot supplies task names and numbers while the TUI refreshes tq data in the background.
 
-At the model layer, `ProgressRow` keeps work sessions, descendant delegates, and implementation checklist entries in one ordered list. Task scope is derived from tq links and delegate ancestor IDs; the selected session stays first so both renderers can map selection consistently. The plain and checklist views derive their visible rows from this shared list.
+PROGRESS follows the selected TASKS session. When tq data is available, a task-linked session shows all sessions linked to that task, descendant delegates, and the task's `実装` checklist. The selected session's work row stays in its task's stable order and remains emphasized when the cursor moves to another row. Project-manager sessions show only their own work row. Without a task link or tq data, PROGRESS keeps the selected session's direct delegates. A delegate row says `(PR unavailable)` when neither its saved repository and branch nor its live worktree can resolve a PR. Stage marks are `✓` for done, `◐` for user attention, `●` for active, `◷` for waiting, and `○` for not started or unknown. `Enter` focuses a delegate's session pane when available; otherwise it opens a known PR link.
+
+At the model layer, `ProgressRow` keeps work sessions, descendant delegates, and implementation checklist entries in one ordered list. Task scope comes from tq links and delegate ancestor IDs. Selection is tracked by row key so the selected session can stay emphasized without changing the order. The plain and checklist views derive their visible rows from this shared list.
 
 In the checklist view, unstarted entries without a delegate or PR link appear as non-selectable rows, and fully merged batches start collapsed. Press `h` or `l` to collapse or expand the implementation section or a batch.
 

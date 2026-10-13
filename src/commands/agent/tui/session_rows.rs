@@ -307,6 +307,7 @@ mod tests {
 
     fn create_test_session(id: &str, status: SessionStatus) -> Session {
         Session {
+            pr_context: None,
             session_id: id.to_string(),
             work_type: None,
             work_type_pinned: false,

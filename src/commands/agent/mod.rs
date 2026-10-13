@@ -28,6 +28,7 @@ mod pane_options;
 pub(crate) mod peer;
 mod resume;
 mod resurrect;
+mod session_pr_context;
 pub(crate) mod session_status;
 mod signal;
 mod status;

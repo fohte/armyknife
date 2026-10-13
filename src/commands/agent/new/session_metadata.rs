@@ -4,8 +4,9 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::commands::agent::session_pr_context::Capture;
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
 use crate::infra::tmux::layout::AgentLaunchRoute;
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 
@@ -27,7 +28,13 @@ pub(super) fn record_codex_daemon_metadata(
 
 fn record_from_env(session_id: &str, cwd: &Path, env_vars: &[(&str, &str)]) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    record_from_env_in(&sessions_dir, session_id, cwd, env_vars)
+    record_from_env_in(
+        &sessions_dir,
+        session_id,
+        cwd,
+        env_vars,
+        Some(super::super::session_pr_context::capture),
+    )
 }
 
 fn record_from_env_in(
@@ -35,6 +42,7 @@ fn record_from_env_in(
     session_id: &str,
     cwd: &Path,
     env_vars: &[(&str, &str)],
+    capture_pr_context: Option<Capture>,
 ) -> Result<()> {
     let metadata = metadata_from_env(env_vars);
     if metadata.label.is_none()
@@ -45,7 +53,8 @@ fn record_from_env_in(
         return Ok(());
     }
 
-    record_in(sessions_dir, session_id, cwd, metadata)
+    let pr_context = capture_pr_context.and_then(|capture| capture(cwd));
+    record_in(sessions_dir, session_id, cwd, pr_context, metadata)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -79,11 +88,13 @@ fn record_in(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,
+    pr_context: Option<SessionPrContext>,
     metadata: SessionMetadata<'_>,
 ) -> Result<()> {
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        pr_context,
         session_id: session_id.to_string(),
         work_type: None,
         is_delegated: false,
@@ -133,6 +144,7 @@ fn record_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::session_pr_context::fixed_context_capture;
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -150,6 +162,7 @@ mod tests {
             .single()
             .expect("timestamp should be valid");
         Session {
+            pr_context: None,
             session_id: "thread-a".to_string(),
             work_type: Some("detected-skill".to_string()),
             work_type_pinned: false,
@@ -201,6 +214,12 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
+            Some(SessionPrContext {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "sample-branch".to_string(),
+                checklist_item_id: Some("sample-item".to_string()),
+            }),
             SessionMetadata {
                 label: Some("explicit label"),
                 work_type,
@@ -215,6 +234,12 @@ mod tests {
         actual["updated_at"] = json!("<timestamp>");
         let mut expected = json!({
             "session_id": "thread-a",
+            "pr_context": {
+                "owner": "sample-owner",
+                "repo": "sample-repo",
+                "branch": "sample-branch",
+                "checklist_item_id": "sample-item"
+            },
             "cwd": "/workspace/delegate",
             "transcript_path": null,
             "tty": null,
@@ -254,6 +279,7 @@ mod tests {
             "thread-a",
             Path::new("/workspace/delegate"),
             &env_vars,
+            Some(fixed_context_capture),
         )
         .expect("record should succeed");
 
@@ -262,6 +288,12 @@ mod tests {
         actual["updated_at"] = json!("<timestamp>");
         let mut expected = json!({
             "session_id": "thread-a",
+            "pr_context": {
+                "owner": "sample-owner",
+                "repo": "sample-repo",
+                "branch": "sample-branch",
+                "checklist_item_id": "sample-item"
+            },
             "cwd": "/workspace/delegate",
             "transcript_path": null,
             "tty": null,
@@ -335,6 +367,7 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
+            None,
             SessionMetadata {
                 label,
                 work_type,
@@ -360,6 +393,7 @@ mod tests {
             sessions_dir.path(),
             "thread-a",
             Path::new("/workspace/delegate"),
+            None,
             SessionMetadata {
                 label: None,
                 work_type: None,

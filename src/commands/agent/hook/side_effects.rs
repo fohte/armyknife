@@ -2,6 +2,7 @@ use std::path::Path;
 
 #[cfg(not(test))]
 use super::super::archive_tq_session_detached;
+use super::super::session_pr_context::Capture;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
@@ -19,6 +20,7 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
+    pub(super) capture_pr_context: Option<Capture>,
     /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
     pub(super) tq_archive: bool,
@@ -62,6 +64,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            capture_pr_context: Some(super::super::session_pr_context::capture),
             tq_archive: true,
             track_bg_run_tasks: true,
             #[cfg(test)]
@@ -83,6 +86,7 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
             removed_notification_groups: None,
