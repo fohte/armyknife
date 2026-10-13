@@ -1,18 +1,18 @@
 use serde::{Deserialize, Serialize};
 
-/// Display settings for an agent watch marker.
+/// Display settings for an agent work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWorkTypeConfig {
-    /// Icon shown in the agent watch marker.
+    /// Icon shown for this work type.
     pub icon: String,
 
-    /// Terminal color used in the agent watch marker.
+    /// Terminal color for this work type.
     pub color: AgentWorkTypeColor,
 }
 
-/// A terminal color accepted for an agent watch marker.
+/// A terminal color accepted for an agent work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
@@ -22,7 +22,7 @@ pub enum AgentWorkTypeColor {
     Indexed(u8),
 }
 
-/// A named terminal color accepted for an agent watch marker.
+/// A named terminal color accepted for an agent work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]

@@ -153,7 +153,7 @@
           "default": null
         },
         "work_type_fallback": {
-          "description": "Display configuration used by `a agent watch` when a session has no recorded work type.",
+          "description": "Display configuration used in `a agent watch` when a session has no recorded work type.",
           "anyOf": [
             {
               "$ref": "#/$defs/AgentWorkTypeConfig"
@@ -218,7 +218,7 @@
       ]
     },
     "AgentWorkTypeColor": {
-      "description": "A terminal color accepted for an agent watch marker.",
+      "description": "A terminal color accepted for an agent work type.",
       "anyOf": [
         {
           "$ref": "#/$defs/AgentWorkTypeNamedColor"
@@ -243,15 +243,15 @@
       ]
     },
     "AgentWorkTypeConfig": {
-      "description": "Display settings for an agent watch marker.",
+      "description": "Display settings for an agent work type.",
       "type": "object",
       "properties": {
         "color": {
-          "description": "Terminal color used in the agent watch marker.",
+          "description": "Terminal color for this work type.",
           "$ref": "#/$defs/AgentWorkTypeColor"
         },
         "icon": {
-          "description": "Icon shown in the agent watch marker.",
+          "description": "Icon shown for this work type.",
           "type": "string"
         }
       },
@@ -262,7 +262,7 @@
       ]
     },
     "AgentWorkTypeNamedColor": {
-      "description": "A named terminal color accepted for an agent watch marker.",
+      "description": "A named terminal color accepted for an agent work type.",
       "type": "string",
       "enum": [
         "reset",
