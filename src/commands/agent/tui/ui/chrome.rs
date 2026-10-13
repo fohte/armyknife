@@ -11,14 +11,12 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::{App, AppMode, View};
-use crate::commands::agent::tui::tq_sidebar::SidebarSelection;
 use crate::commands::agent::user_turn::user_turns;
 
 use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
 use super::helpers::{count_statuses, truncate};
-use super::session_content::{render_main_list, render_sidebar_scope};
-use super::tq_sidebar::minimum_total_width;
+use super::session_content::{minimum_two_pane_width, render_main_list};
 
 const HEADER_HEIGHT: u16 = 1;
 
@@ -29,7 +27,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     let area = frame.area();
-    app.set_sidebar_available(app.view == View::Session && area.width >= minimum_total_width());
+    app.narrow_layout = app.view == View::Session && area.width < minimum_two_pane_width();
 
     // The top bar (search / rename) is session-view only.
     let has_error = app.error_message.is_some();
@@ -37,16 +35,8 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let is_edit_mode = app.view == View::Session && matches!(app.mode, AppMode::Edit { .. });
     let has_text_filter = app.view == View::Session && !app.confirmed_query.is_empty();
     let has_drilldown_scope = app.view == View::Session && app.drilldown_scope.is_some();
-    let has_sidebar_scope = app.view == View::Session
-        && !(app.narrow_layout && app.sidebar_focused)
-        && app.sidebar_selection != SidebarSelection::All;
     let has_input_bar = is_search_mode || has_text_filter || is_edit_mode || has_drilldown_scope;
-    let show_top_bar = has_input_bar || has_sidebar_scope;
-    let top_bar_height = if has_input_bar && has_sidebar_scope {
-        2
-    } else {
-        1
-    };
+    let show_top_bar = has_input_bar;
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
@@ -54,15 +44,15 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     let layouts: Vec<Constraint> = match (show_top_bar, has_error) {
         (true, true) => vec![
             Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(top_bar_height), // Search / rename / tq scope
-            Constraint::Min(1),                 // Session list
+            Constraint::Length(1), // Search / rename
+            Constraint::Min(1),    // Session list
             Constraint::Length(help_height),
             Constraint::Length(1), // Error
         ],
         (true, false) => vec![
             Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(top_bar_height), // Search / rename / tq scope
-            Constraint::Min(1),                 // Session list
+            Constraint::Length(1), // Search / rename
+            Constraint::Min(1),    // Session list
             Constraint::Length(help_height),
         ],
         (false, true) => vec![
@@ -111,21 +101,7 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
 /// while searching, or the confirmed filter query while browsing a
 /// filtered list).
 fn render_top_bar(frame: &mut Frame, area: Rect, app: &App) {
-    let has_input_bar = app.mode == AppMode::Search
-        || !app.confirmed_query.is_empty()
-        || matches!(app.mode, AppMode::Edit { .. })
-        || app.drilldown_scope.is_some();
-    let has_sidebar_scope = app.sidebar_selection != SidebarSelection::All;
-    if has_input_bar && has_sidebar_scope && area.height > 1 {
-        let [input_area, scope_area] =
-            Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
-        render_input_bar(frame, input_area, app);
-        render_sidebar_scope(frame, scope_area, app);
-    } else if has_input_bar {
-        render_input_bar(frame, area, app);
-    } else {
-        render_sidebar_scope(frame, area, app);
-    }
+    render_input_bar(frame, area, app);
 }
 
 fn render_input_bar(frame: &mut Frame, area: Rect, app: &App) {
@@ -350,18 +326,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::session_view_default(View::Session, false, vec![
-        " ?: keys   /: search   Tab: focus   C-b: sidebar   q: quit".to_string(),
+    #[case::session_view_default(View::Session, false, false, vec![
+        " ?: keys   /: search   Tab: pane   q: quit".to_string(),
     ])]
-    #[case::session_view_expanded(View::Session, true, vec![
+    #[case::session_view_expanded(View::Session, true, false, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
         "  C-r/w/s/p: filter  o: open crit  q: quit".to_string(),
-        "  Tab: focus  C-b: toggle sidebar".to_string(),
+        "  Tab: pane".to_string(),
+    ])]
+    #[case::progress_view(View::Session, false, true, vec![
+        " ?: keys   j/k: move   Enter: open   Tab: pane   Esc: tasks   q: quit".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,
         #[case] show_help: bool,
+        #[case] progress_focused: bool,
         #[case] expected_lines: Vec<String>,
     ) {
         let now = Utc::now();
@@ -370,6 +350,7 @@ mod tests {
         let output = render_to_string_with(&sessions, None, now, 120, height, |app| {
             app.view = view;
             app.show_help = show_help;
+            app.progress_focused = progress_focused;
         });
 
         let actual_lines: Vec<&str> = output

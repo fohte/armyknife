@@ -120,7 +120,6 @@ pub(super) fn build_user_turn_item(
     app: &App,
     now: DateTime<Utc>,
     term_width: usize,
-    is_linked: bool,
 ) -> ListItem<'static> {
     let title = app
         .get_cached_title(&turn.session.session_id)
@@ -168,12 +167,7 @@ pub(super) fn build_user_turn_item(
         Span::raw(time_col),
     ]);
 
-    let item = ListItem::new(Line::from(spans));
-    if is_linked {
-        item.style(Style::default().bg(Color::Indexed(236)))
-    } else {
-        item
-    }
+    ListItem::new(Line::from(spans))
 }
 
 fn user_turn_label_style() -> Style {
@@ -263,7 +257,6 @@ pub(super) fn build_session_item(
     now: DateTime<Utc>,
     term_width: usize,
     query: &str,
-    is_linked: bool,
 ) -> ListItem<'static> {
     let session = entry.session;
     let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
@@ -393,12 +386,7 @@ pub(super) fn build_session_item(
         ]));
     }
 
-    let item = ListItem::new(lines);
-    if is_linked {
-        item.style(Style::default().bg(Color::Indexed(236)))
-    } else {
-        item
-    }
+    ListItem::new(lines)
 }
 
 pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bool) -> String {
