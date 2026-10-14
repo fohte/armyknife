@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.423](https://github.com/fohte/armyknife/compare/v0.1.422...v0.1.423) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent/tui:** align PROGRESS PR rows with TASKS ([#1181](https://github.com/fohte/armyknife/issues/1181)) ([bc1c9c7](https://github.com/fohte/armyknife/commit/bc1c9c7d568ee5bd7f28b14e4d928635dce1a2f6))
+
 ## [0.1.422](https://github.com/fohte/armyknife/compare/v0.1.421...v0.1.422) (2026-10-14)
 
 
