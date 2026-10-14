@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.424](https://github.com/fohte/armyknife/compare/v0.1.423...v0.1.424) (2026-10-14)
+
+
+### Features
+
+* **agent/bg:** remind about long-running tasks ([#1183](https://github.com/fohte/armyknife/issues/1183)) ([df606a3](https://github.com/fohte/armyknife/commit/df606a372b2afb6dda62093aa68b0919aa68fb10))
+
 ## [0.1.423](https://github.com/fohte/armyknife/compare/v0.1.422...v0.1.423) (2026-10-14)
 
 
