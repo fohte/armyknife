@@ -134,6 +134,7 @@ mod tests {
 
     fn pull_request_row(is_ended: bool, pane_id: Option<&str>, url: Option<&str>) -> ProgressRow {
         ProgressRow::PullRequest(PrProgressRow {
+            repo: None,
             session_id: "delegate".to_string(),
             title: "Example delegated work".to_string(),
             number: Some(7),
@@ -366,6 +367,7 @@ mod tests {
         ProgressRow::ChecklistPullRequest {
             batch_id: "batch-1".to_string(),
             row: PrProgressRow {
+                repo: None,
                 session_id: "delegate".to_string(),
                 title: "Active change".to_string(),
                 number: None,
@@ -433,6 +435,7 @@ mod tests {
 
     fn unmatched_delegate_row() -> ProgressRow {
         ProgressRow::PullRequest(PrProgressRow {
+            repo: None,
             session_id: "unmapped-delegate".to_string(),
             title: "Unmapped delegated work".to_string(),
             number: None,
@@ -717,6 +720,7 @@ mod tests {
             ProgressRow::ChecklistPullRequest {
                 batch_id: "batch-1".to_string(),
                 row: PrProgressRow {
+                    repo: None,
                     session_id: "delegate".to_string(),
                     title: "Example delegated work".to_string(),
                     number: Some(7),

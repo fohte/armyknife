@@ -131,6 +131,7 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
             batch_id: "batch-a".to_string(),
             row: PrProgressRow {
                 session_id: "checklist-item:item-a".to_string(),
+                repo: Some("example-project".to_string()),
                 title: "Placeholder change".to_string(),
                 number: Some(23),
                 url: Some("https://example.test/pull/23".to_string()),
@@ -163,6 +164,7 @@ fn expected_work_row(session_id: &str, role: &str) -> ProgressRow {
 fn expected_unlinked_delegate_row(session_id: &str) -> ProgressRow {
     ProgressRow::PullRequest(PrProgressRow {
         session_id: session_id.to_string(),
+        repo: None,
         title: session_id.to_string(),
         number: None,
         url: None,
@@ -691,6 +693,7 @@ fn local_progress_refresh_uses_current_delegate_state(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: None,
                     title: "Finished change".to_string(),
                     number: Some(42),
                     url: Some("https://example.test/pull/42".to_string()),
@@ -925,6 +928,7 @@ fn shows_local_delegates_before_pr_status_is_fetched(
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "delegate".to_string(),
+                repo: None,
                 title: "Local delegate".to_string(),
                 number: None,
                 url: None,
@@ -1008,6 +1012,7 @@ fn reuses_cached_progress_when_returning_to_a_session(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: None,
                     title: "Example change".to_string(),
                     number: Some(17),
                     url: Some("https://example.test/pull/17".to_string()),
@@ -1083,6 +1088,7 @@ fn keeps_fetched_progress_for_ended_delegates_after_local_refresh(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: None,
                     title: "Finished change".to_string(),
                     number: Some(42),
                     url: Some("https://example.test/pull/42".to_string()),
@@ -1434,6 +1440,7 @@ fn preserves_local_delegate_rows_and_selection_when_fetch_fails(
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: None,
                     title: "delegate".to_string(),
                     number: None,
                     url: None,

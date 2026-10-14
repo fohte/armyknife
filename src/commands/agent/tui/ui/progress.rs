@@ -8,7 +8,9 @@ use ratatui::{
 
 use crate::commands::agent::tui::{
     app::App,
-    progress::{PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow, work_row_count},
+    progress::{
+        PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow, repo_from_pr_url, work_row_count,
+    },
 };
 
 use super::helpers::DIM_FG;
@@ -180,7 +182,8 @@ fn render_work_row(
         "  "
     };
     let status = identity_status(app, &row.session_id);
-    let mut spans = progress_row_identity(app, status, task_number(app, &row.session_id), marker);
+    let mut spans =
+        progress_row_identity(app, status, task_number(app, &row.session_id), marker, None);
     spans.push(Span::styled(
         row.role.clone(),
         Style::default().add_modifier(Modifier::BOLD),
@@ -349,7 +352,7 @@ fn checklist_table_row(row: &ProgressRow, app: &App) -> Row<'static> {
         ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    ", app),
         ProgressRow::PlannedPullRequest { title, .. } => {
             let mut spans =
-                progress_row_identity(app, IdentityStatus::Planned, String::new(), "    ");
+                progress_row_identity(app, IdentityStatus::Planned, String::new(), "    ", None);
             spans.push(Span::raw(title.clone()));
             Row::new(vec![
                 Cell::from(Line::from(spans)),
@@ -374,7 +377,11 @@ fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str, app: &App) -> Row
     let number = row
         .number
         .map_or_else(String::new, |number| format!("PR#{number}"));
-    let mut name = progress_row_identity(app, status, number, indent);
+    let fallback_repo = row
+        .repo
+        .as_deref()
+        .or_else(|| row.url.as_deref().and_then(repo_from_pr_url));
+    let mut name = progress_row_identity(app, status, number, indent, fallback_repo);
     name.push(Span::raw(row.title.clone()));
     if row.lookup_unavailable {
         name.push(Span::raw(" (PR unavailable)"));
@@ -436,6 +443,7 @@ mod tests {
     fn delegate_pr_row() -> PrProgressRow {
         PrProgressRow {
             session_id: "delegate".to_string(),
+            repo: None,
             title: "Example task change".to_string(),
             number: Some(17),
             url: Some("https://example.test/pull/17".to_string()),
@@ -732,6 +740,7 @@ mod tests {
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "delegate".to_string(),
+                repo: None,
                 title: "Sample change".to_string(),
                 number: Some(17),
                 url: Some("https://example.test/pull/17".to_string()),
@@ -748,6 +757,7 @@ mod tests {
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "unavailable-delegate".to_string(),
+                repo: None,
                 title: "Sample delegate".to_string(),
                 number: None,
                 url: None,
@@ -800,12 +810,9 @@ mod tests {
         let mut selected = create_test_session("selected");
         selected.cwd = "/tmp/project-main".into();
         let selected_cwd = selected.cwd.clone();
-        let mut delegate = create_test_session("delegate");
-        delegate.cwd = "/tmp/project-worker".into();
-        delegate.status = crate::commands::agent::types::SessionStatus::Ended;
-        let delegate_cwd = delegate.cwd.clone();
+        let delegate_cwd = create_test_session("delegate").cwd;
 
-        let mut app = App::with_sessions(vec![selected, delegate]);
+        let mut app = App::with_sessions(vec![selected]);
         if app.selected_session_id() != Some("selected") {
             app.select_next();
         }
@@ -839,6 +846,7 @@ mod tests {
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "delegate".to_string(),
+                repo: Some("repo-worker".to_string()),
                 title: "Delegated change".to_string(),
                 number: Some(1168),
                 url: Some("https://example.test/pull/1168".to_string()),
@@ -864,7 +872,7 @@ mod tests {
                 "│PROGRESS: project-main".to_string(),
                 "│  ● repo-main       #42    builder".to_string(),
                 "│                                                                                             実 装  差 分  body  CI  merge".to_string(),
-                "│  ✓ repo-worker     PR#1168 Delegated change                                                 ○    ○    ○     ○   ○".to_string(),
+                "│  - repo-worker     PR#1168 Delegated change                                                 ○    ○    ○     ○   ○".to_string(),
             ],
         );
     }
@@ -893,6 +901,7 @@ mod tests {
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "delegate".to_string(),
+                repo: None,
                 title: "Example task change".to_string(),
                 number: Some(17),
                 url: Some("https://example.test/pull/17".to_string()),
@@ -1298,6 +1307,7 @@ mod tests {
                 batch_id: "batch-2".to_string(),
                 row: PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: None,
                     title: "Sample change".to_string(),
                     number: Some(17),
                     url: Some("https://example.test/pull/17".to_string()),

@@ -36,23 +36,28 @@ pub(super) fn progress_row_identity(
     status: IdentityStatus<'_>,
     number: String,
     indent: &str,
+    fallback_repo: Option<&str>,
 ) -> Vec<Span<'static>> {
     let session = match status {
         IdentityStatus::Session(session) => Some(session),
         IdentityStatus::MissingSession | IdentityStatus::Planned => None,
     };
-    let repo = session.map_or_else(
-        || " ".repeat(REPO_COLUMN_WIDTH),
-        |session| {
-            let repo = app
-                .get_cached_worktree_labels(&session.cwd)
-                .map_or("", |(repo, _)| repo);
-            let repo = truncate(&get_session_info(session, repo), REPO_COLUMN_WIDTH);
-            format!(
-                "{repo}{}",
-                " ".repeat(REPO_COLUMN_WIDTH.saturating_sub(repo.width()))
-            )
-        },
+    let repo_name = session
+        .and_then(|session| {
+            app.get_cached_worktree_labels(&session.cwd)
+                .map(|(repo, _)| repo)
+                .filter(|repo| !repo.is_empty())
+        })
+        .or(fallback_repo)
+        .unwrap_or("");
+    let repo_text = session.map_or_else(
+        || crate::commands::agent::claude_sessions::normalize_title(repo_name),
+        |session| get_session_info(session, repo_name),
+    );
+    let repo = truncate(&repo_text, REPO_COLUMN_WIDTH);
+    let repo = format!(
+        "{repo}{}",
+        " ".repeat(REPO_COLUMN_WIDTH.saturating_sub(repo.width()))
     );
     let number_style = match app
         .task_by_session

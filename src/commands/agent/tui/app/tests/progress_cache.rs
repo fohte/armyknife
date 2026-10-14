@@ -226,6 +226,7 @@ fn task_rows() -> Vec<ProgressRow> {
             batch_id: "batch-placeholder".to_string(),
             row: PrProgressRow {
                 session_id: "delegate-placeholder".to_string(),
+                repo: None,
                 title: "Placeholder change".to_string(),
                 number: Some(7),
                 url: Some("https://example.test/pull/7".to_string()),

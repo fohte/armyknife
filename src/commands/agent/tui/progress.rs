@@ -186,6 +186,8 @@ pub(super) struct WorkProgressRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PrProgressRow {
     pub session_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
     pub title: String,
     pub number: Option<u64>,
     pub url: Option<String>,
@@ -321,6 +323,12 @@ pub(super) fn pr_progress_row(
     let pr = pull_request.map(|progress| &progress.pull_request);
     let mut row = PrProgressRow {
         session_id: delegate.session.session_id.clone(),
+        repo: delegate
+            .session
+            .pr_context
+            .as_ref()
+            .map(|context| context.repo.clone())
+            .or_else(|| pr.and_then(|pr| repo_from_pr_url(&pr.url).map(str::to_string))),
         title: pr.map_or_else(|| session_title(&delegate.session), |pr| pr.title.clone()),
         number: pr.map(|pr| pr.number),
         url: pr.map(|pr| pr.url.clone()),
@@ -331,6 +339,15 @@ pub(super) fn pr_progress_row(
     };
     apply_session_fields(&mut row, &delegate.session);
     row
+}
+
+pub(super) fn repo_from_pr_url(url: &str) -> Option<&str> {
+    let segments = url.trim_end_matches('/').split('/').collect::<Vec<_>>();
+    let pull_index = segments.iter().rposition(|segment| *segment == "pull")?;
+    if pull_index < 5 {
+        return None;
+    }
+    segments.get(pull_index.checked_sub(1)?).copied()
 }
 
 fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
@@ -471,6 +488,23 @@ mod tests {
         session("selected")
     }
 
+    #[rstest]
+    #[case::github_url(
+        "https://github.com/example-owner/example-repo/pull/42",
+        Some("example-repo")
+    )]
+    #[case::repository_named_pull(
+        "https://github.com/example-owner/pull/example-repo/pull/42",
+        Some("example-repo")
+    )]
+    #[case::url_without_repository("https://example.test/pull/42", None)]
+    fn extracts_repository_from_pull_request_url(
+        #[case] url: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        assert_eq!(repo_from_pr_url(url), expected);
+    }
+
     #[fixture]
     fn delegated_session() -> Session {
         let mut session = session("delegate");
@@ -566,6 +600,7 @@ mod tests {
                     pane_id: None,
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
+                    repo: None,
                     session_id: "delegate".to_string(),
                     title: "Example delegated work".to_string(),
                     number: None,
@@ -628,6 +663,7 @@ mod tests {
                     pane_id: None,
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
+                    repo: None,
                     session_id: "delegate".to_string(),
                     title: "Example delegated work".to_string(),
                     number: None,
@@ -738,6 +774,7 @@ mod tests {
                     pane_id: None,
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
+                    repo: None,
                     session_id: "delegate".to_string(),
                     title: "Example delegated work".to_string(),
                     number: None,
@@ -791,6 +828,7 @@ mod tests {
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: Some("example-project".to_string()),
                     title: "Example delegated work".to_string(),
                     number: Some(7),
                     url: Some("https://github.com/example-org/example-project/pull/7".to_string(),),
@@ -898,6 +936,7 @@ mod tests {
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
+                    repo: Some("example-project".to_string()),
                     title: "Example delegated work".to_string(),
                     number: Some(7),
                     url: Some("https://github.com/example-org/example-project/pull/7".to_string()),

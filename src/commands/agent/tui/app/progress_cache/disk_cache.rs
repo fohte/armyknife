@@ -298,6 +298,7 @@ mod tests {
                 batch_id: "batch-placeholder".to_string(),
                 row: PrProgressRow {
                     session_id: "delegate-placeholder".to_string(),
+                    repo: Some("sample-repo".to_string()),
                     title: "Placeholder change".to_string(),
                     number: Some(7),
                     url: Some("https://example.test/pull/7".to_string()),
@@ -337,6 +338,48 @@ mod tests {
                 None,
                 0,
             ),
+        );
+    }
+
+    #[test]
+    fn cached_pr_row_defaults_repository_when_loading_legacy_data() {
+        let row = serde_json::from_value::<PrProgressRow>(serde_json::json!({
+            "session_id": "delegate-placeholder",
+            "title": "Placeholder change",
+            "number": 7,
+            "url": "https://example.test/pull/7",
+            "pane_id": null,
+            "is_ended": true,
+            "lookup_unavailable": false,
+            "stages": {
+                "implementation": "Done",
+                "diff_review": "User",
+                "pr_body": "Working",
+                "ci": "Waiting",
+                "merge": "NotStarted"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            row,
+            PrProgressRow {
+                session_id: "delegate-placeholder".to_string(),
+                repo: None,
+                title: "Placeholder change".to_string(),
+                number: Some(7),
+                url: Some("https://example.test/pull/7".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::User,
+                    pr_body: ProgressMark::Working,
+                    ci: ProgressMark::Waiting,
+                    merge: ProgressMark::NotStarted,
+                },
+            },
         );
     }
 
@@ -581,6 +624,7 @@ mod tests {
                     batch_id: "batch-placeholder".to_string(),
                     row: PrProgressRow {
                         session_id: "delegate-placeholder".to_string(),
+                        repo: Some("sample-repo".to_string()),
                         title: "Placeholder change".to_string(),
                         number: Some(7),
                         url: Some("https://example.test/pull/7".to_string()),

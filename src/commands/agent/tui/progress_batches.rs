@@ -368,6 +368,7 @@ fn pr_only_row(item: &ImplementationItem) -> PrProgressRow {
     let is_merged = item.is_merged();
     PrProgressRow {
         session_id: format!("checklist-item:{}", item.id),
+        repo: link.and_then(|link| link.repo.clone()),
         title: item.title.clone(),
         number: progress
             .map(|progress| progress.pull_request.number)
@@ -403,6 +404,9 @@ fn apply_link_fallback(row: &mut PrProgressRow, link: Option<&TqGithubLink>) {
     };
     if row.number.is_none() {
         row.number = link.number;
+    }
+    if row.repo.is_none() {
+        row.repo.clone_from(&link.repo);
     }
     if row.url.is_none() {
         row.url.clone_from(&link.url);
@@ -707,6 +711,7 @@ mod tests {
                 ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
                 ProgressRow::PullRequest(super::super::progress::PrProgressRow {
                     session_id: "unmapped-delegate".to_string(),
+                    repo: Some("sample-project".to_string()),
                     title: "Unplanned delegated change".to_string(),
                     number: Some(23),
                     url: Some("https://github.com/sample-org/sample-project/pull/23".to_string()),
@@ -758,6 +763,7 @@ mod tests {
                 ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
                 ProgressRow::PullRequest(super::super::progress::PrProgressRow {
                     session_id: "new-delegate".to_string(),
+                    repo: None,
                     title: "New delegated work".to_string(),
                     number: None,
                     url: None,
@@ -852,6 +858,7 @@ mod tests {
                     batch_id: "batch-1".to_string(),
                     row: super::super::progress::PrProgressRow {
                         session_id: "checklist-item:item-1".to_string(),
+                        repo: Some("sample-project".to_string()),
                         title: "Add a sample feature".to_string(),
                         number: Some(17),
                         url: Some(
