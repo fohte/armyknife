@@ -179,8 +179,22 @@ fn wait_for_delivery(
     delivery: &DeliveryContext<'_>,
     next_read_request_id: &mut u64,
 ) -> super::Result<()> {
+    wait_for_delivery_with_reader(socket, delivery, next_read_request_id, |socket| {
+        socket.read()
+    })
+}
+
+fn wait_for_delivery_with_reader<R>(
+    socket: &mut WebSocket<UnixStream>,
+    delivery: &DeliveryContext<'_>,
+    next_read_request_id: &mut u64,
+    mut read: R,
+) -> super::Result<()>
+where
+    R: FnMut(&mut WebSocket<UnixStream>) -> tungstenite::Result<Message>,
+{
     loop {
-        let message = match super::read_message_unless_interrupted(|| socket.read()) {
+        let message = match super::ignore_interrupted_read(read(socket)) {
             Ok(Some(message)) => message,
             Ok(None) => continue,
             Err(error) if is_read_timeout(&error) => {
@@ -580,6 +594,46 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
+        Ok(())
+    }
+
+    #[rstest]
+    fn confirms_delivery_after_interrupted_notification_read(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, _server_socket) = connected_sockets?;
+        let snapshot = MatchingItemSnapshot::default();
+        let delivery = DeliveryContext {
+            thread_id: THREAD_ID,
+            turn_id: TURN_ID,
+            client_user_message_id: CLIENT_USER_MESSAGE_ID,
+            content: "hello there",
+            snapshot: &snapshot,
+            read_timeout: Duration::from_secs(1),
+        };
+        let mut messages = [
+            Err(tungstenite::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::Interrupted,
+            ))),
+            Ok(Message::Text(
+                user_message_notification().to_string().into(),
+            )),
+        ]
+        .into_iter();
+        let mut next_read_request_id = NEXT_THREAD_READ_REQUEST_ID;
+
+        let actual = wait_for_delivery_with_reader(
+            &mut client_socket,
+            &delivery,
+            &mut next_read_request_id,
+            |_| {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+        );
+
+        assert_eq!(result_text(actual), Ok(()));
         Ok(())
     }
 

@@ -110,29 +110,18 @@ impl Client {
         cwd: &Path,
         timeout: Duration,
     ) -> anyhow::Result<String> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .context("Codex app-server wait timeout is out of range")?;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(anyhow!(
-                    "timed out waiting for Codex app-server `thread/started` notification"
-                ));
-            }
-            self.socket
-                .get_ref()
-                .set_read_timeout(Some(remaining))
-                .context("failed to set Codex app-server read timeout")?;
-            let Some(message) = read_message_unless_interrupted(|| self.socket.read())
-                .context("failed to read Codex app-server `thread/started` notification")?
-            else {
-                continue;
-            };
-            if let Some(thread_id) = thread_started_from_message(message, cwd)? {
-                return Ok(thread_id);
-            }
-        }
+        wait_for_thread_started_with_reader(
+            |remaining| {
+                self.socket
+                    .get_ref()
+                    .set_read_timeout(Some(remaining))
+                    .context("failed to set Codex app-server read timeout")?;
+                ignore_interrupted_read(self.socket.read())
+                    .context("failed to read Codex app-server `thread/started` notification")
+            },
+            cwd,
+            timeout,
+        )
     }
 
     /// Starts the initial turn and waits for Codex to record its input.
@@ -292,15 +281,25 @@ fn turn_start_request(
     }
 }
 
-#[cfg(test)]
-fn wait_for_thread_started<R>(mut read: R, cwd: &Path) -> anyhow::Result<String>
+fn wait_for_thread_started_with_reader<R>(
+    mut read_with_timeout: R,
+    cwd: &Path,
+    timeout: Duration,
+) -> anyhow::Result<String>
 where
-    R: FnMut() -> tungstenite::Result<Message>,
+    R: FnMut(Duration) -> anyhow::Result<Option<Message>>,
 {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .context("Codex app-server wait timeout is out of range")?;
     loop {
-        let Some(message) = read_message_unless_interrupted(&mut read)
-            .context("failed to read Codex app-server `thread/started` notification")?
-        else {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow!(
+                "timed out waiting for Codex app-server `thread/started` notification"
+            ));
+        }
+        let Some(message) = read_with_timeout(remaining)? else {
             continue;
         };
         if let Some(thread_id) = thread_started_from_message(message, cwd)? {
@@ -309,11 +308,25 @@ where
     }
 }
 
-fn read_message_unless_interrupted<R>(mut read: R) -> tungstenite::Result<Option<Message>>
+#[cfg(test)]
+fn wait_for_thread_started<R>(mut read: R, cwd: &Path) -> anyhow::Result<String>
 where
     R: FnMut() -> tungstenite::Result<Message>,
 {
-    match read() {
+    wait_for_thread_started_with_reader(
+        |_| {
+            ignore_interrupted_read(read())
+                .context("failed to read Codex app-server `thread/started` notification")
+        },
+        cwd,
+        Duration::from_secs(1),
+    )
+}
+
+fn ignore_interrupted_read(
+    result: tungstenite::Result<Message>,
+) -> tungstenite::Result<Option<Message>> {
+    match result {
         Ok(message) => Ok(Some(message)),
         Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
             Ok(None)
@@ -410,7 +423,7 @@ where
     F: FnMut(Value),
 {
     loop {
-        let Some(message) = read_message_unless_interrupted(&mut read)
+        let Some(message) = ignore_interrupted_read(read())
             .with_context(|| format!("failed to read Codex app-server `{method}` response"))
             .map_err(RequestError::Transport)?
         else {
