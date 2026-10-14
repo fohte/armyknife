@@ -18,9 +18,7 @@ use crate::infra::git::fetch_with_prune;
 use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
-use crate::shared::active_session::{
-    DraftProbe, NoDraftProbe, TmuxDraftProbe, contains_active_session,
-};
+use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, contains_active_session};
 use crate::shared::config::load_config;
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
@@ -308,13 +306,7 @@ fn apply_active_session_protection(
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
         .unwrap_or(Duration::from_secs(30 * 60));
 
-    // agent clean may be invoked from a non-tmux context (cron, plain shell);
-    // fall back to the no-op probe so we never block on tmux calls.
-    if std::env::var_os("TMUX").is_some() {
-        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
-    } else {
-        protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &NoDraftProbe);
-    }
+    protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
 }
 
 /// Pure core of [`apply_active_session_protection`]. Exposed for tests so the

@@ -514,9 +514,10 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
 
     if session.engine == Engine::Codex
         && first_request
-        && let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str())
+        && let Some(tmux_info) = session.tmux_info.as_ref()
     {
-        match sender.request_and_wait(pane_id, pid) {
+        let pane_id = &tmux_info.pane_id;
+        match sender.request_and_wait_for_socket(tmux_info.socket_path.as_deref(), pane_id, pid) {
             Ok(true) => return Ok(ShutdownOutcome::Exited),
             Ok(false) => {
                 tracing::info!(
@@ -769,7 +770,7 @@ mod tests {
 
     type SweepObservation = (
         SweepReport,
-        Vec<String>,
+        Vec<(Option<String>, String)>,
         Vec<(u32, i32)>,
         SessionStatus,
         bool,
@@ -798,7 +799,7 @@ mod tests {
 
         (
             report,
-            sender.ctrl_d_calls.borrow().clone(),
+            sender.ctrl_d_socket_calls.borrow().clone(),
             sender.calls.borrow().clone(),
             reloaded.status,
             reloaded.sweep_signaled,
@@ -810,8 +811,11 @@ mod tests {
         let old = Utc::now() - TimeDelta::hours(1);
         let sender = RecordingSender::default();
         sender.graceful_exit_result.replace(true);
-        let actual =
-            observe_codex_sweep(&test_dir, &sender, make_codex_session("codex", old), false);
+        let mut session = make_codex_session("codex", old);
+        if let Some(tmux_info) = session.tmux_info.as_mut() {
+            tmux_info.socket_path = Some("/tmp/armyknife-test/server.sock".to_string());
+        }
+        let actual = observe_codex_sweep(&test_dir, &sender, session, false);
 
         assert_eq!(
             actual,
@@ -823,7 +827,10 @@ mod tests {
                     waiting: 0,
                     active: 0,
                 },
-                vec!["%42".to_string()],
+                vec![(
+                    Some("/tmp/armyknife-test/server.sock".to_string()),
+                    "%42".to_string(),
+                )],
                 Vec::new(),
                 SessionStatus::Paused,
                 false,
@@ -853,7 +860,7 @@ mod tests {
         sender.fail_ctrl_d.replace(ctrl_d_fails);
         let actual = observe_codex_sweep(&test_dir, &sender, session, false);
         let expected_ctrl_d_calls = has_tmux_info
-            .then(|| "%42".to_string())
+            .then(|| (None, "%42".to_string()))
             .filter(|_| !already_signaled)
             .into_iter()
             .collect::<Vec<_>>();

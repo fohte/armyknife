@@ -43,10 +43,14 @@ impl DraftProbe for NoDraftProbe {
 /// Production probe that checks whether the live composer contains a draft.
 pub struct TmuxDraftProbe;
 
-impl DraftProbe for TmuxDraftProbe {
-    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
-        let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        match pane::input::pane_has_draft(pane_id, session.engine) {
+impl TmuxDraftProbe {
+    fn draft_observed_at_with(
+        session: &Session,
+        now: DateTime<Utc>,
+        pane_has_draft: impl FnOnce(Option<&str>, &str) -> Option<bool>,
+    ) -> Option<DateTime<Utc>> {
+        let tmux_info = session.tmux_info.as_ref()?;
+        match pane_has_draft(tmux_info.socket_path.as_deref(), &tmux_info.pane_id) {
             Some(true) => {
                 tracing::debug!(
                     event = "agent.composer.draft_protected",
@@ -65,6 +69,14 @@ impl DraftProbe for TmuxDraftProbe {
                 None
             }
         }
+    }
+}
+
+impl DraftProbe for TmuxDraftProbe {
+    fn draft_observed_at(&self, session: &Session, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        Self::draft_observed_at_with(session, now, |socket_path, pane_id| {
+            pane::input::pane_has_draft_for_socket(socket_path, pane_id, session.engine)
+        })
     }
 }
 
@@ -139,6 +151,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::commands::agent::types::TmuxInfo;
 
     #[derive(Default)]
     pub(crate) struct FakeDraftProbe {
@@ -209,6 +222,37 @@ mod tests {
             agent_status_clear_pending: false,
             engine: Engine::Claude,
         }
+    }
+
+    #[test]
+    fn tmux_draft_probe_uses_session_socket() {
+        let now = Utc::now();
+        let mut session = make_session("s", SessionStatus::Stopped, now);
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%23".to_string(),
+            socket_path: Some("/tmp/armyknife-test/server.sock".to_string()),
+        });
+        let mut probe_input = None;
+
+        let observed_at =
+            TmuxDraftProbe::draft_observed_at_with(&session, now, |socket_path, pane_id| {
+                probe_input = Some((socket_path.map(str::to_string), pane_id.to_string()));
+                Some(true)
+            });
+
+        assert_eq!(
+            (probe_input, observed_at),
+            (
+                Some((
+                    Some("/tmp/armyknife-test/server.sock".to_string()),
+                    "%23".to_string(),
+                )),
+                Some(now),
+            )
+        );
     }
 
     #[rstest]

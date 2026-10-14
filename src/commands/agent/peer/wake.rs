@@ -207,7 +207,9 @@ fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
         .tmux_info
         .as_ref()
         .ok_or_else(|| CcError::NoTmuxInfo(session_id.to_string()))?;
-    let recorded = resolve_session_option(|option| host.pane_option(&tmux_info.pane_id, option));
+    let recorded = resolve_session_option(|option| {
+        host.pane_option(tmux_info.socket_path.as_deref(), &tmux_info.pane_id, option)
+    });
     check_pane_matches_target(recorded.as_deref(), session_id)?;
 
     let pane_id = &tmux_info.pane_id;
@@ -241,7 +243,11 @@ fn respawn_unless_awake(
     if let Some(name) = policy.already_awake(host, &session.session_id) {
         return Ok(Some(name));
     }
-    let respawned_at = host.pane_option(pane_id, RESPAWNED_AT_OPTION);
+    let socket_path = session
+        .tmux_info
+        .as_ref()
+        .and_then(|tmux_info| tmux_info.socket_path.as_deref());
+    let respawned_at = host.pane_option(socket_path, pane_id, RESPAWNED_AT_OPTION);
     if respawned_recently(respawned_at.as_deref(), host.now_unix_secs()) {
         return Ok(None);
     }
@@ -250,6 +256,7 @@ fn respawn_unless_awake(
             // Best effort: the pane is already respawned, so failing to mark
             // it must not fail the wake.
             let _ = host.set_pane_option(
+                socket_path,
                 pane_id,
                 RESPAWNED_AT_OPTION,
                 &host.now_unix_secs().to_string(),
@@ -282,8 +289,15 @@ fn respawned_recently(respawned_at: Option<&str>, now: i64) -> bool {
 /// particular a race between two wakes) without tmux or Claude Code.
 trait Host {
     fn sessions_dir(&self) -> Result<PathBuf>;
-    fn pane_option(&self, pane_id: &str, option: &str) -> Option<String>;
-    fn set_pane_option(&self, pane_id: &str, option: &str, value: &str) -> Result<()>;
+    fn pane_option(&self, socket_path: Option<&str>, pane_id: &str, option: &str)
+    -> Option<String>;
+    fn set_pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<()>;
     fn respawn(&self, session: &Session) -> Result<String, RespawnError>;
     fn pane_has_agent_process(&self, session: &Session) -> Result<bool>;
     fn registered_name(&self, session_id: &str) -> Option<String>;
@@ -297,12 +311,28 @@ impl Host for System {
         store::sessions_dir()
     }
 
-    fn pane_option(&self, pane_id: &str, option: &str) -> Option<String> {
-        tmux::get_pane_option(pane_id, option)
+    fn pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+    ) -> Option<String> {
+        tmux::get_pane_option_for_socket(socket_path, pane_id, option)
     }
 
-    fn set_pane_option(&self, pane_id: &str, option: &str, value: &str) -> Result<()> {
-        Ok(tmux::set_pane_option(pane_id, option, value)?)
+    fn set_pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<()> {
+        Ok(tmux::set_pane_option_for_socket(
+            socket_path,
+            pane_id,
+            option,
+            value,
+        )?)
     }
 
     fn respawn(&self, session: &Session) -> Result<String, RespawnError> {
@@ -391,6 +421,9 @@ mod tests {
     const PANE_ID: &str = "%0";
     const NAME: &str = "agent-1";
 
+    type PaneOptionCall = (Option<String>, String, String);
+    type SetPaneOptionCall = (Option<String>, String, String, String);
+
     #[rstest]
     #[case::matches(Some("abc"), "abc", Ok(()))]
     #[case::mismatched(
@@ -468,6 +501,8 @@ mod tests {
         dir: TempDir,
         pane_cmd: Mutex<&'static str>,
         pane_options: Mutex<HashMap<String, String>>,
+        pane_option_calls: Mutex<Vec<PaneOptionCall>>,
+        set_pane_option_calls: Mutex<Vec<SetPaneOptionCall>>,
         registered: Mutex<Option<String>>,
         respawns: AtomicUsize,
         now: AtomicI64,
@@ -493,6 +528,8 @@ mod tests {
                     TMUX_SESSION_OPTION.to_string(),
                     SESSION_ID.to_string(),
                 )])),
+                pane_option_calls: Mutex::new(Vec::new()),
+                set_pane_option_calls: Mutex::new(Vec::new()),
                 registered: Mutex::new(None),
                 respawns: AtomicUsize::new(0),
                 now: AtomicI64::new(1_000_000),
@@ -503,6 +540,19 @@ mod tests {
 
         fn slow_startup(mut self) -> Self {
             self.agent_up_on_respawn = false;
+            self
+        }
+
+        fn with_socket_path(self, socket_path: &str) -> Self {
+            let mut session = store::load_session_from(self.dir.path(), SESSION_ID)
+                .expect("session load should succeed")
+                .expect("session should exist");
+            session
+                .tmux_info
+                .as_mut()
+                .expect("session should have tmux info")
+                .socket_path = Some(socket_path.to_string());
+            store::save_session_to(self.dir.path(), &session).expect("session save should succeed");
             self
         }
 
@@ -535,11 +585,36 @@ mod tests {
             Ok(self.dir.path().to_path_buf())
         }
 
-        fn pane_option(&self, _pane_id: &str, option: &str) -> Option<String> {
+        fn pane_option(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+            option: &str,
+        ) -> Option<String> {
+            self.pane_option_calls.lock().ok()?.push((
+                socket_path.map(str::to_string),
+                pane_id.to_string(),
+                option.to_string(),
+            ));
             self.pane_options.lock().ok()?.get(option).cloned()
         }
 
-        fn set_pane_option(&self, _pane_id: &str, option: &str, value: &str) -> Result<()> {
+        fn set_pane_option(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+            option: &str,
+            value: &str,
+        ) -> Result<()> {
+            self.set_pane_option_calls
+                .lock()
+                .expect("pane option calls lock")
+                .push((
+                    socket_path.map(str::to_string),
+                    pane_id.to_string(),
+                    option.to_string(),
+                    value.to_string(),
+                ));
             self.pane_options
                 .lock()
                 .expect("pane options lock")
@@ -589,6 +664,50 @@ mod tests {
 
     fn wake_result(host: &FakeHost) -> std::result::Result<Option<String>, String> {
         wake_with(host, SESSION_ID).map_err(|e| e.to_string())
+    }
+
+    #[test]
+    fn wake_uses_the_recorded_socket_for_pane_options() {
+        let socket_path = "/tmp/armyknife-test/private.sock";
+        let host =
+            FakeHost::new(Engine::Codex, SessionStatus::Paused).with_socket_path(socket_path);
+
+        let result = wake_result(&host);
+        let pane_option_calls = host
+            .pane_option_calls
+            .lock()
+            .expect("pane option calls lock")
+            .clone();
+        let set_pane_option_calls = host
+            .set_pane_option_calls
+            .lock()
+            .expect("pane option calls lock")
+            .clone();
+
+        assert_eq!(
+            (result, pane_option_calls, set_pane_option_calls),
+            (
+                Ok(None),
+                vec![
+                    (
+                        Some(socket_path.to_string()),
+                        PANE_ID.to_string(),
+                        TMUX_SESSION_OPTION.to_string(),
+                    ),
+                    (
+                        Some(socket_path.to_string()),
+                        PANE_ID.to_string(),
+                        RESPAWNED_AT_OPTION.to_string(),
+                    ),
+                ],
+                vec![(
+                    Some(socket_path.to_string()),
+                    PANE_ID.to_string(),
+                    RESPAWNED_AT_OPTION.to_string(),
+                    "1000000".to_string(),
+                )],
+            ),
+        );
     }
 
     /// The locked respawn step of one wake, without the wait that follows it

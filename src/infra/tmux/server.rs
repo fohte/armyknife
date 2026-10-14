@@ -36,9 +36,7 @@ pub(crate) fn run_tmux_output_for_socket<S: AsRef<OsStr>>(
     socket_path: Option<&str>,
     args: &[S],
 ) -> Result<String> {
-    let mut full_args = socket_selector_args(socket_path);
-    full_args.extend(args.iter().map(|arg| arg.as_ref().to_os_string()));
-    super::run_tmux_output(&full_args)
+    super::run_tmux_output(&socket_command_args(socket_path, args))
 }
 
 fn socket_selector_args(socket_path: Option<&str>) -> Vec<OsString> {
@@ -46,6 +44,16 @@ fn socket_selector_args(socket_path: Option<&str>) -> Vec<OsString> {
         Some(path) => vec![OsString::from("-S"), OsString::from(path)],
         None => vec![OsString::from("-L"), OsString::from("default")],
     }
+}
+
+fn socket_command_args<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -> Vec<OsString> {
+    let mut full_args = socket_selector_args(socket_path);
+    full_args.extend(args.iter().map(|arg| arg.as_ref().to_os_string()));
+    full_args
+}
+
+fn run_tmux_for_socket<S: AsRef<OsStr>>(socket_path: Option<&str>, args: &[S]) -> Result<()> {
+    run_tmux_output_for_socket(socket_path, args).map(|_| ())
 }
 
 /// Returns the socket path of the server selected by the current environment.
@@ -121,6 +129,84 @@ pub fn send_sigterm_to_pane_for_socket(socket_path: Option<&str>, pane_id: &str)
     }
 }
 
+/// Reads a pane-scoped user option from its recorded server.
+pub fn get_pane_option_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    option: &str,
+) -> Option<String> {
+    let output = run_tmux_output_for_socket(
+        socket_path,
+        &["show-options", "-p", "-t", pane_id, "-v", option],
+    )
+    .ok()?;
+    (!output.is_empty()).then_some(output)
+}
+
+/// Sets a pane-scoped user option on its recorded server.
+pub fn set_pane_option_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    option: &str,
+    value: &str,
+) -> Result<()> {
+    run_tmux_for_socket(
+        socket_path,
+        &["set-option", "-p", "-t", pane_id, option, value],
+    )
+}
+
+/// Captures a pane from its recorded server without ANSI styling.
+pub fn capture_pane_for_socket(socket_path: Option<&str>, pane_id: &str) -> Option<String> {
+    run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-t", pane_id]).ok()
+}
+
+/// Captures a pane from its recorded server with ANSI styling.
+pub fn capture_pane_with_escapes_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+) -> Option<String> {
+    run_tmux_output_for_socket(socket_path, &["capture-pane", "-p", "-e", "-t", pane_id]).ok()
+}
+
+/// Sends keys to a pane on its recorded server.
+pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
+    run_tmux_for_socket(socket_path, &["send-keys", "-t", pane_id, keys])
+}
+
+/// Kills a pane on its recorded server.
+pub fn kill_pane_for_socket(socket_path: Option<&str>, pane_id: &str) -> Result<()> {
+    run_tmux_for_socket(socket_path, &["kill-pane", "-t", pane_id])
+}
+
+/// Returns a pane's current command from its recorded server.
+pub fn get_pane_current_command_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+) -> Option<String> {
+    let output = run_tmux_output_for_socket(
+        socket_path,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            pane_id,
+            "#{pane_current_command}",
+        ],
+    )
+    .ok()?;
+    (!output.is_empty()).then_some(output)
+}
+
+/// Restarts a pane on its recorded server with `command`.
+pub fn respawn_pane_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    command: &str,
+) -> Result<()> {
+    run_tmux_for_socket(socket_path, &["respawn-pane", "-k", "-t", pane_id, command])
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -138,6 +224,28 @@ mod tests {
     fn selects_server_socket(#[case] socket_path: Option<&str>, #[case] expected: Vec<&str>) {
         assert_eq!(
             socket_selector_args(socket_path),
+            expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        );
+    }
+
+    #[rstest]
+    #[case::legacy_commands_use_default_server(
+        None,
+        vec!["list-panes", "-a", "-F", "#{pane_id}"],
+        vec!["-L", "default", "list-panes", "-a", "-F", "#{pane_id}"]
+    )]
+    #[case::recorded_commands_use_recorded_server(
+        Some("/tmp/armyknife-test/private.sock"),
+        vec!["kill-pane", "-t", "%81234"],
+        vec!["-S", "/tmp/armyknife-test/private.sock", "kill-pane", "-t", "%81234"]
+    )]
+    fn prepends_server_selection_to_command(
+        #[case] socket_path: Option<&str>,
+        #[case] args: Vec<&str>,
+        #[case] expected: Vec<&str>,
+    ) {
+        assert_eq!(
+            socket_command_args(socket_path, &args),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
         );
     }

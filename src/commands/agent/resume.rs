@@ -332,15 +332,31 @@ pub(crate) enum RespawnError {
 ///
 /// Returns the pane ID that was respawned on success.
 pub(crate) fn respawn_paused_session(session: &Session) -> Result<String, RespawnError> {
+    respawn_paused_session_with(
+        session,
+        tmux::get_pane_current_command_for_socket,
+        |socket_path, pane_id, command| {
+            tmux::respawn_pane_for_socket(socket_path, pane_id, command)
+                .map_err(|error| error.to_string())
+        },
+    )
+}
+
+fn respawn_paused_session_with(
+    session: &Session,
+    get_pane_current_command: impl FnOnce(Option<&str>, &str) -> Option<String>,
+    respawn_pane: impl FnOnce(Option<&str>, &str, &str) -> std::result::Result<(), String>,
+) -> Result<String, RespawnError> {
     let tmux_info = session.tmux_info.as_ref().ok_or(RespawnError::NoTmuxPane)?;
     if session.status != SessionStatus::Paused {
         return Err(RespawnError::NotPaused);
     }
-    check_idle_at_shell_prompt(tmux::get_pane_current_command(&tmux_info.pane_id).as_deref())?;
+    let socket_path = tmux_info.socket_path.as_deref();
+    let pane_current_command = get_pane_current_command(socket_path, &tmux_info.pane_id);
+    check_idle_at_shell_prompt(pane_current_command.as_deref())?;
 
     let wrapped = build_resume_command().ok_or(RespawnError::CommandBuildFailed)?;
-    tmux::respawn_pane(&tmux_info.pane_id, &wrapped)
-        .map_err(|e| RespawnError::RespawnFailed(e.to_string()))?;
+    respawn_pane(socket_path, &tmux_info.pane_id, &wrapped).map_err(RespawnError::RespawnFailed)?;
 
     Ok(tmux_info.pane_id.clone())
 }
@@ -823,6 +839,50 @@ mod tests {
         )]
         fn guards(#[case] session: Session, #[case] expected: RespawnError) {
             assert_eq!(respawn_paused_session(&session), Err(expected));
+        }
+
+        #[test]
+        fn respawn_queries_and_restarts_the_recorded_socket() {
+            let socket_path = "/tmp/armyknife-test/private.sock";
+            let tmux_info = TmuxInfo {
+                session_name: "main".to_string(),
+                window_name: "editor".to_string(),
+                window_index: 0,
+                pane_id: "%0".to_string(),
+                socket_path: Some(socket_path.to_string()),
+            };
+            let session = session(SessionStatus::Paused, Some(tmux_info));
+            let pane_command_queries = std::cell::RefCell::new(Vec::new());
+            let respawn_calls = std::cell::RefCell::new(Vec::new());
+
+            let result = respawn_paused_session_with(
+                &session,
+                |socket_path, pane_id| {
+                    pane_command_queries
+                        .borrow_mut()
+                        .push((socket_path.map(str::to_string), pane_id.to_string()));
+                    Some("zsh".to_string())
+                },
+                |socket_path, pane_id, _command| {
+                    respawn_calls
+                        .borrow_mut()
+                        .push((socket_path.map(str::to_string), pane_id.to_string()));
+                    Ok(())
+                },
+            );
+
+            assert_eq!(
+                (
+                    result,
+                    pane_command_queries.into_inner(),
+                    respawn_calls.into_inner(),
+                ),
+                (
+                    Ok("%0".to_string()),
+                    vec![(Some(socket_path.to_string()), "%0".to_string())],
+                    vec![(Some(socket_path.to_string()), "%0".to_string())],
+                ),
+            );
         }
     }
 }
