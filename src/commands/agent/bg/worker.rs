@@ -58,36 +58,31 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     window_status::sync_window_status_for_session(&args.session);
 
     let message = completion_message(args, status.as_ref().ok(), execution_error.as_deref());
-    match notify::notify(&args.session, &message, None, None) {
-        Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
-            event = "agent.bg_run.notification_queued",
-            session = %args.session,
-            task = %args.task_id,
-            reason,
-        ),
-        Ok(_) => tracing::info!(
-            event = "agent.bg_run.completed",
-            session = %args.session,
-            task = %args.task_id,
-            exit_code = ?exit_code,
-        ),
-        Err(error) => tracing::warn!(
-            event = "agent.bg_run.notification_failed",
-            session = %args.session,
-            task = %args.task_id,
-            error = %format!("{error:#}"),
-        ),
-    }
-
-    if let Some(reminder_delivery) = reminder_delivery
-        && reminder_delivery.join().is_err()
-    {
-        tracing::warn!(
-            event = "agent.bg_run.reminder_delivery_panicked",
-            session = %args.session,
-            task = %args.task_id,
-        );
-    }
+    send_completion_before_joining_reminder(
+        || match notify::notify(&args.session, &message, None, None) {
+            Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
+                event = "agent.bg_run.notification_queued",
+                session = %args.session,
+                task = %args.task_id,
+                reason,
+            ),
+            Ok(_) => tracing::info!(
+                event = "agent.bg_run.completed",
+                session = %args.session,
+                task = %args.task_id,
+                exit_code = ?exit_code,
+            ),
+            Err(error) => tracing::warn!(
+                event = "agent.bg_run.notification_failed",
+                session = %args.session,
+                task = %args.task_id,
+                error = %format!("{error:#}"),
+            ),
+        },
+        reminder_delivery,
+        &args.session,
+        &args.task_id,
+    );
 
     if let Some(error) = execution_error {
         tracing::warn!(
@@ -98,6 +93,25 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn send_completion_before_joining_reminder(
+    send_completion: impl FnOnce(),
+    reminder_delivery: Option<JoinHandle<()>>,
+    session: &str,
+    task_id: &str,
+) {
+    send_completion();
+
+    if let Some(reminder_delivery) = reminder_delivery
+        && reminder_delivery.join().is_err()
+    {
+        tracing::warn!(
+            event = "agent.bg_run.reminder_delivery_panicked",
+            session = %session,
+            task = %task_id,
+        );
+    }
 }
 
 fn run_command(
@@ -154,27 +168,29 @@ fn run_command(
             let task_id = args.task_id.clone();
             let message = reminder_message(args, reminder.message());
             let span = tracing::Span::current();
-            match spawn_reminder_delivery(move || {
-                span.in_scope(|| match notify::notify(&session, &message, None, None) {
-                    Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
-                        event = "agent.bg_run.reminder_queued",
-                        session = %session,
-                        task = %task_id,
-                        reason,
-                    ),
-                    Ok(_) => tracing::info!(
-                        event = "agent.bg_run.reminder_sent",
-                        session = %session,
-                        task = %task_id,
-                    ),
-                    Err(error) => tracing::warn!(
-                        event = "agent.bg_run.reminder_failed",
-                        session = %session,
-                        task = %task_id,
-                        error = %format!("{error:#}"),
-                    ),
-                })
-            }) {
+            match thread::Builder::new()
+                .name("agent-bg-reminder".to_string())
+                .spawn(move || {
+                    span.in_scope(|| match notify::notify(&session, &message, None, None) {
+                        Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
+                            event = "agent.bg_run.reminder_queued",
+                            session = %session,
+                            task = %task_id,
+                            reason,
+                        ),
+                        Ok(_) => tracing::info!(
+                            event = "agent.bg_run.reminder_sent",
+                            session = %session,
+                            task = %task_id,
+                        ),
+                        Err(error) => tracing::warn!(
+                            event = "agent.bg_run.reminder_failed",
+                            session = %session,
+                            task = %task_id,
+                            error = %format!("{error:#}"),
+                        ),
+                    })
+                }) {
                 Ok(handle) => *reminder_delivery = Some(handle),
                 Err(error) => tracing::warn!(
                     event = "agent.bg_run.reminder_thread_failed",
@@ -194,14 +210,6 @@ fn run_command(
         },
         Ok,
     )
-}
-
-fn spawn_reminder_delivery(
-    notify: impl FnOnce() + Send + 'static,
-) -> std::io::Result<JoinHandle<()>> {
-    thread::Builder::new()
-        .name("agent-bg-reminder".to_string())
-        .spawn(notify)
 }
 
 fn completion_message(
@@ -290,30 +298,35 @@ mod tests {
     }
 
     #[test]
-    fn reminder_delivery_runs_without_blocking_its_caller() {
-        let (started_tx, started_rx) = mpsc::channel();
+    fn completion_notification_does_not_wait_for_reminder_delivery() {
+        let (reminder_started_tx, reminder_started_rx) = mpsc::channel();
         let (release_tx, release_rx) = mpsc::channel();
-        let (handle_tx, handle_rx) = mpsc::channel();
-
-        let dispatcher = thread::spawn(move || {
-            let handle = spawn_reminder_delivery(move || {
-                started_tx.send(()).unwrap();
+        let reminder_delivery = thread::Builder::new()
+            .name("fixture-reminder".to_string())
+            .spawn(move || {
+                reminder_started_tx.send(()).unwrap();
                 release_rx.recv().unwrap();
             })
             .unwrap();
-            handle_tx.send(handle).unwrap();
+        let (completion_sent_tx, completion_sent_rx) = mpsc::channel();
+        let completion = thread::spawn(move || {
+            send_completion_before_joining_reminder(
+                || completion_sent_tx.send(()).unwrap(),
+                Some(reminder_delivery),
+                "fixture-session",
+                "fixture-task",
+            );
         });
 
-        let started = started_rx.recv_timeout(Duration::from_secs(2)).is_ok();
-        let dispatched_handle = handle_rx.recv_timeout(Duration::from_secs(2));
+        let reminder_started = reminder_started_rx
+            .recv_timeout(Duration::from_secs(5))
+            .is_ok();
+        let completion_sent = completion_sent_rx
+            .recv_timeout(Duration::from_secs(5))
+            .is_ok();
         release_tx.send(()).unwrap();
-        dispatcher.join().unwrap();
-        let dispatched_without_waiting = dispatched_handle.is_ok();
-        let handle = dispatched_handle
-            .or_else(|_| handle_rx.recv_timeout(Duration::from_secs(2)))
-            .unwrap();
-        handle.join().unwrap();
+        completion.join().unwrap();
 
-        assert_eq!((started, dispatched_without_waiting), (true, true));
+        assert_eq!((reminder_started, completion_sent), (true, true));
     }
 }
