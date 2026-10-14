@@ -28,10 +28,6 @@ pub struct PrMergeArgs {
     /// Target repository (owner/repo)
     #[arg(short = 'R', long = "repo")]
     pub repo: Option<String>,
-
-    /// Skip normal close safety checks while keeping the caller's current session open
-    #[arg(long)]
-    pub force_close: bool,
 }
 
 pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
@@ -43,14 +39,13 @@ pub async fn run(args: &PrMergeArgs) -> anyhow::Result<()> {
     ensure_repo_vibe_access_for_session(in_agent_session, load_config, &owner, &repo)?;
 
     let client = GhCli;
-    let force_close = args.force_close;
     run_merge_and_close(
         &client,
         &mut |env| hooks::run_hook("pre-pr-merge", env),
         &owner,
         &repo,
         args.pr_number,
-        |merged_pr| async move { close_merged_head_worktree(&merged_pr, force_close).await },
+        |merged_pr| async move { close_merged_head_worktree(&merged_pr).await },
     )
     .await?;
     Ok(())
@@ -171,10 +166,7 @@ where
     Ok(())
 }
 
-async fn close_merged_head_worktree(
-    merged_pr: &PrSnapshot,
-    force_close: bool,
-) -> anyhow::Result<()> {
+async fn close_merged_head_worktree(merged_pr: &PrSnapshot) -> anyhow::Result<()> {
     let Some((owner, repo_name)) = merged_pr
         .head_repository
         .as_deref()
@@ -185,9 +177,7 @@ async fn close_merged_head_worktree(
     let config = load_config()?;
     match find_local_head_worktree(&owner, &repo_name, &merged_pr.head_ref_name, &config) {
         HeadWorktreeSelection::NotFound => Ok(()),
-        HeadWorktreeSelection::Unique(worktree_path) => {
-            close_worktree_path(&worktree_path, force_close).await
-        }
+        HeadWorktreeSelection::Unique(worktree_path) => close_worktree_path(&worktree_path).await,
         HeadWorktreeSelection::Ambiguous(count) => {
             eprintln!(
                 "Multiple local worktrees match merged PR head branch `{}` ({count} matches); skipping close.",
@@ -607,15 +597,13 @@ mod tests {
             false,
         );
         let mut hook = |_: &[(&str, &str)]| Ok(());
-        let force_close = true;
         let close = |merged_pr: PrSnapshot| {
             let events = Rc::clone(&events);
             async move {
                 events.borrow_mut().push(format!(
-                    "close:{}:{}:{}",
+                    "close:{}:{}",
                     merged_pr.head_ref_name,
                     merged_pr.head_repository.unwrap_or_default(),
-                    force_close,
                 ));
                 anyhow::bail!("fake close failed")
             }
@@ -634,7 +622,7 @@ mod tests {
                     "view".to_string(),
                     "merge:head-a".to_string(),
                     "view".to_string(),
-                    "close:topic/example-branch:sample-org/sample-repo:true".to_string(),
+                    "close:topic/example-branch:sample-org/sample-repo".to_string(),
                 ],
             ),
         );
@@ -784,13 +772,12 @@ mod tests {
             true,
         );
         let mut hook = |_: &[(&str, &str)]| Ok(());
-        let force_close = false;
         let close = |merged_pr: PrSnapshot| {
             let events = Rc::clone(&events);
             async move {
                 events
                     .borrow_mut()
-                    .push(format!("close:{}:{}", merged_pr.head_ref_name, force_close));
+                    .push(format!("close:{}", merged_pr.head_ref_name));
                 Ok(())
             }
         };
@@ -808,7 +795,7 @@ mod tests {
                     "view".to_string(),
                     "merge:head-a".to_string(),
                     "view".to_string(),
-                    "close:topic/example-branch:false".to_string(),
+                    "close:topic/example-branch".to_string(),
                 ],
             ),
         );
@@ -875,26 +862,6 @@ mod tests {
         #[case] expected: bool,
     ) {
         assert_eq!(required_checks_succeeded(status_success, output), expected);
-    }
-
-    #[test]
-    fn pr_merge_force_close_flag_defaults_to_false_and_can_be_enabled() {
-        use clap::Parser;
-
-        let defaults = crate::cli::Cli::try_parse_from(["a", "gh", "pr-merge", "42"])
-            .expect("pr-merge arguments should parse");
-        let forced =
-            crate::cli::Cli::try_parse_from(["a", "gh", "pr-merge", "42", "--force-close"])
-                .expect("--force-close should parse");
-
-        let force_values = [defaults, forced].map(|cli| match cli.command {
-            crate::cli::Commands::Gh(crate::commands::gh::GhCommands::PrMerge(args)) => {
-                args.force_close
-            }
-            _ => false,
-        });
-
-        assert_eq!(force_values, [false, true]);
     }
 
     #[rstest]
