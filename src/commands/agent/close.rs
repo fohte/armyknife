@@ -368,7 +368,7 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
     ensure_pane_session(runtime, pane_id, &session.session_id)?;
 
     if !force {
-        let codex_turn_interrupted = session.engine == Engine::Codex
+        let effective_status = if session.engine == Engine::Codex
             && session.status == SessionStatus::Running
             && match runtime.latest_codex_turn_status(&session.session_id) {
                 Ok(Some(status)) => status == "interrupted",
@@ -381,8 +381,12 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
                     );
                     false
                 }
-            };
-        ensure_session_is_idle(session, codex_turn_interrupted)?;
+            } {
+            session.status_after_interrupted_codex_turn()
+        } else {
+            session.status
+        };
+        ensure_session_is_idle(session, effective_status)?;
     }
 
     match runtime.resolve_agent_pid(pane_id, session.engine)? {
@@ -464,16 +468,11 @@ fn ensure_pane_session<R: CloseRuntime>(
     Ok(())
 }
 
-fn ensure_session_is_idle(session: &Session, codex_turn_interrupted: bool) -> Result<()> {
-    let interrupted_codex_turn_is_idle = session.status == SessionStatus::Running
-        && session.engine == Engine::Codex
-        && codex_turn_interrupted
-        && !session.has_pending_permission_requests();
+fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) -> Result<()> {
     if matches!(
-        session.status,
+        effective_status,
         SessionStatus::Running | SessionStatus::WaitingInput
-    ) && !interrupted_codex_turn_is_idle
-    {
+    ) {
         bail!(
             "Agent session `{}` is running or waiting for input; pass --force to close it",
             session.session_id
@@ -755,6 +754,7 @@ mod tests {
     }
 
     #[rstest]
+    #[case::no_latest_turn(Ok(None))]
     #[case::turn_in_progress(Ok(Some("inProgress".to_string())))]
     #[case::app_server_unavailable(Err("fixture app-server unavailable".to_string()))]
     fn close_keeps_running_codex_sessions_active_without_interrupted_status(
@@ -801,6 +801,35 @@ mod tests {
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
                 "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+                    .to_string(),
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::LatestTurnStatus("session-1".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_keeps_rejecting_pending_permissions_after_an_interrupted_codex_turn() {
+        let mut session = session();
+        session.engine = Engine::Codex;
+        session.status = SessionStatus::Running;
+        session
+            .pending_permission_agent_ids
+            .insert("fixture-agent-id".to_string());
+        let runtime = FakeRuntime {
+            turn_status: Ok(Some("interrupted".to_string())),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Agent session `session-1` is running or waiting for input; pass --force to close it"
                     .to_string(),
                 vec![
                     Call::PaneExists("%42".to_string()),

@@ -89,18 +89,12 @@ where
                 continue;
             }
         };
-        let (next_status, is_failed) = match latest_status.as_str() {
-            "failed" => (SessionStatus::Failed, true),
-            "interrupted" => (
-                if session.has_pending_permission_requests() {
-                    SessionStatus::WaitingInput
-                } else {
-                    SessionStatus::Stopped
-                },
-                false,
-            ),
+        let next_status = match latest_status.as_str() {
+            "failed" => SessionStatus::Failed,
+            "interrupted" => session.status_after_interrupted_codex_turn(),
             _ => continue,
         };
+        let is_failed = next_status == SessionStatus::Failed;
 
         if dry_run {
             let event = if is_failed {
@@ -113,7 +107,7 @@ where
             continue;
         }
 
-        let mut failed_session = None;
+        let mut updated_session = None;
         store::update_session_in(sessions_dir, &session.session_id, |current| {
             if current.engine != Engine::Codex
                 || current.status != SessionStatus::Running
@@ -132,11 +126,11 @@ where
                 }
             }
             current.updated_at = Utc::now();
-            failed_session = Some(current.clone());
+            updated_session = Some(current.clone());
             true
         })?;
 
-        if let Some(session) = failed_session {
+        if let Some(session) = updated_session {
             let event = if is_failed {
                 "agent.sweep.codex_turn_failed"
             } else {
@@ -232,6 +226,7 @@ mod tests {
     #[rstest]
     #[case::failed("failed", SessionStatus::Failed)]
     #[case::interrupted("interrupted", SessionStatus::Stopped)]
+    #[case::interrupted_with_pending_permission("interrupted", SessionStatus::WaitingInput)]
     fn marks_finished_running_codex_turn_and_syncs_tmux(
         sessions_dir: TempDir,
         #[case] latest_status: &str,
@@ -243,6 +238,11 @@ mod tests {
             Engine::Codex,
             Utc::now(),
         );
+        if expected_status == SessionStatus::WaitingInput {
+            session
+                .pending_permission_agent_ids
+                .insert("fixture-agent-id".to_string());
+        }
         session.current_tool = Some("fixture-tool".to_string());
         session.read_at = Some(Utc::now());
         session.tmux_info = Some(TmuxInfo {
@@ -279,7 +279,7 @@ mod tests {
             }
         };
         let expected_current_tool =
-            (expected_status != SessionStatus::Stopped).then(|| "fixture-tool".to_string());
+            (expected_status == SessionStatus::Failed).then(|| "fixture-tool".to_string());
         let expected_read_at = (expected_status != SessionStatus::Stopped)
             .then_some(session.read_at)
             .flatten();
@@ -466,7 +466,13 @@ mod tests {
     }
 
     #[rstest]
-    fn dry_run_reports_failed_turn_without_saving_or_syncing(sessions_dir: TempDir) {
+    #[case::failed("failed", CodexTurnUpdates { failed: 1, interrupted: 0 })]
+    #[case::interrupted("interrupted", CodexTurnUpdates { failed: 0, interrupted: 1 })]
+    fn dry_run_reports_finished_turn_without_saving_or_syncing(
+        sessions_dir: TempDir,
+        #[case] latest_status: &str,
+        #[case] expected_updates: CodexTurnUpdates,
+    ) {
         save_session_to(
             sessions_dir.path(),
             &session(
@@ -481,7 +487,7 @@ mod tests {
 
         let updates =
             mark_finished_codex_sessions_with_reader(sessions_dir.path(), &syncer, true, |_| {
-                Ok(Some("failed".to_string()))
+                Ok(Some(latest_status.to_string()))
             })
             .expect("inspect turn status");
 
@@ -492,12 +498,9 @@ mod tests {
                 syncer.calls.borrow().clone(),
             ),
             (
-                CodexTurnUpdates {
-                    failed: 1,
-                    interrupted: 0,
-                },
+                expected_updates,
                 SessionStatus::Running,
-                Vec::<SyncCall>::new(),
+                Vec::<SyncCall>::new()
             ),
         );
     }
