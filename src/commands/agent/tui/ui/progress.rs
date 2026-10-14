@@ -3,7 +3,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, HighlightSpacing, Paragraph, Row, Table},
 };
 
 use crate::commands::agent::tui::{
@@ -240,14 +240,7 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
             | ProgressRow::PlannedPullRequest { .. } => None,
         })
         .collect::<Vec<_>>();
-    let table = Table::new(table_rows, stage_widths())
-        .column_spacing(1)
-        .highlight_symbol(if app.progress_focused { "› " } else { "> " })
-        .row_highlight_style(Style::default().bg(if app.progress_focused {
-            Color::DarkGray
-        } else {
-            Color::Indexed(236)
-        }));
+    let table = progress_table(table_rows, app.progress_focused);
     frame.render_stateful_widget(table, area, &mut app.progress_table_state);
 }
 
@@ -266,15 +259,20 @@ fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_
     {
         *app.progress_table_state.offset_mut() = row_index + 1 - usize::from(area.height);
     }
-    let table = Table::new(table_rows, stage_widths())
+    let table = progress_table(table_rows, app.progress_focused);
+    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+}
+
+fn progress_table<'a>(rows: Vec<Row<'a>>, focused: bool) -> Table<'a> {
+    Table::new(rows, stage_widths())
         .column_spacing(1)
-        .highlight_symbol(if app.progress_focused { "› " } else { "> " })
-        .row_highlight_style(Style::default().bg(if app.progress_focused {
+        .highlight_symbol(if focused { "› " } else { "> " })
+        .highlight_spacing(HighlightSpacing::Always)
+        .row_highlight_style(Style::default().bg(if focused {
             Color::DarkGray
         } else {
             Color::Indexed(236)
-        }));
-    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+        }))
 }
 
 fn first_checklist_pr_row_index(rows: &[ProgressRow], work_row_count: usize) -> Option<usize> {
@@ -510,6 +508,144 @@ mod tests {
         )
     }
 
+    fn progress_snapshot_without_cursor_markers(
+        terminal: &mut Terminal<TestBackend>,
+        app: &mut App,
+    ) -> Vec<String> {
+        progress_snapshot(terminal, app)
+            .0
+            .into_iter()
+            .map(|line| {
+                match line
+                    .strip_prefix("│› ")
+                    .or_else(|| line.strip_prefix("│> "))
+                {
+                    Some(content) => format!("│  {content}"),
+                    None => line,
+                }
+            })
+            .collect()
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProgressLayout {
+        Checklist,
+        PullRequestsOnly,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ProgressCursor {
+        Unfocused,
+        Work,
+        ImplementationHeader,
+        PullRequest,
+    }
+
+    fn app_with_progress_layout(layout: ProgressLayout) -> App {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_session_id = Some("selected".to_string());
+        let work_row = ProgressRow::Work(WorkProgressRow {
+            session_id: "selected".to_string(),
+            role: "session".to_string(),
+            mark: ProgressMark::Working,
+            status_label: None,
+            note: None,
+            pane_id: None,
+        });
+        let pr_row = delegate_pr_row();
+        app.progress_rows = match layout {
+            ProgressLayout::Checklist => vec![
+                work_row,
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-one".to_string(),
+                    row: pr_row,
+                },
+            ],
+            ProgressLayout::PullRequestsOnly => {
+                vec![work_row, ProgressRow::PullRequest(pr_row)]
+            }
+        };
+        app
+    }
+
+    fn app_with_progress_cursor(layout: ProgressLayout, cursor: ProgressCursor) -> App {
+        let mut app = app_with_progress_layout(layout);
+        app.progress_focused = !matches!(cursor, ProgressCursor::Unfocused);
+        match cursor {
+            ProgressCursor::Unfocused => {}
+            ProgressCursor::Work => app.progress_list_state.select(Some(0)),
+            ProgressCursor::ImplementationHeader => {
+                app.progress_table_state.select(Some(0));
+            }
+            ProgressCursor::PullRequest => {
+                let row_index = match layout {
+                    ProgressLayout::Checklist => 1,
+                    ProgressLayout::PullRequestsOnly => 0,
+                };
+                app.progress_table_state.select(Some(row_index));
+            }
+        }
+        app
+    }
+
+    #[rstest]
+    #[case::checklist(
+        ProgressLayout::Checklist,
+        vec![
+            ProgressCursor::Unfocused,
+            ProgressCursor::Work,
+            ProgressCursor::ImplementationHeader,
+            ProgressCursor::PullRequest,
+        ],
+        vec![
+            "│PROGRESS: project".to_string(),
+            "│  ● session".to_string(),
+            "│  ▾ 実 装  (PR 0/1)                            実 装  差 分  body  CI  merge"
+                .to_string(),
+            "│      #17 Example task change                ✓    ◐    ●     ◷   ○".to_string(),
+            "│".to_string(),
+            "│".to_string(),
+        ],
+    )]
+    #[case::pull_requests_only(
+        ProgressLayout::PullRequestsOnly,
+        vec![
+            ProgressCursor::Unfocused,
+            ProgressCursor::Work,
+            ProgressCursor::PullRequest,
+        ],
+        vec![
+            "│PROGRESS: project".to_string(),
+            "│  ● session".to_string(),
+            "│                                             実 装  差 分  body  CI  merge"
+                .to_string(),
+            "│  #17 Example task change                    ✓    ◐    ●     ◷   ○".to_string(),
+            "│".to_string(),
+            "│".to_string(),
+        ],
+    )]
+    fn table_indentation_stays_stable_across_cursor_locations(
+        #[case] layout: ProgressLayout,
+        #[case] cursor_locations: Vec<ProgressCursor>,
+        #[case] expected: Vec<String>,
+    ) {
+        let actual = cursor_locations
+            .iter()
+            .map(|cursor| {
+                let mut app = app_with_progress_cursor(layout, *cursor);
+                let mut terminal = Terminal::new(TestBackend::new(72, 6)).unwrap();
+                progress_snapshot_without_cursor_markers(&mut terminal, &mut app)
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(actual, vec![expected; cursor_locations.len()]);
+    }
+
     #[test]
     fn renders_no_delegates_without_a_loading_message() {
         let mut app = App::with_sessions(vec![create_test_session("selected")]);
@@ -717,7 +853,7 @@ mod tests {
                 "│  ● planner",
                 "│› ● builder",
                 "│                                             実 装  差 分  body  CI  merge",
-                "│#17 Example task change                      ✓    ◐    ●     ◷   ○",
+                "│  #17 Example task change                    ✓    ◐    ●     ◷   ○",
                 "│",
             ],
         );
@@ -935,9 +1071,9 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ▸ Batch one (0 PR merged)",
-                "│  ▾ Batch two",
-                "│    #17 Example task change                              ✓    ◐    ●     ◷   ○",
+                "│    ▸ Batch one (0 PR merged)",
+                "│    ▾ Batch two",
+                "│      #17 Example task change                            ✓    ◐    ●     ◷   ○",
             ],
         );
     }
@@ -998,9 +1134,9 @@ mod tests {
                 (
                     vec![
                         "│PROGRESS: project".to_string(),
-                        "│  ▸ Batch 5 (0 PR merged)".to_string(),
-                        "│  ▸ Batch 6 (0 PR merged)".to_string(),
-                        "│    #17 Change 0                 ✓    ◐    ●     ◷   ○".to_string(),
+                        "│    ▸ Batch 5 (0 PR merged)".to_string(),
+                        "│    ▸ Batch 6 (0 PR merged)".to_string(),
+                        "│      #17 Change 0               ✓    ◐    ●     ◷   ○".to_string(),
                     ],
                     5,
                 ),
