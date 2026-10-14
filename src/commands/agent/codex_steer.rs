@@ -124,10 +124,11 @@ impl Client {
                 .get_ref()
                 .set_read_timeout(Some(remaining))
                 .context("failed to set Codex app-server read timeout")?;
-            let message = self
-                .socket
-                .read()
-                .context("failed to read Codex app-server `thread/started` notification")?;
+            let Some(message) = read_message_unless_interrupted(|| self.socket.read())
+                .context("failed to read Codex app-server `thread/started` notification")?
+            else {
+                continue;
+            };
             if let Some(thread_id) = thread_started_from_message(message, cwd)? {
                 return Ok(thread_id);
             }
@@ -297,11 +298,27 @@ where
     R: FnMut() -> tungstenite::Result<Message>,
 {
     loop {
-        let message =
-            read().context("failed to read Codex app-server `thread/started` notification")?;
+        let Some(message) = read_message_unless_interrupted(&mut read)
+            .context("failed to read Codex app-server `thread/started` notification")?
+        else {
+            continue;
+        };
         if let Some(thread_id) = thread_started_from_message(message, cwd)? {
             return Ok(thread_id);
         }
+    }
+}
+
+fn read_message_unless_interrupted<R>(mut read: R) -> tungstenite::Result<Option<Message>>
+where
+    R: FnMut() -> tungstenite::Result<Message>,
+{
+    match read() {
+        Ok(message) => Ok(Some(message)),
+        Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
+            Ok(None)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -393,9 +410,12 @@ where
     F: FnMut(Value),
 {
     loop {
-        let message = read()
+        let Some(message) = read_message_unless_interrupted(&mut read)
             .with_context(|| format!("failed to read Codex app-server `{method}` response"))
-            .map_err(RequestError::Transport)?;
+            .map_err(RequestError::Transport)?
+        else {
+            continue;
+        };
         match message {
             Message::Text(text) => {
                 let response: Value = serde_json::from_str(&text)
@@ -752,6 +772,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn waits_for_started_thread_after_interrupted_read() {
+        let mut messages = [
+            Err(tungstenite::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::Interrupted,
+            ))),
+            Ok(Message::Text(
+                json!({
+                    "method": "thread/started",
+                    "params": {"thread": {
+                        "id": "thread-a",
+                        "cwd": "/workspace/project-a",
+                        "parentThreadId": null,
+                    }},
+                })
+                .to_string()
+                .into(),
+            )),
+        ]
+        .into_iter();
+
+        let actual = wait_for_thread_started(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            Path::new("/workspace/project-a"),
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok("thread-a".to_string())
+        );
+    }
+
     #[rstest]
     #[case::closed(
         Message::Close(None),
@@ -834,6 +890,37 @@ mod tests {
                 Ok(json!({})),
                 vec![json!({"method": "turn/started", "params": {}})],
             ),
+        );
+    }
+
+    #[test]
+    fn waits_for_matching_response_after_interrupted_read() {
+        let mut messages = [
+            Err(tungstenite::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::Interrupted,
+            ))),
+            Ok(Message::Text(
+                json!({"id": 2, "result": {"turn": {"id": "turn-a"}}})
+                    .to_string()
+                    .into(),
+            )),
+        ]
+        .into_iter();
+
+        let actual = wait_for_response_with_notifications(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            2,
+            "turn/start",
+            |_| {},
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok(json!({"turn": {"id": "turn-a"}}))
         );
     }
 

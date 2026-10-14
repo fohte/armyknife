@@ -180,8 +180,9 @@ fn wait_for_delivery(
     next_read_request_id: &mut u64,
 ) -> super::Result<()> {
     loop {
-        let message = match socket.read() {
-            Ok(message) => message,
+        let message = match super::read_message_unless_interrupted(|| socket.read()) {
+            Ok(Some(message)) => message,
+            Ok(None) => continue,
             Err(error) if is_read_timeout(&error) => {
                 let request_id = take_request_id(next_read_request_id)?;
                 let (response, notifications) = read_thread(
