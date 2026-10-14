@@ -51,7 +51,7 @@ pub(crate) mod test_support {
 #[cfg(feature = "schema-gen")]
 mod schema;
 mod work_type;
-pub use agent::AgentConfig;
+pub use agent::{AgentConfig, BgTaskReminderConfig};
 pub use agent_status::{AgentStatusConfig, AgentStatusState};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
@@ -790,6 +790,7 @@ mod tests {
                     default_engine: Engine::Claude,
                     merge_notification: None,
                     stop_hook_instruction: None,
+                    bg_task_reminder: BgTaskReminderConfig::default(),
                     codex: CodexConfig {
                         model: None,
                         reasoning_effort: None,
@@ -937,6 +938,32 @@ mod tests {
                     "Please summarize the result before stopping.".to_string()
                 ),
                 ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_agent_bg_task_reminder_yaml() {
+        let yaml = indoc! {"
+            agent:
+              bg_task_reminder:
+                timeout: 7m
+                message: Check the long-running task.
+                excluded_commands:
+                  - sample-review --wait
+                  - release approve
+        "};
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.agent.bg_task_reminder,
+            BgTaskReminderConfig {
+                timeout: Some("7m".to_string()),
+                message: "Check the long-running task.".to_string(),
+                excluded_commands: vec![
+                    "sample-review --wait".to_string(),
+                    "release approve".to_string(),
+                ],
             }
         );
     }
@@ -1870,6 +1897,27 @@ mod tests {
                 "type": ["string", "null"],
                 "default": null,
             })
+        );
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_contains_bg_task_reminder_settings(schema_value: serde_json::Value) {
+        let properties = &schema_value["$defs"]["BgTaskReminderConfig"]["properties"];
+
+        assert_eq!(
+            (
+                properties["timeout"]["type"].clone(),
+                properties["message"]["default"].clone(),
+                properties["excluded_commands"]["default"].clone(),
+            ),
+            (
+                serde_json::json!(["string", "null"]),
+                serde_json::json!(
+                    "This is a reminder, not an error: this background task has been running for a long time. Check its output and the state of what it is monitoring. Stop it if it is stuck."
+                ),
+                serde_json::json!([]),
+            )
         );
     }
 

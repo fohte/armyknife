@@ -17,6 +17,11 @@
           "enabled": true,
           "timeout": "30m"
         },
+        "bg_task_reminder": {
+          "excluded_commands": [],
+          "message": "This is a reminder, not an error: this background task has been running for a long time. Check its output and the state of what it is monitoring. Stop it if it is stuck.",
+          "timeout": null
+        },
         "codex": {
           "model": null,
           "reasoning_effort": null
@@ -101,6 +106,15 @@
           "default": {
             "enabled": true,
             "timeout": "30m"
+          }
+        },
+        "bg_task_reminder": {
+          "description": "Reminder settings for background tasks that run longer than expected.",
+          "$ref": "#/$defs/BgTaskReminderConfig",
+          "default": {
+            "excluded_commands": [],
+            "message": "This is a reminder, not an error: this background task has been running for a long time. Check its output and the state of what it is monitoring. Stop it if it is stuck.",
+            "timeout": null
           }
         },
         "codex": {
@@ -353,6 +367,34 @@
           "description": "How long a session must stay in Stopped before being paused.\nAccepts human-friendly durations parsed by the `humantime` style parser\nbuilt into armyknife, e.g., \"30s\", \"10m\", \"1h30m\".\nDefault: \"30m\".",
           "type": "string",
           "default": "30m"
+        }
+      },
+      "additionalProperties": false
+    },
+    "BgTaskReminderConfig": {
+      "description": "Configuration for reminders sent when a background task exceeds its timeout.",
+      "type": "object",
+      "properties": {
+        "excluded_commands": {
+          "description": "Command fragments that skip reminders when they appear in the command line.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "message": {
+          "description": "Message sent when a background task exceeds `timeout`.",
+          "type": "string",
+          "default": "This is a reminder, not an error: this background task has been running for a long time. Check its output and the state of what it is monitoring. Stop it if it is stuck."
+        },
+        "timeout": {
+          "description": "How long a background task may run before a reminder is sent.\nAccepts human-friendly durations such as \"13m\". When omitted, reminders are disabled.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "additionalProperties": false

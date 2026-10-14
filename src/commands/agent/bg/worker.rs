@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -9,6 +10,7 @@ use indoc::formatdoc;
 
 use super::super::{bg_tasks, peer::notify, window_status};
 use super::output;
+use super::reminder::{self, ReminderSettings};
 use crate::shared::command;
 use crate::shared::sanitize::strip_angle_brackets;
 
@@ -36,8 +38,9 @@ pub struct RunDetachedArgs {
 }
 
 pub fn run(args: &RunDetachedArgs) -> Result<()> {
+    let reminder = ReminderSettings::load();
     let status = bg_tasks::set_worker_pid(&args.session, &args.task_id, std::process::id())
-        .and_then(|()| run_command(args));
+        .and_then(|()| run_command(args, &reminder));
     let execution_error = status.as_ref().err().map(|error| format!("{error:#}"));
     let exit_code = status.as_ref().ok().and_then(ExitStatus::code);
 
@@ -77,10 +80,16 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_command(args: &RunDetachedArgs) -> Result<ExitStatus> {
+fn run_command(args: &RunDetachedArgs, reminder: &ReminderSettings) -> Result<ExitStatus> {
     let Some((program, command_args)) = args.command.split_first() else {
         anyhow::bail!("background command is empty");
     };
+    let command_line = args
+        .command
+        .iter()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
     let stdout = output::open_output_file(&args.stdout_file)
         .with_context(|| format!("failed to open stdout file: {}", args.stdout_file.display()))?;
     let stderr = output::open_output_file(&args.stderr_file)
@@ -104,9 +113,47 @@ fn run_command(args: &RunDetachedArgs) -> Result<ExitStatus> {
             error = %error,
         );
     }
-    child
-        .wait()
-        .context("failed to wait for background command")
+    let Some(timeout) = reminder.timeout_for(&command_line) else {
+        return child
+            .wait()
+            .context("failed to wait for background command");
+    };
+
+    let started_at = Instant::now();
+    reminder::wait_until_timeout_or_exit(
+        timeout,
+        || child.try_wait(),
+        || started_at.elapsed(),
+        reminder::sleep,
+        || match notify::notify(&args.session, reminder.message(), None, None) {
+            Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
+                event = "agent.bg_run.reminder_queued",
+                session = %args.session,
+                task = %args.task_id,
+                reason,
+            ),
+            Ok(_) => tracing::info!(
+                event = "agent.bg_run.reminder_sent",
+                session = %args.session,
+                task = %args.task_id,
+            ),
+            Err(error) => tracing::warn!(
+                event = "agent.bg_run.reminder_failed",
+                session = %args.session,
+                task = %args.task_id,
+                error = %format!("{error:#}"),
+            ),
+        },
+    )
+    .context("failed to wait for background command")?
+    .map_or_else(
+        || {
+            child
+                .wait()
+                .context("failed to wait for background command")
+        },
+        Ok,
+    )
 }
 
 fn completion_message(
