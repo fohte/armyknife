@@ -15,7 +15,7 @@ use crate::commands::agent::user_turn::user_turns;
 
 use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
-use super::helpers::{count_statuses, truncate};
+use super::helpers::{DIM_FG, count_statuses, truncate};
 use super::session_content::{minimum_two_pane_width, render_main_list};
 
 const HEADER_HEIGHT: u16 = 1;
@@ -146,7 +146,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" · "),
-        Span::styled(idle_text, Style::default().fg(Color::DarkGray)),
+        Span::styled(idle_text, Style::default().fg(DIM_FG)),
     ]);
 
     frame.render_widget(Paragraph::new(line), area);
@@ -246,10 +246,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     spans.push(Span::raw(padding));
-    spans.push(Span::styled(
-        count_str,
-        Style::default().fg(Color::DarkGray),
-    ));
+    spans.push(Span::styled(count_str, Style::default().fg(DIM_FG)));
 
     let search_text = Line::from(spans);
     let search = Paragraph::new(search_text);

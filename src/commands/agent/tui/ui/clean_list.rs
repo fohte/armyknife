@@ -14,7 +14,7 @@ use crate::commands::agent::tui::clean_view::{
 };
 use crate::commands::agent::tui::worktree_session_children::create_session_child_list_item;
 
-use super::helpers::truncate;
+use super::helpers::{DIM_FG, truncate};
 
 /// Renders the clean view: To delete / Kept sections, repo group
 /// headers under each section, one row per worktree, then nested
@@ -27,8 +27,7 @@ pub(super) fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, no
             // No initial worktree snapshot yet — the only thing to show
             // is the pending state. Once the snapshot arrives the view
             // re-renders as Ready.
-            let p = Paragraph::new("  Loading worktrees...")
-                .style(Style::default().fg(Color::DarkGray));
+            let p = Paragraph::new("  Loading worktrees...").style(Style::default().fg(DIM_FG));
             frame.render_widget(p, area);
             return;
         }
@@ -59,8 +58,7 @@ pub(super) fn render_clean_list(frame: &mut Frame, area: Rect, app: &mut App, no
 
     let entries = app.clean_view.list_entries();
     if entries.is_empty() {
-        let p =
-            Paragraph::new("  No worktrees to clean.").style(Style::default().fg(Color::DarkGray));
+        let p = Paragraph::new("  No worktrees to clean.").style(Style::default().fg(DIM_FG));
         frame.render_widget(p, area);
         return;
     }
@@ -97,7 +95,7 @@ fn pr_fetch_banner(status: &PrFetchStatus) -> Option<Paragraph<'static>> {
     match status {
         PrFetchStatus::Loading => Some(
             Paragraph::new("  Fetching PR status... (toggle disabled)")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(DIM_FG)),
         ),
         PrFetchStatus::Failed(err) => {
             let line = Line::from(vec![
@@ -118,7 +116,7 @@ fn create_clean_list_item(
     term_width: usize,
     now: DateTime<Utc>,
 ) -> ListItem<'static> {
-    let dim_style = Style::default().fg(Color::DarkGray);
+    let dim_style = Style::default().fg(DIM_FG);
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
     match entry {
@@ -159,9 +157,9 @@ fn create_clean_list_item(
             } else if row.session_count > 0 {
                 ("●", Color::Green)
             } else {
-                ("◌", Color::DarkGray)
+                ("◌", DIM_FG)
             };
-            let bar = Span::styled("▎", Style::default().fg(Color::DarkGray));
+            let bar = Span::styled("▎", Style::default().fg(DIM_FG));
 
             let primary = if row.repo == row.name || row.branch.is_empty() {
                 row.repo.clone()

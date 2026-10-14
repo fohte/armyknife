@@ -8,7 +8,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// headers, breadcrumbs, ...). A fixed 256-color grayscale index rather than
 /// the ANSI-16 `Color::Gray`/`Color::DarkGray` names, whose actual rendered
 /// brightness depends on the terminal's configurable palette.
-pub(super) const DIM_FG: Color = Color::Indexed(245);
+pub(in crate::commands::agent::tui) const DIM_FG: Color = Color::Indexed(245);
 
 /// Distance beyond which a kin relationship no longer gets a distinct
 /// color and renders with the normal (non-kin) title style, e.g. a

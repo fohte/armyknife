@@ -6,6 +6,9 @@ mod helpers;
 mod progress;
 mod session_content;
 mod session_list;
+
+pub(super) use helpers::DIM_FG;
+
 #[cfg(test)]
 pub(super) mod test_support;
 

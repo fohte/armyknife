@@ -9,6 +9,8 @@ use ratatui::widgets::ListItem;
 
 use crate::commands::agent::types::{DisplayStatus, Session};
 
+use super::ui::DIM_FG;
+
 #[cfg(test)]
 use super::worktree::canonicalize_or_self;
 #[cfg(test)]
@@ -88,10 +90,8 @@ fn status_color(status: DisplayStatus) -> Color {
         DisplayStatus::WaitingInput => Color::Yellow,
         DisplayStatus::Background => Color::Cyan,
         DisplayStatus::Failed => Color::Red,
-        DisplayStatus::Paused => Color::Indexed(245),
-        DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
-            Color::DarkGray
-        }
+        DisplayStatus::Paused => DIM_FG,
+        DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => DIM_FG,
     }
 }
 
@@ -105,7 +105,7 @@ pub fn create_session_child_list_item(
     let connector = if child.is_last { "└─" } else { "├─" };
     let symbol = child.display_symbol();
     let s_style = Style::default().fg(status_color(child.display_status));
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(DIM_FG);
     let time_ago = format_relative_time(child.updated_at, now);
 
     let line = Line::from(vec![
