@@ -35,8 +35,8 @@ use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler, SessionChange, SessionChangeType};
 use self::progress::ProgressOpenTarget;
 use self::progress_refresh::{
-    apply_tq_snapshot_and_schedule_progress_refresh, start_pending_progress_refresh,
-    start_progress_refresh,
+    ProgressRefreshSchedule, apply_tq_snapshot_and_schedule_progress_refresh,
+    start_pending_progress_refresh, start_progress_refresh,
 };
 use self::session_key::handle_key_event;
 use self::session_preview::PreviewError;
@@ -45,7 +45,6 @@ use crate::shared::command;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 const TQ_SESSION_TASKS_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
-const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 struct TqRefreshSchedule {
     in_flight: bool,
@@ -91,47 +90,6 @@ impl TqRefreshSchedule {
         self.in_flight = true;
         self.pending = false;
         true
-    }
-}
-
-struct ProgressRefreshSchedule {
-    in_flight: bool,
-    pending_session_id: Option<String>,
-    next_periodic_refresh: Instant,
-}
-
-impl ProgressRefreshSchedule {
-    fn new(now: Instant) -> Self {
-        Self {
-            in_flight: false,
-            pending_session_id: None,
-            next_periodic_refresh: now + PROGRESS_REFRESH_INTERVAL,
-        }
-    }
-
-    fn request(&mut self, session_id: Option<String>) {
-        self.pending_session_id = session_id;
-    }
-
-    fn periodic_refresh_due(&mut self, now: Instant) -> bool {
-        if now < self.next_periodic_refresh {
-            return false;
-        }
-        self.next_periodic_refresh = now + PROGRESS_REFRESH_INTERVAL;
-        true
-    }
-
-    fn fetch_completed(&mut self) {
-        self.in_flight = false;
-    }
-
-    fn start_pending(&mut self) -> Option<String> {
-        if self.in_flight {
-            return None;
-        }
-        let session_id = self.pending_session_id.take()?;
-        self.in_flight = true;
-        Some(session_id)
     }
 }
 
