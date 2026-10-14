@@ -66,8 +66,7 @@ impl App {
         let scope = self.progress_scope(&selected);
         let request_scope = scope.kind.fetch_scope();
         let cached_delegates = self
-            .progress_cache
-            .get(&self.progress_cache_key(&selected.session_id))
+            .cached_progress(&selected.session_id)
             .filter(|cached| {
                 same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
             })

@@ -190,9 +190,11 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     app.tq_refresh_started();
     event_handler.start_tq_task_fetch(local_session_ids);
     let mut tq_refresh_schedule = TqRefreshSchedule::new(Instant::now());
-    start_pending_progress_refresh(&mut progress_refresh_schedule, |session_id| {
-        start_progress_refresh(&mut app, &event_handler, session_id)
-    });
+    start_pending_progress_refresh(
+        &mut progress_refresh_schedule,
+        Instant::now(),
+        |session_id| start_progress_refresh(&mut app, &event_handler, session_id),
+    );
 
     loop {
         let unresolved = app.claim_unresolved_label_cwds();
@@ -397,9 +399,12 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             event_handler.start_tq_task_fetch(local_session_ids);
         }
 
-        start_pending_progress_refresh(&mut progress_refresh_schedule, |session_id| {
-            start_progress_refresh(&mut app, &event_handler, session_id)
-        });
+        start_pending_progress_refresh(
+            &mut progress_refresh_schedule,
+            Instant::now(),
+            |session_id| start_progress_refresh(&mut app, &event_handler, session_id),
+        );
+        app::persist_progress_cache(&mut app);
 
         if app.should_quit {
             break;
@@ -920,13 +925,18 @@ mod tests {
 
     #[test]
     fn skipped_progress_fetch_leaves_schedule_ready() {
-        let mut schedule = ProgressRefreshSchedule::new(Instant::now());
+        let now = Instant::now();
+        let mut schedule = ProgressRefreshSchedule::new(now);
         schedule.request(Some("project-manager".to_string()));
-        start_pending_progress_refresh(&mut schedule, |_| false);
+        start_pending_progress_refresh(&mut schedule, now, |_| {
+            super::progress_refresh::ProgressRefreshStart::MissingScope
+        });
         let skipped_state = (schedule.in_flight, schedule.pending_session_id.clone());
 
         schedule.request(Some("session-0".to_string()));
-        start_pending_progress_refresh(&mut schedule, |_| true);
+        start_pending_progress_refresh(&mut schedule, now, |_| {
+            super::progress_refresh::ProgressRefreshStart::Started
+        });
 
         assert_eq!(
             (
@@ -935,6 +945,25 @@ mod tests {
                 schedule.pending_session_id
             ),
             ((false, None), true, None),
+        );
+    }
+
+    #[test]
+    fn fresh_progress_attempt_schedules_periodic_refresh_at_its_due_time() {
+        let now = Instant::now();
+        let mut schedule = ProgressRefreshSchedule::new(now);
+        let periodic_due = now + Duration::from_secs(30);
+        schedule.request(Some("session-0".to_string()));
+        start_pending_progress_refresh(&mut schedule, periodic_due, |_| {
+            super::progress_refresh::ProgressRefreshStart::Fresh(Duration::from_secs(20))
+        });
+
+        assert_eq!(
+            (
+                schedule.periodic_refresh_due(periodic_due + Duration::from_secs(19)),
+                schedule.periodic_refresh_due(periodic_due + Duration::from_secs(20)),
+            ),
+            (false, true),
         );
     }
 

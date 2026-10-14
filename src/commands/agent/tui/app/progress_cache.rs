@@ -10,6 +10,8 @@ use super::progress::CachedProgress;
 
 mod disk_cache;
 
+const MAX_CACHED_TASKS: usize = 128;
+
 pub(super) fn same_implementation_scope(
     cached: Option<&ProgressFetchScope>,
     current: Option<&ProgressFetchScope>,
@@ -48,24 +50,37 @@ impl App {
                 .into_iter()
                 .map(|(task_id, snapshot)| (task_cache_key(&task_id), snapshot)),
         );
+        self.progress_cache_dirty |= prune_task_entries(&mut self.progress_cache);
     }
 
+    #[cfg(test)]
     pub(in crate::commands::agent::tui) fn progress_refresh_due(
         &self,
         session_id: &str,
         now: DateTime<Utc>,
         max_age: std::time::Duration,
     ) -> bool {
-        let cache_key = self.progress_cache_key(session_id);
+        self.progress_refresh_wait(session_id, now, max_age)
+            .is_none_or(|wait| wait.is_zero())
+    }
+
+    pub(in crate::commands::agent::tui) fn progress_refresh_wait(
+        &self,
+        session_id: &str,
+        now: DateTime<Utc>,
+        max_age: std::time::Duration,
+    ) -> Option<std::time::Duration> {
         let last_attempt = self
-            .progress_cache
-            .get(&cache_key)
+            .cached_progress(session_id)
             .and_then(|snapshot| snapshot.last_attempt_at.or(snapshot.fetched_at));
-        let Some(last_attempt) = last_attempt else {
-            return true;
-        };
+        let last_attempt = last_attempt?;
         let max_age_millis = i64::try_from(max_age.as_millis()).unwrap_or(i64::MAX);
-        now.signed_duration_since(last_attempt) >= ChronoDuration::milliseconds(max_age_millis)
+        let elapsed = now.signed_duration_since(last_attempt);
+        if elapsed >= ChronoDuration::milliseconds(max_age_millis) {
+            Some(std::time::Duration::ZERO)
+        } else {
+            Some(max_age.saturating_sub(elapsed.to_std().unwrap_or_default()))
+        }
     }
 
     pub(in crate::commands::agent::tui) fn mark_progress_refresh_started(
@@ -73,17 +88,21 @@ impl App {
         session_id: &str,
         attempted_at: DateTime<Utc>,
     ) {
-        let cache_key = self.progress_cache_key(session_id);
-        let has_cached_result = self
-            .progress_cache
-            .get_mut(&cache_key)
-            .map(|snapshot| {
-                snapshot.last_attempt_at = Some(attempted_at);
-                snapshot.fetched_at.is_some()
-            })
-            .unwrap_or(false);
-        if has_cached_result {
-            self.persist_progress_cache();
+        if let Some(snapshot) = self.cached_progress_mut(session_id) {
+            snapshot.last_attempt_at = Some(attempted_at);
+        } else {
+            self.set_cached_progress(
+                session_id,
+                CachedProgress {
+                    rows: Vec::new(),
+                    error: None,
+                    implementation: None,
+                    request_scope: None,
+                    delegated_sessions: Vec::new(),
+                    fetched_at: None,
+                    last_attempt_at: Some(attempted_at),
+                },
+            );
         }
     }
 
@@ -92,6 +111,31 @@ impl App {
             .get(session_id)
             .map(|task| task_cache_key(&task.task_id))
             .unwrap_or_else(|| format!("session:{session_id}"))
+    }
+
+    pub(super) fn cached_progress(&self, session_id: &str) -> Option<&CachedProgress> {
+        let key = self.progress_cache_key(session_id);
+        self.progress_cache.get(&key)
+    }
+
+    pub(super) fn cached_progress_mut(&mut self, session_id: &str) -> Option<&mut CachedProgress> {
+        let key = self.progress_cache_key(session_id);
+        self.progress_cache.get_mut(&key)
+    }
+
+    pub(super) fn set_cached_progress(&mut self, session_id: &str, snapshot: CachedProgress) {
+        let key = self.progress_cache_key(session_id);
+        let changed = self.progress_cache.get(&key).is_none_or(|cached| {
+            cached.rows != snapshot.rows
+                || cached.implementation != snapshot.implementation
+                || cached.fetched_at != snapshot.fetched_at
+                || cached.last_attempt_at != snapshot.last_attempt_at
+        });
+        if changed && key.starts_with("task:") && snapshot.fetched_at.is_some() {
+            self.progress_cache_dirty = true;
+        }
+        self.progress_cache.insert(key, snapshot);
+        self.progress_cache_dirty |= prune_task_entries(&mut self.progress_cache);
     }
 
     pub(super) fn rows_with_current_panes(&self, rows: &[ProgressRow]) -> Vec<ProgressRow> {
@@ -121,12 +165,42 @@ impl App {
             })
             .collect()
     }
+}
 
-    pub(super) fn persist_progress_cache(&self) {
-        if let Err(error) = disk_cache::store(&self.progress_cache) {
-            tracing::warn!("failed to store progress cache: {error}");
-        }
+pub(in crate::commands::agent::tui) fn persist_progress_cache(app: &mut App) {
+    if !app.progress_cache_dirty {
+        return;
     }
+    app.progress_cache_dirty = false;
+    if let Err(error) = disk_cache::store(&app.progress_cache) {
+        tracing::warn!("failed to store progress cache: {error}");
+    }
+}
+
+fn prune_task_entries(entries: &mut HashMap<String, CachedProgress>) -> bool {
+    let mut task_entries = entries
+        .iter()
+        .filter(|(key, _)| key.starts_with("task:"))
+        .map(|(key, snapshot)| {
+            (
+                key.clone(),
+                snapshot.last_attempt_at.or(snapshot.fetched_at),
+            )
+        })
+        .collect::<Vec<_>>();
+    if task_entries.len() <= MAX_CACHED_TASKS {
+        return false;
+    }
+    task_entries.sort_by(|(left_key, left_time), (right_key, right_time)| {
+        right_time
+            .cmp(left_time)
+            .then_with(|| left_key.cmp(right_key))
+    });
+    let removed = task_entries.len() - MAX_CACHED_TASKS;
+    for (key, _) in task_entries.into_iter().skip(MAX_CACHED_TASKS) {
+        entries.remove(&key);
+    }
+    removed > 0
 }
 
 fn task_cache_key(task_id: &str) -> String {

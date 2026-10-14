@@ -13,7 +13,7 @@ use crate::commands::agent::tui::progress::{
 };
 use crate::commands::agent::tui::session_rows::SessionTask;
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
-use crate::commands::agent::types::Session;
+use crate::commands::agent::types::{Session, SessionStatus, TmuxInfo};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
 use crate::shared::config::AgentConfig;
 
@@ -24,10 +24,11 @@ fn timestamp() -> DateTime<Utc> {
 
 #[fixture]
 fn app_with_task(timestamp: DateTime<Utc>) -> App {
-    let sessions = vec![
-        create_test_session_at("session-a", timestamp),
-        create_test_session_at("session-b", timestamp + ChronoDuration::seconds(1)),
-    ];
+    let mut session_a = create_test_session_at("session-a", timestamp);
+    session_a.work_type = Some("implementation".to_string());
+    let mut session_b = create_test_session_at("session-b", timestamp + ChronoDuration::seconds(1));
+    session_b.work_type = Some("implementation".to_string());
+    let sessions = vec![session_a, session_b];
     let mut app = create_test_app(sessions);
     app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
         ("session-a".to_string(), vec![linked_task()]),
@@ -60,25 +61,86 @@ fn cached_progress_is_restored_for_another_session_linked_to_the_same_task(
 }
 
 #[rstest]
-#[case::cache_is_fresh(29, false)]
-#[case::cache_is_due(30, true)]
-fn progress_refresh_uses_the_task_cache_age(
+fn cached_work_rows_refresh_status_and_rebind_live_pane_ids(
     mut app_with_task: App,
     timestamp: DateTime<Utc>,
-    #[case] age_seconds: i64,
-    #[case] expected: bool,
 ) {
+    let session_a = app_with_task
+        .sessions
+        .iter_mut()
+        .find(|session| session.session_id == "session-a")
+        .unwrap();
+    session_a.status = SessionStatus::Stopped;
+    session_a.tmux_info = Some(TmuxInfo {
+        session_name: "tmux-placeholder".to_string(),
+        window_name: "window-placeholder".to_string(),
+        window_index: 0,
+        pane_id: "%42".to_string(),
+    });
     app_with_task.restore_progress_cache(HashMap::from([(
         "task-placeholder".to_string(),
         cached_progress(timestamp, task_rows()),
     )]));
 
+    app_with_task.begin_progress_refresh("session-b");
+
+    let mut expected = task_rows();
+    if let ProgressRow::Work(row) = &mut expected[0] {
+        row.mark = ProgressMark::NotStarted;
+        row.pane_id = Some("%42".to_string());
+    }
+    assert_eq!(app_with_task.progress_rows, expected);
+}
+
+#[rstest]
+fn progress_cache_retains_the_most_recent_128_tasks(
+    mut app_with_task: App,
+    timestamp: DateTime<Utc>,
+) {
+    let entries = (0..129)
+        .map(|index| {
+            let task_id = format!("task-placeholder-{index}");
+            let fetched_at = timestamp + ChronoDuration::seconds(index);
+            (task_id, cached_progress(fetched_at, Vec::new()))
+        })
+        .collect::<HashMap<_, _>>();
+
+    app_with_task.restore_progress_cache(entries);
+
     assert_eq!(
-        app_with_task.progress_refresh_due(
-            "session-b",
-            timestamp + ChronoDuration::seconds(age_seconds),
-            Duration::from_secs(30),
+        (
+            app_with_task.progress_cache.len(),
+            app_with_task
+                .progress_cache
+                .contains_key("task:task-placeholder-128"),
+            app_with_task
+                .progress_cache
+                .contains_key("task:task-placeholder-0"),
         ),
+        (128, true, false),
+    );
+}
+
+#[rstest]
+#[case::cache_is_fresh(29, 29, false)]
+#[case::cache_is_due(30, 30, true)]
+#[case::recent_attempt_throttles_older_result(60, 29, false)]
+#[case::old_attempt_allows_refresh(60, 30, true)]
+fn progress_refresh_uses_the_task_cache_age(
+    mut app_with_task: App,
+    timestamp: DateTime<Utc>,
+    #[case] fetched_age_seconds: i64,
+    #[case] attempt_age_seconds: i64,
+    #[case] expected: bool,
+) {
+    let now = timestamp + ChronoDuration::seconds(fetched_age_seconds);
+    let mut snapshot = cached_progress(timestamp, task_rows());
+    snapshot.last_attempt_at = Some(now - ChronoDuration::seconds(attempt_age_seconds));
+    app_with_task
+        .restore_progress_cache(HashMap::from([("task-placeholder".to_string(), snapshot)]));
+
+    assert_eq!(
+        app_with_task.progress_refresh_due("session-b", now, Duration::from_secs(30),),
         expected,
     );
 }

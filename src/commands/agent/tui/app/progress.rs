@@ -28,9 +28,10 @@ pub(super) struct CachedProgress {
 
 impl App {
     pub(in crate::commands::agent::tui) fn begin_progress_refresh(&mut self, session_id: &str) {
-        let cache_key = self.progress_cache_key(session_id);
-        if let Some(mut snapshot) = self.progress_cache.get(&cache_key).cloned() {
-            snapshot.rows = self.rows_with_current_panes(&snapshot.rows);
+        if let Some(snapshot) = self.cached_progress(session_id).cloned() {
+            let rows = self.refresh_cached_work_rows(session_id, &snapshot.rows);
+            let mut snapshot = snapshot;
+            snapshot.rows = self.rows_with_current_panes(&rows);
             self.store_progress_snapshot(session_id, snapshot, false);
         } else {
             self.refresh_local_progress(session_id, None, false);
@@ -64,8 +65,7 @@ impl App {
                     return;
                 }
                 let includes_fetched_progress = scope.kind.includes_fetched_progress();
-                let cache_key = self.progress_cache_key(session_id);
-                let reusable_cache = self.progress_cache.get(&cache_key).filter(|cached| {
+                let reusable_cache = self.cached_progress(session_id).filter(|cached| {
                     same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
                 });
                 let cached_implementation =
@@ -144,20 +144,16 @@ impl App {
                     },
                     true,
                 );
-                self.persist_progress_cache();
             }
             Ok(_) => {}
             Err(error) => {
                 self.refresh_local_progress(session_id, Some(error), true);
-                self.persist_progress_cache();
             }
         }
     }
 
     fn existing_progress_rows(&self, session_id: &str) -> Vec<ProgressRow> {
-        let cache_key = self.progress_cache_key(session_id);
-        self.progress_cache
-            .get(&cache_key)
+        self.cached_progress(session_id)
             .map(|snapshot| snapshot.rows.clone())
             .unwrap_or_default()
     }
@@ -184,8 +180,7 @@ impl App {
     ) -> CachedProgress {
         let scope = self.progress_scope(selected);
         let current_request_scope = scope.kind.fetch_scope();
-        let cache_key = self.progress_cache_key(&selected.session_id);
-        let cached = self.progress_cache.get(&cache_key);
+        let cached = self.cached_progress(&selected.session_id);
         let reusable_cache = cached.filter(|snapshot| {
             same_implementation_scope(
                 snapshot.request_scope.as_ref(),
@@ -260,8 +255,7 @@ impl App {
         snapshot: CachedProgress,
         resolve_initial_selection: bool,
     ) {
-        let cache_key = self.progress_cache_key(session_id);
-        self.progress_cache.insert(cache_key, snapshot.clone());
+        self.set_cached_progress(session_id, snapshot.clone());
         if self.selected_session_id() != Some(session_id) {
             return;
         }
@@ -366,6 +360,34 @@ impl App {
         )
     }
 
+    fn refresh_cached_work_rows(
+        &self,
+        session_id: &str,
+        cached_rows: &[ProgressRow],
+    ) -> Vec<ProgressRow> {
+        let Some(selected) = self.session_by_id(session_id) else {
+            return cached_rows.to_vec();
+        };
+        let scope = self.progress_scope(&selected);
+        let refreshed_rows = refresh_task_rows_from_sessions(
+            &scope.work_sessions,
+            session_id,
+            &scope.delegated,
+            cached_rows,
+            &self.agent_config,
+        );
+        refreshed_rows
+            .into_iter()
+            .take_while(|row| matches!(row, ProgressRow::Work(_)))
+            .chain(
+                cached_rows
+                    .iter()
+                    .filter(|row| !matches!(row, ProgressRow::Work(_)))
+                    .cloned(),
+            )
+            .collect()
+    }
+
     fn initial_progress_target(&self, parent_session_id: &str) -> Option<&str> {
         self.initial_progress_selection
             .as_ref()
@@ -404,10 +426,7 @@ impl App {
     fn current_progress_implementation(&self) -> Option<&ImplementationPlan> {
         self.progress_session_id
             .as_deref()
-            .and_then(|session_id| {
-                self.progress_cache
-                    .get(&self.progress_cache_key(session_id))
-            })
+            .and_then(|session_id| self.cached_progress(session_id))
             .and_then(|snapshot| snapshot.implementation.as_ref())
     }
 
@@ -434,10 +453,10 @@ impl App {
         self.progress_list_state.select(Some(selected_index));
         self.progress_table_state
             .select(table_selection_index(&self.progress_rows, selected_index));
-        if let Some(session_id) = self.progress_session_id.as_deref() {
-            let cache_key = self.progress_cache_key(session_id);
-            if let Some(snapshot) = self.progress_cache.get_mut(&cache_key) {
-                snapshot.rows.clone_from(&self.progress_rows);
+        if let Some(session_id) = self.progress_session_id.clone() {
+            let rows = self.progress_rows.clone();
+            if let Some(snapshot) = self.cached_progress_mut(&session_id) {
+                snapshot.rows = rows;
             }
         }
     }

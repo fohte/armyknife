@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::super::progress::CachedProgress;
+use super::MAX_CACHED_TASKS;
 use crate::commands::agent::tui::progress::{ProgressFetchScope, ProgressRow};
 use crate::commands::agent::tui::progress_batches::ImplementationPlan;
 use crate::shared::cache;
@@ -71,13 +72,7 @@ fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
 }
 
 fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()> {
-    let parent = path
-        .parent()
-        .context("cache file path has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
-
-    let tasks: HashMap<String, PersistedProgress> = entries
+    let mut tasks: HashMap<String, PersistedProgress> = entries
         .iter()
         .filter_map(|(key, snapshot)| {
             let task_id = key.strip_prefix("task:")?;
@@ -96,6 +91,33 @@ fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()
     if tasks.is_empty() {
         return Ok(());
     }
+    let mut task_times = tasks
+        .iter()
+        .map(|(task_id, progress)| {
+            (
+                task_id.clone(),
+                progress
+                    .last_attempt_at
+                    .as_ref()
+                    .unwrap_or(&progress.fetched_at)
+                    .to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    task_times.sort_by(|(left_id, left_time), (right_id, right_time)| {
+        right_time
+            .cmp(left_time)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for (task_id, _) in task_times.into_iter().skip(MAX_CACHED_TASKS) {
+        tasks.remove(&task_id);
+    }
+
+    let parent = path
+        .parent()
+        .context("cache file path has no parent directory")?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
     let cache = ProgressCacheFile {
         format_version: FORMAT_VERSION,
         tasks,
@@ -136,7 +158,9 @@ struct PersistedProgress {
 mod tests {
     use std::collections::HashMap;
 
-    use chrono::TimeZone;
+    use chrono::{Duration, TimeZone};
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
 
     use super::*;
     use crate::commands::agent::tui::progress::{
@@ -146,22 +170,24 @@ mod tests {
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 
-    #[test]
-    fn missing_progress_cache_returns_none() {
-        let directory = tempfile::tempdir().unwrap();
+    #[fixture]
+    fn cache_directory() -> TempDir {
+        tempfile::tempdir().unwrap()
+    }
 
+    #[rstest]
+    fn missing_progress_cache_returns_none(cache_directory: TempDir) {
         assert_eq!(
-            load_from(&directory.path().join("missing.json"))
+            load_from(&cache_directory.path().join("missing.json"))
                 .unwrap()
                 .map(|entries| entries.len()),
             None
         );
     }
 
-    #[test]
-    fn progress_cache_round_trip_keeps_checklist_and_pr_rows() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("watch-progress.json");
+    #[rstest]
+    fn progress_cache_round_trip_keeps_checklist_and_pr_rows(cache_directory: TempDir) {
+        let path = cache_directory.path().join("watch-progress.json");
         let fetched_at = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let last_attempt_at = Utc.timestamp_opt(1_800_000_010, 0).single().unwrap();
         let progress = cached_progress(fetched_at, last_attempt_at);
@@ -225,6 +251,34 @@ mod tests {
                 None,
                 0,
             ),
+        );
+    }
+
+    #[rstest]
+    fn progress_cache_store_retains_the_most_recent_128_tasks(cache_directory: TempDir) {
+        let path = cache_directory.path().join("watch-progress.json");
+        let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let entries = (0..129)
+            .map(|index| {
+                let fetched_at = timestamp + Duration::seconds(index);
+                let task_id = format!("task-placeholder-{index}");
+                (
+                    format!("task:{task_id}"),
+                    cached_progress(fetched_at, fetched_at),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+
+        store_to(&path, &entries).unwrap();
+        let stored = load_from(&path).unwrap().unwrap();
+
+        assert_eq!(
+            (
+                stored.len(),
+                stored.contains_key("task-placeholder-128"),
+                stored.contains_key("task-placeholder-0"),
+            ),
+            (128, true, false),
         );
     }
 
