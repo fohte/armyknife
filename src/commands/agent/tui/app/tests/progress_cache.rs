@@ -101,7 +101,11 @@ fn progress_cache_retains_the_most_recent_128_tasks(
         .map(|index| {
             let task_id = format!("task-placeholder-{index}");
             let fetched_at = timestamp + ChronoDuration::seconds(index);
-            (task_id, cached_progress(fetched_at, Vec::new()))
+            let mut snapshot = cached_progress(fetched_at, Vec::new());
+            if index == 128 {
+                snapshot.last_attempt_at = Some(timestamp);
+            }
+            (task_id, snapshot)
         })
         .collect::<HashMap<_, _>>();
 

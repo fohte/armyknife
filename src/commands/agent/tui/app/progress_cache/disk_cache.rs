@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -9,7 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::super::progress::CachedProgress;
-use super::MAX_CACHED_TASKS;
+use super::task_keys_to_evict;
 use crate::commands::agent::tui::progress::{ProgressFetchScope, ProgressRow};
 use crate::commands::agent::tui::progress_batches::ImplementationPlan;
 use crate::shared::cache;
@@ -33,6 +32,33 @@ pub(super) fn store(entries: &HashMap<String, CachedProgress>) -> Result<()> {
 }
 
 fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
+    let Some(cache) = read_cache_file(path)? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        cache
+            .tasks
+            .into_iter()
+            .map(|(task_id, progress)| {
+                let snapshot = CachedProgress {
+                    rows: progress.rows,
+                    error: None,
+                    implementation: progress.implementation,
+                    request_scope: Some(ProgressFetchScope {
+                        task_id: Some(task_id.clone()),
+                        session_ids: None,
+                    }),
+                    delegated_sessions: Vec::new(),
+                    fetched_at: Some(progress.fetched_at),
+                    last_attempt_at: progress.last_attempt_at,
+                };
+                (task_id, snapshot)
+            })
+            .collect(),
+    ))
+}
+
+fn read_cache_file(path: &Path) -> Result<Option<ProgressCacheFile>> {
     match fs::read(path) {
         Ok(content) => {
             let cache: ProgressCacheFile = match serde_json::from_slice(&content) {
@@ -53,27 +79,7 @@ fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
                 );
                 return Ok(None);
             }
-            Ok(Some(
-                cache
-                    .tasks
-                    .into_iter()
-                    .map(|(task_id, progress)| {
-                        let snapshot = CachedProgress {
-                            rows: progress.rows,
-                            error: None,
-                            implementation: progress.implementation,
-                            request_scope: Some(ProgressFetchScope {
-                                task_id: Some(task_id.clone()),
-                                session_ids: None,
-                            }),
-                            delegated_sessions: Vec::new(),
-                            fetched_at: Some(progress.fetched_at),
-                            last_attempt_at: progress.last_attempt_at,
-                        };
-                        (task_id, snapshot)
-                    })
-                    .collect(),
-            ))
+            Ok(Some(cache))
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => {
@@ -83,6 +89,14 @@ fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
 }
 
 fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()> {
+    store_to_with(path, entries, || {})
+}
+
+fn store_to_with(
+    path: &Path,
+    entries: &HashMap<String, CachedProgress>,
+    after_merge: impl FnOnce(),
+) -> Result<()> {
     let mut tasks: HashMap<String, PersistedProgress> = entries
         .iter()
         .filter_map(|(key, snapshot)| persisted_progress(key, snapshot))
@@ -97,14 +111,13 @@ fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
     let _lock = lock_progress_cache(path)?;
-    if let Some(existing) = load_from(path)? {
-        for (task_id, snapshot) in existing {
-            if let Some((_, progress)) = persisted_progress(&format!("task:{task_id}"), &snapshot) {
-                merge_task(&mut tasks, task_id, progress);
-            }
+    if let Some(existing) = read_cache_file(path)? {
+        for (task_id, progress) in existing.tasks {
+            merge_task(&mut tasks, task_id, progress);
         }
     }
     prune_persisted_tasks(&mut tasks);
+    after_merge();
 
     let cache = ProgressCacheFile {
         format_version: FORMAT_VERSION,
@@ -162,30 +175,22 @@ fn merge_task(
 }
 
 fn prune_persisted_tasks(tasks: &mut HashMap<String, PersistedProgress>) {
-    let mut task_times = tasks
-        .iter()
-        .map(|(task_id, progress)| {
-            (
-                task_id.clone(),
-                progress
-                    .last_attempt_at
-                    .as_ref()
-                    .max(Some(&progress.fetched_at))
-                    .cloned(),
-            )
-        })
-        .collect::<Vec<_>>();
-    task_times.sort_by(|(left_id, left_time), (right_id, right_time)| {
-        right_time
-            .cmp(left_time)
-            .then_with(|| left_id.cmp(right_id))
-    });
-    for (task_id, _) in task_times.into_iter().skip(MAX_CACHED_TASKS) {
+    let evicted = task_keys_to_evict(tasks.iter().map(|(task_id, progress)| {
+        (
+            task_id.clone(),
+            progress
+                .last_attempt_at
+                .as_ref()
+                .max(Some(&progress.fetched_at))
+                .cloned(),
+        )
+    }));
+    for task_id in evicted {
         tasks.remove(&task_id);
     }
 }
 
-fn lock_progress_cache(path: &Path) -> Result<ProgressCacheLock> {
+fn lock_progress_cache(path: &Path) -> Result<File> {
     let file_name = path
         .file_name()
         .context("cache file path has no file name")?;
@@ -204,23 +209,9 @@ fn lock_progress_cache(path: &Path) -> Result<ProgressCacheLock> {
                 lock_path.display()
             )
         })?;
-    // SAFETY: `file` remains open while the lock is held.
-    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
-        return Err(std::io::Error::last_os_error())
-            .with_context(|| format!("failed to lock progress cache: {}", lock_path.display()));
-    }
-    Ok(ProgressCacheLock(file))
-}
-
-struct ProgressCacheLock(File);
-
-impl Drop for ProgressCacheLock {
-    fn drop(&mut self) {
-        // SAFETY: `self.0` remains open until after this unlock call.
-        unsafe {
-            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
-        }
-    }
+    file.lock()
+        .with_context(|| format!("failed to lock progress cache: {}", lock_path.display()))?;
+    Ok(file)
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -357,9 +348,10 @@ mod tests {
             .map(|index| {
                 let fetched_at = timestamp + Duration::seconds(index);
                 let task_id = format!("task-placeholder-{index}");
+                let last_attempt_at = if index == 128 { timestamp } else { fetched_at };
                 (
                     format!("task:{task_id}"),
-                    cached_progress(fetched_at, fetched_at),
+                    cached_progress(fetched_at, last_attempt_at),
                 )
             })
             .collect::<HashMap<_, _>>();
@@ -450,6 +442,112 @@ mod tests {
                     Some(t1),
                     Some(t1),
                     cached_progress_with_note(t1, t1, "charlie-new").rows,
+                ),
+            ),
+            (
+                "task-bravo".to_string(),
+                (
+                    Some(t2),
+                    Some(t2),
+                    cached_progress_with_note(t2, t2, "bravo-new").rows,
+                ),
+            ),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    fn progress_cache_store_serializes_concurrent_writers(cache_directory: TempDir) {
+        let path = cache_directory.path().join("watch-progress.json");
+        let t0 = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let t1 = t0 + Duration::seconds(10);
+        let t2 = t0 + Duration::seconds(20);
+        store_to(
+            &path,
+            &HashMap::from([(
+                "task:task-base".to_string(),
+                cached_progress_with_note(t0, t0, "base"),
+            )]),
+        )
+        .unwrap();
+
+        let (first_merged_tx, first_merged_rx) = std::sync::mpsc::channel();
+        let (release_first_tx, release_first_rx) = std::sync::mpsc::channel();
+        let first_path = path.clone();
+        let first_entries = HashMap::from([(
+            "task:task-alpha".to_string(),
+            cached_progress_with_note(t1, t1, "alpha-new"),
+        )]);
+        let first_writer = std::thread::spawn(move || {
+            store_to_with(&first_path, &first_entries, || {
+                first_merged_tx.send(()).unwrap();
+                release_first_rx.recv().unwrap();
+            })
+            .unwrap();
+        });
+        first_merged_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+
+        let (second_started_tx, second_started_rx) = std::sync::mpsc::channel();
+        let (second_merged_tx, second_merged_rx) = std::sync::mpsc::channel();
+        let (release_second_tx, release_second_rx) = std::sync::mpsc::channel();
+        let second_path = path.clone();
+        let second_entries = HashMap::from([(
+            "task:task-bravo".to_string(),
+            cached_progress_with_note(t2, t2, "bravo-new"),
+        )]);
+        let second_writer = std::thread::spawn(move || {
+            second_started_tx.send(()).unwrap();
+            store_to_with(&second_path, &second_entries, || {
+                second_merged_tx.send(()).unwrap();
+                release_second_rx.recv().unwrap();
+            })
+            .unwrap();
+        });
+        second_started_rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        let second_merged_before_first_write = second_merged_rx
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_ok();
+
+        release_first_tx.send(()).unwrap();
+        first_writer.join().unwrap();
+        if !second_merged_before_first_write {
+            second_merged_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .unwrap();
+        }
+        release_second_tx.send(()).unwrap();
+        second_writer.join().unwrap();
+
+        let stored = load_from(&path).unwrap().unwrap();
+        let actual = stored
+            .into_iter()
+            .map(|(task_id, snapshot)| {
+                (
+                    task_id,
+                    (snapshot.fetched_at, snapshot.last_attempt_at, snapshot.rows),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let expected = HashMap::from([
+            (
+                "task-base".to_string(),
+                (
+                    Some(t0),
+                    Some(t0),
+                    cached_progress_with_note(t0, t0, "base").rows,
+                ),
+            ),
+            (
+                "task-alpha".to_string(),
+                (
+                    Some(t1),
+                    Some(t1),
+                    cached_progress_with_note(t1, t1, "alpha-new").rows,
                 ),
             ),
             (

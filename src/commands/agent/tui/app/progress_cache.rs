@@ -178,33 +178,44 @@ pub(in crate::commands::agent::tui) fn persist_progress_cache(app: &mut App) {
 }
 
 fn prune_task_entries(entries: &mut HashMap<String, CachedProgress>) -> bool {
-    let mut task_entries = entries
-        .iter()
-        .filter(|(key, _)| key.starts_with("task:"))
-        .map(|(key, snapshot)| {
-            (
-                key.clone(),
-                snapshot
-                    .last_attempt_at
-                    .as_ref()
-                    .max(snapshot.fetched_at.as_ref())
-                    .cloned(),
-            )
-        })
-        .collect::<Vec<_>>();
-    if task_entries.len() <= MAX_CACHED_TASKS {
+    let evicted = task_keys_to_evict(
+        entries
+            .iter()
+            .filter(|(key, _)| key.starts_with("task:"))
+            .map(|(key, snapshot)| {
+                (
+                    key.clone(),
+                    snapshot
+                        .last_attempt_at
+                        .as_ref()
+                        .max(snapshot.fetched_at.as_ref())
+                        .cloned(),
+                )
+            }),
+    );
+    if evicted.is_empty() {
         return false;
     }
-    task_entries.sort_by(|(left_key, left_time), (right_key, right_time)| {
+    for key in evicted {
+        entries.remove(&key);
+    }
+    true
+}
+
+fn task_keys_to_evict<K: Ord>(
+    task_times: impl IntoIterator<Item = (K, Option<DateTime<Utc>>)>,
+) -> Vec<K> {
+    let mut task_times = task_times.into_iter().collect::<Vec<_>>();
+    task_times.sort_by(|(left_key, left_time), (right_key, right_time)| {
         right_time
             .cmp(left_time)
             .then_with(|| left_key.cmp(right_key))
     });
-    let removed = task_entries.len() - MAX_CACHED_TASKS;
-    for (key, _) in task_entries.into_iter().skip(MAX_CACHED_TASKS) {
-        entries.remove(&key);
-    }
-    removed > 0
+    task_times
+        .into_iter()
+        .skip(MAX_CACHED_TASKS)
+        .map(|(key, _)| key)
+        .collect()
 }
 
 fn task_cache_key(task_id: &str) -> String {
