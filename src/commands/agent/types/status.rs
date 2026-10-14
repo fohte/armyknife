@@ -1,6 +1,10 @@
 use super::{DisplayStatus, Engine, Session, SessionStatus, StatusColor};
 
 impl Session {
+    pub(crate) fn is_direct_child_of(&self, parent_id: &str) -> bool {
+        self.ancestor_session_ids.last().map(String::as_str) == Some(parent_id)
+    }
+
     /// A `Stopped` session is unread when it has never been focused since its
     /// most recent transition into `Stopped`. Drives the `✱` glyph.
     pub fn is_unread_stopped(&self) -> bool {
