@@ -242,15 +242,7 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
             | ProgressRow::PlannedPullRequest { .. } => None,
         })
         .collect::<Vec<_>>();
-    let table = Table::new(table_rows, stage_widths())
-        .column_spacing(1)
-        .highlight_symbol(if app.progress_focused { "› " } else { "> " })
-        .highlight_spacing(HighlightSpacing::Always)
-        .row_highlight_style(Style::default().bg(if app.progress_focused {
-            Color::DarkGray
-        } else {
-            Color::Indexed(236)
-        }));
+    let table = progress_table(table_rows, app.progress_focused);
     frame.render_stateful_widget(table, area, &mut app.progress_table_state);
 }
 
@@ -269,16 +261,20 @@ fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_
     {
         *app.progress_table_state.offset_mut() = row_index + 1 - usize::from(area.height);
     }
-    let table = Table::new(table_rows, stage_widths())
+    let table = progress_table(table_rows, app.progress_focused);
+    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+}
+
+fn progress_table<'a>(rows: Vec<Row<'a>>, focused: bool) -> Table<'a> {
+    Table::new(rows, stage_widths())
         .column_spacing(1)
-        .highlight_symbol(if app.progress_focused { "› " } else { "> " })
+        .highlight_symbol(if focused { "› " } else { "> " })
         .highlight_spacing(HighlightSpacing::Always)
-        .row_highlight_style(Style::default().bg(if app.progress_focused {
+        .row_highlight_style(Style::default().bg(if focused {
             Color::DarkGray
         } else {
             Color::Indexed(236)
-        }));
-    frame.render_stateful_widget(table, area, &mut app.progress_table_state);
+        }))
 }
 
 fn first_checklist_pr_row_index(rows: &[ProgressRow], work_row_count: usize) -> Option<usize> {
