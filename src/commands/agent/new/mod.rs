@@ -529,10 +529,9 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, Eq)]
-    struct CapturedSessionOnlyLaunch {
-        route: &'static str,
-        repo_root: String,
-        cwd: String,
+    enum CapturedSessionOnlyLaunch {
+        Split { cwd: String },
+        Window { repo_root: String, cwd: String },
     }
 
     fn capture_session_only_launch(
@@ -541,23 +540,19 @@ mod tests {
         caller_pane: Option<&str>,
     ) -> Option<CapturedSessionOnlyLaunch> {
         let actual = RefCell::new(None);
-        let repo_root = context.repo_root.to_string();
 
         run_session_only_inner_with_launchers(
             args,
             context,
             || caller_pane.map(str::to_string),
             |spec| {
-                actual.replace(Some(CapturedSessionOnlyLaunch {
-                    route: "split",
-                    repo_root: repo_root.clone(),
+                actual.replace(Some(CapturedSessionOnlyLaunch::Split {
                     cwd: spec.cwd.to_string(),
                 }));
                 Ok(String::new())
             },
             |spec, _| {
-                actual.replace(Some(CapturedSessionOnlyLaunch {
-                    route: "window",
+                actual.replace(Some(CapturedSessionOnlyLaunch::Window {
                     repo_root: spec.repo_root.to_string(),
                     cwd: spec.cwd.to_string(),
                 }));
@@ -570,10 +565,20 @@ mod tests {
     }
 
     #[rstest]
-    #[case::main_checkout_subdirectory(false)]
-    #[case::linked_worktree_subdirectory(true)]
+    #[case::main_checkout_window(false, None, ".worktrees", false)]
+    #[case::linked_worktree_window(true, None, ".worktrees", false)]
+    #[case::main_checkout_split(false, Some("%caller-pane"), ".worktrees", true)]
+    #[case::linked_worktree_split_when_worktrees_dir_differs(
+        true,
+        Some("%caller-pane"),
+        "configured-worktrees",
+        true
+    )]
     fn repo_argument_launches_from_containing_checkout(
         #[case] linked_worktree: bool,
+        #[case] caller_pane: Option<&str>,
+        #[case] worktrees_dir: &str,
+        #[case] split: bool,
         session_only_repo: SessionOnlyRepoFixture,
     ) {
         let target_path = if linked_worktree {
@@ -593,7 +598,8 @@ mod tests {
         let repo_root = repo.main_workdir_string().unwrap();
         let caller_repo_root = session_only_repo.main_root.to_string_lossy().to_string();
         let current_dir = caller_repo_root.clone();
-        let config = Config::default();
+        let mut config = Config::default();
+        config.agent.worktree.dir = worktrees_dir.to_string();
         let cli = TestCli::try_parse_from(["a", "-R", target_path.to_str().unwrap()]).unwrap();
 
         let actual = capture_session_only_launch(
@@ -605,61 +611,19 @@ mod tests {
                 current_dir: &current_dir,
                 config: &config,
             },
-            None,
+            caller_pane,
         );
 
-        assert_eq!(
-            actual,
-            Some(CapturedSessionOnlyLaunch {
-                route: "window",
+        let expected = if split {
+            CapturedSessionOnlyLaunch::Split { cwd: expected_cwd }
+        } else {
+            CapturedSessionOnlyLaunch::Window {
                 repo_root: session_only_repo.main_root.to_string_lossy().to_string(),
                 cwd: expected_cwd,
-            }),
-        );
-    }
+            }
+        };
 
-    #[test]
-    fn linked_worktree_and_main_checkout_use_the_same_split_route() {
-        let session_only_repo = session_only_repo();
-        let repo = open_repo_at(&session_only_repo.linked_worktree_subdirectory).unwrap();
-        let repo_root = repo.main_workdir_string().unwrap();
-        let caller_repo_root = session_only_repo.main_root.to_string_lossy().to_string();
-        let current_dir = caller_repo_root.clone();
-        let mut config = Config::default();
-        config.agent.worktree.dir = "configured-worktrees".to_string();
-        let cli = TestCli::try_parse_from([
-            "a",
-            "-R",
-            session_only_repo
-                .linked_worktree_subdirectory
-                .to_str()
-                .unwrap(),
-        ])
-        .unwrap();
-
-        let actual = capture_session_only_launch(
-            &cli.args,
-            SessionOnlyRunContext {
-                repo: Some(&repo),
-                repo_root: &repo_root,
-                caller_repo_root: &caller_repo_root,
-                current_dir: &current_dir,
-                config: &config,
-            },
-            Some("%caller-pane"),
-        );
-
-        assert_eq!(
-            actual,
-            Some(CapturedSessionOnlyLaunch {
-                route: "split",
-                repo_root: session_only_repo.main_root.to_string_lossy().to_string(),
-                cwd: session_only_repo
-                    .linked_worktree_root
-                    .to_string_lossy()
-                    .to_string(),
-            }),
-        );
+        assert_eq!(actual, Some(expected),);
     }
 
     #[test]
