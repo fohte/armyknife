@@ -327,8 +327,7 @@ pub(super) fn pr_progress_row(
             .session
             .pr_context
             .as_ref()
-            .map(|context| context.repo.clone())
-            .or_else(|| pr.and_then(|pr| repo_from_pr_url(&pr.url).map(str::to_string))),
+            .map(|context| context.repo.clone()),
         title: pr.map_or_else(|| session_title(&delegate.session), |pr| pr.title.clone()),
         number: pr.map(|pr| pr.number),
         url: pr.map(|pr| pr.url.clone()),
@@ -342,12 +341,8 @@ pub(super) fn pr_progress_row(
 }
 
 pub(super) fn repo_from_pr_url(url: &str) -> Option<&str> {
-    let segments = url.trim_end_matches('/').split('/').collect::<Vec<_>>();
-    let pull_index = segments.iter().rposition(|segment| *segment == "pull")?;
-    if pull_index < 5 {
-        return None;
-    }
-    segments.get(pull_index.checked_sub(1)?).copied()
+    lazy_regex::regex_captures!(r"^https?://[^/]+/(?:[^/]+/)+([^/]+)/pull/\d+(?:/.*)?$", url)
+        .map(|(_, repo)| repo)
 }
 
 fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
@@ -491,6 +486,10 @@ mod tests {
     #[rstest]
     #[case::github_url(
         "https://github.com/example-owner/example-repo/pull/42",
+        Some("example-repo")
+    )]
+    #[case::github_files_url(
+        "https://github.com/example-owner/example-repo/pull/42/files",
         Some("example-repo")
     )]
     #[case::repository_named_pull(
@@ -828,7 +827,7 @@ mod tests {
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
-                    repo: Some("example-project".to_string()),
+                    repo: None,
                     title: "Example delegated work".to_string(),
                     number: Some(7),
                     url: Some("https://github.com/example-org/example-project/pull/7".to_string(),),
@@ -936,7 +935,7 @@ mod tests {
                 }),
                 ProgressRow::PullRequest(PrProgressRow {
                     session_id: "delegate".to_string(),
-                    repo: Some("example-project".to_string()),
+                    repo: None,
                     title: "Example delegated work".to_string(),
                     number: Some(7),
                     url: Some("https://github.com/example-org/example-project/pull/7".to_string()),

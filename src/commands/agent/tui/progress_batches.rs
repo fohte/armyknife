@@ -711,7 +711,7 @@ mod tests {
                 ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
                 ProgressRow::PullRequest(super::super::progress::PrProgressRow {
                     session_id: "unmapped-delegate".to_string(),
-                    repo: Some("sample-project".to_string()),
+                    repo: None,
                     title: "Unplanned delegated change".to_string(),
                     number: Some(23),
                     url: Some("https://github.com/sample-org/sample-project/pull/23".to_string()),

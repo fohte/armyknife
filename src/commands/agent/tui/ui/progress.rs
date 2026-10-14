@@ -805,8 +805,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rows_render_repo_tq_and_pull_request_columns_separately() {
+    #[rstest]
+    #[case::stored_repo(Some("repo-worker"), "https://example.test/pull/1168")]
+    #[case::legacy_row_url(None, "https://github.com/example-owner/repo-worker/pull/1168")]
+    fn rows_render_repo_tq_and_pull_request_columns_separately(
+        #[case] repo: Option<&str>,
+        #[case] url: &str,
+    ) {
         let mut selected = create_test_session("selected");
         selected.cwd = "/tmp/project-main".into();
         let selected_cwd = selected.cwd.clone();
@@ -846,10 +851,10 @@ mod tests {
             }),
             ProgressRow::PullRequest(PrProgressRow {
                 session_id: "delegate".to_string(),
-                repo: Some("repo-worker".to_string()),
+                repo: repo.map(str::to_string),
                 title: "Delegated change".to_string(),
                 number: Some(1168),
-                url: Some("https://example.test/pull/1168".to_string()),
+                url: Some(url.to_string()),
                 pane_id: None,
                 is_ended: true,
                 lookup_unavailable: false,
