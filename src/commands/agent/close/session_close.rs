@@ -288,4 +288,51 @@ mod tests {
             ),
         );
     }
+
+    #[tokio::test]
+    async fn session_id_child_close_skips_worktree_removal_when_shared_with_caller() {
+        let mut target_session = session();
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let mut caller_session = session();
+        caller_session.cwd = PathBuf::from("/tmp/worktrees/example/src");
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_session_value_with_worktree(
+            SessionWorktreeContext {
+                session: &target_session,
+                force: false,
+                parent_session_id: Some("parent-session"),
+                worktree_root: Path::new("/tmp/worktrees/example"),
+            },
+            async {
+                calls.borrow_mut().push("prepare worktree");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_| {
+                calls.borrow_mut().push("load caller session");
+                Ok(Some(caller_session))
+            },
+            |_, _| {
+                calls.borrow_mut().push("close child session");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("close worktree session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (Ok(()), vec!["load caller session", "close child session"],),
+        );
+    }
 }
