@@ -2,6 +2,7 @@ use std::ffi::OsString;
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
+use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -47,8 +48,9 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     let _entered = span.enter();
 
     let reminder = ReminderSettings::load();
+    let mut reminder_delivery = None;
     let status = bg_tasks::set_worker_pid(&args.session, &args.task_id, std::process::id())
-        .and_then(|()| run_command(args, &reminder));
+        .and_then(|()| run_command(args, &reminder, &mut reminder_delivery));
     let execution_error = status.as_ref().err().map(|error| format!("{error:#}"));
     let exit_code = status.as_ref().ok().and_then(ExitStatus::code);
 
@@ -77,6 +79,16 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
         ),
     }
 
+    if let Some(reminder_delivery) = reminder_delivery
+        && reminder_delivery.join().is_err()
+    {
+        tracing::warn!(
+            event = "agent.bg_run.reminder_delivery_panicked",
+            session = %args.session,
+            task = %args.task_id,
+        );
+    }
+
     if let Some(error) = execution_error {
         tracing::warn!(
             event = "agent.bg_run.command_failed",
@@ -88,7 +100,11 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     Ok(())
 }
 
-fn run_command(args: &RunDetachedArgs, reminder: &ReminderSettings) -> Result<ExitStatus> {
+fn run_command(
+    args: &RunDetachedArgs,
+    reminder: &ReminderSettings,
+    reminder_delivery: &mut Option<JoinHandle<()>>,
+) -> Result<ExitStatus> {
     let Some((program, command_args)) = args.command.split_first() else {
         anyhow::bail!("background command is empty");
     };
@@ -133,29 +149,40 @@ fn run_command(args: &RunDetachedArgs, reminder: &ReminderSettings) -> Result<Ex
         || child.try_wait(),
         || started_at.elapsed(),
         reminder::sleep,
-        || match notify::notify(
-            &args.session,
-            &reminder_message(args, reminder.message()),
-            None,
-            None,
-        ) {
-            Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
-                event = "agent.bg_run.reminder_queued",
-                session = %args.session,
-                task = %args.task_id,
-                reason,
-            ),
-            Ok(_) => tracing::info!(
-                event = "agent.bg_run.reminder_sent",
-                session = %args.session,
-                task = %args.task_id,
-            ),
-            Err(error) => tracing::warn!(
-                event = "agent.bg_run.reminder_failed",
-                session = %args.session,
-                task = %args.task_id,
-                error = %format!("{error:#}"),
-            ),
+        || {
+            let session = args.session.clone();
+            let task_id = args.task_id.clone();
+            let message = reminder_message(args, reminder.message());
+            let span = tracing::Span::current();
+            match spawn_reminder_delivery(move || {
+                span.in_scope(|| match notify::notify(&session, &message, None, None) {
+                    Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
+                        event = "agent.bg_run.reminder_queued",
+                        session = %session,
+                        task = %task_id,
+                        reason,
+                    ),
+                    Ok(_) => tracing::info!(
+                        event = "agent.bg_run.reminder_sent",
+                        session = %session,
+                        task = %task_id,
+                    ),
+                    Err(error) => tracing::warn!(
+                        event = "agent.bg_run.reminder_failed",
+                        session = %session,
+                        task = %task_id,
+                        error = %format!("{error:#}"),
+                    ),
+                })
+            }) {
+                Ok(handle) => *reminder_delivery = Some(handle),
+                Err(error) => tracing::warn!(
+                    event = "agent.bg_run.reminder_thread_failed",
+                    session = %args.session,
+                    task = %args.task_id,
+                    error = %error,
+                ),
+            }
         },
     )
     .context("failed to wait for background command")?
@@ -167,6 +194,14 @@ fn run_command(args: &RunDetachedArgs, reminder: &ReminderSettings) -> Result<Ex
         },
         Ok,
     )
+}
+
+fn spawn_reminder_delivery(
+    notify: impl FnOnce() + Send + 'static,
+) -> std::io::Result<JoinHandle<()>> {
+    thread::Builder::new()
+        .name("agent-bg-reminder".to_string())
+        .spawn(notify)
 }
 
 fn completion_message(
@@ -227,6 +262,8 @@ fn exit_description(status: Option<&ExitStatus>, execution_error: Option<&str>) 
 mod tests {
     use super::*;
     use indoc::indoc;
+    use std::sync::mpsc;
+    use std::time::Duration;
 
     #[test]
     fn reminder_message_identifies_the_background_task() {
@@ -250,5 +287,33 @@ mod tests {
                 Reminder text
                 </background-task-reminder>"#},
         );
+    }
+
+    #[test]
+    fn reminder_delivery_runs_without_blocking_its_caller() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (handle_tx, handle_rx) = mpsc::channel();
+
+        let dispatcher = thread::spawn(move || {
+            let handle = spawn_reminder_delivery(move || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+            .unwrap();
+            handle_tx.send(handle).unwrap();
+        });
+
+        let started = started_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+        let dispatched_handle = handle_rx.recv_timeout(Duration::from_secs(2));
+        release_tx.send(()).unwrap();
+        dispatcher.join().unwrap();
+        let dispatched_without_waiting = dispatched_handle.is_ok();
+        let handle = dispatched_handle
+            .or_else(|_| handle_rx.recv_timeout(Duration::from_secs(2)))
+            .unwrap();
+        handle.join().unwrap();
+
+        assert_eq!((started, dispatched_without_waiting), (true, true));
     }
 }
