@@ -13,6 +13,10 @@ use crate::commands::agent::tui::{
 
 use super::helpers::DIM_FG;
 
+mod columns;
+
+use columns::{mark_style, stage_widths};
+
 pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected = app.selected_session();
     let title = selected
@@ -381,28 +385,6 @@ fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str) -> Row<'static> {
 
 fn mark_cell(mark: ProgressMark) -> Cell<'static> {
     Cell::from(mark.symbol()).style(mark_style(mark))
-}
-
-fn stage_widths() -> [Constraint; 6] {
-    [
-        Constraint::Min(8),
-        Constraint::Length(4),
-        Constraint::Length(4),
-        Constraint::Length(5),
-        Constraint::Length(3),
-        Constraint::Length(6),
-    ]
-}
-
-fn mark_style(mark: ProgressMark) -> Style {
-    let color = match mark {
-        ProgressMark::Done => Color::Green,
-        ProgressMark::User => Color::Yellow,
-        ProgressMark::Working => Color::Green,
-        ProgressMark::Waiting => Color::Cyan,
-        ProgressMark::NotStarted => DIM_FG,
-    };
-    Style::default().fg(color)
 }
 
 #[cfg(test)]
