@@ -70,6 +70,11 @@ impl GitRepo {
         &self.workdir
     }
 
+    /// Worktree root as a string with trailing slashes removed.
+    pub fn workdir_string(&self) -> String {
+        path_to_string(&self.workdir)
+    }
+
     pub fn common_dir(&self) -> &Path {
         &self.common_dir
     }
@@ -84,6 +89,11 @@ impl GitRepo {
             .parent()
             .map(|p| p.to_path_buf())
             .ok_or_else(|| GitError::NotInRepo.into())
+    }
+
+    /// Main worktree root as a string with trailing slashes removed.
+    pub fn main_workdir_string(&self) -> Result<String> {
+        Ok(path_to_string(&self.main_workdir()?))
     }
 
     /// Re-open the handle rooted at the main worktree.
@@ -172,6 +182,10 @@ fn resolve_relative(base: &Path, raw: &str) -> PathBuf {
     if p.is_absolute() { p } else { base.join(p) }
 }
 
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().trim_end_matches('/').to_string()
+}
+
 /// Open a git repository from the current directory or any parent.
 pub fn open_repo() -> Result<GitRepo> {
     GitRepo::open_from_env()
@@ -191,9 +205,7 @@ pub fn get_repo_root() -> Result<String> {
 /// Get the main worktree root from the specified directory.
 pub fn get_repo_root_in(cwd: &Path) -> Result<String> {
     let repo = open_repo_at(cwd)?;
-    let path = repo.main_workdir()?;
-    let path_str = path.to_string_lossy();
-    Ok(path_str.trim_end_matches('/').to_string())
+    repo.main_workdir_string()
 }
 
 /// Get the current branch name.
