@@ -13,6 +13,8 @@ use super::progress::{
     delegate_row_is_displayable, has_delegated_descendant, pr_progress_row, work_progress_row,
 };
 
+mod restore_cached;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ImplementationPlan {
     batches: Vec<ImplementationBatch>,
@@ -28,76 +30,6 @@ impl ImplementationPlan {
                 .any(|item| item.delegate_session_id.as_deref() == Some(session_id))
                 .then_some(batch.id.as_str())
         })
-    }
-
-    pub(super) fn restore_cached_unmatched_delegates(
-        &mut self,
-        cached: &Self,
-        cached_sessions: &[Session],
-        current_delegate_ids: &[String],
-    ) -> Vec<FetchedDelegate> {
-        let mut restored = Vec::new();
-        for cached_delegate in &cached.unmatched_delegates {
-            if current_delegate_ids.contains(&cached_delegate.session_id) {
-                continue;
-            }
-            let Some(session) = cached_sessions
-                .iter()
-                .find(|session| session.session_id == cached_delegate.session_id)
-            else {
-                continue;
-            };
-
-            let existing = self
-                .unmatched_delegates
-                .iter_mut()
-                .find(|delegate| delegate.session_id == cached_delegate.session_id);
-            let (pull_request, lookup_unavailable) = if let Some(existing) = existing {
-                if existing.pull_request.is_none() {
-                    existing
-                        .pull_request
-                        .clone_from(&cached_delegate.pull_request);
-                }
-                existing.lookup_unavailable = existing.pull_request.is_none()
-                    && (existing.lookup_unavailable || cached_delegate.lookup_unavailable);
-                (existing.pull_request.clone(), existing.lookup_unavailable)
-            } else {
-                if self
-                    .batches
-                    .iter()
-                    .flat_map(|batch| &batch.items)
-                    .any(|item| {
-                        item.delegate_session_id.as_deref() == Some(&cached_delegate.session_id)
-                            || cached_delegate
-                                .pull_request
-                                .as_ref()
-                                .is_some_and(|cached_pr| {
-                                    item.pull_request.as_ref().is_some_and(|item_pr| {
-                                        item_pr.pull_request.url == cached_pr.pull_request.url
-                                    }) || item.github_link.as_ref().is_some_and(|link| {
-                                        link.url.as_deref()
-                                            == Some(cached_pr.pull_request.url.as_str())
-                                    })
-                                })
-                    })
-                {
-                    continue;
-                }
-                self.unmatched_delegates.push(cached_delegate.clone());
-                (
-                    cached_delegate.pull_request.clone(),
-                    cached_delegate.lookup_unavailable,
-                )
-            };
-
-            restored.push(FetchedDelegate {
-                session: session.clone(),
-                checklist_item_id: None,
-                pull_request,
-                lookup_unavailable,
-            });
-        }
-        restored
     }
 }
 
