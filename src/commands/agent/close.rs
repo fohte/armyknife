@@ -31,7 +31,7 @@ pub struct CloseArgs {
     pub target: Option<String>,
 
     /// Refuse to close the target unless it is a direct child session.
-    #[arg(long)]
+    #[arg(long, requires = "target")]
     pub child: bool,
 
     /// Override session safety checks and unmerged-worktree confirmation.
@@ -119,11 +119,27 @@ async fn close_session_value(
     args: &CloseArgs,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
+    let Some(worktree_root) = linked_worktree_root(&session.cwd) else {
+        return close_session_value_without_worktree(
+            session,
+            args,
+            child_parent_session_id,
+            close_tracked_session,
+        );
+    };
+
     child::ensure_target_session(Some(session), child_parent_session_id)?;
 
-    let Some(worktree_root) = linked_worktree_root(&session.cwd) else {
-        return close_tracked_session(session, args.force);
-    };
+    if close_child_session_if_sharing_worktree(
+        session,
+        args,
+        child_parent_session_id,
+        &worktree_root,
+        super::store::load_session,
+        close_tracked_session,
+    )? {
+        return Ok(());
+    }
 
     close_with_worktree_plan(
         worktree_delete::prepare(&worktree_root, args.force),
@@ -134,6 +150,45 @@ async fn close_session_value(
         |plan| worktree_delete::execute(plan, args.skip_hooks),
     )
     .await
+}
+
+fn close_session_value_without_worktree(
+    session: &Session,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+    close_session: impl FnOnce(&Session, bool) -> Result<()>,
+) -> Result<()> {
+    child::ensure_target_session(Some(session), child_parent_session_id)?;
+    close_session(session, args.force)
+}
+
+fn close_child_session_if_sharing_worktree(
+    session: &Session,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+    worktree_root: &Path,
+    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
+    close_session: impl FnOnce(&Session, bool) -> Result<()>,
+) -> Result<bool> {
+    let Some(parent_session_id) = child_parent_session_id else {
+        return Ok(false);
+    };
+    if !caller_session_is_in_worktree(parent_session_id, worktree_root, load_session)? {
+        return Ok(false);
+    }
+    close_session(session, args.force)?;
+    Ok(true)
+}
+
+fn caller_session_is_in_worktree(
+    caller_session_id: &str,
+    worktree_root: &Path,
+    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
+) -> Result<bool> {
+    Ok(match load_session(caller_session_id)? {
+        Some(session) => path_is_within_worktree(&session.cwd, worktree_root),
+        None => true,
+    })
 }
 
 async fn close_worktree(
@@ -1363,6 +1418,121 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::caller_in_worktree(Some("/tmp/worktrees/feature/src"), Ok(true))]
+    #[case::caller_outside_worktree(Some("/tmp/other-repo"), Ok(false))]
+    #[case::caller_record_missing(None, Ok(true))]
+    fn detects_when_child_worktree_is_shared_with_the_caller(
+        mut session: Session,
+        #[case] caller_cwd: Option<&str>,
+        #[case] expected: std::result::Result<bool, String>,
+    ) {
+        if let Some(caller_cwd) = caller_cwd {
+            session.cwd = PathBuf::from(caller_cwd);
+        }
+        let caller_session = caller_cwd.map(|_| session.clone());
+
+        let actual = caller_session_is_in_worktree(
+            "parent-session",
+            Path::new("/tmp/worktrees/feature"),
+            |_| Ok(caller_session),
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::shared_worktree(true, vec!["close child session"])]
+    #[case::separate_worktree(false, Vec::new())]
+    fn closes_shared_worktree_child_without_removing_its_worktree(
+        mut session: Session,
+        #[case] caller_shares_worktree: bool,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let mut parent = session.clone();
+        parent.cwd = PathBuf::from(if caller_shares_worktree {
+            "/tmp/worktrees/feature/src"
+        } else {
+            "/tmp/other-repo"
+        });
+        let args = CloseArgs {
+            target: Some(session.session_id.clone()),
+            child: true,
+            ..CloseArgs::default()
+        };
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_child_session_if_sharing_worktree(
+            &session,
+            &args,
+            Some("parent-session"),
+            Path::new("/tmp/worktrees/feature"),
+            |_| Ok(Some(parent)),
+            |_, _| {
+                calls.borrow_mut().push("close child session");
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (Ok(caller_shares_worktree), expected_calls),
+        );
+    }
+
+    #[rstest]
+    #[case::direct_child(
+        vec!["parent-session"],
+        Ok(()),
+        vec!["close session safely"],
+    )]
+    #[case::non_child(
+        vec!["other-session"],
+        Err("Agent session `session-1` is not a direct child of the calling session"),
+        vec![],
+    )]
+    fn validates_before_closing_a_tracked_session_without_a_linked_worktree(
+        mut session: Session,
+        #[case] ancestors: Vec<&str>,
+        #[case] expected_result: std::result::Result<(), &str>,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        session.ancestor_session_ids = ancestors.into_iter().map(str::to_string).collect();
+        let args = CloseArgs {
+            target: Some(session.session_id.clone()),
+            child: true,
+            ..CloseArgs::default()
+        };
+        let calls = RefCell::new(Vec::new());
+
+        let result = close_session_value_without_worktree(
+            &session,
+            &args,
+            Some("parent-session"),
+            |_, force| {
+                calls.borrow_mut().push(if force {
+                    "close session with force"
+                } else {
+                    "close session safely"
+                });
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (expected_result.map_err(str::to_string), expected_calls,),
+        );
+    }
+
     #[tokio::test]
     async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
         let target_session = session();
@@ -1743,6 +1913,18 @@ mod tests {
         assert_eq!(
             close_args,
             Some((Some("feature/worktree".to_string()), true, true, true))
+        );
+    }
+
+    #[test]
+    fn child_flag_requires_a_target() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from(["a", "ag", "c", "--child"]);
+
+        assert_eq!(
+            parsed.err().map(|error| error.kind()),
+            Some(clap::error::ErrorKind::MissingRequiredArgument)
         );
     }
 

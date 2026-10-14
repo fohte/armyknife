@@ -9,16 +9,12 @@ pub(super) fn parent_session_id(args: &CloseArgs) -> Result<Option<String>> {
     if !args.child {
         return Ok(None);
     }
-    require_parent_session_id(args.target.as_deref(), || EnvVars::load().own_session_id()).map(Some)
+    require_parent_session_id(|| EnvVars::load().own_session_id()).map(Some)
 }
 
 pub(super) fn require_parent_session_id(
-    target: Option<&str>,
     self_session_id: impl FnOnce() -> Option<String>,
 ) -> Result<String> {
-    if target.is_none() {
-        bail!("--child requires a target");
-    }
     self_session_id().ok_or_else(|| CcError::SelfSessionUnknown.into())
 }
 
@@ -87,15 +83,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::requires_target(None, Some("parent"), Err("--child requires a target".to_string()))]
-    #[case::requires_self_session_id(Some("target"), None, Err(CcError::SelfSessionUnknown.to_string()))]
-    #[case::returns_self_session_id(Some("target"), Some("parent"), Ok("parent".to_string()))]
-    fn requires_target_and_self_session_id(
-        #[case] target: Option<&str>,
+    #[case::unknown_self_session_id(None, Err(CcError::SelfSessionUnknown.to_string()))]
+    #[case::returns_self_session_id(Some("parent"), Ok("parent".to_string()))]
+    fn resolves_self_session_id(
         #[case] self_session_id: Option<&str>,
         #[case] expected: std::result::Result<String, String>,
     ) {
-        let actual = require_parent_session_id(target, || self_session_id.map(str::to_string))
+        let actual = require_parent_session_id(|| self_session_id.map(str::to_string))
             .map_err(|error| error.to_string());
 
         assert_eq!(actual, expected);
