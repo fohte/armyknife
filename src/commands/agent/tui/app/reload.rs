@@ -323,16 +323,14 @@ impl App {
 /// Ended and Paused sessions are never considered stale -- they are retained
 /// for `claude -c` resume even after their pane dies.
 fn is_session_stale(session: &Session) -> bool {
-    if !tmux::is_server_available() {
-        return false;
-    }
     if matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) {
         return false;
     }
-    session
-        .tmux_info
-        .as_ref()
-        .is_some_and(|info| !tmux::is_pane_alive(&info.pane_id))
+    let Some(info) = session.tmux_info.as_ref() else {
+        return false;
+    };
+    tmux::is_pane_alive_for_socket(info.socket_path.as_deref(), &info.pane_id)
+        .is_ok_and(|is_alive| !is_alive)
 }
 
 /// Builds the title cache for all sessions.

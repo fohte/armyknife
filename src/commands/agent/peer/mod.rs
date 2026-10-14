@@ -275,6 +275,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%3".to_string(),
+            socket_path: None,
         }),
         Engine::Claude,
         Some("repo-ab".to_string()),

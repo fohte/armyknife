@@ -2,6 +2,10 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+use std::{
+    cell::RefCell,
+    collections::{HashMap, HashSet},
+};
 
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -600,20 +604,9 @@ fn serialize_session(session: &Session) -> Result<String> {
 ///
 /// A session is considered stale and removed if its tmux pane no longer exists.
 /// Sessions without tmux_info are kept (they may be running outside tmux).
-/// If tmux server is not available, cleanup is skipped to avoid incorrectly
-/// deleting sessions (is_pane_alive returns false when server is down).
+/// Sessions are checked against their recorded server; failed server queries
+/// leave those sessions untouched.
 pub fn cleanup_stale_sessions() -> Result<bool> {
-    // Skip cleanup if tmux server is not available to avoid false negatives
-    if !tmux::is_server_available() {
-        return Ok(false);
-    }
-
-    // Fetch all alive pane IDs in a single tmux call (O(1) instead of O(N)).
-    // Skip cleanup on error to avoid misidentifying all sessions as stale.
-    let alive_panes = match tmux::list_all_pane_ids() {
-        Ok(panes) => panes,
-        Err(_) => return Ok(false),
-    };
     // `Path::exists()` also returns false on ambiguous errors (e.g. permission
     // denied, a transient mount issue), not just on confirmed deletion. Treat
     // only a confirmed NotFound as "gone" so a live session's file is never
@@ -621,21 +614,36 @@ pub fn cleanup_stale_sessions() -> Result<bool> {
     // being removed.
     let cwd_exists =
         |cwd: &Path| !matches!(fs::metadata(cwd), Err(e) if e.kind() == io::ErrorKind::NotFound);
-    cleanup_stale_sessions_impl(|pane_id| alive_panes.contains(pane_id), cwd_exists)
+    cleanup_stale_sessions_by_socket(
+        &sessions_dir()?,
+        tmux::list_all_pane_ids_for_socket,
+        cwd_exists,
+    )
 }
 
-fn cleanup_stale_sessions_impl<F, G>(is_pane_alive: F, cwd_exists: G) -> Result<bool>
+fn cleanup_stale_sessions_by_socket<F, G>(dir: &Path, list_panes: F, cwd_exists: G) -> Result<bool>
 where
-    F: Fn(&str) -> bool,
+    F: FnMut(Option<&str>) -> tmux::Result<HashSet<String>>,
     G: Fn(&Path) -> bool,
 {
-    cleanup_stale_sessions_in(&sessions_dir()?, is_pane_alive, cwd_exists)
+    let cache = RefCell::new(HashMap::<Option<String>, Option<HashSet<String>>>::new());
+    let list_panes = RefCell::new(list_panes);
+    let is_pane_alive = |info: &super::types::TmuxInfo| {
+        let socket_path = info.socket_path.clone();
+        cache
+            .borrow_mut()
+            .entry(socket_path.clone())
+            .or_insert_with(|| (list_panes.borrow_mut())(socket_path.as_deref()).ok())
+            .as_ref()
+            .map(|panes| panes.contains(&info.pane_id))
+    };
+    cleanup_stale_sessions_in(dir, is_pane_alive, cwd_exists)
 }
 
 /// Returns whether at least one session file was removed.
 fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
-    F: Fn(&str) -> bool,
+    F: Fn(&super::types::TmuxInfo) -> Option<bool>,
     G: Fn(&Path) -> bool,
 {
     cleanup_stale_sessions_in_with_archive(
@@ -653,7 +661,7 @@ fn cleanup_stale_sessions_in_with_archive<F, G, A>(
     mut archive_codex_thread: A,
 ) -> Result<bool>
 where
-    F: Fn(&str) -> bool,
+    F: Fn(&super::types::TmuxInfo) -> Option<bool>,
     G: Fn(&Path) -> bool,
     A: FnMut(&str) -> anyhow::Result<()>,
 {
@@ -689,7 +697,7 @@ where
             && session
                 .tmux_info
                 .as_ref()
-                .is_some_and(|info| !is_pane_alive(&info.pane_id));
+                .is_some_and(|info| is_pane_alive(info) == Some(false));
 
         // Orphaned sessions: the worktree (cwd) is gone but the session file
         // lingered after worktree cleanup raced with `kill_window`, the worktree
@@ -950,13 +958,13 @@ mod tests {
         use rstest::rstest;
 
         /// Mock that treats all panes as dead
-        fn mock_pane_always_dead(_pane_id: &str) -> bool {
-            false
+        fn mock_pane_always_dead(_info: &TmuxInfo) -> Option<bool> {
+            Some(false)
         }
 
         /// Mock that treats all panes as alive
-        fn mock_pane_always_alive(_pane_id: &str) -> bool {
-            true
+        fn mock_pane_always_alive(_info: &TmuxInfo) -> Option<bool> {
+            Some(true)
         }
 
         /// Mock that treats every cwd as existing on disk
@@ -987,6 +995,7 @@ mod tests {
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%99999".to_string(),
+                socket_path: None,
             });
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
@@ -1044,6 +1053,7 @@ mod tests {
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%1".to_string(),
+                socket_path: None,
             });
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
@@ -1093,6 +1103,7 @@ mod tests {
                 window_name: "test".to_string(),
                 window_index: 0,
                 pane_id: "%99999".to_string(),
+                socket_path: None,
             });
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
@@ -1195,6 +1206,86 @@ mod tests {
             assert!(
                 path.exists(),
                 "ended session should rely on retention, not cwd existence"
+            );
+        }
+
+        #[rstest]
+        fn cleanup_uses_recorded_sockets_and_keeps_records_when_a_server_is_unavailable(
+            temp_session_dir: TempSessionDir,
+        ) {
+            let records = [
+                ("default-live", "%731", None),
+                ("default-stale", "%732", None),
+                ("private-live", "%733", Some("/tmp/armyknife-test/private")),
+                (
+                    "unavailable-server",
+                    "%734",
+                    Some("/tmp/armyknife-test/unavailable"),
+                ),
+            ];
+            let mut paths = HashMap::new();
+
+            for (session_id, pane_id, socket_path) in records {
+                let mut session = create_test_session(session_id);
+                session.tmux_info = Some(TmuxInfo {
+                    session_name: "fixture-session".to_string(),
+                    window_name: "fixture-window".to_string(),
+                    window_index: 0,
+                    pane_id: pane_id.to_string(),
+                    socket_path: socket_path.map(str::to_owned),
+                });
+                let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                    .expect("session path should be valid");
+                save_session_to(&temp_session_dir.sessions_path, &session)
+                    .expect("session should save");
+                paths.insert(session_id, path);
+            }
+
+            let query_counts = std::cell::RefCell::new(HashMap::<Option<String>, usize>::new());
+            let removed = cleanup_stale_sessions_by_socket(
+                &temp_session_dir.sessions_path,
+                |socket_path| {
+                    let socket_path = socket_path.map(str::to_owned);
+                    *query_counts
+                        .borrow_mut()
+                        .entry(socket_path.clone())
+                        .or_default() += 1;
+                    match socket_path.as_deref() {
+                        None => Ok(HashSet::from(["%731".to_string()])),
+                        Some("/tmp/armyknife-test/private") => {
+                            Ok(HashSet::from(["%733".to_string()]))
+                        }
+                        Some("/tmp/armyknife-test/unavailable") => Err(tmux::TmuxError::Internal(
+                            "fixture server unavailable".to_string(),
+                        )),
+                        Some(_) => Err(tmux::TmuxError::Internal("unexpected socket".to_string())),
+                    }
+                },
+                mock_cwd_always_exists,
+            )
+            .expect("cleanup should tolerate a server query failure");
+
+            assert_eq!(
+                (
+                    removed,
+                    paths["default-live"].exists(),
+                    paths["default-stale"].exists(),
+                    paths["private-live"].exists(),
+                    paths["unavailable-server"].exists(),
+                    query_counts.into_inner(),
+                ),
+                (
+                    true,
+                    true,
+                    false,
+                    true,
+                    true,
+                    HashMap::from([
+                        (None, 1),
+                        (Some("/tmp/armyknife-test/private".to_string()), 1),
+                        (Some("/tmp/armyknife-test/unavailable".to_string()), 1),
+                    ]),
+                ),
             );
         }
     }
@@ -1401,6 +1492,7 @@ mod tests {
                 window_name: "dev".to_string(),
                 window_index: 0,
                 pane_id: pane_id.to_string(),
+                socket_path: Some("/tmp/armyknife-test/default".to_string()),
             }
         }
 
@@ -1422,6 +1514,7 @@ mod tests {
                     window_name: "dev".to_string(),
                     window_index: 0,
                     pane_id: "%42".to_string(),
+                    socket_path: Some("/tmp/armyknife-test/default".to_string()),
                 })
             );
         }

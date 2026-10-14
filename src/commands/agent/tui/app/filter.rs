@@ -362,6 +362,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
         assert_eq!(session_matches(&session, query), expected);
     }

@@ -186,6 +186,7 @@ fn current_tmux_info() -> Option<TmuxInfo> {
         window_name: pane.window_name,
         window_index: pane.window_index,
         pane_id: pane.pane_id,
+        socket_path: tmux::current_socket_path(),
     })
 }
 
@@ -649,6 +650,7 @@ mod tests {
                 window_name: "resumed-window".to_string(),
                 window_index: 2,
                 pane_id: "%9".to_string(),
+                socket_path: None,
             });
 
             let result = run_codex_resume_with_status_in(
@@ -687,6 +689,7 @@ mod tests {
                 window_name: "resumed-window".to_string(),
                 window_index: 2,
                 pane_id: "%9".to_string(),
+                socket_path: None,
             });
 
             let change = mark_codex_session_resumed_in(
@@ -803,6 +806,7 @@ mod tests {
                 window_name: "editor".to_string(),
                 window_index: 0,
                 pane_id: "%0".to_string(),
+                socket_path: None,
             }
         }
 

@@ -201,6 +201,7 @@ mod tests {
             window_name: "fixture-window".to_string(),
             window_index: 0,
             pane_id: "%73".to_string(),
+            socket_path: None,
         });
         save_session_to(sessions_dir.path(), &session).expect("save session");
 

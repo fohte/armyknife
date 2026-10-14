@@ -103,6 +103,7 @@ mod tests {
                 window_name: "example".to_string(),
                 window_index: 0,
                 pane_id: "%1".to_string(),
+                socket_path: None,
             }),
             status: SessionStatus::Stopped,
             created_at: Utc::now(),

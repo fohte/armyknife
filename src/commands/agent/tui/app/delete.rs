@@ -17,10 +17,10 @@ impl App {
         if let Some(session) = self.selected_session() {
             let session_id = session.session_id.clone();
             let cwd = session.cwd.clone();
-            let is_alive = session
-                .tmux_info
-                .as_ref()
-                .is_some_and(|info| tmux::is_pane_alive(&info.pane_id));
+            let is_alive = session.tmux_info.as_ref().is_some_and(|info| {
+                tmux::is_pane_alive_for_socket(info.socket_path.as_deref(), &info.pane_id)
+                    .unwrap_or(false)
+            });
 
             let worktree_cleanup = resolve_worktree_root(&cwd).filter(|wt_root| {
                 !self
@@ -58,7 +58,10 @@ impl App {
             && let Some(session) = self.sessions.iter().find(|s| s.session_id == session_id)
             && let Some(ref tmux_info) = session.tmux_info
         {
-            tmux::send_sigterm_to_pane(&tmux_info.pane_id);
+            tmux::send_sigterm_to_pane_for_socket(
+                tmux_info.socket_path.as_deref(),
+                &tmux_info.pane_id,
+            );
         }
 
         store::delete_session(&session_id)?;

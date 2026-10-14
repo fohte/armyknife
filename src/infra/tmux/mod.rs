@@ -6,6 +6,7 @@ mod floating_pane;
 mod format;
 pub mod layout;
 mod pane_info;
+mod server;
 
 use std::ffi::OsStr;
 use std::fmt;
@@ -24,6 +25,10 @@ pub(crate) use crit_pane::{
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;
 pub use pane_info::get_pane_info_by_pane_id;
+pub use server::{
+    current_socket_path, get_pane_pid_for_socket, is_pane_alive_for_socket,
+    list_all_pane_ids_for_socket, send_sigterm_to_pane_for_socket,
+};
 
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;

@@ -11,7 +11,7 @@ use clap::Args;
 use super::graceful_quit::GracefulQuitRequester;
 use super::resume;
 use super::signal::{LibcSignalSender, SignalSender};
-use super::types::{Engine, Session, SessionStatus};
+use super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
@@ -291,10 +291,10 @@ fn select_worktree_session<'a>(
 }
 
 trait CloseRuntime {
-    fn pane_exists(&self, pane_id: &str) -> Result<bool>;
+    fn pane_exists(&self, tmux_info: &TmuxInfo) -> Result<bool>;
     fn pane_session_id(&self, pane_id: &str) -> Option<String>;
     fn has_draft(&self, pane_id: &str, engine: Engine) -> Option<bool>;
-    fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>>;
+    fn resolve_agent_pid(&self, tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>>;
     fn request_graceful_quit(&self, pane_id: &str, pid: u32) -> io::Result<bool>;
     fn send_sigterm(&self, pid: u32) -> io::Result<()>;
     fn wait_for_exit(&self, pid: u32) -> bool;
@@ -305,8 +305,11 @@ trait CloseRuntime {
 struct LiveCloseRuntime;
 
 impl CloseRuntime for LiveCloseRuntime {
-    fn pane_exists(&self, pane_id: &str) -> Result<bool> {
-        Ok(tmux::list_all_pane_ids()?.contains(pane_id))
+    fn pane_exists(&self, tmux_info: &TmuxInfo) -> Result<bool> {
+        Ok(
+            tmux::list_all_pane_ids_for_socket(tmux_info.socket_path.as_deref())?
+                .contains(&tmux_info.pane_id),
+        )
     }
 
     fn pane_session_id(&self, pane_id: &str) -> Option<String> {
@@ -317,9 +320,12 @@ impl CloseRuntime for LiveCloseRuntime {
         super::pane::input::pane_has_draft(pane_id, engine)
     }
 
-    fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>> {
-        let pane_pid = tmux::get_pane_pid(pane_id)
-            .with_context(|| format!("Could not resolve the process for pane `{pane_id}`"))?;
+    fn resolve_agent_pid(&self, tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>> {
+        let Some(pane_pid) =
+            tmux::get_pane_pid_for_socket(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)?
+        else {
+            return Ok(None);
+        };
         let snapshot = ProcessSnapshot::capture().context("Could not inspect running processes")?;
         Ok(snapshot.find_self_or_descendant_by_command(
             pane_pid,
@@ -350,13 +356,13 @@ impl CloseRuntime for LiveCloseRuntime {
 }
 
 fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -> Result<()> {
-    let pane_id = session
+    let tmux_info = session
         .tmux_info
         .as_ref()
-        .map(|info| info.pane_id.as_str())
         .context("Agent session has no tmux pane")?;
+    let pane_id = tmux_info.pane_id.as_str();
 
-    if !runtime.pane_exists(pane_id)? {
+    if !runtime.pane_exists(tmux_info)? {
         return Ok(());
     }
     ensure_pane_session(runtime, pane_id, &session.session_id)?;
@@ -365,7 +371,7 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         ensure_session_is_idle(session)?;
     }
 
-    match runtime.resolve_agent_pid(pane_id, session.engine)? {
+    match runtime.resolve_agent_pid(tmux_info, session.engine)? {
         Some(pid) => {
             if !force {
                 ensure_no_unsent_draft(runtime, pane_id, session)?;
@@ -423,7 +429,7 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         None => {}
     }
 
-    if runtime.pane_exists(pane_id)? {
+    if runtime.pane_exists(tmux_info)? {
         ensure_pane_session(runtime, pane_id, &session.session_id)?;
         if session.engine == Engine::Codex && session.status != SessionStatus::Ended {
             runtime.end_codex_session(&session.session_id)?;
@@ -496,10 +502,10 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
-        PaneExists(String),
+        PaneExists(Option<String>, String),
         PaneSession(String),
         Draft(String, Engine),
-        ResolvePid(String, Engine),
+        ResolvePid(Option<String>, String, Engine),
         GracefulQuit(String, u32),
         Sigterm(u32),
         WaitForExit(u32),
@@ -513,6 +519,7 @@ mod tests {
         pane_session_id: Option<String>,
         draft: Option<bool>,
         pid: Option<u32>,
+        pid_error: Option<String>,
         graceful_result: io::Result<bool>,
         signal_result: io::Result<()>,
         wait_for_exit: bool,
@@ -526,6 +533,7 @@ mod tests {
                 pane_session_id: Some("session-1".to_string()),
                 draft: Some(false),
                 pid: Some(42),
+                pid_error: None,
                 graceful_result: Ok(true),
                 signal_result: Ok(()),
                 wait_for_exit: true,
@@ -534,10 +542,11 @@ mod tests {
     }
 
     impl CloseRuntime for FakeRuntime {
-        fn pane_exists(&self, pane_id: &str) -> Result<bool> {
-            self.calls
-                .borrow_mut()
-                .push(Call::PaneExists(pane_id.to_string()));
+        fn pane_exists(&self, tmux_info: &TmuxInfo) -> Result<bool> {
+            self.calls.borrow_mut().push(Call::PaneExists(
+                tmux_info.socket_path.clone(),
+                tmux_info.pane_id.clone(),
+            ));
             match &self.pane_exists {
                 Ok(exists) => Ok(*exists),
                 Err(error) => Err(anyhow::anyhow!(error.to_string())),
@@ -558,10 +567,15 @@ mod tests {
             self.draft
         }
 
-        fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>> {
-            self.calls
-                .borrow_mut()
-                .push(Call::ResolvePid(pane_id.to_string(), engine));
+        fn resolve_agent_pid(&self, tmux_info: &TmuxInfo, engine: Engine) -> Result<Option<u32>> {
+            self.calls.borrow_mut().push(Call::ResolvePid(
+                tmux_info.socket_path.clone(),
+                tmux_info.pane_id.clone(),
+                engine,
+            ));
+            if let Some(error) = &self.pid_error {
+                return Err(anyhow::anyhow!(error.clone()));
+            }
             Ok(self.pid)
         }
 
@@ -622,6 +636,7 @@ mod tests {
                 window_name: "agent".to_string(),
                 window_index: 1,
                 pane_id: "%42".to_string(),
+                socket_path: Some("/tmp/tmux-test/socket".to_string()),
             }),
             status: SessionStatus::Stopped,
             created_at: Utc::now(),
@@ -641,6 +656,18 @@ mod tests {
             agent_status_clear_pending: false,
             engine: Engine::Claude,
         }
+    }
+
+    fn pane_exists_call() -> Call {
+        Call::PaneExists(Some("/tmp/tmux-test/socket".to_string()), "%42".to_string())
+    }
+
+    fn resolve_pid_call(engine: Engine) -> Call {
+        Call::ResolvePid(
+            Some("/tmp/tmux-test/socket".to_string()),
+            "%42".to_string(),
+            engine,
+        )
     }
 
     #[rstest]
@@ -677,7 +704,7 @@ mod tests {
                 }
                 .to_string(),
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                 ],
             ),
@@ -724,9 +751,9 @@ mod tests {
             (
                 expected_error.to_string(),
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), engine),
+                    resolve_pid_call(engine),
                     Call::Draft("%42".to_string(), engine),
                 ],
             ),
@@ -744,12 +771,12 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -770,11 +797,11 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Codex),
+                    resolve_pid_call(Engine::Codex),
                     Call::GracefulQuit("%42".to_string(), 42),
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                     Call::EndCodexSession("session-1".to_string()),
                     Call::KillPane("%42".to_string()),
@@ -794,10 +821,48 @@ mod tests {
 
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            ("tmux is unavailable".to_string(), vec![pane_exists_call()],),
+        );
+    }
+
+    #[test]
+    fn close_stops_when_tmux_cannot_resolve_the_pane_pid() {
+        let runtime = FakeRuntime {
+            pid_error: Some("tmux is unavailable".to_string()),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session(), false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
                 "tmux is unavailable".to_string(),
-                vec![Call::PaneExists("%42".to_string())],
+                vec![
+                    pane_exists_call(),
+                    Call::PaneSession("%42".to_string()),
+                    resolve_pid_call(Engine::Claude),
+                ],
             ),
+        );
+    }
+
+    #[test]
+    fn close_uses_the_default_socket_for_legacy_session_info() {
+        let mut session = session();
+        if let Some(tmux_info) = session.tmux_info.as_mut() {
+            tmux_info.socket_path = None;
+        }
+        let runtime = FakeRuntime {
+            pane_exists: Ok(false),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (true, vec![Call::PaneExists(None, "%42".to_string())]),
         );
     }
 
@@ -812,7 +877,7 @@ mod tests {
 
         assert_eq!(
             (result.is_ok(), runtime.calls.into_inner()),
-            (true, vec![Call::PaneExists("%42".to_string())]),
+            (true, vec![pane_exists_call()]),
         );
     }
 
@@ -830,14 +895,14 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -859,14 +924,14 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
                     Call::WaitForExit(42),
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -891,11 +956,11 @@ mod tests {
             (
                 true,
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
                     Call::KillPane("%42".to_string()),
                 ],
@@ -916,10 +981,7 @@ mod tests {
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
             (
                 "Pane `%42` is no longer bound to agent session `session-1`".to_string(),
-                vec![
-                    Call::PaneExists("%42".to_string()),
-                    Call::PaneSession("%42".to_string()),
-                ],
+                vec![pane_exists_call(), Call::PaneSession("%42".to_string()),],
             ),
         );
     }
@@ -940,9 +1002,9 @@ mod tests {
                 "Agent session `session-1` did not exit after SIGTERM; its pane was left open"
                     .to_string(),
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                     Call::Draft("%42".to_string(), Engine::Claude),
                     Call::GracefulQuit("%42".to_string(), 42),
                     Call::Sigterm(42),
@@ -973,9 +1035,9 @@ mod tests {
                 "Could not find a running agent process for session `session-1`; its pane was left open"
                     .to_string(),
                 vec![
-                    Call::PaneExists("%42".to_string()),
+                    pane_exists_call(),
                     Call::PaneSession("%42".to_string()),
-                    Call::ResolvePid("%42".to_string(), Engine::Claude),
+                    resolve_pid_call(Engine::Claude),
                 ],
             ),
         );
@@ -1001,10 +1063,10 @@ mod tests {
 
         let result = close_session(&session, false, &runtime);
         let mut expected_calls = vec![
-            Call::PaneExists("%42".to_string()),
+            pane_exists_call(),
             Call::PaneSession("%42".to_string()),
-            Call::ResolvePid("%42".to_string(), engine),
-            Call::PaneExists("%42".to_string()),
+            resolve_pid_call(engine),
+            pane_exists_call(),
             Call::PaneSession("%42".to_string()),
         ];
         if engine == Engine::Codex && status != SessionStatus::Ended {
