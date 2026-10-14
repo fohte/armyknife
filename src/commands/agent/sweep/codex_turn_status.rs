@@ -33,28 +33,40 @@ impl AppServerTurnStatusReader {
     }
 }
 
-pub(super) fn mark_failed_codex_sessions<T: TmuxStatusSyncer>(
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct CodexTurnUpdates {
+    pub(super) failed: usize,
+    pub(super) interrupted: usize,
+}
+
+impl CodexTurnUpdates {
+    pub(super) fn total(self) -> usize {
+        self.failed + self.interrupted
+    }
+}
+
+pub(super) fn mark_finished_codex_sessions<T: TmuxStatusSyncer>(
     sessions_dir: &Path,
     syncer: &T,
     dry_run: bool,
-) -> Result<usize> {
+) -> Result<CodexTurnUpdates> {
     let mut reader = AppServerTurnStatusReader::default();
-    mark_failed_codex_sessions_with_reader(sessions_dir, syncer, dry_run, |thread_id| {
+    mark_finished_codex_sessions_with_reader(sessions_dir, syncer, dry_run, |thread_id| {
         reader.latest_turn_status(thread_id)
     })
 }
 
-fn mark_failed_codex_sessions_with_reader<T, F>(
+fn mark_finished_codex_sessions_with_reader<T, F>(
     sessions_dir: &Path,
     syncer: &T,
     dry_run: bool,
     mut read_latest_turn_status: F,
-) -> Result<usize>
+) -> Result<CodexTurnUpdates>
 where
     T: TmuxStatusSyncer,
     F: FnMut(&str) -> Result<Option<String>>,
 {
-    let mut failed = 0;
+    let mut updates = CodexTurnUpdates::default();
 
     for session_id in session_ids_in(sessions_dir)? {
         let Some(session) = store::load_session_from(sessions_dir, &session_id)? else {
@@ -77,20 +89,25 @@ where
                 continue;
             }
         };
-        if latest_status != "failed" {
-            continue;
-        }
+        let next_status = match latest_status.as_str() {
+            "failed" => SessionStatus::Failed,
+            "interrupted" => session.status_after_interrupted_codex_turn(),
+            _ => continue,
+        };
+        let is_failed = next_status == SessionStatus::Failed;
 
         if dry_run {
-            tracing::info!(
-                event = "agent.sweep.dry_run_codex_turn_failed",
-                session = %session.session_id,
-            );
-            failed += 1;
+            let event = if is_failed {
+                "agent.sweep.dry_run_codex_turn_failed"
+            } else {
+                "agent.sweep.dry_run_codex_turn_interrupted"
+            };
+            tracing::info!(event, session = %session.session_id);
+            increment_update_count(&mut updates, is_failed);
             continue;
         }
 
-        let mut failed_session = None;
+        let mut updated_session = None;
         store::update_session_in(sessions_dir, &session.session_id, |current| {
             if current.engine != Engine::Codex
                 || current.status != SessionStatus::Running
@@ -99,29 +116,47 @@ where
                 return false;
             }
 
-            current.status = SessionStatus::Failed;
+            current.status = next_status;
+            if !is_failed {
+                current.current_tool = None;
+                current.agent_status_clear_pending = current.agent_status.is_some();
+                current.sweep_signaled = false;
+                if next_status == SessionStatus::Stopped {
+                    current.read_at = None;
+                }
+            }
             current.updated_at = Utc::now();
-            failed_session = Some(current.clone());
+            updated_session = Some(current.clone());
             true
         })?;
 
-        if let Some(session) = failed_session {
-            tracing::info!(
-                event = "agent.sweep.codex_turn_failed",
-                session = %session.session_id,
-            );
+        if let Some(session) = updated_session {
+            let event = if is_failed {
+                "agent.sweep.codex_turn_failed"
+            } else {
+                "agent.sweep.codex_turn_interrupted"
+            };
+            tracing::info!(event, session = %session.session_id);
             syncer.sync(
                 session.tmux_info.as_ref().map(|info| info.pane_id.as_str()),
-                Some(SessionStatus::Failed),
+                Some(next_status),
                 Some(&session),
                 None,
                 sessions_dir,
             );
-            failed += 1;
+            increment_update_count(&mut updates, is_failed);
         }
     }
 
-    Ok(failed)
+    Ok(updates)
+}
+
+fn increment_update_count(updates: &mut CodexTurnUpdates, is_failed: bool) {
+    if is_failed {
+        updates.failed += 1;
+    } else {
+        updates.interrupted += 1;
+    }
 }
 
 #[cfg(test)]
@@ -189,13 +224,27 @@ mod tests {
     }
 
     #[rstest]
-    fn marks_failed_running_codex_turn_and_syncs_tmux(sessions_dir: TempDir) {
+    #[case::failed("failed", SessionStatus::Failed)]
+    #[case::interrupted("interrupted", SessionStatus::Stopped)]
+    #[case::interrupted_with_pending_permission("interrupted", SessionStatus::WaitingInput)]
+    fn marks_finished_running_codex_turn_and_syncs_tmux(
+        sessions_dir: TempDir,
+        #[case] latest_status: &str,
+        #[case] expected_status: SessionStatus,
+    ) {
         let mut session = session(
             "fixture-thread-id",
             SessionStatus::Running,
             Engine::Codex,
             Utc::now(),
         );
+        if expected_status == SessionStatus::WaitingInput {
+            session
+                .pending_permission_agent_ids
+                .insert("fixture-agent-id".to_string());
+        }
+        session.current_tool = Some("fixture-tool".to_string());
+        session.read_at = Some(Utc::now());
         session.tmux_info = Some(TmuxInfo {
             session_name: "fixture-session".to_string(),
             window_name: "fixture-window".to_string(),
@@ -207,35 +256,61 @@ mod tests {
 
         let syncer = RecordingTmuxStatusSyncer::default();
         let mut requested_threads = Vec::new();
-        let failed = mark_failed_codex_sessions_with_reader(
+        let updates = mark_finished_codex_sessions_with_reader(
             sessions_dir.path(),
             &syncer,
             false,
             |thread_id| {
                 requested_threads.push(thread_id.to_string());
-                Ok(Some("failed".to_string()))
+                Ok(Some(latest_status.to_string()))
             },
         )
-        .expect("mark failed turn");
+        .expect("mark finished turn");
 
         let reloaded = load_session(sessions_dir.path(), "fixture-thread-id");
+        let expected_updates = if expected_status == SessionStatus::Failed {
+            CodexTurnUpdates {
+                failed: 1,
+                interrupted: 0,
+            }
+        } else {
+            CodexTurnUpdates {
+                failed: 0,
+                interrupted: 1,
+            }
+        };
+        let expected_current_tool =
+            (expected_status == SessionStatus::Failed).then(|| "fixture-tool".to_string());
+        let expected_read_at = (expected_status != SessionStatus::Stopped)
+            .then_some(session.read_at)
+            .flatten();
         let actual = (
-            failed,
-            (reloaded.status, reloaded.last_message),
+            updates,
+            (
+                reloaded.status,
+                reloaded.current_tool,
+                reloaded.read_at,
+                reloaded.last_message,
+            ),
             requested_threads,
             syncer.calls.borrow().clone(),
         );
         let expected_sync: Vec<SyncCall> = vec![(
             Some("%73".to_string()),
-            Some(SessionStatus::Failed),
+            Some(expected_status),
             Some("fixture-thread-id".to_string()),
             sessions_dir.path().to_path_buf(),
         )];
         assert_eq!(
             actual,
             (
-                1,
-                (SessionStatus::Failed, Some("previous response".to_string())),
+                expected_updates,
+                (
+                    expected_status,
+                    expected_current_tool,
+                    expected_read_at,
+                    Some("previous response".to_string()),
+                ),
                 vec!["fixture-thread-id".to_string()],
                 expected_sync,
             ),
@@ -245,12 +320,11 @@ mod tests {
     #[rstest]
     #[case::latest_completed(SessionStatus::Running, Engine::Codex, Some("completed"), true)]
     #[case::latest_in_progress(SessionStatus::Running, Engine::Codex, Some("inProgress"), true)]
-    #[case::latest_interrupted(SessionStatus::Running, Engine::Codex, Some("interrupted"), true)]
     #[case::no_turn(SessionStatus::Running, Engine::Codex, None, true)]
     #[case::not_running(SessionStatus::Stopped, Engine::Codex, Some("failed"), false)]
     #[case::not_codex(SessionStatus::Running, Engine::Claude, Some("failed"), false)]
     #[case::already_failed(SessionStatus::Failed, Engine::Codex, Some("failed"), false)]
-    fn ignores_sessions_without_a_running_failed_codex_turn(
+    fn ignores_sessions_without_a_running_finished_codex_turn(
         sessions_dir: TempDir,
         #[case] initial_status: SessionStatus,
         #[case] engine: Engine,
@@ -262,7 +336,7 @@ mod tests {
 
         let syncer = RecordingTmuxStatusSyncer::default();
         let mut requested_threads = Vec::new();
-        let failed = mark_failed_codex_sessions_with_reader(
+        let updates = mark_finished_codex_sessions_with_reader(
             sessions_dir.path(),
             &syncer,
             false,
@@ -275,13 +349,13 @@ mod tests {
 
         assert_eq!(
             (
-                failed,
+                updates,
                 load_session(sessions_dir.path(), "fixture-session-id").status,
                 requested_threads,
                 syncer.calls.borrow().clone(),
             ),
             (
-                0,
+                CodexTurnUpdates::default(),
                 initial_status,
                 should_query
                     .then(|| "fixture-session-id".to_string())
@@ -309,7 +383,7 @@ mod tests {
 
         let syncer = RecordingTmuxStatusSyncer::default();
         let mut requested_threads = Vec::new();
-        let failed = mark_failed_codex_sessions_with_reader(
+        let updates = mark_finished_codex_sessions_with_reader(
             sessions_dir.path(),
             &syncer,
             false,
@@ -326,13 +400,16 @@ mod tests {
 
         assert_eq!(
             (
-                failed,
+                updates,
                 load_session(sessions_dir.path(), "fixture-error-session").status,
                 load_session(sessions_dir.path(), "fixture-failed-session").status,
                 requested_threads,
             ),
             (
-                1,
+                CodexTurnUpdates {
+                    failed: 1,
+                    interrupted: 0,
+                },
                 SessionStatus::Running,
                 SessionStatus::Failed,
                 vec![
@@ -359,8 +436,8 @@ mod tests {
         let newer_updated_at = original_updated_at + TimeDelta::seconds(1);
 
         let syncer = RecordingTmuxStatusSyncer::default();
-        let failed =
-            mark_failed_codex_sessions_with_reader(sessions_dir.path(), &syncer, false, |_| {
+        let updates =
+            mark_finished_codex_sessions_with_reader(sessions_dir.path(), &syncer, false, |_| {
                 store::update_session_in(sessions_dir.path(), "fixture-thread-id", |current| {
                     current.updated_at = newer_updated_at;
                     current.last_message = Some("new response".to_string());
@@ -373,14 +450,14 @@ mod tests {
 
         assert_eq!(
             (
-                failed,
+                updates,
                 reloaded.status,
                 reloaded.updated_at,
                 reloaded.last_message,
                 syncer.calls.borrow().clone(),
             ),
             (
-                0,
+                CodexTurnUpdates::default(),
                 SessionStatus::Running,
                 newer_updated_at,
                 Some("new response".to_string()),
@@ -390,7 +467,13 @@ mod tests {
     }
 
     #[rstest]
-    fn dry_run_reports_failed_turn_without_saving_or_syncing(sessions_dir: TempDir) {
+    #[case::failed("failed", CodexTurnUpdates { failed: 1, interrupted: 0 })]
+    #[case::interrupted("interrupted", CodexTurnUpdates { failed: 0, interrupted: 1 })]
+    fn dry_run_reports_finished_turn_without_saving_or_syncing(
+        sessions_dir: TempDir,
+        #[case] latest_status: &str,
+        #[case] expected_updates: CodexTurnUpdates,
+    ) {
         save_session_to(
             sessions_dir.path(),
             &session(
@@ -403,19 +486,23 @@ mod tests {
         .expect("save session");
         let syncer = RecordingTmuxStatusSyncer::default();
 
-        let failed =
-            mark_failed_codex_sessions_with_reader(sessions_dir.path(), &syncer, true, |_| {
-                Ok(Some("failed".to_string()))
+        let updates =
+            mark_finished_codex_sessions_with_reader(sessions_dir.path(), &syncer, true, |_| {
+                Ok(Some(latest_status.to_string()))
             })
             .expect("inspect turn status");
 
         assert_eq!(
             (
-                failed,
+                updates,
                 load_session(sessions_dir.path(), "fixture-thread-id").status,
                 syncer.calls.borrow().clone(),
             ),
-            (1, SessionStatus::Running, Vec::<SyncCall>::new()),
+            (
+                expected_updates,
+                SessionStatus::Running,
+                Vec::<SyncCall>::new()
+            ),
         );
     }
 }

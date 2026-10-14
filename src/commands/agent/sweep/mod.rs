@@ -1,7 +1,7 @@
 //! `a agent sweep` subcommand.
 //!
-//! Scans session files to mark failed Codex turns and pause sessions that have
-//! been `Stopped` for longer than the configured timeout. Designed to be
+//! Scans session files to mark terminal Codex turns and pause sessions that
+//! have been `Stopped` for longer than the configured timeout. Designed to be
 //! invoked periodically (e.g., by a launchd agent on a 1-minute interval)
 //! rather than spawned on demand from the Stop hook.
 //!
@@ -44,7 +44,7 @@ use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, effective_update
 use crate::shared::config;
 use crate::shared::log::short_run_id;
 
-mod codex_failed;
+mod codex_turn_status;
 mod merged_close;
 mod service;
 mod session_files;
@@ -60,8 +60,8 @@ pub struct SweepArgs {
     #[arg(long, global = true)]
     pub timeout: Option<String>,
 
-    /// Dry-run: log what would be paused, marked failed, or closed without
-    /// sending signals or updating session files.
+    /// Dry-run: log what would be paused, marked failed or stopped, or closed
+    /// without sending signals or updating session files.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -131,11 +131,15 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             args.dry_run,
         )
     };
-    let codex_failed_pass = || {
-        codex_failed::mark_failed_codex_sessions(&sessions_dir, &LiveTmuxStatusSyncer, args.dry_run)
+    let codex_status_pass = || {
+        codex_turn_status::mark_finished_codex_sessions(
+            &sessions_dir,
+            &LiveTmuxStatusSyncer,
+            args.dry_run,
+        )
     };
-    let (report, codex_failed, merged_closed) =
-        run_sweep_passes(pause_enabled, pause_pass, codex_failed_pass, || {
+    let (report, codex_updates, merged_closed) =
+        run_sweep_passes(pause_enabled, pause_pass, codex_status_pass, || {
             merged_close::close_merged_sessions(args.dry_run)
         })
         .await?;
@@ -146,25 +150,27 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         signaled = report.signaled,
         waiting = report.waiting,
         active = report.active,
-        codex_failed,
+        codex_failed = codex_updates.failed,
+        codex_interrupted = codex_updates.interrupted,
         merged_closed,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
 
     // Always print a summary in --dry-run so the user can see the reasoning.
-    // Otherwise only speak up when a pause, failed Codex turn, or merged-session close succeeded.
+    // Otherwise only speak up when a pause, terminal Codex turn, or merged-session close succeeded.
     // A session stuck in the signaled-but-not-Paused window (see module docs) gets
     // re-signaled on every sweep pass with no retry limit, so gating on
     // `signaled` too would flood the log for exactly the stuck-process
     // scenario this module exists to handle; the structured `tracing::info!`
     // above already records every signal for anyone tailing the JSONL log.
-    if report.paused > 0 || codex_failed > 0 || merged_closed > 0 || args.dry_run {
+    if report.paused > 0 || codex_updates.total() > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
-            codex_failed,
+            codex_updates.failed,
+            codex_updates.interrupted,
             merged_closed,
             report.signaled,
             report.waiting,
@@ -179,12 +185,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
 async fn run_sweep_passes<P, C, M, Fut>(
     pause_enabled: bool,
     pause_pass: P,
-    codex_failed_pass: C,
+    codex_status_pass: C,
     merged_close_pass: M,
-) -> Result<(SweepReport, usize, usize)>
+) -> Result<(SweepReport, codex_turn_status::CodexTurnUpdates, usize)>
 where
     P: FnOnce() -> Result<SweepReport>,
-    C: FnOnce() -> Result<usize>,
+    C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
     M: FnOnce() -> Fut,
     Fut: Future<Output = usize>,
 {
@@ -193,9 +199,9 @@ where
     } else {
         SweepReport::default()
     };
-    let codex_failed = codex_failed_pass()?;
+    let codex_updates = codex_status_pass()?;
     let merged_closed = merged_close_pass().await;
-    Ok((report, codex_failed, merged_closed))
+    Ok((report, codex_updates, merged_closed))
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
@@ -712,7 +718,7 @@ mod tests {
     #[tokio::test]
     async fn disabling_auto_pause_still_runs_codex_and_merged_passes() {
         let pause_calls = Cell::new(0);
-        let codex_failed_calls = Cell::new(0);
+        let codex_status_calls = Cell::new(0);
         let close_calls = Cell::new(0);
         let result = run_sweep_passes(
             false,
@@ -724,8 +730,11 @@ mod tests {
                 })
             },
             || {
-                codex_failed_calls.set(codex_failed_calls.get() + 1);
-                Ok(3)
+                codex_status_calls.set(codex_status_calls.get() + 1);
+                Ok(codex_turn_status::CodexTurnUpdates {
+                    failed: 3,
+                    interrupted: 0,
+                })
             },
             || async {
                 close_calls.set(close_calls.get() + 1);
@@ -739,10 +748,22 @@ mod tests {
             (
                 result,
                 pause_calls.get(),
-                codex_failed_calls.get(),
+                codex_status_calls.get(),
                 close_calls.get(),
             ),
-            ((SweepReport::default(), 3, 2), 0, 1, 1),
+            (
+                (
+                    SweepReport::default(),
+                    codex_turn_status::CodexTurnUpdates {
+                        failed: 3,
+                        interrupted: 0,
+                    },
+                    2,
+                ),
+                0,
+                1,
+                1,
+            ),
         );
     }
 

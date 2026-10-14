@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::commands::agent::types::Session;
 use crate::infra::github::{PrNumberQuery, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
@@ -11,7 +13,7 @@ use super::progress::{
     delegate_row_is_displayable, has_delegated_descendant, pr_progress_row, work_progress_row,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ImplementationPlan {
     batches: Vec<ImplementationBatch>,
     unmatched_delegates: Vec<UnmatchedDelegate>,
@@ -29,14 +31,14 @@ impl ImplementationPlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ImplementationBatch {
     id: String,
     title: String,
     items: Vec<ImplementationItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ImplementationItem {
     id: String,
     title: String,
@@ -46,7 +48,7 @@ struct ImplementationItem {
     lookup_unavailable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct UnmatchedDelegate {
     session_id: String,
     pull_request: Option<PrProgressInfo>,

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.418](https://github.com/fohte/armyknife/compare/v0.1.417...v0.1.418) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent/tui:** restore watch progress on reopen ([#1171](https://github.com/fohte/armyknife/issues/1171)) ([71dbd2b](https://github.com/fohte/armyknife/commit/71dbd2bf0255ab5f51f0c19ed2520067f7e727b7))
+
 ## [0.1.417](https://github.com/fohte/armyknife/compare/v0.1.416...v0.1.417) (2026-10-14)
 
 
