@@ -1,6 +1,6 @@
 use anyhow::Result;
 use armyknife::cli::{Cli, Commands};
-use armyknife::commands::agent::AgentCommands;
+use armyknife::commands::agent::{AgentCommands, BgCommands};
 use armyknife::shared;
 use armyknife::shared::update;
 use clap::{CommandFactory, Parser};
@@ -11,6 +11,7 @@ async fn main() {
     shared::log::init();
     match run().await {
         Ok(ExitMode::Immediate) => std::process::exit(0),
+        Ok(ExitMode::ImmediateWithCode(code)) => std::process::exit(code),
         Ok(ExitMode::RuntimeShutdown) => {}
         Err(e) => {
             eprintln!("Error: {e:?}");
@@ -23,6 +24,7 @@ async fn main() {
 enum ExitMode {
     RuntimeShutdown,
     Immediate,
+    ImmediateWithCode(i32),
 }
 
 fn exit_mode(command: &Commands) -> ExitMode {
@@ -42,6 +44,7 @@ async fn run() -> Result<ExitMode> {
             | Commands::Completions { .. }
             | Commands::Doctor(_)
             | Commands::Agent(AgentCommands::ArchiveDetached(_))
+            | Commands::Agent(AgentCommands::Bg(BgCommands::ReminderHook(_)))
     ) {
         // Avoid running the updater twice when `a update` was requested,
         // and skip for completions to keep output clean.
@@ -51,7 +54,11 @@ async fn run() -> Result<ExitMode> {
     }
 
     match command {
-        Commands::Agent(agent_cmd) => agent_cmd.run().await?,
+        Commands::Agent(agent_cmd) => {
+            if let Some(code) = agent_cmd.run().await? {
+                return Ok(ExitMode::ImmediateWithCode(code));
+            }
+        }
         Commands::Ai(ai_cmd) => ai_cmd.run().await?,
         Commands::Config(config_cmd) => config_cmd.run().await?,
         Commands::Doctor(args) => armyknife::commands::doctor::run(&args)?,

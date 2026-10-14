@@ -213,6 +213,8 @@ pub struct HookInput {
     pub tool_name: Option<String>,
     #[serde(default)]
     pub tool_input: Option<ToolInput>,
+    #[serde(default)]
+    pub tool_response: Option<serde_json::Value>,
 
     /// Identifies which agent fired this hook event. Present only when the
     /// event fires inside a subagent (per
@@ -258,6 +260,24 @@ pub struct HookInput {
 }
 
 impl HookInput {
+    /// ID returned when a Bash command is launched as a background task.
+    pub fn launched_background_task_id(&self) -> Option<&str> {
+        if self.engine != Engine::Claude
+            || self.tool_name.as_deref() != Some("Bash")
+            || !self
+                .tool_input
+                .as_ref()
+                .is_some_and(|tool| tool.run_in_background)
+        {
+            return None;
+        }
+
+        self.tool_response
+            .as_ref()?
+            .get("backgroundTaskId")?
+            .as_str()
+    }
+
     /// IDs of Bash background tasks (`run_in_background: true`) that Claude
     /// Code's task registry reports as still in flight or scheduled, per
     /// `background_tasks` (see its doc comment). Filtered to
@@ -297,7 +317,7 @@ pub struct BackgroundTask {
     pub task_type: String,
 }
 
-/// Tool input data from pre-tool-use events.
+/// Tool input data from tool-use hook events.
 #[derive(Debug, PartialEq, Eq)]
 pub struct ToolInput {
     /// Command for Bash tool
@@ -308,6 +328,8 @@ pub struct ToolInput {
     pub file_path: Option<String>,
     /// Pattern for Grep/Glob tools
     pub pattern: Option<String>,
+    /// Whether a Bash command was launched without waiting for completion.
+    pub run_in_background: bool,
 }
 
 // Never fails: Codex passes a tool's raw arguments as `tool_input`, so it can
@@ -321,6 +343,10 @@ impl<'de> Deserialize<'de> for ToolInput {
             skill: field("skill"),
             file_path: field("file_path"),
             pattern: field("pattern"),
+            run_in_background: value
+                .get("run_in_background")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
         })
     }
 }
@@ -409,6 +435,7 @@ mod tests {
             skill: None,
             file_path: file_path.map(str::to_string),
             pattern: pattern.map(str::to_string),
+            run_in_background: false,
         }
     }
 
@@ -416,6 +443,16 @@ mod tests {
     // survive shapes Claude Code never sends.
     #[rstest]
     #[case::bash(r#"{"command":"ls"}"#, tool_input(Some("ls"), None, None))]
+    #[case::background_bash(
+        r#"{"command":"sample-command","run_in_background":true}"#,
+        ToolInput {
+            command: Some("sample-command".to_string()),
+            skill: None,
+            file_path: None,
+            pattern: None,
+            run_in_background: true,
+        }
+    )]
     #[case::read(r#"{"file_path":"/a"}"#, tool_input(None, Some("/a"), None))]
     #[case::grep(r#"{"pattern":"x"}"#, tool_input(None, None, Some("x")))]
     #[case::bare_string(r#""raw arguments""#, tool_input(None, None, None))]

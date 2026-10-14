@@ -35,13 +35,15 @@ armyknife reads every `*.yaml` and `*.yml` file directly under `~/.config/armykn
 
 Mapping keys are merged recursively; sequences and scalars are replaced wholesale by later files. All fields are optional and fall back to sensible defaults. If no config files exist and no `ARMYKNIFE_*` environment variable overrides are set (see [Environment variable overrides](#environment-variable-overrides)), armyknife runs entirely on defaults.
 
-Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, merge notification text under `agent.merge_notification`, status names and states under `agent.statuses`, and Stop hook instructions under `agent.stop_hook_instruction`.
+Unknown configuration keys fail parsing. Put worktree settings under `agent.worktree`, pause settings under `agent.auto_pause`, compaction settings under `agent.auto_compact`, background task reminders under `agent.bg_task_reminder`, merge notification text under `agent.merge_notification`, status names and states under `agent.statuses`, and Stop hook instructions under `agent.stop_hook_instruction`.
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
 `agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear in YOUR TURN and tmux's next action; `waiting` and `done` status names mark TASKS rows without appearing in YOUR TURN. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
 
 `agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
+
+`agent.bg_task_reminder.timeout` is an optional duration such as `17m`; when omitted, background task reminders are disabled. `message` overrides the reminder text. Entries in `excluded_commands` are substring matches against the command line and skip the reminder for matching commands.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -63,6 +65,10 @@ agent:
     work_finished: { state: done }
   # Returned when the Stop hook cannot infer why the agent stopped; only active when statuses are configured.
   stop_hook_instruction: 'Summarize the result before stopping.'
+  bg_task_reminder:
+    timeout: 17m
+    message: 'This is a reminder, not an error. Check the task output and monitored state, then stop it if it is stuck.'
+    excluded_commands: ['human-review-tool', 'release-check --approval']
   work_type_fallback: # icon and color for watch rows without a recorded type
     icon: '?'
     color: gray
@@ -411,6 +417,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `crit add <url>`                                    |         | Associate a crit review with the calling session                                            |
 | `crit open [--session <id> \| --pane <pane_id>]`    |         | Toggle the latest associated review in a tmux floating pane                                 |
 | `bg run -- <cmd> [args...]`                         |         | Run a command detached and notify this session when it finishes                             |
+| `bg reminder-hook`                                  |         | Internal PostToolUse hook for Claude Code background Bash reminders                         |
 | `sweep`                                             |         | Reconcile failed or interrupted Codex turns, pause idle sessions, and close merged sessions |
 | `auto-compact schedule --session <id>`              |         | Detached worker spawned by the Stop hook (not for direct use)                               |
 | `window-status <window_id>`                         |         | Print status symbols for the sessions in a tmux window                                      |
@@ -465,7 +472,31 @@ In the checklist view, unstarted entries without a delegate or PR link appear as
 
 The session list shows YOUR TURN first, then TASKS: a tree of sessions where each root is a session without a displayed parent and descendants appear at their full depth beneath the nearest displayed parent. The root badge counts all displayed descendants. Sessions launched with `a agent new --agent` are left out of TASKS. Each TASKS row shows a mark: `✓` done, `◐` your turn, `●` working, `◷` waiting on something else (another session, CI, a background command); stops without a known reason keep the plain status glyph. Roots that contain your turn come first, then the most recently active. A session listed in YOUR TURN is also selectable in TASKS.
 
-`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
+`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
+
+For Claude Code background Bash commands, add this entry alongside the existing `PostToolUse` hook in your Claude Code settings:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "a agent bg reminder-hook",
+            "asyncRewake": true,
+            "timeout": 1080
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Set the hook timeout in seconds to a value longer than `agent.bg_task_reminder.timeout` (the example above uses 18 minutes for the 17-minute config example). The existing `a agent hook post-tool-use` registration records each background Bash task ID, and the `Stop` hook in [Setup](#setup) refreshes that list from Claude Code's task registry at each Stop event. Both hooks must be registered for reminders to work. When the task remains pending after the configured timeout, the hook exits with status `2` and writes the reminder to stderr.
 
 `a agent list --tmux` prints one next user action for a tmux status line and includes the session name at the end. The shared action order is `failed`, `crit`, `body`, user-state status names, `allow`, `ask`, then `merge`; configured status names are shown as labels. The oldest session update wins within each action. `waiting` and `done` statuses produce no user action.
 

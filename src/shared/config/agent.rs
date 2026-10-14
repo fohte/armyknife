@@ -9,6 +9,51 @@ use super::{
     WorktreeConfig,
 };
 
+/// Configuration for reminders sent when a background task exceeds its timeout.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BgTaskReminderConfig {
+    /// How long a background task may run before a reminder is sent.
+    /// Accepts human-friendly durations such as "13m". When omitted, reminders are disabled.
+    #[serde(default)]
+    pub timeout: Option<String>,
+
+    /// Message sent when a background task exceeds `timeout`.
+    #[serde(default = "default_bg_task_reminder_message")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_bg_task_reminder_message")
+    )]
+    pub message: String,
+
+    /// Command fragments that skip reminders when they appear in the command line.
+    #[serde(default = "default_bg_task_reminder_excluded_commands")]
+    #[cfg_attr(
+        feature = "schema-gen",
+        schemars(default = "default_bg_task_reminder_excluded_commands")
+    )]
+    pub excluded_commands: Vec<String>,
+}
+
+impl Default for BgTaskReminderConfig {
+    fn default() -> Self {
+        Self {
+            timeout: None,
+            message: default_bg_task_reminder_message(),
+            excluded_commands: default_bg_task_reminder_excluded_commands(),
+        }
+    }
+}
+
+fn default_bg_task_reminder_message() -> String {
+    "This is a reminder, not an error: this background task has been running for a long time. Check its output and the state of what it is monitoring. Stop it if it is stuck.".to_string()
+}
+
+fn default_bg_task_reminder_excluded_commands() -> Vec<String> {
+    Vec::new()
+}
+
 /// `a agent` settings.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -29,6 +74,10 @@ pub struct AgentConfig {
     /// The hook blocks only when this is set and at least one status is configured.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
+
+    /// Reminder settings for background tasks that run longer than expected.
+    #[serde(default)]
+    pub bg_task_reminder: BgTaskReminderConfig,
 
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]

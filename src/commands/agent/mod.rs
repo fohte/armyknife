@@ -176,7 +176,7 @@ pub enum AgentCommands {
 }
 
 impl AgentCommands {
-    pub async fn run(&self) -> anyhow::Result<()> {
+    pub async fn run(&self) -> anyhow::Result<Option<i32>> {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
@@ -195,7 +195,7 @@ impl AgentCommands {
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
             Self::Peer(cmd) => peer::run(cmd)?,
             Self::Sweep(args) => sweep::run(args).await?,
-            Self::Bg(cmd) => bg::run(cmd)?,
+            Self::Bg(cmd) => return bg::run(cmd),
             Self::AutoCompact(args) => auto_compact::run(args).await?,
             Self::WindowStatus(args) => window_status::run(args)?,
             Self::PaneHasPaused(args) => pane::status::run(args)?,
@@ -204,6 +204,6 @@ impl AgentCommands {
             Self::ArchiveDetached(args) => archive_detached::run(args)?,
             Self::ArchiveTqSessionDetached(args) => archive_tq_session_detached::run(args)?,
         }
-        Ok(())
+        Ok(None)
     }
 }
