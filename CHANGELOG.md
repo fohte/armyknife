@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.416](https://github.com/fohte/armyknife/compare/v0.1.415...v0.1.416) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent/tui:** brighten watch secondary text ([#1166](https://github.com/fohte/armyknife/issues/1166)) ([21e2403](https://github.com/fohte/armyknife/commit/21e240329cf0e98d124d8873b09f5a3a5164b343))
+
 ## [0.1.415](https://github.com/fohte/armyknife/compare/v0.1.414...v0.1.415) (2026-10-13)
 
 
