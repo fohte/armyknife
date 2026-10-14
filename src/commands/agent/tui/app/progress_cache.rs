@@ -184,7 +184,11 @@ fn prune_task_entries(entries: &mut HashMap<String, CachedProgress>) -> bool {
         .map(|(key, snapshot)| {
             (
                 key.clone(),
-                snapshot.last_attempt_at.or(snapshot.fetched_at),
+                snapshot
+                    .last_attempt_at
+                    .as_ref()
+                    .max(snapshot.fetched_at.as_ref())
+                    .cloned(),
             )
         })
         .collect::<Vec<_>>();

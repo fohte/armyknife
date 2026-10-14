@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -34,13 +35,23 @@ pub(super) fn store(entries: &HashMap<String, CachedProgress>) -> Result<()> {
 fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
     match fs::read(path) {
         Ok(content) => {
-            let cache: ProgressCacheFile = serde_json::from_slice(&content)
-                .with_context(|| format!("failed to parse cache file: {}", path.display()))?;
+            let cache: ProgressCacheFile = match serde_json::from_slice(&content) {
+                Ok(cache) => cache,
+                Err(error) => {
+                    tracing::warn!(
+                        "ignoring invalid progress cache {}: {error}",
+                        path.display()
+                    );
+                    return Ok(None);
+                }
+            };
             if cache.format_version != FORMAT_VERSION {
-                bail!(
-                    "unsupported progress cache format version: {}",
+                tracing::warn!(
+                    "ignoring progress cache {} with unsupported format version {}",
+                    path.display(),
                     cache.format_version
                 );
+                return Ok(None);
             }
             Ok(Some(
                 cache
@@ -74,43 +85,10 @@ fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
 fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()> {
     let mut tasks: HashMap<String, PersistedProgress> = entries
         .iter()
-        .filter_map(|(key, snapshot)| {
-            let task_id = key.strip_prefix("task:")?;
-            let fetched_at = snapshot.fetched_at?;
-            Some((
-                task_id.to_string(),
-                PersistedProgress {
-                    fetched_at,
-                    last_attempt_at: snapshot.last_attempt_at,
-                    rows: snapshot.rows.clone(),
-                    implementation: snapshot.implementation.clone(),
-                },
-            ))
-        })
+        .filter_map(|(key, snapshot)| persisted_progress(key, snapshot))
         .collect();
     if tasks.is_empty() {
         return Ok(());
-    }
-    let mut task_times = tasks
-        .iter()
-        .map(|(task_id, progress)| {
-            (
-                task_id.clone(),
-                progress
-                    .last_attempt_at
-                    .as_ref()
-                    .unwrap_or(&progress.fetched_at)
-                    .to_owned(),
-            )
-        })
-        .collect::<Vec<_>>();
-    task_times.sort_by(|(left_id, left_time), (right_id, right_time)| {
-        right_time
-            .cmp(left_time)
-            .then_with(|| left_id.cmp(right_id))
-    });
-    for (task_id, _) in task_times.into_iter().skip(MAX_CACHED_TASKS) {
-        tasks.remove(&task_id);
     }
 
     let parent = path
@@ -118,6 +96,16 @@ fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()
         .context("cache file path has no parent directory")?;
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create cache directory: {}", parent.display()))?;
+    let _lock = lock_progress_cache(path)?;
+    if let Some(existing) = load_from(path)? {
+        for (task_id, snapshot) in existing {
+            if let Some((_, progress)) = persisted_progress(&format!("task:{task_id}"), &snapshot) {
+                merge_task(&mut tasks, task_id, progress);
+            }
+        }
+    }
+    prune_persisted_tasks(&mut tasks);
+
     let cache = ProgressCacheFile {
         format_version: FORMAT_VERSION,
         tasks,
@@ -136,6 +124,103 @@ fn store_to(path: &Path, entries: &HashMap<String, CachedProgress>) -> Result<()
         .persist(path)
         .with_context(|| format!("failed to replace cache file: {}", path.display()))?;
     Ok(())
+}
+
+fn persisted_progress(key: &str, snapshot: &CachedProgress) -> Option<(String, PersistedProgress)> {
+    let task_id = key.strip_prefix("task:")?;
+    let fetched_at = snapshot.fetched_at?;
+    Some((
+        task_id.to_string(),
+        PersistedProgress {
+            fetched_at,
+            last_attempt_at: snapshot.last_attempt_at,
+            rows: snapshot.rows.clone(),
+            implementation: snapshot.implementation.clone(),
+        },
+    ))
+}
+
+fn merge_task(
+    tasks: &mut HashMap<String, PersistedProgress>,
+    task_id: String,
+    incoming: PersistedProgress,
+) {
+    let Some(existing) = tasks.get_mut(&task_id) else {
+        tasks.insert(task_id, incoming);
+        return;
+    };
+
+    let latest_attempt = existing
+        .last_attempt_at
+        .as_ref()
+        .max(incoming.last_attempt_at.as_ref())
+        .cloned();
+    if incoming.fetched_at > existing.fetched_at {
+        *existing = incoming;
+    }
+    existing.last_attempt_at = latest_attempt;
+}
+
+fn prune_persisted_tasks(tasks: &mut HashMap<String, PersistedProgress>) {
+    let mut task_times = tasks
+        .iter()
+        .map(|(task_id, progress)| {
+            (
+                task_id.clone(),
+                progress
+                    .last_attempt_at
+                    .as_ref()
+                    .max(Some(&progress.fetched_at))
+                    .cloned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    task_times.sort_by(|(left_id, left_time), (right_id, right_time)| {
+        right_time
+            .cmp(left_time)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for (task_id, _) in task_times.into_iter().skip(MAX_CACHED_TASKS) {
+        tasks.remove(&task_id);
+    }
+}
+
+fn lock_progress_cache(path: &Path) -> Result<ProgressCacheLock> {
+    let file_name = path
+        .file_name()
+        .context("cache file path has no file name")?;
+    let mut lock_name = file_name.to_os_string();
+    lock_name.push(".lock");
+    let lock_path = path.with_file_name(lock_name);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "failed to open progress cache lock: {}",
+                lock_path.display()
+            )
+        })?;
+    // SAFETY: `file` remains open while the lock is held.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error())
+            .with_context(|| format!("failed to lock progress cache: {}", lock_path.display()));
+    }
+    Ok(ProgressCacheLock(file))
+}
+
+struct ProgressCacheLock(File);
+
+impl Drop for ProgressCacheLock {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` remains open until after this unlock call.
+        unsafe {
+            libc::flock(self.0.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -183,6 +268,16 @@ mod tests {
                 .map(|entries| entries.len()),
             None
         );
+    }
+
+    #[rstest]
+    #[case::invalid_json("not-json")]
+    #[case::unsupported_version(r#"{"formatVersion":0,"tasks":{}}"#)]
+    fn invalid_progress_cache_returns_none(cache_directory: TempDir, #[case] content: &str) {
+        let path = cache_directory.path().join("watch-progress.json");
+        fs::write(&path, content).unwrap();
+
+        assert_eq!(load_from(&path).unwrap().map(|entries| entries.len()), None);
     }
 
     #[rstest]
@@ -282,6 +377,94 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn progress_cache_store_merges_stale_writer_data(cache_directory: TempDir) {
+        let path = cache_directory.path().join("watch-progress.json");
+        let t0 = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
+        let t1 = t0 + Duration::seconds(10);
+        let t2 = t0 + Duration::seconds(20);
+        let t3 = t0 + Duration::seconds(30);
+
+        let initial = HashMap::from([
+            (
+                "task:task-alpha".to_string(),
+                cached_progress_with_note(t0, t0, "alpha-old"),
+            ),
+            (
+                "task:task-bravo".to_string(),
+                cached_progress_with_note(t0, t0, "bravo-old"),
+            ),
+        ]);
+        store_to(&path, &initial).unwrap();
+
+        let writer_a_snapshot = HashMap::from([
+            (
+                "task:task-alpha".to_string(),
+                cached_progress_with_note(t1, t1, "alpha-new"),
+            ),
+            (
+                "task:task-charlie".to_string(),
+                cached_progress_with_note(t1, t1, "charlie-new"),
+            ),
+            (
+                "task:task-bravo".to_string(),
+                cached_progress_with_note(t0, t0, "bravo-old"),
+            ),
+        ]);
+        store_to(&path, &writer_a_snapshot).unwrap();
+
+        let stale_writer_b_snapshot = HashMap::from([
+            (
+                "task:task-alpha".to_string(),
+                cached_progress_with_note(t0, t3, "alpha-old"),
+            ),
+            (
+                "task:task-bravo".to_string(),
+                cached_progress_with_note(t2, t2, "bravo-new"),
+            ),
+        ]);
+        store_to(&path, &stale_writer_b_snapshot).unwrap();
+
+        let stored = load_from(&path).unwrap().unwrap();
+        let actual = stored
+            .into_iter()
+            .map(|(task_id, snapshot)| {
+                (
+                    task_id,
+                    (snapshot.fetched_at, snapshot.last_attempt_at, snapshot.rows),
+                )
+            })
+            .collect::<HashMap<_, _>>();
+        let expected = HashMap::from([
+            (
+                "task-alpha".to_string(),
+                (
+                    Some(t1),
+                    Some(t3),
+                    cached_progress_with_note(t1, t1, "alpha-new").rows,
+                ),
+            ),
+            (
+                "task-charlie".to_string(),
+                (
+                    Some(t1),
+                    Some(t1),
+                    cached_progress_with_note(t1, t1, "charlie-new").rows,
+                ),
+            ),
+            (
+                "task-bravo".to_string(),
+                (
+                    Some(t2),
+                    Some(t2),
+                    cached_progress_with_note(t2, t2, "bravo-new").rows,
+                ),
+            ),
+        ]);
+
+        assert_eq!(actual, expected);
+    }
+
     fn cached_progress(
         fetched_at: DateTime<Utc>,
         last_attempt_at: DateTime<Utc>,
@@ -326,6 +509,23 @@ mod tests {
             fetched_at: Some(fetched_at),
             last_attempt_at: Some(last_attempt_at),
         }
+    }
+
+    fn cached_progress_with_note(
+        fetched_at: DateTime<Utc>,
+        last_attempt_at: DateTime<Utc>,
+        note: &str,
+    ) -> CachedProgress {
+        let mut progress = cached_progress(fetched_at, last_attempt_at);
+        let Some(ProgressRow::Work(row)) = progress.rows.first_mut() else {
+            unreachable!();
+        };
+        row.note = Some(note.to_string());
+        row.pane_id = None;
+        if let Some(ProgressRow::ChecklistPullRequest { row, .. }) = progress.rows.get_mut(1) {
+            row.pane_id = None;
+        }
+        progress
     }
 
     fn implementation_plan() -> ImplementationPlan {
