@@ -74,6 +74,38 @@ fn unmatched_progress_plan(delegates: &[FetchedDelegate]) -> ImplementationPlan 
     )
 }
 
+fn checklist_plan_covering_cached_pr() -> ImplementationPlan {
+    let checklist = TqChecklist {
+        id: "checklist-refresh".to_string(),
+        name: "Implementation".to_string(),
+        items: vec![TqChecklistItem {
+            id: "batch-refresh".to_string(),
+            content: "Batch 1".to_string(),
+            checked_at: None,
+            github_link_id: None,
+            children: vec![TqChecklistItem {
+                id: "item-cached-alpha".to_string(),
+                content: "PR 314: cached-alpha change".to_string(),
+                checked_at: None,
+                github_link_id: Some("link-cached-alpha".to_string()),
+                children: Vec::new(),
+            }],
+        }],
+    };
+    let github_link = TqGithubLink {
+        id: "link-cached-alpha".to_string(),
+        kind: Some("pull_request".to_string()),
+        owner: Some("example-owner".to_string()),
+        repo: Some("example-project".to_string()),
+        number: Some(314),
+        title: Some("cached-alpha change".to_string()),
+        url: Some("https://github.com/example-owner/example-project/pull/314".to_string()),
+        state: Some("open".to_string()),
+    };
+
+    build_implementation_plan(&checklist, &[github_link], &[], &HashMap::new(), false)
+}
+
 #[fixture]
 fn linked_checklist_plan() -> ImplementationPlan {
     let checklist = TqChecklist {
@@ -177,6 +209,28 @@ fn expected_unlinked_delegate_row(session_id: &str) -> ProgressRow {
             pr_body: ProgressMark::NotStarted,
             ci: ProgressMark::NotStarted,
             merge: ProgressMark::NotStarted,
+        },
+    })
+}
+
+fn expected_cached_pr_row(session_id: &str, number: u64) -> ProgressRow {
+    ProgressRow::PullRequest(PrProgressRow {
+        session_id: session_id.to_string(),
+        repo: Some("example-project".to_string()),
+        title: format!("{session_id} change"),
+        number: Some(number),
+        url: Some(format!(
+            "https://github.com/example-owner/example-project/pull/{number}"
+        )),
+        pane_id: None,
+        is_ended: true,
+        lookup_unavailable: false,
+        stages: StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::Done,
+            pr_body: ProgressMark::Done,
+            ci: ProgressMark::Done,
+            merge: ProgressMark::Done,
         },
     })
 }
@@ -1226,7 +1280,12 @@ fn reopening_unmatched_delegates_keeps_cached_rows_after_session_reload_is_incom
 }
 
 #[rstest]
-fn task_refresh_keeps_cached_unmatched_prs_when_sessions_are_missing(timestamp: DateTime<Utc>) {
+#[case::keeps_unmatched_rows(false)]
+#[case::deduplicates_pr_moved_into_checklist(true)]
+fn task_refresh_keeps_cached_unmatched_prs_when_sessions_are_missing(
+    timestamp: DateTime<Utc>,
+    #[case] refreshed_checklist_covers_cached_pr: bool,
+) {
     let selected = create_test_session_at("selected", timestamp);
     let make_cached_pr_delegate = |session_id: &str, number| {
         let mut session = progress_delegate(session_id, timestamp);
@@ -1300,13 +1359,55 @@ fn task_refresh_keeps_cached_unmatched_prs_when_sessions_are_missing(timestamp: 
             selected_session_id: "selected".to_string(),
             request_scope,
             delegated: Vec::new(),
-            implementation: Some(unmatched_progress_plan(&[])),
+            implementation: Some(if refreshed_checklist_covers_cached_pr {
+                checklist_plan_covering_cached_pr()
+            } else {
+                unmatched_progress_plan(&[])
+            }),
             github_error: None,
         }),
     );
 
-    assert_eq!(
-        app.progress_rows,
+    let expected_rows = if refreshed_checklist_covers_cached_pr {
+        vec![
+            expected_work_row("selected", "session"),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 1,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-refresh".to_string(),
+                title: "Batch 1".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch-refresh".to_string(),
+                row: PrProgressRow {
+                    session_id: "checklist-item:item-cached-alpha".to_string(),
+                    repo: Some("example-project".to_string()),
+                    title: "cached-alpha change".to_string(),
+                    number: Some(314),
+                    url: Some(
+                        "https://github.com/example-owner/example-project/pull/314".to_string(),
+                    ),
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+            ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
+            expected_cached_pr_row("cached-bravo", 315),
+        ]
+    } else {
         vec![
             expected_work_row("selected", "session"),
             ProgressRow::ImplementationHeader {
@@ -1315,42 +1416,11 @@ fn task_refresh_keeps_cached_unmatched_prs_when_sessions_are_missing(timestamp: 
                 collapsed: false,
             },
             ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
-            ProgressRow::PullRequest(PrProgressRow {
-                session_id: "cached-alpha".to_string(),
-                repo: Some("example-project".to_string()),
-                title: "cached-alpha change".to_string(),
-                number: Some(314),
-                url: Some("https://github.com/example-owner/example-project/pull/314".to_string()),
-                pane_id: None,
-                is_ended: true,
-                lookup_unavailable: false,
-                stages: StageMarks {
-                    implementation: ProgressMark::Done,
-                    diff_review: ProgressMark::Done,
-                    pr_body: ProgressMark::Done,
-                    ci: ProgressMark::Done,
-                    merge: ProgressMark::Done,
-                },
-            }),
-            ProgressRow::PullRequest(PrProgressRow {
-                session_id: "cached-bravo".to_string(),
-                repo: Some("example-project".to_string()),
-                title: "cached-bravo change".to_string(),
-                number: Some(315),
-                url: Some("https://github.com/example-owner/example-project/pull/315".to_string()),
-                pane_id: None,
-                is_ended: true,
-                lookup_unavailable: false,
-                stages: StageMarks {
-                    implementation: ProgressMark::Done,
-                    diff_review: ProgressMark::Done,
-                    pr_body: ProgressMark::Done,
-                    ci: ProgressMark::Done,
-                    merge: ProgressMark::Done,
-                },
-            }),
-        ],
-    );
+            expected_cached_pr_row("cached-alpha", 314),
+            expected_cached_pr_row("cached-bravo", 315),
+        ]
+    };
+    assert_eq!(app.progress_rows, expected_rows);
 }
 
 #[rstest]

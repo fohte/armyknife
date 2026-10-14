@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use super::super::progress::{
-    FetchedProgress, ProgressFetchScope, ProgressRow, ProgressSelectionKey,
+    FetchedDelegate, FetchedProgress, ProgressFetchScope, ProgressRow, ProgressSelectionKey,
     build_task_progress_rows, refresh_task_rows_from_sessions, table_selection_index,
 };
 use super::super::progress_batches::{
@@ -111,23 +111,11 @@ impl App {
                     cached_implementation,
                     reusable_cache,
                 ) {
-                    let current_delegate_ids = delegated
-                        .iter()
-                        .map(|delegate| delegate.session.session_id.clone())
-                        .collect::<Vec<_>>();
-                    let missing_cached_sessions = cached
-                        .delegated_sessions
-                        .iter()
-                        .filter(|session| {
-                            self.session_by_id(&session.session_id).is_none()
-                                && !current_delegate_ids.contains(&session.session_id)
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-                    delegated.extend(implementation.restore_cached_unmatched_delegates(
+                    delegated.extend(self.restore_missing_cached_delegates(
+                        implementation,
                         cached_implementation,
-                        &missing_cached_sessions,
-                        &current_delegate_ids,
+                        cached,
+                        &delegated,
                     ));
                 }
                 if let Some(cached) = reusable_cache {
@@ -184,6 +172,31 @@ impl App {
         self.cached_progress(session_id)
             .map(|snapshot| snapshot.rows.clone())
             .unwrap_or_default()
+    }
+
+    fn restore_missing_cached_delegates(
+        &self,
+        implementation: &mut ImplementationPlan,
+        cached_implementation: &ImplementationPlan,
+        cached: &CachedProgress,
+        current_delegates: &[FetchedDelegate],
+    ) -> Vec<FetchedDelegate> {
+        let current_delegate_ids = current_delegates
+            .iter()
+            .map(|delegate| delegate.session.session_id.as_str())
+            .collect::<Vec<_>>();
+        let missing_cached_sessions = cached
+            .delegated_sessions
+            .iter()
+            .filter(|session| {
+                self.session_by_id(&session.session_id).is_none()
+                    && !current_delegate_ids.contains(&session.session_id.as_str())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+
+        implementation
+            .restore_cached_unmatched_delegates(cached_implementation, &missing_cached_sessions)
     }
 
     fn refresh_local_progress(
