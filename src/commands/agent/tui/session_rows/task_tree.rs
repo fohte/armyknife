@@ -176,7 +176,7 @@ fn vibe_mode(session: &Session, vibe_enabled_session_ids: &HashSet<String>) -> O
         .then_some(VibeMode::Inherited)
 }
 
-fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig) -> TaskMark {
+pub fn task_mark(session: &Session, has_user_turn: bool, agent_config: &AgentConfig) -> TaskMark {
     if has_user_turn {
         return TaskMark::UserTurn;
     }

@@ -5,17 +5,33 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Cell, HighlightSpacing, Paragraph, Row, Table},
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::{
     app::App,
     progress::{PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow, work_row_count},
+    session_rows::{TaskMark, is_related_task, task_mark},
 };
+use crate::commands::agent::types::Session;
+use crate::commands::agent::user_turn::user_turns;
 
-use super::helpers::DIM_FG;
+use super::{
+    helpers::{DIM_FG, REPO_COLUMN_WIDTH, get_session_info, truncate},
+    session_list::{mark_glyph, task_number::task_number_style},
+};
 
 mod columns;
 
 use columns::{mark_style, stage_widths};
+
+const PROGRESS_NUMBER_COLUMN_WIDTH: usize = 7;
+
+#[derive(Clone, Copy)]
+enum IdentityStatus {
+    MissingSession,
+    Planned,
+    Session(TaskMark),
+}
 
 pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected = app.selected_session();
@@ -177,15 +193,24 @@ fn render_work_row(
     } else {
         "  "
     };
-    let mut spans = vec![
-        Span::raw(marker),
-        Span::styled(row.mark.symbol(), mark_style(row.mark)),
-        Span::raw(" "),
-        Span::styled(
-            row.role.clone(),
-            Style::default().add_modifier(Modifier::BOLD),
-        ),
-    ];
+    let session = app
+        .sessions
+        .iter()
+        .find(|session| session.session_id == row.session_id);
+    let status = session.map_or(IdentityStatus::MissingSession, |session| {
+        IdentityStatus::Session(session_task_mark(app, session))
+    });
+    let mut spans = progress_row_identity(
+        app,
+        session,
+        status,
+        task_number(app, &row.session_id),
+        marker,
+    );
+    spans.push(Span::styled(
+        row.role.clone(),
+        Style::default().add_modifier(Modifier::BOLD),
+    ));
     if let Some(label) = row.status_label.as_deref() {
         spans.push(Span::raw("  "));
         spans.push(Span::styled(label.to_string(), mark_style(row.mark)));
@@ -212,6 +237,85 @@ fn render_work_row(
     frame.render_widget(Paragraph::new(Line::from(spans)).style(row_style), area);
 }
 
+fn progress_row_identity(
+    app: &App,
+    session: Option<&Session>,
+    status: IdentityStatus,
+    number: String,
+    indent: &str,
+) -> Vec<Span<'static>> {
+    let repo = session.map_or_else(
+        || " ".repeat(REPO_COLUMN_WIDTH),
+        |session| {
+            let repo = app
+                .get_cached_worktree_labels(&session.cwd)
+                .map_or("", |(repo, _)| repo);
+            let repo = truncate(&get_session_info(session, repo), REPO_COLUMN_WIDTH);
+            format!(
+                "{repo}{}",
+                " ".repeat(REPO_COLUMN_WIDTH.saturating_sub(repo.width()))
+            )
+        },
+    );
+    let number_style = match app
+        .task_by_session
+        .get(session.map_or("", |session| session.session_id.as_str()))
+    {
+        Some(task) => {
+            let cursor_task = app
+                .selected_session_id()
+                .and_then(|id| app.task_by_session.get(id));
+            task_number_style(is_related_task(cursor_task, Some(task)), task.is_closed)
+        }
+        None => Style::default().fg(DIM_FG),
+    };
+    vec![
+        Span::raw(indent.to_string()),
+        status_span(status, session),
+        Span::raw(" "),
+        Span::styled(repo, Style::default().fg(DIM_FG)),
+        Span::styled(pad_number(&number), number_style),
+    ]
+}
+
+fn status_span(status: IdentityStatus, session: Option<&Session>) -> Span<'static> {
+    match status {
+        IdentityStatus::MissingSession => Span::styled("-", Style::default().fg(DIM_FG)),
+        IdentityStatus::Planned => Span::styled("○", mark_style(ProgressMark::NotStarted)),
+        IdentityStatus::Session(mark) => match session {
+            Some(session) => {
+                let (glyph, color) = mark_glyph(mark, session);
+                Span::styled(glyph, Style::default().fg(color))
+            }
+            None => Span::styled("-", Style::default().fg(DIM_FG)),
+        },
+    }
+}
+
+fn session_task_mark(app: &App, session: &Session) -> TaskMark {
+    let has_user_turn = !user_turns(std::iter::once(session), &app.agent_config).is_empty();
+    task_mark(session, has_user_turn, &app.agent_config)
+}
+
+fn task_number(app: &App, session_id: &str) -> String {
+    app.task_by_session
+        .get(session_id)
+        .map_or_else(String::new, |task| format!("#{}", task.task_number))
+}
+
+fn pad_number(number: &str) -> String {
+    let padding = PROGRESS_NUMBER_COLUMN_WIDTH
+        .saturating_sub(number.width())
+        .max(usize::from(!number.is_empty()));
+    format!("{number}{}", " ".repeat(padding))
+}
+
+fn pr_session<'a>(app: &'a App, row: &PrProgressRow) -> Option<&'a Session> {
+    app.sessions
+        .iter()
+        .find(|session| session.session_id == row.session_id)
+}
+
 fn render_stage_header(frame: &mut Frame, area: Rect, width: u16) {
     let title_width = (width as usize).saturating_sub(24);
     let title_padding = " ".repeat(title_width.min(28));
@@ -235,7 +339,7 @@ fn render_pr_rows(frame: &mut Frame, area: Rect, app: &mut App) {
         .progress_rows
         .iter()
         .filter_map(|row| match row {
-            ProgressRow::PullRequest(row) => Some(pr_table_row(row)),
+            ProgressRow::PullRequest(row) => Some(pr_table_row(row, app)),
             ProgressRow::Work(_)
             | ProgressRow::ImplementationHeader { .. }
             | ProgressRow::UnmatchedDelegatesHeader { .. }
@@ -253,7 +357,7 @@ fn render_checklist_rows(frame: &mut Frame, area: Rect, app: &mut App, work_row_
         .progress_rows
         .iter()
         .skip(work_row_count)
-        .map(checklist_table_row)
+        .map(|row| checklist_table_row(row, app))
         .collect::<Vec<_>>();
     if app.progress_table_state.selected().is_none()
         && app.progress_table_state.offset() == 0
@@ -290,7 +394,7 @@ fn first_checklist_pr_row_index(rows: &[ProgressRow], work_row_count: usize) -> 
     })
 }
 
-fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
+fn checklist_table_row(row: &ProgressRow, app: &App) -> Row<'static> {
     match row {
         ProgressRow::ImplementationHeader {
             merged_pr_count,
@@ -347,34 +451,44 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
             ])
             .style(Style::default().fg(DIM_FG))
         }
-        ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    "),
-        ProgressRow::PlannedPullRequest { title, .. } => Row::new(vec![
-            Cell::from(format!("    ○ {title}")).style(Style::default().fg(DIM_FG)),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-            Cell::from(""),
-        ]),
-        ProgressRow::PullRequest(row) => pr_table_row_with_indent(row, "    "),
+        ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    ", app),
+        ProgressRow::PlannedPullRequest { title, .. } => {
+            let mut spans =
+                progress_row_identity(app, None, IdentityStatus::Planned, String::new(), "    ");
+            spans.push(Span::raw(title.clone()));
+            Row::new(vec![
+                Cell::from(Line::from(spans)),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+                Cell::from(""),
+            ])
+        }
+        ProgressRow::PullRequest(row) => pr_table_row_with_indent(row, "    ", app),
         ProgressRow::Work(_) => Row::new(Vec::<Cell>::new()),
     }
 }
 
-fn pr_table_row(row: &PrProgressRow) -> Row<'static> {
-    pr_table_row_with_indent(row, "")
+fn pr_table_row(row: &PrProgressRow, app: &App) -> Row<'static> {
+    pr_table_row_with_indent(row, "", app)
 }
 
-fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str) -> Row<'static> {
-    let mut name = match row.number {
-        Some(number) => format!("{indent}#{number} {}", row.title),
-        None => format!("{indent}{}", row.title),
-    };
+fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str, app: &App) -> Row<'static> {
+    let session = pr_session(app, row);
+    let status = session.map_or(IdentityStatus::MissingSession, |session| {
+        IdentityStatus::Session(session_task_mark(app, session))
+    });
+    let number = row
+        .number
+        .map_or_else(String::new, |number| format!("PR#{number}"));
+    let mut name = progress_row_identity(app, session, status, number, indent);
+    name.push(Span::raw(row.title.clone()));
     if row.lookup_unavailable {
-        name.push_str(" (PR unavailable)");
+        name.push(Span::raw(" (PR unavailable)"));
     }
     Row::new(vec![
-        Cell::from(name),
+        Cell::from(Line::from(name)),
         mark_cell(row.stages.implementation),
         mark_cell(row.stages.diff_review),
         mark_cell(row.stages.pr_body),
@@ -389,13 +503,19 @@ fn mark_cell(mark: ProgressMark) -> Cell<'static> {
 
 #[cfg(test)]
 mod tests {
-    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, style::Modifier};
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        buffer::Buffer,
+        style::{Color, Modifier, Style},
+    };
     use rstest::{fixture, rstest};
 
     use super::*;
     use crate::commands::agent::tui::{
         app::App,
         progress::{ProgressRow, StageMarks},
+        session_rows::SessionTask,
         ui::test_support::create_test_session,
     };
 
@@ -509,6 +629,30 @@ mod tests {
             .collect()
     }
 
+    #[rstest]
+    #[case::done(ProgressMark::Done, Style::default().fg(DIM_FG))]
+    #[case::user(ProgressMark::User, Style::default().fg(Color::Red))]
+    #[case::working(ProgressMark::Working, Style::default().fg(Color::Green))]
+    #[case::waiting(ProgressMark::Waiting, Style::default().fg(Color::Yellow))]
+    #[case::not_started(ProgressMark::NotStarted, Style::default().fg(DIM_FG))]
+    fn progress_marks_use_the_tasks_palette(#[case] mark: ProgressMark, #[case] expected: Style) {
+        assert_eq!(mark_style(mark), expected);
+    }
+
+    #[test]
+    fn progress_identity_uses_the_tasks_glyph_for_unclassified_sessions() {
+        let mut session = create_test_session("paused");
+        session.status = crate::commands::agent::types::SessionStatus::Paused;
+        let app = App::with_sessions(vec![session.clone()]);
+        let status = IdentityStatus::Session(session_task_mark(&app, &session));
+        let span = status_span(status, Some(&session));
+
+        assert_eq!(
+            (span.content.to_string(), span.style),
+            ("⏸".to_string(), Style::default().fg(DIM_FG)),
+        );
+    }
+
     #[derive(Clone, Copy)]
     enum ProgressLayout {
         Checklist,
@@ -586,10 +730,10 @@ mod tests {
         ],
         vec![
             "│PROGRESS: project".to_string(),
-            "│  ● session".to_string(),
+            "│  ● project                session".to_string(),
             "│  ▾ 実 装  (PR 0/1)                            実 装  差 分  body  CI  merge"
                 .to_string(),
-            "│      #17 Example task change                ✓    ◐    ●     ◷   ○".to_string(),
+            "│      -                 PR#17  Example task  ✓    ◐    ●     ◷   ○".to_string(),
             "│".to_string(),
             "│".to_string(),
         ],
@@ -603,10 +747,10 @@ mod tests {
         ],
         vec![
             "│PROGRESS: project".to_string(),
-            "│  ● session".to_string(),
+            "│  ● project                session".to_string(),
             "│                                             実 装  差 分  body  CI  merge"
                 .to_string(),
-            "│  #17 Example task change                    ✓    ◐    ●     ◷   ○".to_string(),
+            "│  -                 PR#17  Example task chan ✓    ◐    ●     ◷   ○".to_string(),
             "│".to_string(),
             "│".to_string(),
         ],
@@ -661,14 +805,14 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ● session",
+                "│  ● project                session",
                 "│No delegated sessions",
             ],
         );
     }
 
     #[test]
-    fn renders_unstarted_marks_and_notes_with_palette_independent_dim_color() {
+    fn renders_session_status_and_notes_with_palette_independent_colors() {
         let mut app = App::with_sessions(vec![create_test_session("selected")]);
         app.progress_session_id = Some("selected".to_string());
         app.progress_rows = vec![ProgressRow::Work(WorkProgressRow {
@@ -686,7 +830,10 @@ mod tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
 
-        assert_eq!([buffer[(3, 1)].fg, buffer[(13, 1)].fg], [DIM_FG, DIM_FG],);
+        assert_eq!(
+            [buffer[(3, 1)].fg, buffer[(13, 1)].fg],
+            [Color::Green, DIM_FG],
+        );
     }
 
     #[test]
@@ -761,11 +908,85 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ● builder  implementing",
+                "│  ● project                builder  implementing",
                 "│                                             実 装  差 分  body  CI  merge",
-                "│› #17 Sample change                          ✓    ◐    ●     ◷   ○",
-                "│  Sample delegate (PR unavailable)           ●    ○    ○     ○   ○",
+                "│› -                 PR#17  Sample change     ✓    ◐    ●     ◷   ○",
+                "│  -                        Sample delegate ( ●    ○    ○     ○   ○",
                 "│",
+            ],
+        );
+    }
+
+    #[test]
+    fn rows_render_repo_tq_and_pull_request_columns_separately() {
+        let mut selected = create_test_session("selected");
+        selected.cwd = "/tmp/project-main".into();
+        let selected_cwd = selected.cwd.clone();
+        let mut delegate = create_test_session("delegate");
+        delegate.cwd = "/tmp/project-worker".into();
+        delegate.status = crate::commands::agent::types::SessionStatus::Ended;
+        let delegate_cwd = delegate.cwd.clone();
+
+        let mut app = App::with_sessions(vec![selected, delegate]);
+        if app.selected_session_id() != Some("selected") {
+            app.select_next();
+        }
+        app.progress_session_id = Some("selected".to_string());
+        app.apply_resolved_labels(vec![
+            (selected_cwd, "repo-main".to_string(), "main".to_string()),
+            (
+                delegate_cwd,
+                "repo-worker".to_string(),
+                "worker".to_string(),
+            ),
+        ]);
+        app.task_by_session.insert(
+            "selected".to_string(),
+            SessionTask {
+                task_id: "task-42".to_string(),
+                task_number: 42,
+                task_title: "Build a feature".to_string(),
+                parent_task_id: None,
+                is_closed: false,
+            },
+        );
+        app.progress_rows = vec![
+            ProgressRow::Work(WorkProgressRow {
+                session_id: "selected".to_string(),
+                role: "builder".to_string(),
+                mark: ProgressMark::Working,
+                status_label: None,
+                note: None,
+                pane_id: None,
+            }),
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "delegate".to_string(),
+                title: "Delegated change".to_string(),
+                number: Some(1168),
+                url: Some("https://example.test/pull/1168".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::NotStarted,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            }),
+        ];
+
+        let mut terminal = Terminal::new(TestBackend::new(120, 4)).unwrap();
+        let actual = progress_snapshot(&mut terminal, &mut app).0;
+
+        assert_eq!(
+            actual,
+            vec![
+                "│PROGRESS: project-main".to_string(),
+                "│  ● repo-main       #42    builder".to_string(),
+                "│                                                                                             実 装  差 分  body  CI  merge".to_string(),
+                "│  ✓ repo-worker     PR#1168 Delegated change                                                 ○    ○    ○     ○   ○".to_string(),
             ],
         );
     }
@@ -832,10 +1053,10 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ● planner",
-                "│› ● builder",
+                "│  ● project                planner",
+                "│› -                        builder",
                 "│                                             実 装  差 分  body  CI  merge",
-                "│  #17 Example task change                    ✓    ◐    ●     ◷   ○",
+                "│  -                 PR#17  Example task chan ✓    ◐    ●     ◷   ○",
                 "│",
             ],
         );
@@ -881,9 +1102,9 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ● worker-two",
-                "│  ● worker-three",
-                "│› ● worker-four",
+                "│  -                        worker-two",
+                "│  -                        worker-three",
+                "│› -                        worker-four",
             ],
         );
     }
@@ -920,12 +1141,21 @@ mod tests {
             buffer_snapshot_with_bold(terminal.backend().buffer()),
             vec![
                 ("│PROGRESS: project".to_string(), vec![]),
-                ("│  ● helper".to_string(), (5..=10).collect()),
-                ("│  ● helper".to_string(), (5..=10).collect()),
-                ("│  ● helper".to_string(), (5..=10).collect()),
                 (
-                    "│  ● builder  implementing detail".to_string(),
-                    (1..=32).collect(),
+                    "│  -                        helper".to_string(),
+                    (28..=33).collect()
+                ),
+                (
+                    "│  -                        helper".to_string(),
+                    (28..=33).collect()
+                ),
+                (
+                    "│  -                        helper".to_string(),
+                    (28..=33).collect()
+                ),
+                (
+                    "│  ● project                builder  implementing detail".to_string(),
+                    (1..=55).collect(),
                 ),
                 (
                     "│                                             実 装  差 分  body  CI  merge"
@@ -933,7 +1163,7 @@ mod tests {
                     vec![],
                 ),
                 (
-                    "│› #17 Example task change                    ✓    ◐    ●     ◷   ○"
+                    "│› -                 PR#17  Example task chan ✓    ◐    ●     ◷   ○"
                         .to_string(),
                     vec![],
                 ),
@@ -946,22 +1176,22 @@ mod tests {
         7,
         vec![
             "│PROGRESS: project",
-            "│  ● helper",
-            "│> ● builder",
+            "│  -                        helper",
+            "│> ● project                builder",
             "│                                             実 装  差 分  body  CI  merge",
-            "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
-            "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
-            "│  #19 Change 2                               ✓    ◐    ●     ◷   ○",
+            "│> -                 PR#17  Change 0          ✓    ◐    ●     ◷   ○",
+            "│  -                 PR#18  Change 1          ✓    ◐    ●     ◷   ○",
+            "│  -                 PR#19  Change 2          ✓    ◐    ●     ◷   ○",
         ],
     )]
     #[case::short_pane(
         5,
         vec![
             "│PROGRESS: project",
-            "│> ● builder",
+            "│> ● project                builder",
             "│                                             実 装  差 分  body  CI  merge",
-            "│> #17 Change 0                               ✓    ◐    ●     ◷   ○",
-            "│  #18 Change 1                               ✓    ◐    ●     ◷   ○",
+            "│> -                 PR#17  Change 0          ✓    ◐    ●     ◷   ○",
+            "│  -                 PR#18  Change 1          ✓    ◐    ●     ◷   ○",
         ],
     )]
     fn keeps_pr_rows_visible_without_hiding_the_selected_work_row(
@@ -1055,7 +1285,7 @@ mod tests {
                 "│PROGRESS: project",
                 "│    ▸ Batch one (0 PR merged)",
                 "│    ▾ Batch two",
-                "│      #17 Example task change                            ✓    ◐    ●     ◷   ○",
+                "│      -                 PR#17  Example task change       ✓    ◐    ●     ◷   ○",
             ],
         );
     }
@@ -1118,34 +1348,34 @@ mod tests {
                         "│PROGRESS: project".to_string(),
                         "│    ▸ Batch 5 (0 PR merged)".to_string(),
                         "│    ▸ Batch 6 (0 PR merged)".to_string(),
-                        "│      #17 Change 0               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#17  C ✓    ◐    ●     ◷   ○".to_string(),
                     ],
                     5,
                 ),
                 (
                     vec![
                         "│PROGRESS: project".to_string(),
-                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│      #23 Change 6               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│›     #24 Change 7               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#22  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#23  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│›     -                 PR#24  C ✓    ◐    ●     ◷   ○".to_string(),
                     ],
                     12,
                 ),
                 (
                     vec![
                         "│PROGRESS: project".to_string(),
-                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│›     #23 Change 6               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│      #24 Change 7               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#22  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│›     -                 PR#23  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#24  C ✓    ◐    ●     ◷   ○".to_string(),
                     ],
                     12,
                 ),
                 (
                     vec![
                         "│PROGRESS: project".to_string(),
-                        "│›     #20 Change 3               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│      #21 Change 4               ✓    ◐    ●     ◷   ○".to_string(),
-                        "│      #22 Change 5               ✓    ◐    ●     ◷   ○".to_string(),
+                        "│›     -                 PR#20  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#21  C ✓    ◐    ●     ◷   ○".to_string(),
+                        "│      -                 PR#22  C ✓    ◐    ●     ◷   ○".to_string(),
                     ],
                     10,
                 ),
@@ -1234,12 +1464,12 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project",
-                "│  ● builder",
+                "│  ● project                builder",
                 "│  ▾ 実 装  (PR 1/2)                                        実 装  差 分  body  CI  merge",
                 "│    ▸ Batch 1 (1 PR merged)",
                 "│    ▾ Batch 2",
-                "│›     #17 Sample change                                  ✓    ◐    ●     ◷   ○",
-                "│      ○ Future change",
+                "│›     -                 PR#17  Sample change             ✓    ◐    ●     ◷   ○",
+                "│      ○                        Future change",
             ],
         );
     }
@@ -1282,12 +1512,12 @@ mod tests {
             actual,
             vec![
                 "│PROGRESS: project".to_string(),
-                "│  ● builder".to_string(),
+                "│  ● project                builder".to_string(),
                 "│  ▾ 実 装  (PR 0/1)                                        実 装  差 分  body  CI  merge"
                     .to_string(),
                 "│    ▾ Batch 1".to_string(),
                 "│    ▾ チ ェ ッ ク リ ス ト 外".to_string(),
-                "│›     #17 Example task change                            ✓    ◐    ●     ◷   ○"
+                "│›     -                 PR#17  Example task change       ✓    ◐    ●     ◷   ○"
                     .to_string(),
             ],
         );

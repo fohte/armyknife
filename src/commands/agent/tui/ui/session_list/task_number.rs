@@ -10,7 +10,10 @@ use crate::commands::agent::tui::ui::helpers::DIM_FG;
 /// `DIM_FG` otherwise. A channel separate from `own_title_style`'s
 /// `kin_color` -- session kinship colors the title, task
 /// kinship/closedness only ever colors the number.
-pub(super) fn task_number_style(is_related: bool, is_closed: bool) -> Style {
+pub(in crate::commands::agent::tui::ui) fn task_number_style(
+    is_related: bool,
+    is_closed: bool,
+) -> Style {
     if is_closed {
         Style::default().fg(Color::Indexed(97))
     } else if is_related {

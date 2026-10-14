@@ -8,6 +8,8 @@ use crate::shared::config::AgentConfig;
 
 mod task_tree;
 
+pub(super) use task_tree::task_mark;
+
 /// One row in the session list's selection/render order.
 ///
 /// Section headers are not individually selectable; both row variants carry

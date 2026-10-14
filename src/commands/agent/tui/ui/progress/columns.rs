@@ -20,10 +20,10 @@ pub(super) fn stage_widths() -> [Constraint; 6] {
 
 pub(super) fn mark_style(mark: ProgressMark) -> Style {
     let color = match mark {
-        ProgressMark::Done => Color::Green,
-        ProgressMark::User => Color::Yellow,
+        ProgressMark::Done => DIM_FG,
+        ProgressMark::User => Color::Red,
         ProgressMark::Working => Color::Green,
-        ProgressMark::Waiting => Color::Cyan,
+        ProgressMark::Waiting => Color::Yellow,
         ProgressMark::NotStarted => DIM_FG,
     };
     Style::default().fg(color)

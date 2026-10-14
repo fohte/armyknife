@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::KeyEffects;
 use super::app::App;
 use super::event::KeyEvent;
-use super::progress::open_target;
+use super::progress::{ProgressRow, open_pr_url_target, open_target};
 
 pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     if !app.progress_focused {
@@ -30,15 +30,44 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
         }
         (KeyCode::Enter, _) if current_rows => {
             if !app.toggle_selected_progress_heading() {
+                let target = app
+                    .progress_list_state
+                    .selected()
+                    .and_then(|index| app.progress_rows.get(index))
+                    .filter(|row| {
+                        let session_id = match row {
+                            ProgressRow::Work(row) => Some(row.session_id.as_str()),
+                            ProgressRow::PullRequest(row)
+                            | ProgressRow::ChecklistPullRequest { row, .. } => {
+                                Some(row.session_id.as_str())
+                            }
+                            ProgressRow::ImplementationHeader { .. }
+                            | ProgressRow::UnmatchedDelegatesHeader { .. }
+                            | ProgressRow::BatchHeader { .. }
+                            | ProgressRow::PlannedPullRequest { .. } => None,
+                        };
+                        session_id.is_some_and(|session_id| {
+                            app.sessions
+                                .iter()
+                                .any(|session| session.session_id == session_id)
+                        })
+                    })
+                    .and_then(open_target);
                 return Some(KeyEffects {
-                    open_progress_target: app
-                        .progress_list_state
-                        .selected()
-                        .and_then(|index| app.progress_rows.get(index))
-                        .and_then(open_target),
+                    open_progress_target: target,
                     ..Default::default()
                 });
             }
+        }
+        (KeyCode::Char('o'), KeyModifiers::NONE) if current_rows => {
+            return Some(KeyEffects {
+                open_progress_target: app
+                    .progress_list_state
+                    .selected()
+                    .and_then(|index| app.progress_rows.get(index))
+                    .and_then(open_pr_url_target),
+                ..Default::default()
+            });
         }
         (KeyCode::Char('q'), KeyModifiers::NONE) => app.quit(),
         (KeyCode::Char('?'), KeyModifiers::NONE) => app.toggle_help(),
@@ -609,16 +638,35 @@ mod tests {
     }
 
     #[rstest]
-    #[case::focus_running_delegate(false, Some("%8"), Some("https://example.com/pull/7"), Some(ProgressOpenTarget::FocusPane("%8".to_string())))]
-    #[case::open_pr_after_delegate_ends(true, Some("%8"), Some("https://example.com/pull/7"), Some(ProgressOpenTarget::OpenUrl("https://example.com/pull/7".to_string())))]
-    #[case::ignore_row_without_target(false, None, None, None)]
+    #[case::focus_running_delegate(false, Some("%8"), Some("https://example.com/pull/7"), true, Some(ProgressOpenTarget::FocusPane("%8".to_string())))]
+    #[case::ignore_ended_delegate(true, Some("%8"), Some("https://example.com/pull/7"), true, None)]
+    #[case::ignore_missing_session(
+        false,
+        Some("%8"),
+        Some("https://example.com/pull/7"),
+        false,
+        None
+    )]
+    #[case::ignore_row_without_target(false, None, None, true, None)]
     fn enter_opens_the_progress_row_target(
         #[case] is_ended: bool,
         #[case] pane_id: Option<&str>,
         #[case] url: Option<&str>,
+        #[case] has_session: bool,
         #[case] expected_target: Option<ProgressOpenTarget>,
     ) {
-        let mut app = App::with_sessions(vec![session("selected")]);
+        let mut sessions = vec![session("selected")];
+        if has_session {
+            let mut delegate = session("delegate");
+            if is_ended {
+                delegate.status = SessionStatus::Ended;
+            }
+            sessions.push(delegate);
+        }
+        let mut app = App::with_sessions(sessions);
+        if app.selected_session_id() != Some("selected") {
+            app.select_next();
+        }
         app.progress_focused = true;
         app.progress_session_id = Some("selected".to_string());
         app.progress_rows = vec![work_row(), pull_request_row(is_ended, pane_id, url)];
@@ -636,6 +684,65 @@ mod tests {
                 open_progress_target: expected_target,
                 ..Default::default()
             }),
+        );
+    }
+
+    #[test]
+    fn o_opens_the_selected_pull_request_url() {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![
+            work_row(),
+            pull_request_row(true, None, Some("https://example.com/pull/7")),
+        ];
+        app.progress_list_state.select(Some(1));
+
+        assert_eq!(
+            handle(
+                &mut app,
+                KeyEvent {
+                    code: KeyCode::Char('o'),
+                    modifiers: KeyModifiers::NONE,
+                },
+            ),
+            Some(KeyEffects {
+                open_progress_target: Some(ProgressOpenTarget::OpenUrl(
+                    "https://example.com/pull/7".to_string(),
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[test]
+    fn o_does_nothing_on_a_work_or_planned_row() {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![
+            work_row(),
+            ProgressRow::PlannedPullRequest {
+                batch_id: "batch-1".to_string(),
+                checklist_item_id: "item-1".to_string(),
+                title: "Future change".to_string(),
+            },
+        ];
+
+        let actual = [0, 1].map(|index| {
+            app.progress_list_state.select(Some(index));
+            handle(
+                &mut app,
+                KeyEvent {
+                    code: KeyCode::Char('o'),
+                    modifiers: KeyModifiers::NONE,
+                },
+            )
+        });
+
+        assert_eq!(
+            actual,
+            [Some(KeyEffects::default()), Some(KeyEffects::default())]
         );
     }
 

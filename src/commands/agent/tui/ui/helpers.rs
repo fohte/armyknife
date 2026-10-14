@@ -10,6 +10,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// brightness depends on the terminal's configurable palette.
 pub(in crate::commands::agent::tui) const DIM_FG: Color = Color::Indexed(245);
 
+pub(super) const REPO_COLUMN_WIDTH: usize = 16;
+
 /// Distance beyond which a kin relationship no longer gets a distinct
 /// color and renders with the normal (non-kin) title style, e.g. a
 /// great-great-grandparent. Matches the worked example in the spec: parent

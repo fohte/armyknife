@@ -115,9 +115,11 @@ pub(super) fn open_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
             .pane_id
             .as_ref()
             .map(|pane_id| ProgressOpenTarget::FocusPane(pane_id.clone())),
-        ProgressRow::PullRequest(row) | ProgressRow::ChecklistPullRequest { row, .. } => {
-            open_pull_request_target(row)
-        }
+        ProgressRow::PullRequest(row) | ProgressRow::ChecklistPullRequest { row, .. } => (!row
+            .is_ended)
+            .then_some(row.pane_id.as_ref())
+            .flatten()
+            .map(|pane_id| ProgressOpenTarget::FocusPane(pane_id.clone())),
         ProgressRow::ImplementationHeader { .. }
         | ProgressRow::UnmatchedDelegatesHeader { .. }
         | ProgressRow::BatchHeader { .. }
@@ -125,15 +127,18 @@ pub(super) fn open_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
     }
 }
 
-fn open_pull_request_target(row: &PrProgressRow) -> Option<ProgressOpenTarget> {
-    if !row.is_ended
-        && let Some(pane_id) = row.pane_id.as_ref()
-    {
-        return Some(ProgressOpenTarget::FocusPane(pane_id.clone()));
+pub(super) fn open_pr_url_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
+    match row {
+        ProgressRow::PullRequest(row) | ProgressRow::ChecklistPullRequest { row, .. } => row
+            .url
+            .as_ref()
+            .map(|url| ProgressOpenTarget::OpenUrl(url.clone())),
+        ProgressRow::Work(_)
+        | ProgressRow::ImplementationHeader { .. }
+        | ProgressRow::UnmatchedDelegatesHeader { .. }
+        | ProgressRow::BatchHeader { .. }
+        | ProgressRow::PlannedPullRequest { .. } => None,
     }
-    row.url
-        .as_ref()
-        .map(|url| ProgressOpenTarget::OpenUrl(url.clone()))
 }
 
 impl ProgressRow {
