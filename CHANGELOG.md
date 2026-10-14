@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.420](https://github.com/fohte/armyknife/compare/v0.1.419...v0.1.420) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent/new:** launch from the -R worktree root ([#1175](https://github.com/fohte/armyknife/issues/1175)) ([fc60202](https://github.com/fohte/armyknife/commit/fc60202884099e97f606f12f63ebe0bdd1b1d999))
+
 ## [0.1.419](https://github.com/fohte/armyknife/compare/v0.1.418...v0.1.419) (2026-10-14)
 
 
