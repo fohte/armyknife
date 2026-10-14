@@ -257,7 +257,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::commands::agent::tui::ui::test_support::{
-        create_test_session, render_to_string, render_to_string_with, wt_row,
+        create_test_session, render_buffer, render_to_string, render_to_string_with, wt_row,
     };
     use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
     use rstest::rstest;
@@ -279,13 +279,19 @@ mod tests {
         stopped.status = SessionStatus::Stopped;
 
         let sessions = vec![running, waiting, paused, stopped];
+        let buffer = render_buffer(&sessions, Some(0), now, 80, 20);
         let output = render_to_string(&sessions, Some(0), now, 80, 20);
         let header_line = output.lines().next().unwrap();
+        let idle_start = header_line
+            .find("2 idle")
+            .map(|byte_index| header_line[..byte_index].chars().count() as u16)
+            .unwrap();
 
         assert_eq!(
             header_line,
             " agent watch                                    1 needs you · 1 running · 2 idle"
         );
+        assert_eq!(buffer[(idle_start, 0)].fg, DIM_FG);
     }
 
     #[test]

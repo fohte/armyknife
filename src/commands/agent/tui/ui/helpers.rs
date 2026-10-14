@@ -69,7 +69,7 @@ pub(super) fn kin_color(direction: KinDirection, distance: usize) -> Option<Colo
 /// Amber for waiting-for-user, green for running, cyan for a session whose
 /// main loop is idle but a background task is still in flight, and a single
 /// neutral color for every idle status (paused/stopped/ended).
-pub(super) fn status_color(status: DisplayStatus) -> Color {
+pub(in crate::commands::agent::tui) fn status_color(status: DisplayStatus) -> Color {
     match status {
         DisplayStatus::Running => Color::Green,
         DisplayStatus::WaitingInput => Color::Yellow,
