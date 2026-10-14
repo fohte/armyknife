@@ -1,5 +1,5 @@
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -42,22 +42,26 @@ struct BashToolResponse {
 pub fn run(_args: &ReminderHookArgs) -> Result<Option<i32>> {
     let input: ClaudePostToolUseInput = serde_json::from_reader(io::stdin().lock())
         .context("failed to parse Claude Code PostToolUse input")?;
-    if input.tool_name.as_deref() != Some("Bash") || !input.tool_input.run_in_background {
-        return Ok(None);
-    }
-
     let settings = ReminderSettings::load();
-    let Some(sessions_dir) = settings
-        .timeout_for(&input.tool_input.command)
-        .map(|_| store::sessions_dir())
-        .transpose()?
-    else {
-        return Ok(None);
-    };
+    run_with(
+        &input,
+        &settings,
+        store::sessions_dir,
+        reminder::sleep,
+        io::stderr().lock(),
+    )
+}
 
-    let message = check_task(&input, &settings, &sessions_dir, reminder::sleep)?;
+fn run_with(
+    input: &ClaudePostToolUseInput,
+    settings: &ReminderSettings,
+    sessions_dir: impl FnOnce() -> Result<PathBuf>,
+    wait: impl FnOnce(Duration),
+    mut stderr: impl Write,
+) -> Result<Option<i32>> {
+    let message = check_task(input, settings, sessions_dir, wait)?;
     if let Some(message) = message {
-        writeln!(io::stderr().lock(), "{message}")?;
+        writeln!(stderr, "{message}")?;
         return Ok(Some(2));
     }
 
@@ -67,7 +71,7 @@ pub fn run(_args: &ReminderHookArgs) -> Result<Option<i32>> {
 fn check_task(
     input: &ClaudePostToolUseInput,
     settings: &ReminderSettings,
-    sessions_dir: &Path,
+    sessions_dir: impl FnOnce() -> Result<PathBuf>,
     wait: impl FnOnce(Duration),
 ) -> Result<Option<String>> {
     if input.tool_name.as_deref() != Some("Bash") || !input.tool_input.run_in_background {
@@ -82,7 +86,8 @@ fn check_task(
 
     wait(timeout);
 
-    let Some(session) = store::load_session_from(sessions_dir, &input.session_id)? else {
+    let sessions_dir = sessions_dir()?;
+    let Some(session) = store::load_session_from(&sessions_dir, &input.session_id)? else {
         return Ok(None);
     };
     Ok(session
@@ -94,6 +99,7 @@ fn check_task(
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
+    use std::path::Path;
 
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -110,6 +116,7 @@ mod tests {
         TempDir::new().expect("temporary sessions directory")
     }
 
+    #[fixture]
     fn settings() -> ReminderSettings {
         ReminderSettings::from_config(&BgTaskReminderConfig {
             timeout: Some("5m".to_string()),
@@ -154,24 +161,33 @@ mod tests {
         store::save_session_to(sessions_dir, &session).expect("session fixture should save");
     }
 
-    #[test]
-    fn pending_background_bash_returns_the_configured_message() {
+    #[rstest]
+    fn pending_background_bash_writes_the_message_and_returns_exit_code_2(
+        settings: ReminderSettings,
+    ) {
         let sessions_dir = sessions_dir();
         save_session(sessions_dir.path(), true);
         let wait_duration = Cell::new(None);
+        let mut stderr = Vec::new();
 
-        let actual = check_task(
+        let exit_code = run_with(
             &hook_input("sample-command --watch", true),
-            &settings(),
-            sessions_dir.path(),
+            &settings,
+            || Ok(sessions_dir.path().to_path_buf()),
             |duration| wait_duration.set(Some(duration)),
+            &mut stderr,
         )
         .unwrap();
 
         assert_eq!(
-            (actual, wait_duration.get()),
             (
-                Some("Task reminder".to_string()),
+                exit_code,
+                String::from_utf8(stderr).unwrap(),
+                wait_duration.get(),
+            ),
+            (
+                Some(2),
+                "Task reminder\n".to_string(),
                 Some(Duration::from_secs(300))
             )
         );
@@ -182,42 +198,54 @@ mod tests {
     #[case::excluded_command(true, "sample-review --wait")]
     fn skipped_commands_return_without_waiting(
         sessions_dir: TempDir,
+        settings: ReminderSettings,
         #[case] run_in_background: bool,
         #[case] command: &str,
     ) {
         save_session(sessions_dir.path(), true);
         let waits = Cell::new(0);
+        let mut stderr = Vec::new();
 
-        let actual = check_task(
+        let actual = run_with(
             &hook_input(command, run_in_background),
-            &settings(),
-            sessions_dir.path(),
+            &settings,
+            || Ok(sessions_dir.path().to_path_buf()),
             |_| waits.set(waits.get() + 1),
+            &mut stderr,
         )
         .unwrap();
 
-        assert_eq!((actual, waits.get()), (None, 0));
+        assert_eq!((actual, stderr, waits.get()), (None, Vec::new(), 0));
     }
 
-    #[test]
-    fn task_missing_from_the_session_registry_returns_without_a_message() {
-        let sessions_dir = sessions_dir();
-        save_session(sessions_dir.path(), false);
+    #[rstest]
+    fn task_missing_from_the_session_registry_returns_without_a_message(
+        sessions_dir: TempDir,
+        settings: ReminderSettings,
+    ) {
+        save_session(sessions_dir.path(), true);
         let waits = Cell::new(0);
 
         let actual = check_task(
             &hook_input("sample-command --watch", true),
-            &settings(),
-            sessions_dir.path(),
-            |_| waits.set(waits.get() + 1),
+            &settings,
+            || Ok(sessions_dir.path().to_path_buf()),
+            |duration| {
+                assert_eq!(duration, Duration::from_secs(300));
+                waits.set(waits.get() + 1);
+                store::update_session_in(sessions_dir.path(), "fixture-session", |session| {
+                    session.pending_bg_task_ids.remove("fixture-task-id")
+                })
+                .expect("completed task should be removed from the registry");
+            },
         )
         .unwrap();
 
         assert_eq!((actual, waits.get()), (None, 1));
     }
 
-    #[test]
-    fn background_task_id_is_read_from_claude_tool_response() {
+    #[rstest]
+    fn background_task_id_is_read_from_claude_tool_response(settings: ReminderSettings) {
         let input: ClaudePostToolUseInput = serde_json::from_str(indoc! {r#"
             {
               "session_id": "fixture-session",
@@ -230,19 +258,37 @@ mod tests {
 
         assert_eq!(
             (
-                input.session_id,
-                input.tool_name,
-                input.tool_input.command,
+                input.session_id.as_str(),
+                input.tool_name.as_deref(),
+                input.tool_input.command.as_str(),
                 input.tool_input.run_in_background,
-                input.tool_response.background_task_id,
+                input.tool_response.background_task_id.as_deref(),
             ),
             (
-                "fixture-session".to_string(),
-                Some("Bash".to_string()),
-                "sample-command".to_string(),
+                "fixture-session",
+                Some("Bash"),
+                "sample-command",
                 true,
-                Some("fixture-task-id".to_string()),
+                Some("fixture-task-id"),
             )
+        );
+        let wait_duration = Cell::new(None);
+        let mut stderr = Vec::new();
+        let exit_code = run_with(
+            &input,
+            &settings,
+            || Ok(PathBuf::from("/missing/session/registry")),
+            |duration| wait_duration.set(Some(duration)),
+            &mut stderr,
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                exit_code,
+                String::from_utf8(stderr).unwrap(),
+                wait_duration.get()
+            ),
+            (None, String::new(), Some(Duration::from_secs(300)))
         );
     }
 }

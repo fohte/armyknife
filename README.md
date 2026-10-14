@@ -474,7 +474,29 @@ The session list shows YOUR TURN first, then TASKS: a tree of sessions where eac
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
-For Claude Code background Bash commands, wire `a agent bg reminder-hook` to a `PostToolUse` hook with the `Bash` matcher and `asyncRewake: true`. It waits for the configured timeout, then exits with status `2` and writes the reminder to stderr only while the task ID remains pending in the session store. Configure the hook timeout to exceed `agent.bg_task_reminder.timeout`.
+For Claude Code background Bash commands, add this entry alongside the existing `PostToolUse` hook in your Claude Code settings:
+
+```json
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "a agent bg reminder-hook",
+            "asyncRewake": true,
+            "timeout": 781
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+Set the hook timeout in seconds to a value longer than `agent.bg_task_reminder.timeout` (the example above is longer than the `13m` config example). The existing `a agent hook post-tool-use` registration records each background Bash task ID, and the `Stop` hook in [Setup](#setup) refreshes that list from Claude Code's task registry at each Stop event. Both hooks must be registered for reminders to work. When the task remains pending after the configured timeout, the hook exits with status `2` and writes the reminder to stderr.
 
 `a agent list --tmux` prints one next user action for a tmux status line and includes the session name at the end. The shared action order is `failed`, `crit`, `body`, user-state status names, `allow`, `ask`, then `merge`; configured status names are shown as labels. The oldest session update wins within each action. `waiting` and `done` statuses produce no user action.
 

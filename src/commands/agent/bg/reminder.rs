@@ -156,4 +156,30 @@ mod tests {
             (None, 4, 1, Duration::from_secs(2))
         );
     }
+
+    #[test]
+    fn task_exiting_at_deadline_does_not_trigger_reminder() {
+        let elapsed = Cell::new(Duration::ZERO);
+        let polls = Cell::new(0);
+        let reminded = Cell::new(false);
+        let actual = wait_until_timeout_or_exit(
+            Duration::from_secs(1),
+            || {
+                polls.set(polls.get() + 1);
+                Ok::<_, io::Error>(match polls.get() {
+                    1 | 2 => None,
+                    _ => Some("completed"),
+                })
+            },
+            || elapsed.get(),
+            |duration| elapsed.set(elapsed.get() + duration),
+            || reminded.set(true),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (actual, polls.get(), reminded.get()),
+            (Some("completed"), 3, false)
+        );
+    }
 }

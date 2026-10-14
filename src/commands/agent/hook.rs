@@ -28,6 +28,7 @@ use crate::shared::config::{self, Config};
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 use crate::shared::log::short_run_id;
 
+mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
 mod session_lifecycle;
@@ -500,11 +501,10 @@ fn process_hook_event_impl_with_instruction(
     }
 
     // Refresh in-flight background tasks (Bash bg shells and Task-tool
-    // subagents) from Claude Code's own task registry (see
-    // `HookInput::pending_bg_task_ids` / `pending_agent_task_ids` and the
-    // matching `Session` fields). armyknife only wires the `Stop` hook, so
-    // each Stop overwrites both sets wholesale with the registry's current
-    // view. The immediately-following Stop after a launch fires
+    // subagents) from Claude Code's task events. PostToolUse records a newly
+    // launched Bash task so a delayed reminder can see it before the next
+    // Stop; each Stop then overwrites both sets from the registry's current
+    // snapshot. The immediately-following Stop after a launch fires
     // synthetically -- Claude moves on as soon as the task is spawned, not
     // when it finishes -- so a non-empty set here means "the user is still
     // mid-task even though Claude's main loop went idle":
@@ -538,6 +538,8 @@ fn process_hook_event_impl_with_instruction(
         session
             .pending_permission_request_ids
             .retain(|key, _| key == MAIN_THREAD_AGENT_KEY || live_agent_ids.contains(key));
+    } else if event == HookEvent::PostToolUse {
+        background_tasks::record_launched_bash_task(&mut session, &input);
     }
 
     // At least one agent (main thread or subagent) is still blocked on a
@@ -2604,6 +2606,34 @@ mod tests {
             ),
             (set_of(&["bg-1"]), set_of(&["task-1"])),
         );
+    }
+
+    #[test]
+    fn post_tool_use_registers_background_bash_task() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir");
+        let sessions_dir = temp_dir.path();
+
+        let mut existing = create_test_session(None);
+        existing.session_id = "task-sess-3".to_string();
+        store::save_session_to(sessions_dir, &existing).expect("save");
+
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"task-sess-3","cwd":"/tmp/test","tool_name":"Bash","tool_input":{"command":"sample-command","run_in_background":true},"tool_response":{"backgroundTaskId":"task-id"}}"#,
+        )
+        .expect("valid JSON");
+
+        process_hook_event_impl(
+            HookEvent::PostToolUse,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "task-sess-3")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.pending_bg_task_ids, set_of(&["task-id"]));
     }
 
     #[test]

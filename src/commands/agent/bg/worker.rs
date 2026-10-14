@@ -12,6 +12,7 @@ use super::super::{bg_tasks, peer::notify, window_status};
 use super::output;
 use super::reminder::{self, ReminderSettings};
 use crate::shared::command;
+use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -38,6 +39,13 @@ pub struct RunDetachedArgs {
 }
 
 pub fn run(args: &RunDetachedArgs) -> Result<()> {
+    let span = tracing::info_span!(
+        "agent.bg_run",
+        run_id = %short_run_id(),
+        session = %args.session,
+    );
+    let _entered = span.enter();
+
     let reminder = ReminderSettings::load();
     let status = bg_tasks::set_worker_pid(&args.session, &args.task_id, std::process::id())
         .and_then(|()| run_command(args, &reminder));
@@ -125,7 +133,12 @@ fn run_command(args: &RunDetachedArgs, reminder: &ReminderSettings) -> Result<Ex
         || child.try_wait(),
         || started_at.elapsed(),
         reminder::sleep,
-        || match notify::notify(&args.session, reminder.message(), None, None) {
+        || match notify::notify(
+            &args.session,
+            &reminder_message(args, reminder.message()),
+            None,
+            None,
+        ) {
             Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
                 event = "agent.bg_run.reminder_queued",
                 session = %args.session,
@@ -178,6 +191,25 @@ fn completion_message(
     }
 }
 
+fn reminder_message(args: &RunDetachedArgs, message: &str) -> String {
+    let task_id = strip_angle_brackets(&args.task_id);
+    let command = strip_angle_brackets(&format!("{:?}", args.command));
+    let stdout = strip_angle_brackets(&format!("{:?}", args.stdout_file));
+    let stderr = strip_angle_brackets(&format!("{:?}", args.stderr_file));
+    let message = strip_angle_brackets(message);
+
+    formatdoc! {"
+        <background-task-reminder>
+        - Task ID: {task_id}
+        - Command argv: {command}
+        - stdout: {stdout}
+        - stderr: {stderr}
+
+        {message}
+        </background-task-reminder>"
+    }
+}
+
 fn exit_description(status: Option<&ExitStatus>, execution_error: Option<&str>) -> String {
     if let Some(code) = status.and_then(ExitStatus::code) {
         return code.to_string();
@@ -189,4 +221,34 @@ fn exit_description(status: Option<&ExitStatus>, execution_error: Option<&str>) 
         return format!("unavailable (failed to run command: {:?})", error);
     }
     "unavailable".to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use indoc::indoc;
+
+    #[test]
+    fn reminder_message_identifies_the_background_task() {
+        let args = RunDetachedArgs {
+            session: "fixture-session".to_string(),
+            task_id: "fixture-task".to_string(),
+            stdout_file: PathBuf::from("/tmp/fixture/stdout.log"),
+            stderr_file: PathBuf::from("/tmp/fixture/stderr.log"),
+            command: vec![OsString::from("sample-command"), OsString::from("--wait")],
+        };
+
+        assert_eq!(
+            reminder_message(&args, "Reminder text"),
+            indoc! {r#"
+                <background-task-reminder>
+                - Task ID: fixture-task
+                - Command argv: ["sample-command", "--wait"]
+                - stdout: "/tmp/fixture/stdout.log"
+                - stderr: "/tmp/fixture/stderr.log"
+
+                Reminder text
+                </background-task-reminder>"#},
+        );
+    }
 }
