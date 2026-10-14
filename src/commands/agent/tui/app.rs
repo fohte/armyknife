@@ -56,6 +56,7 @@ mod reload;
 mod tq;
 mod worktree;
 
+pub(in crate::commands::agent::tui) use progress_cache::persist_progress_cache;
 #[cfg(test)]
 pub(super) use progress_scope::ProgressScopeKind;
 
@@ -181,6 +182,7 @@ pub struct App {
     pub(super) initial_progress_selection: Option<InitialProgressSelection>,
     pub(super) progress_error: Option<String>,
     progress_cache: HashMap<String, CachedProgress>,
+    progress_cache_dirty: bool,
     /// Whether the PROGRESS pane currently receives keyboard input.
     pub progress_focused: bool,
 }
@@ -282,6 +284,7 @@ impl App {
             initial_progress_selection: None,
             progress_error: None,
             progress_cache: HashMap::new(),
+            progress_cache_dirty: false,
             progress_focused: false,
         };
         app.rebuild_row_order();
@@ -460,6 +463,9 @@ mod tests {
 
     #[path = "progress.rs"]
     mod progress;
+
+    #[path = "progress_cache.rs"]
+    mod progress_cache;
 
     /// Counter to assign distinct timestamps to test sessions.
     /// Each call returns a progressively older timestamp, so sessions
