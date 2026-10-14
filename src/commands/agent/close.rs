@@ -294,6 +294,7 @@ trait CloseRuntime {
     fn pane_exists(&self, pane_id: &str) -> Result<bool>;
     fn pane_session_id(&self, pane_id: &str) -> Option<String>;
     fn has_draft(&self, pane_id: &str, engine: Engine) -> Option<bool>;
+    fn latest_codex_turn_status(&self, thread_id: &str) -> Result<Option<String>>;
     fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>>;
     fn request_graceful_quit(&self, pane_id: &str, pid: u32) -> io::Result<bool>;
     fn send_sigterm(&self, pid: u32) -> io::Result<()>;
@@ -315,6 +316,11 @@ impl CloseRuntime for LiveCloseRuntime {
 
     fn has_draft(&self, pane_id: &str, engine: Engine) -> Option<bool> {
         super::pane::input::pane_has_draft(pane_id, engine)
+    }
+
+    fn latest_codex_turn_status(&self, thread_id: &str) -> Result<Option<String>> {
+        let mut client = super::codex_steer::Client::connect()?;
+        client.latest_turn_status(thread_id)
     }
 
     fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>> {
@@ -362,7 +368,21 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
     ensure_pane_session(runtime, pane_id, &session.session_id)?;
 
     if !force {
-        ensure_session_is_idle(session)?;
+        let codex_turn_interrupted = session.engine == Engine::Codex
+            && session.status == SessionStatus::Running
+            && match runtime.latest_codex_turn_status(&session.session_id) {
+                Ok(Some(status)) => status == "interrupted",
+                Ok(None) => false,
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.close.codex_turn_read_failed",
+                        session = %session.session_id,
+                        error = %error,
+                    );
+                    false
+                }
+            };
+        ensure_session_is_idle(session, codex_turn_interrupted)?;
     }
 
     match runtime.resolve_agent_pid(pane_id, session.engine)? {
@@ -444,11 +464,16 @@ fn ensure_pane_session<R: CloseRuntime>(
     Ok(())
 }
 
-fn ensure_session_is_idle(session: &Session) -> Result<()> {
+fn ensure_session_is_idle(session: &Session, codex_turn_interrupted: bool) -> Result<()> {
+    let interrupted_codex_turn_is_idle = session.status == SessionStatus::Running
+        && session.engine == Engine::Codex
+        && codex_turn_interrupted
+        && !session.has_pending_permission_requests();
     if matches!(
         session.status,
         SessionStatus::Running | SessionStatus::WaitingInput
-    ) {
+    ) && !interrupted_codex_turn_is_idle
+    {
         bail!(
             "Agent session `{}` is running or waiting for input; pass --force to close it",
             session.session_id
@@ -499,6 +524,7 @@ mod tests {
         PaneExists(String),
         PaneSession(String),
         Draft(String, Engine),
+        LatestTurnStatus(String),
         ResolvePid(String, Engine),
         GracefulQuit(String, u32),
         Sigterm(u32),
@@ -512,6 +538,7 @@ mod tests {
         pane_exists: Result<bool>,
         pane_session_id: Option<String>,
         draft: Option<bool>,
+        turn_status: std::result::Result<Option<String>, String>,
         pid: Option<u32>,
         graceful_result: io::Result<bool>,
         signal_result: io::Result<()>,
@@ -525,6 +552,7 @@ mod tests {
                 pane_exists: Ok(true),
                 pane_session_id: Some("session-1".to_string()),
                 draft: Some(false),
+                turn_status: Ok(None),
                 pid: Some(42),
                 graceful_result: Ok(true),
                 signal_result: Ok(()),
@@ -556,6 +584,16 @@ mod tests {
                 .borrow_mut()
                 .push(Call::Draft(pane_id.to_string(), engine));
             self.draft
+        }
+
+        fn latest_codex_turn_status(&self, thread_id: &str) -> Result<Option<String>> {
+            self.calls
+                .borrow_mut()
+                .push(Call::LatestTurnStatus(thread_id.to_string()));
+            match &self.turn_status {
+                Ok(status) => Ok(status.clone()),
+                Err(error) => bail!(error.clone()),
+            }
         }
 
         fn resolve_agent_pid(&self, pane_id: &str, engine: Engine) -> Result<Option<u32>> {
@@ -679,6 +717,95 @@ mod tests {
                 vec![
                     Call::PaneExists("%42".to_string()),
                     Call::PaneSession("%42".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_allows_a_codex_turn_interrupted_by_the_user() {
+        let mut session = session();
+        session.engine = Engine::Codex;
+        session.status = SessionStatus::Running;
+        let runtime = FakeRuntime {
+            turn_status: Ok(Some("interrupted".to_string())),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (
+                true,
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::LatestTurnStatus("session-1".to_string()),
+                    Call::ResolvePid("%42".to_string(), Engine::Codex),
+                    Call::Draft("%42".to_string(), Engine::Codex),
+                    Call::GracefulQuit("%42".to_string(), 42),
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::EndCodexSession("session-1".to_string()),
+                    Call::KillPane("%42".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::turn_in_progress(Ok(Some("inProgress".to_string())))]
+    #[case::app_server_unavailable(Err("fixture app-server unavailable".to_string()))]
+    fn close_keeps_running_codex_sessions_active_without_interrupted_status(
+        mut session: Session,
+        #[case] turn_status: std::result::Result<Option<String>, String>,
+    ) {
+        session.engine = Engine::Codex;
+        session.status = SessionStatus::Running;
+        let runtime = FakeRuntime {
+            turn_status,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Agent session `session-1` is running or waiting for input; pass --force to close it"
+                    .to_string(),
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::LatestTurnStatus("session-1".to_string()),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_keeps_rejecting_pending_tasks_after_an_interrupted_codex_turn() {
+        let mut session = session();
+        session.engine = Engine::Codex;
+        session.status = SessionStatus::Running;
+        session.pending_bg_task_ids.insert("task-1".to_string());
+        let runtime = FakeRuntime {
+            turn_status: Ok(Some("interrupted".to_string())),
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+                    .to_string(),
+                vec![
+                    Call::PaneExists("%42".to_string()),
+                    Call::PaneSession("%42".to_string()),
+                    Call::LatestTurnStatus("session-1".to_string()),
                 ],
             ),
         );
