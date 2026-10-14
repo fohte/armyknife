@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.417](https://github.com/fohte/armyknife/compare/v0.1.416...v0.1.417) (2026-10-14)
+
+
+### Features
+
+* **gh/pr-merge:** remove --force-close ([#1165](https://github.com/fohte/armyknife/issues/1165)) ([064ab09](https://github.com/fohte/armyknife/commit/064ab0941e74efbdf70423d24338db318c32f780))
+
+
+### Bug Fixes
+
+* **agent/watch:** keep PROGRESS rows aligned ([#1168](https://github.com/fohte/armyknife/issues/1168)) ([91ec696](https://github.com/fohte/armyknife/commit/91ec6960cb4c82244cb2e9e2641db02ef9f79434))
+* **agent:** retry interrupted Codex reads ([#1169](https://github.com/fohte/armyknife/issues/1169)) ([7fbafa1](https://github.com/fohte/armyknife/commit/7fbafa1f6c34528849cb191c336dea83b1551128))
+
 ## [0.1.416](https://github.com/fohte/armyknife/compare/v0.1.415...v0.1.416) (2026-10-14)
 
 
