@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.422](https://github.com/fohte/armyknife/compare/v0.1.421...v0.1.422) (2026-10-14)
+
+
+### Features
+
+* **agent:** close direct child sessions ([#1179](https://github.com/fohte/armyknife/issues/1179)) ([935a4c8](https://github.com/fohte/armyknife/commit/935a4c8e6e87cf068e6e16ebdeee587b88d57da7))
+
 ## [0.1.421](https://github.com/fohte/armyknife/compare/v0.1.420...v0.1.421) (2026-10-14)
 
 
