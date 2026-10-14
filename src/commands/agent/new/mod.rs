@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::infra::git::{get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
+use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 
@@ -174,7 +174,7 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         None => None,
     };
     let repo_root = match &repo {
-        Some(repo) => path_to_string(&repo.main_workdir()?),
+        Some(repo) => repo.main_workdir_string()?,
         None => get_repo_root()?,
     };
 
@@ -182,15 +182,8 @@ fn run_inner(args: &NewArgs) -> Result<()> {
         Some(worktree_value) => {
             run_worktree_mode(args, worktree_value.as_deref(), &repo_root, &config)
         }
-        None => {
-            let repo_workdir = repo.as_ref().map(|repo| path_to_string(repo.workdir()));
-            run_session_only(args, &repo_root, repo_workdir.as_deref(), &config)
-        }
+        None => run_session_only(args, repo.as_ref(), &repo_root, &config),
     }
-}
-
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().trim_end_matches('/').to_string()
 }
 
 fn run_worktree_mode(
@@ -343,28 +336,63 @@ fn resolve_launch_options(
 /// `should_open_window`).
 fn run_session_only(
     args: &NewArgs,
+    repo: Option<&GitRepo>,
     repo_root: &str,
-    repo_workdir: Option<&str>,
     config: &Config,
 ) -> Result<()> {
     let raw_prompt = args.common.prompt.as_deref();
 
     with_prompt_cache_recovery(repo_root, raw_prompt, || {
-        run_session_only_inner(args, repo_root, repo_workdir, config)
+        run_session_only_inner(args, repo, repo_root, config)
     })
 }
 
 fn run_session_only_inner(
     args: &NewArgs,
+    repo: Option<&GitRepo>,
     repo_root: &str,
-    repo_workdir: Option<&str>,
     config: &Config,
 ) -> Result<()> {
     let current_dir = std::env::current_dir()
         .context("Failed to get current directory")?
         .to_string_lossy()
         .to_string();
-    let target = resolve_session_only_target(repo_root, repo_workdir, &current_dir);
+    let caller_repo_root = caller_repo_root(&current_dir);
+
+    run_session_only_inner_with_launchers(
+        args,
+        SessionOnlyRunContext {
+            repo,
+            repo_root,
+            caller_repo_root: &caller_repo_root,
+            current_dir: &current_dir,
+            config,
+        },
+        crate::shared::caller_pane::resolve_caller_pane_id,
+        |spec| setup_split_pane(spec).map(|route| route.display_suffix()),
+        |spec, config| setup_tmux_window(spec, config).map(|route| route.display_suffix()),
+    )
+}
+
+struct SessionOnlyRunContext<'a> {
+    repo: Option<&'a GitRepo>,
+    repo_root: &'a str,
+    caller_repo_root: &'a str,
+    current_dir: &'a str,
+    config: &'a Config,
+}
+
+fn run_session_only_inner_with_launchers(
+    args: &NewArgs,
+    context: SessionOnlyRunContext<'_>,
+    resolve_caller_pane: impl FnOnce() -> Option<String>,
+    launch_split: impl FnOnce(TmuxSplitPaneSpec<'_>) -> Result<String>,
+    launch_window: impl FnOnce(TmuxWindowSpec<'_>, &Config) -> Result<String>,
+) -> Result<()> {
+    let cwd = context
+        .repo
+        .map(GitRepo::workdir_string)
+        .unwrap_or_else(|| context.current_dir.to_string());
 
     // No worktree exists for this session, so there is no branch/base to
     // report in the delegation context.
@@ -374,8 +402,8 @@ fn run_session_only_inner(
             args.common.prompt.as_deref(),
             None,
             None,
-            &current_dir,
-            &target.cwd,
+            context.current_dir,
+            &cwd,
         )
     } else {
         args.common.prompt.clone()
@@ -387,23 +415,23 @@ fn run_session_only_inner(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let suffix = if background { " (background)" } else { "" };
-    let engine = resolve_engine(args.common.engine, config);
-    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, config);
+    let background_suffix = if background { " (background)" } else { "" };
+    let engine = resolve_engine(args.common.engine, context.config);
+    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, context.config);
 
     let differs = should_open_window(
-        &target.repo_root,
-        &caller_repo_root(&current_dir),
-        &config.agent.worktree.dir,
+        context.repo_root,
+        context.caller_repo_root,
+        &context.config.agent.worktree.dir,
     );
 
     // Window mode doesn't need a pane, so it remains the fallback when no
     // caller pane can be resolved.
-    match crate::shared::caller_pane::resolve_caller_pane_id() {
+    match resolve_caller_pane() {
         Some(target_pane) if !differs => {
-            let route = setup_split_pane(TmuxSplitPaneSpec {
+            let route_suffix = launch_split(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
-                cwd: &target.cwd,
+                cwd: &cwd,
                 model: model.as_deref(),
                 reasoning_effort,
                 prompt: prompt.as_deref(),
@@ -411,11 +439,7 @@ fn run_session_only_inner(
                 env_vars: &env_refs,
                 background,
             })?;
-            println!(
-                "Split tmux pane in '{}'{suffix}{}",
-                target.cwd,
-                route.display_suffix()
-            );
+            println!("Split tmux pane in '{cwd}'{background_suffix}{route_suffix}");
         }
         _ => {
             // PID-based placeholder: there's no worktree/branch name to use
@@ -428,10 +452,10 @@ fn run_session_only_inner(
                 focus: true,
             });
 
-            let route = setup_tmux_window(
+            let route_suffix = launch_window(
                 TmuxWindowSpec {
-                    repo_root: &target.repo_root,
-                    cwd: &target.cwd,
+                    repo_root: context.repo_root,
+                    cwd: &cwd,
                     window_name: &window_name,
                     layout: &layout,
                     model: model.as_deref(),
@@ -442,34 +466,13 @@ fn run_session_only_inner(
                     background,
                     restore_automatic_rename: true,
                 },
-                config,
+                context.config,
             )?;
-            println!(
-                "Opened tmux window in '{}'{suffix}{}",
-                target.cwd,
-                route.display_suffix()
-            );
+            println!("Opened tmux window in '{cwd}'{background_suffix}{route_suffix}");
         }
     }
 
     Ok(())
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct SessionOnlyTarget {
-    repo_root: String,
-    cwd: String,
-}
-
-fn resolve_session_only_target(
-    repo_root: &str,
-    repo_workdir: Option<&str>,
-    current_dir: &str,
-) -> SessionOnlyTarget {
-    SessionOnlyTarget {
-        repo_root: repo_root.to_string(),
-        cwd: repo_workdir.unwrap_or(current_dir).to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -495,68 +498,43 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[rstest]
-    #[case::main_repo_subdirectory(
-        "/repos/example/project",
-        Some("/repos/example/project"),
-        "/repos/example/project/subdir",
-        SessionOnlyTarget {
-            repo_root: "/repos/example/project".to_string(),
-            cwd: "/repos/example/project".to_string(),
-        }
-    )]
-    #[case::linked_worktree(
-        "/repos/example/project",
-        Some("/worktrees/project-topic"),
-        "/repos/example/project",
-        SessionOnlyTarget {
-            repo_root: "/repos/example/project".to_string(),
-            cwd: "/worktrees/project-topic".to_string(),
-        }
-    )]
-    #[case::repo_omitted(
-        "/repos/example/project",
-        None,
-        "/repos/example/project/subdir",
-        SessionOnlyTarget {
-            repo_root: "/repos/example/project".to_string(),
-            cwd: "/repos/example/project/subdir".to_string(),
-        }
-    )]
-    fn session_only_target_uses_checkout_cwd_and_main_repo_identity(
-        #[case] repo_root: &str,
-        #[case] repo_workdir: Option<&str>,
-        #[case] current_dir: &str,
-        #[case] expected: SessionOnlyTarget,
-    ) {
-        assert_eq!(
-            resolve_session_only_target(repo_root, repo_workdir, current_dir),
-            expected
-        );
-    }
-
     #[test]
-    fn linked_worktree_target_uses_main_repo_for_session_comparison() {
-        let target = resolve_session_only_target(
-            "/repos/example/project",
-            Some("/worktrees/project-topic"),
-            "/repos/example/project",
+    fn linked_worktree_repo_launches_from_worktree_root() {
+        let cli = TestCli::try_parse_from(["a", "-R", "/worktrees/project-topic/subdir"]).unwrap();
+        let repo = GitRepo::from_parts_for_test(
+            PathBuf::from("/worktrees/project-topic"),
+            PathBuf::from("/repos/example/project/.git"),
+            true,
         );
-        let opens_window = should_open_window(
-            &target.repo_root,
-            "/repos/example/project/.worktrees/topic",
-            ".worktrees",
-        );
+        let repo_root = repo.main_workdir_string().unwrap();
+        let current_dir = "/repos/example/project";
+        let config = Config::default();
+        let mut actual_launch_paths = None;
+
+        run_session_only_inner_with_launchers(
+            &cli.args,
+            SessionOnlyRunContext {
+                repo: Some(&repo),
+                repo_root: &repo_root,
+                caller_repo_root: "/repos/example/project",
+                current_dir,
+                config: &config,
+            },
+            || None,
+            |_| Ok(String::new()),
+            |spec, _| {
+                actual_launch_paths = Some((spec.repo_root.to_string(), spec.cwd.to_string()));
+                Ok(String::new())
+            },
+        )
+        .unwrap();
 
         assert_eq!(
-            (target, opens_window),
-            (
-                SessionOnlyTarget {
-                    repo_root: "/repos/example/project".to_string(),
-                    cwd: "/worktrees/project-topic".to_string(),
-                },
-                false,
-            ),
+            actual_launch_paths,
+            Some((
+                "/repos/example/project".to_string(),
+                "/worktrees/project-topic".to_string(),
+            )),
         );
     }
 
