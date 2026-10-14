@@ -4,9 +4,6 @@
 //! `turn/start` uses Codex's `StartOrSteer` input mode, so the same request
 //! starts a turn for an idle thread or injects input into its active turn.
 
-use std::collections::hash_map::DefaultHasher;
-use std::fs::{File, OpenOptions, TryLockError};
-use std::hash::{Hash, Hasher};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -28,8 +25,10 @@ const TURN_START_RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
 
 mod archive;
 mod delivery;
+mod launch_lock;
 
 pub(crate) use archive::archive_thread;
+pub use launch_lock::{acquire_launch_lock, acquire_launch_lock_with_timeout};
 
 pub type Result<T> = std::result::Result<T, DeliveryError>;
 
@@ -110,28 +109,18 @@ impl Client {
         cwd: &Path,
         timeout: Duration,
     ) -> anyhow::Result<String> {
-        let deadline = Instant::now()
-            .checked_add(timeout)
-            .context("Codex app-server wait timeout is out of range")?;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Err(anyhow!(
-                    "timed out waiting for Codex app-server `thread/started` notification"
-                ));
-            }
-            self.socket
-                .get_ref()
-                .set_read_timeout(Some(remaining))
-                .context("failed to set Codex app-server read timeout")?;
-            let message = self
-                .socket
-                .read()
-                .context("failed to read Codex app-server `thread/started` notification")?;
-            if let Some(thread_id) = thread_started_from_message(message, cwd)? {
-                return Ok(thread_id);
-            }
-        }
+        wait_for_thread_started_with_reader(
+            |remaining| {
+                self.socket
+                    .get_ref()
+                    .set_read_timeout(Some(remaining))
+                    .context("failed to set Codex app-server read timeout")?;
+                ignore_interrupted_read(self.socket.read())
+                    .context("failed to read Codex app-server `thread/started` notification")
+            },
+            cwd,
+            timeout,
+        )
     }
 
     /// Starts the initial turn and waits for Codex to record its input.
@@ -162,65 +151,6 @@ impl Client {
             .context("Codex app-server request ID space was exhausted while reading turn status")?;
         delivery::latest_turn_status(&mut self.socket, thread_id, request_id)
     }
-}
-
-/// Serializes armyknife launches that would otherwise match the same cwd-only
-/// `thread/started` notification.
-pub fn acquire_launch_lock(cwd: &Path) -> anyhow::Result<File> {
-    let (file, lock_path) = open_launch_lock(cwd)?;
-
-    file.lock()
-        .with_context(|| format!("failed to lock Codex launch {}", lock_path.display()))?;
-    Ok(file)
-}
-
-/// Acquires the per-cwd launch lock before `timeout` elapses.
-pub fn acquire_launch_lock_with_timeout(cwd: &Path, timeout: Duration) -> anyhow::Result<File> {
-    let (file, lock_path) = open_launch_lock(cwd)?;
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .context("Codex launch-lock timeout is out of range")?;
-
-    loop {
-        match file.try_lock() {
-            Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) => {
-                let remaining = deadline.saturating_duration_since(Instant::now());
-                if remaining.is_zero() {
-                    return Err(anyhow!(
-                        "timed out waiting for another Codex launch in the same directory"
-                    ));
-                }
-                std::thread::sleep(remaining.min(Duration::from_millis(50)));
-            }
-            Err(TryLockError::Error(error)) => {
-                return Err(error).with_context(|| {
-                    format!("failed to lock Codex launch {}", lock_path.display())
-                });
-            }
-        }
-    }
-}
-
-fn open_launch_lock(cwd: &Path) -> anyhow::Result<(File, PathBuf)> {
-    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
-    let mut hasher = DefaultHasher::new();
-    canonical_cwd.hash(&mut hasher);
-    let lock_dir = crate::shared::dirs::cache_dir()
-        .context("could not determine cache directory for Codex launch lock")?
-        .join("armyknife")
-        .join("codex-launch-locks");
-    std::fs::create_dir_all(&lock_dir).context("failed to create Codex launch lock directory")?;
-    let lock_path = lock_dir.join(format!("{:016x}.lock", hasher.finish()));
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open Codex launch lock {}", lock_path.display()))?;
-
-    Ok((file, lock_path))
 }
 
 /// Sends `content` to the Codex thread identified by `thread_id`.
@@ -291,17 +221,57 @@ fn turn_start_request(
     }
 }
 
+fn wait_for_thread_started_with_reader<R>(
+    mut read_with_timeout: R,
+    cwd: &Path,
+    timeout: Duration,
+) -> anyhow::Result<String>
+where
+    R: FnMut(Duration) -> anyhow::Result<Option<Message>>,
+{
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .context("Codex app-server wait timeout is out of range")?;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow!(
+                "timed out waiting for Codex app-server `thread/started` notification"
+            ));
+        }
+        let Some(message) = read_with_timeout(remaining)? else {
+            continue;
+        };
+        if let Some(thread_id) = thread_started_from_message(message, cwd)? {
+            return Ok(thread_id);
+        }
+    }
+}
+
 #[cfg(test)]
 fn wait_for_thread_started<R>(mut read: R, cwd: &Path) -> anyhow::Result<String>
 where
     R: FnMut() -> tungstenite::Result<Message>,
 {
-    loop {
-        let message =
-            read().context("failed to read Codex app-server `thread/started` notification")?;
-        if let Some(thread_id) = thread_started_from_message(message, cwd)? {
-            return Ok(thread_id);
+    wait_for_thread_started_with_reader(
+        |_| {
+            ignore_interrupted_read(read())
+                .context("failed to read Codex app-server `thread/started` notification")
+        },
+        cwd,
+        Duration::from_secs(1),
+    )
+}
+
+fn ignore_interrupted_read(
+    result: tungstenite::Result<Message>,
+) -> tungstenite::Result<Option<Message>> {
+    match result {
+        Ok(message) => Ok(Some(message)),
+        Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
+            Ok(None)
         }
+        Err(error) => Err(error),
     }
 }
 
@@ -393,9 +363,12 @@ where
     F: FnMut(Value),
 {
     loop {
-        let message = read()
+        let Some(message) = ignore_interrupted_read(read())
             .with_context(|| format!("failed to read Codex app-server `{method}` response"))
-            .map_err(RequestError::Transport)?;
+            .map_err(RequestError::Transport)?
+        else {
+            continue;
+        };
         match message {
             Message::Text(text) => {
                 let response: Value = serde_json::from_str(&text)
@@ -752,6 +725,42 @@ mod tests {
         );
     }
 
+    #[test]
+    fn waits_for_started_thread_after_interrupted_read() {
+        let mut messages = [
+            Err(tungstenite::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::Interrupted,
+            ))),
+            Ok(Message::Text(
+                json!({
+                    "method": "thread/started",
+                    "params": {"thread": {
+                        "id": "thread-a",
+                        "cwd": "/workspace/project-a",
+                        "parentThreadId": null,
+                    }},
+                })
+                .to_string()
+                .into(),
+            )),
+        ]
+        .into_iter();
+
+        let actual = wait_for_thread_started(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            Path::new("/workspace/project-a"),
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok("thread-a".to_string())
+        );
+    }
+
     #[rstest]
     #[case::closed(
         Message::Close(None),
@@ -834,6 +843,37 @@ mod tests {
                 Ok(json!({})),
                 vec![json!({"method": "turn/started", "params": {}})],
             ),
+        );
+    }
+
+    #[test]
+    fn waits_for_matching_response_after_interrupted_read() {
+        let mut messages = [
+            Err(tungstenite::Error::Io(std::io::Error::from(
+                std::io::ErrorKind::Interrupted,
+            ))),
+            Ok(Message::Text(
+                json!({"id": 2, "result": {"turn": {"id": "turn-a"}}})
+                    .to_string()
+                    .into(),
+            )),
+        ]
+        .into_iter();
+
+        let actual = wait_for_response_with_notifications(
+            || {
+                messages
+                    .next()
+                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
+            },
+            2,
+            "turn/start",
+            |_| {},
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Ok(json!({"turn": {"id": "turn-a"}}))
         );
     }
 
