@@ -445,7 +445,7 @@ fn open_url(app: &mut App, url: &str) {
         "xdg-open"
     };
     if let Err(e) = command::new(opener).arg(url).spawn() {
-        app.set_error(format!("Failed to open task: {e}"));
+        app.set_error(format!("Failed to open URL: {e}"));
     }
 }
 

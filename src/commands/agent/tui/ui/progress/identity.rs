@@ -3,7 +3,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::{
     app::App,
-    progress::{PrProgressRow, ProgressMark},
+    progress::ProgressMark,
     session_rows::{TaskMark, is_related_task, task_mark},
 };
 use crate::commands::agent::types::Session;
@@ -18,19 +18,29 @@ use super::columns::mark_style;
 const PROGRESS_NUMBER_COLUMN_WIDTH: usize = 7;
 
 #[derive(Clone, Copy)]
-pub(super) enum IdentityStatus {
+pub(super) enum IdentityStatus<'a> {
     MissingSession,
     Planned,
-    Session(TaskMark),
+    Session(&'a Session),
+}
+
+pub(super) fn identity_status<'a>(app: &'a App, session_id: &str) -> IdentityStatus<'a> {
+    app.sessions
+        .iter()
+        .find(|session| session.session_id == session_id)
+        .map_or(IdentityStatus::MissingSession, IdentityStatus::Session)
 }
 
 pub(super) fn progress_row_identity(
     app: &App,
-    session: Option<&Session>,
-    status: IdentityStatus,
+    status: IdentityStatus<'_>,
     number: String,
     indent: &str,
 ) -> Vec<Span<'static>> {
+    let session = match status {
+        IdentityStatus::Session(session) => Some(session),
+        IdentityStatus::MissingSession | IdentityStatus::Planned => None,
+    };
     let repo = session.map_or_else(
         || " ".repeat(REPO_COLUMN_WIDTH),
         |session| {
@@ -58,24 +68,21 @@ pub(super) fn progress_row_identity(
     };
     vec![
         Span::raw(indent.to_string()),
-        status_span(status, session),
+        status_span(app, status),
         Span::raw(" "),
         Span::styled(repo, Style::default().fg(DIM_FG)),
         Span::styled(pad_number(&number), number_style),
     ]
 }
 
-fn status_span(status: IdentityStatus, session: Option<&Session>) -> Span<'static> {
+fn status_span(app: &App, status: IdentityStatus<'_>) -> Span<'static> {
     match status {
         IdentityStatus::MissingSession => Span::styled("-", Style::default().fg(DIM_FG)),
         IdentityStatus::Planned => Span::styled("○", mark_style(ProgressMark::NotStarted)),
-        IdentityStatus::Session(mark) => match session {
-            Some(session) => {
-                let (glyph, color) = mark_glyph(mark, session);
-                Span::styled(glyph, Style::default().fg(color))
-            }
-            None => Span::styled("-", Style::default().fg(DIM_FG)),
-        },
+        IdentityStatus::Session(session) => {
+            let (glyph, color) = mark_glyph(session_task_mark(app, session), session);
+            Span::styled(glyph, Style::default().fg(color))
+        }
     }
 }
 
@@ -97,12 +104,6 @@ fn pad_number(number: &str) -> String {
     format!("{number}{}", " ".repeat(padding))
 }
 
-pub(super) fn pr_session<'a>(app: &'a App, row: &PrProgressRow) -> Option<&'a Session> {
-    app.sessions
-        .iter()
-        .find(|session| session.session_id == row.session_id)
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::style::Style;
@@ -115,8 +116,7 @@ mod tests {
         let mut session = create_test_session("paused");
         session.status = crate::commands::agent::types::SessionStatus::Paused;
         let app = App::with_sessions(vec![session.clone()]);
-        let status = IdentityStatus::Session(session_task_mark(&app, &session));
-        let span = status_span(status, Some(&session));
+        let span = status_span(&app, IdentityStatus::Session(&session));
 
         assert_eq!(
             (span.content.to_string(), span.style),

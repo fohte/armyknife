@@ -17,7 +17,7 @@ mod columns;
 mod identity;
 
 use columns::{mark_style, stage_widths};
-use identity::{IdentityStatus, pr_session, progress_row_identity, session_task_mark, task_number};
+use identity::{IdentityStatus, identity_status, progress_row_identity, task_number};
 
 pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected = app.selected_session();
@@ -179,20 +179,8 @@ fn render_work_row(
     } else {
         "  "
     };
-    let session = app
-        .sessions
-        .iter()
-        .find(|session| session.session_id == row.session_id);
-    let status = session.map_or(IdentityStatus::MissingSession, |session| {
-        IdentityStatus::Session(session_task_mark(app, session))
-    });
-    let mut spans = progress_row_identity(
-        app,
-        session,
-        status,
-        task_number(app, &row.session_id),
-        marker,
-    );
+    let status = identity_status(app, &row.session_id);
+    let mut spans = progress_row_identity(app, status, task_number(app, &row.session_id), marker);
     spans.push(Span::styled(
         row.role.clone(),
         Style::default().add_modifier(Modifier::BOLD),
@@ -361,7 +349,7 @@ fn checklist_table_row(row: &ProgressRow, app: &App) -> Row<'static> {
         ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    ", app),
         ProgressRow::PlannedPullRequest { title, .. } => {
             let mut spans =
-                progress_row_identity(app, None, IdentityStatus::Planned, String::new(), "    ");
+                progress_row_identity(app, IdentityStatus::Planned, String::new(), "    ");
             spans.push(Span::raw(title.clone()));
             Row::new(vec![
                 Cell::from(Line::from(spans)),
@@ -382,14 +370,11 @@ fn pr_table_row(row: &PrProgressRow, app: &App) -> Row<'static> {
 }
 
 fn pr_table_row_with_indent(row: &PrProgressRow, indent: &str, app: &App) -> Row<'static> {
-    let session = pr_session(app, row);
-    let status = session.map_or(IdentityStatus::MissingSession, |session| {
-        IdentityStatus::Session(session_task_mark(app, session))
-    });
+    let status = identity_status(app, &row.session_id);
     let number = row
         .number
         .map_or_else(String::new, |number| format!("PR#{number}"));
-    let mut name = progress_row_identity(app, session, status, number, indent);
+    let mut name = progress_row_identity(app, status, number, indent);
     name.push(Span::raw(row.title.clone()));
     if row.lookup_unavailable {
         name.push(Span::raw(" (PR unavailable)"));

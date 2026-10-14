@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::KeyEffects;
 use super::app::App;
 use super::event::KeyEvent;
-use super::progress::{ProgressRow, open_pr_url_target, open_target};
+use super::progress::{open_pr_url_target, open_target};
 
 pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
     if !app.progress_focused {
@@ -35,18 +35,7 @@ pub(super) fn handle(app: &mut App, key: KeyEvent) -> Option<KeyEffects> {
                     .selected()
                     .and_then(|index| app.progress_rows.get(index))
                     .filter(|row| {
-                        let session_id = match row {
-                            ProgressRow::Work(row) => Some(row.session_id.as_str()),
-                            ProgressRow::PullRequest(row)
-                            | ProgressRow::ChecklistPullRequest { row, .. } => {
-                                Some(row.session_id.as_str())
-                            }
-                            ProgressRow::ImplementationHeader { .. }
-                            | ProgressRow::UnmatchedDelegatesHeader { .. }
-                            | ProgressRow::BatchHeader { .. }
-                            | ProgressRow::PlannedPullRequest { .. } => None,
-                        };
-                        session_id.is_some_and(|session_id| {
+                        row.session_id().is_some_and(|session_id| {
                             app.sessions
                                 .iter()
                                 .any(|session| session.session_id == session_id)
@@ -160,6 +149,14 @@ mod tests {
                 merge: ProgressMark::NotStarted,
             },
         })
+    }
+
+    #[fixture]
+    fn focused_progress_app() -> App {
+        let mut app = App::with_sessions(vec![session("selected")]);
+        app.progress_focused = true;
+        app.progress_session_id = Some("selected".to_string());
+        app
     }
 
     #[test]
@@ -647,6 +644,7 @@ mod tests {
         false,
         None
     )]
+    #[case::active_pr_without_pane(false, None, Some("https://example.com/pull/7"), true, None)]
     #[case::ignore_row_without_target(false, None, None, true, None)]
     fn enter_opens_the_progress_row_target(
         #[case] is_ended: bool,
@@ -687,20 +685,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn o_opens_the_selected_pull_request_url() {
-        let mut app = App::with_sessions(vec![session("selected")]);
-        app.progress_focused = true;
-        app.progress_session_id = Some("selected".to_string());
-        app.progress_rows = vec![
+    #[rstest]
+    fn o_opens_the_selected_pull_request_url(mut focused_progress_app: App) {
+        focused_progress_app.progress_rows = vec![
             work_row(),
             pull_request_row(true, None, Some("https://example.com/pull/7")),
         ];
-        app.progress_list_state.select(Some(1));
+        focused_progress_app.progress_list_state.select(Some(1));
 
         assert_eq!(
             handle(
-                &mut app,
+                &mut focused_progress_app,
                 KeyEvent {
                     code: KeyCode::Char('o'),
                     modifiers: KeyModifiers::NONE,
@@ -715,12 +710,52 @@ mod tests {
         );
     }
 
-    #[test]
-    fn o_does_nothing_on_a_work_or_planned_row() {
-        let mut app = App::with_sessions(vec![session("selected")]);
-        app.progress_focused = true;
-        app.progress_session_id = Some("selected".to_string());
-        app.progress_rows = vec![
+    #[rstest]
+    fn o_opens_the_selected_checklist_pull_request_url(mut focused_progress_app: App) {
+        focused_progress_app.progress_rows = vec![
+            work_row(),
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch-1".to_string(),
+                row: PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    title: "Example delegated work".to_string(),
+                    number: Some(7),
+                    url: Some("https://example.com/pull/7".to_string()),
+                    pane_id: None,
+                    is_ended: true,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::User,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+        ];
+        focused_progress_app.progress_list_state.select(Some(1));
+
+        assert_eq!(
+            handle(
+                &mut focused_progress_app,
+                KeyEvent {
+                    code: KeyCode::Char('o'),
+                    modifiers: KeyModifiers::NONE,
+                },
+            ),
+            Some(KeyEffects {
+                open_progress_target: Some(ProgressOpenTarget::OpenUrl(
+                    "https://example.com/pull/7".to_string(),
+                )),
+                ..Default::default()
+            }),
+        );
+    }
+
+    #[rstest]
+    fn o_does_nothing_on_a_work_or_planned_row(mut focused_progress_app: App) {
+        focused_progress_app.progress_rows = vec![
             work_row(),
             ProgressRow::PlannedPullRequest {
                 batch_id: "batch-1".to_string(),
@@ -730,9 +765,9 @@ mod tests {
         ];
 
         let actual = [0, 1].map(|index| {
-            app.progress_list_state.select(Some(index));
+            focused_progress_app.progress_list_state.select(Some(index));
             handle(
-                &mut app,
+                &mut focused_progress_app,
                 KeyEvent {
                     code: KeyCode::Char('o'),
                     modifiers: KeyModifiers::NONE,
@@ -769,10 +804,17 @@ mod tests {
                 },
             );
         }
-        let effects = handle(
+        let enter_effects = handle(
             &mut app,
             KeyEvent {
                 code: KeyCode::Enter,
+                modifiers: KeyModifiers::NONE,
+            },
+        );
+        let open_effects = handle(
+            &mut app,
+            KeyEvent {
+                code: KeyCode::Char('o'),
                 modifiers: KeyModifiers::NONE,
             },
         );
@@ -781,9 +823,15 @@ mod tests {
             (
                 app.selected_session_id(),
                 app.progress_list_state.selected(),
-                effects
+                enter_effects,
+                open_effects,
             ),
-            (Some("selected"), Some(1), Some(KeyEffects::default())),
+            (
+                Some("selected"),
+                Some(1),
+                Some(KeyEffects::default()),
+                Some(KeyEffects::default()),
+            ),
         );
     }
 

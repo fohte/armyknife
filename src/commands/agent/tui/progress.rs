@@ -142,6 +142,19 @@ pub(super) fn open_pr_url_target(row: &ProgressRow) -> Option<ProgressOpenTarget
 }
 
 impl ProgressRow {
+    pub(super) fn session_id(&self) -> Option<&str> {
+        match self {
+            Self::Work(row) => Some(&row.session_id),
+            Self::PullRequest(row) | Self::ChecklistPullRequest { row, .. } => {
+                Some(&row.session_id)
+            }
+            Self::ImplementationHeader { .. }
+            | Self::UnmatchedDelegatesHeader { .. }
+            | Self::BatchHeader { .. }
+            | Self::PlannedPullRequest { .. } => None,
+        }
+    }
+
     pub(super) fn selection_key(&self) -> Option<ProgressSelectionKey> {
         match self {
             Self::Work(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
