@@ -24,19 +24,6 @@ pub struct GitRepo {
 }
 
 impl GitRepo {
-    #[cfg(test)]
-    pub(crate) fn from_parts_for_test(
-        workdir: PathBuf,
-        common_dir: PathBuf,
-        is_worktree: bool,
-    ) -> Self {
-        Self {
-            workdir,
-            common_dir,
-            is_worktree,
-        }
-    }
-
     /// Open the repository containing the current working directory.
     pub fn open_from_env() -> Result<Self> {
         let cwd = std::env::current_dir().map_err(|_| GitError::NotInRepo)?;
