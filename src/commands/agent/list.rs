@@ -306,6 +306,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
         assert_eq!(get_session_display_name(&session), "work");
     }
@@ -324,6 +325,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
         assert_eq!(get_window_display_name(&session), "editor");
     }
@@ -404,6 +406,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
 
         let mut output = Vec::new();
@@ -578,6 +581,7 @@ mod tests {
             window_name: "also-a-very-long-window-name".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
 
         let mut output = Vec::new();
@@ -777,6 +781,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
 
         let mut output = Vec::new();
@@ -804,6 +809,7 @@ mod tests {
             window_name: "editor".to_string(),
             window_index: 0,
             pane_id: "%0".to_string(),
+            socket_path: None,
         });
 
         let mut output = Vec::new();
@@ -841,6 +847,7 @@ mod tests {
                     window_name: "dev".to_string(),
                     window_index: 0,
                     pane_id: "%0".to_string(),
+                    socket_path: None,
                 }),
                 status: SessionStatus::Running,
                 created_at: now,
@@ -877,6 +884,7 @@ mod tests {
                     window_name: "test".to_string(),
                     window_index: 1,
                     pane_id: "%1".to_string(),
+                    socket_path: None,
                 }),
                 status: SessionStatus::WaitingInput,
                 created_at: now,

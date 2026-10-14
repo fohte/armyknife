@@ -12,12 +12,22 @@ const EXIT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 pub(crate) trait GracefulQuitRequester {
     /// Returns true when the process exits within the grace period.
-    fn request_and_wait(&self, pane_id: &str, pid: u32) -> io::Result<bool>;
+    fn request_and_wait(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        pid: u32,
+    ) -> io::Result<bool>;
 }
 
 impl GracefulQuitRequester for LibcSignalSender {
-    fn request_and_wait(&self, pane_id: &str, pid: u32) -> io::Result<bool> {
-        crate::infra::tmux::run_tmux(&["send-keys", "-t", pane_id, "C-d"])
+    fn request_and_wait(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        pid: u32,
+    ) -> io::Result<bool> {
+        crate::infra::tmux::send_keys_for_socket(socket_path, pane_id, "C-d")
             .map_err(io::Error::other)?;
 
         let deadline = Instant::now() + EXIT_GRACE_PERIOD;
@@ -38,8 +48,15 @@ impl GracefulQuitRequester for LibcSignalSender {
 
 #[cfg(test)]
 impl GracefulQuitRequester for super::signal::test_support::RecordingSender {
-    fn request_and_wait(&self, pane_id: &str, _pid: u32) -> io::Result<bool> {
-        self.ctrl_d_calls.borrow_mut().push(pane_id.to_string());
+    fn request_and_wait(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        _pid: u32,
+    ) -> io::Result<bool> {
+        self.ctrl_d_calls
+            .borrow_mut()
+            .push((socket_path.map(str::to_string), pane_id.to_string()));
         if self.fail_ctrl_d.replace(false) {
             return Err(io::Error::other("tmux send-keys failed"));
         }

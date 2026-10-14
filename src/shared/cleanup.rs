@@ -186,24 +186,50 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 /// Returns the number of sessions cleaned up.
 pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
     let sessions = store::list_all_sessions()?;
-    let alive_panes = tmux::list_all_pane_ids().unwrap_or_default();
+    let alive_panes_by_socket =
+        cache_alive_panes_by_socket(&sessions, worktree_path, |socket_path| {
+            tmux::list_all_pane_ids_for_socket(socket_path).map_err(anyhow::Error::from)
+        });
     let own_codex_session_id = crate::shared::env_var::EnvVars::load().codex_session_id;
 
     Ok(cleanup_sessions_with_deferred_archive(
         &sessions,
         SessionCleanupContext {
             worktree_path,
-            alive_panes: &alive_panes,
+            alive_panes_by_socket: &alive_panes_by_socket,
             own_codex_session_id: own_codex_session_id.as_deref(),
         },
         SessionCleanupOperations {
-            send_sigterm: tmux::send_sigterm_to_pane,
+            send_sigterm: tmux::send_sigterm_to_pane_for_socket,
             delete_session: store::delete_session_without_archive,
             remove_notification_group: crate::infra::notification::remove_group,
             archive_codex_thread: crate::commands::agent::codex_steer::archive_thread,
             defer_archive: crate::commands::agent::spawn_after_parent_exit,
         },
     ))
+}
+
+type AlivePanesBySocket = tmux::PaneLiveness;
+
+fn cache_alive_panes_by_socket(
+    sessions: &[Session],
+    worktree_path: &Path,
+    mut list_panes: impl FnMut(Option<&str>) -> anyhow::Result<HashSet<String>>,
+) -> AlivePanesBySocket {
+    let mut alive_panes_by_socket = tmux::PaneLiveness::default();
+
+    for socket_path in sessions
+        .iter()
+        .filter(|session| {
+            session.cwd.starts_with(worktree_path) && should_sigterm_session(session.status)
+        })
+        .filter_map(|session| session.tmux_info.as_ref())
+        .map(|info| info.socket_path.clone())
+    {
+        alive_panes_by_socket.cache_socket(socket_path.as_deref(), &mut list_panes);
+    }
+
+    alive_panes_by_socket
 }
 
 struct SessionCleanupOperations<
@@ -238,7 +264,7 @@ fn cleanup_sessions_with_deferred_archive<
     >,
 ) -> usize
 where
-    SendSigterm: FnMut(&str),
+    SendSigterm: FnMut(Option<&str>, &str),
     DeleteSession: FnMut(&str) -> anyhow::Result<()>,
     RemoveNotification: FnMut(&str) -> anyhow::Result<()>,
     Archive: FnMut(&str) -> anyhow::Result<()>,
@@ -291,14 +317,14 @@ where
 
 struct SessionCleanupContext<'a> {
     worktree_path: &'a Path,
-    alive_panes: &'a HashSet<String>,
+    alive_panes_by_socket: &'a AlivePanesBySocket,
     own_codex_session_id: Option<&'a str>,
 }
 
 fn cleanup_sessions(
     sessions: &[Session],
     context: SessionCleanupContext<'_>,
-    mut send_sigterm: impl FnMut(&str),
+    mut send_sigterm: impl FnMut(Option<&str>, &str),
     mut delete_session: impl FnMut(&str) -> anyhow::Result<()>,
     mut remove_notification_group: impl FnMut(&str) -> anyhow::Result<()>,
     mut archive_codex_thread: impl FnMut(&str) -> anyhow::Result<()>,
@@ -320,10 +346,13 @@ fn cleanup_sessions(
 
             if !is_own_codex_session
                 && should_sigterm_session(session.status)
-                && let Some(ref tmux_info) = session.tmux_info
-                && context.alive_panes.contains(&tmux_info.pane_id)
+                && let Some(tmux_info) = session.tmux_info.as_ref()
+                && context
+                    .alive_panes_by_socket
+                    .is_alive(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)
+                    == Some(true)
             {
-                send_sigterm(&tmux_info.pane_id);
+                send_sigterm(tmux_info.socket_path.as_deref(), &tmux_info.pane_id);
             }
 
             if session.status != SessionStatus::Ended {
@@ -358,7 +387,7 @@ fn cleanup_sessions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::Engine;
+    use crate::commands::agent::types::{Engine, TmuxInfo};
     use crate::shared::testing::TestRepo;
     use chrono::Utc;
     use rstest::rstest;
@@ -399,6 +428,107 @@ mod tests {
         }
     }
 
+    fn with_tmux_pane(mut session: Session, pane_id: &str, socket_path: Option<&str>) -> Session {
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "test-session".to_string(),
+            window_name: "test-window".to_string(),
+            window_index: 0,
+            pane_id: pane_id.to_string(),
+            socket_path: socket_path.map(str::to_string),
+        });
+        session
+    }
+
+    #[test]
+    fn cleanup_uses_each_recorded_socket_and_does_not_signal_when_listing_fails() {
+        let worktree_path = PathBuf::from("/tmp/armyknife-test-worktree");
+        let private_socket = "/tmp/armyknife-test-tmux-private";
+        let unavailable_socket = "/tmp/armyknife-test-tmux-unavailable";
+        let unrelated_socket = "/tmp/armyknife-test-tmux-unrelated";
+        let sessions = vec![
+            with_tmux_pane(
+                make_session("legacy", &worktree_path, Engine::Claude),
+                "%legacy",
+                None,
+            ),
+            with_tmux_pane(
+                make_session("private-a", &worktree_path, Engine::Claude),
+                "%private-a",
+                Some(private_socket),
+            ),
+            with_tmux_pane(
+                make_session("private-b", &worktree_path, Engine::Claude),
+                "%private-b",
+                Some(private_socket),
+            ),
+            with_tmux_pane(
+                make_session("unavailable", &worktree_path, Engine::Claude),
+                "%unavailable",
+                Some(unavailable_socket),
+            ),
+            with_tmux_pane(
+                make_session(
+                    "unrelated-worktree",
+                    Path::new("/tmp/other-worktree"),
+                    Engine::Claude,
+                ),
+                "%unrelated",
+                Some(unrelated_socket),
+            ),
+        ];
+        let queries = RefCell::new(Vec::new());
+        let alive_panes_by_socket =
+            cache_alive_panes_by_socket(&sessions, &worktree_path, |socket_path| {
+                queries.borrow_mut().push(socket_path.map(str::to_string));
+                match socket_path {
+                    None => Ok(HashSet::from(["%legacy".to_string()])),
+                    Some(path) if path == private_socket => Ok(HashSet::from([
+                        "%private-a".to_string(),
+                        "%private-b".to_string(),
+                    ])),
+                    Some(path) if path == unavailable_socket => {
+                        Err(anyhow::anyhow!("tmux server is unavailable"))
+                    }
+                    Some(_) => Ok(HashSet::new()),
+                }
+            });
+        let signals = RefCell::new(Vec::new());
+
+        let cleaned = cleanup_sessions(
+            &sessions,
+            SessionCleanupContext {
+                worktree_path: &worktree_path,
+                alive_panes_by_socket: &alive_panes_by_socket,
+                own_codex_session_id: None,
+            },
+            |socket_path, pane_id| {
+                signals
+                    .borrow_mut()
+                    .push((socket_path.map(str::to_string), pane_id.to_string()));
+            },
+            |_| Ok(()),
+            |_| Ok(()),
+            |_| Ok(()),
+        );
+
+        assert_eq!(
+            (cleaned, queries.into_inner(), signals.into_inner(),),
+            (
+                4,
+                vec![
+                    None,
+                    Some(private_socket.to_string()),
+                    Some(unavailable_socket.to_string()),
+                ],
+                vec![
+                    (None, "%legacy".to_string()),
+                    (Some(private_socket.to_string()), "%private-a".to_string()),
+                    (Some(private_socket.to_string()), "%private-b".to_string()),
+                ],
+            ),
+        );
+    }
+
     #[rstest]
     fn defers_current_codex_archive_until_cleanup_finishes() {
         let worktree_path = PathBuf::from("/tmp/example-worktree");
@@ -406,18 +536,18 @@ mod tests {
             make_session("current-session", &worktree_path, Engine::Codex),
             make_session("other-session", &worktree_path, Engine::Codex),
         ];
-        let alive_panes = HashSet::new();
+        let alive_panes_by_socket = tmux::PaneLiveness::default();
         let events = RefCell::new(Vec::new());
 
         let cleaned = cleanup_sessions_with_deferred_archive(
             &sessions,
             SessionCleanupContext {
                 worktree_path: &worktree_path,
-                alive_panes: &alive_panes,
+                alive_panes_by_socket: &alive_panes_by_socket,
                 own_codex_session_id: Some("current-session"),
             },
             SessionCleanupOperations {
-                send_sigterm: |_pane_id: &str| {},
+                send_sigterm: |_socket_path: Option<&str>, _pane_id: &str| {},
                 delete_session: |session_id: &str| {
                     events.borrow_mut().push(format!("delete:{session_id}"));
                     Ok(())

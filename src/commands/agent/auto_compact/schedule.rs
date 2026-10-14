@@ -337,7 +337,7 @@ async fn branch_merged_for(session: &Session) -> Option<bool> {
 /// foreground session) and runs `claude -r <id> -p "/compact"` so the
 /// compaction itself reuses the still-warm prompt cache.
 async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> Result<()> {
-    if let Some(pid) = resolve_claude_pid(session) {
+    if let Some(pid) = resolve_claude_pid(session)? {
         if let Err(e) = sender.send(pid, libc::SIGTERM)
             && e.raw_os_error() != Some(libc::ESRCH)
         {
@@ -363,11 +363,24 @@ async fn execute_compaction<S: SignalSender>(session: &Session, sender: &S) -> R
     Ok(())
 }
 
-fn resolve_claude_pid(session: &Session) -> Option<u32> {
-    let pane_id = &session.tmux_info.as_ref()?.pane_id;
-    let pane_pid = tmux::get_pane_pid(pane_id)?;
-    let snapshot = ProcessSnapshot::capture()?;
-    snapshot.find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES)
+fn resolve_claude_pid(session: &Session) -> Result<Option<u32>> {
+    resolve_claude_pid_with(session, tmux::get_pane_pid_for_socket)
+}
+
+fn resolve_claude_pid_with(
+    session: &Session,
+    get_pane_pid: impl FnOnce(Option<&str>, &str) -> tmux::Result<Option<u32>>,
+) -> Result<Option<u32>> {
+    let Some(tmux_info) = session.tmux_info.as_ref() else {
+        return Ok(None);
+    };
+    let Some(pane_pid) = get_pane_pid(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)? else {
+        return Ok(None);
+    };
+    let Some(snapshot) = ProcessSnapshot::capture() else {
+        return Ok(None);
+    };
+    Ok(snapshot.find_self_or_descendant_by_command(pane_pid, "claude", MAX_DESCENDANT_NODES))
 }
 
 fn spawn_compact_resume(session: &Session) -> Result<()> {
@@ -491,6 +504,33 @@ mod tests {
             store::load_session_from(dir.path(), "ghost")
                 .expect("load")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn resolve_claude_pid_propagates_tmux_server_errors() {
+        let mut session = make_session("sess", SessionStatus::Stopped);
+        session.tmux_info = Some(crate::commands::agent::types::TmuxInfo {
+            session_name: "main".to_string(),
+            window_name: "editor".to_string(),
+            window_index: 0,
+            pane_id: "%0".to_string(),
+            socket_path: Some("/tmp/armyknife-test/server.sock".to_string()),
+        });
+
+        let result = resolve_claude_pid_with(&session, |socket_path, pane_id| {
+            assert_eq!(
+                (socket_path, pane_id),
+                (Some("/tmp/armyknife-test/server.sock"), "%0")
+            );
+            Err(crate::infra::tmux::TmuxError::Internal(
+                "tmux query failed".to_string(),
+            ))
+        });
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err("tmux query failed".to_string())
         );
     }
 }

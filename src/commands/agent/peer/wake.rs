@@ -95,7 +95,12 @@ trait EnginePolicy {
     fn already_awake(&self, host: &dyn Host, session_id: &str) -> Option<String>;
 
     /// Whether this pane command identifies an already-running session.
-    fn is_awake_pane_command(&self, host: &dyn Host, pane_id: &str, command: &str) -> bool;
+    fn is_awake_pane_command(
+        &self,
+        host: &dyn Host,
+        session: &Session,
+        command: &str,
+    ) -> Result<bool>;
 
     /// After the respawn, outside the lock: what to wait for, and what to
     /// hand back to the caller.
@@ -128,8 +133,13 @@ impl EnginePolicy for ClaudePolicy {
         host.registered_name(session_id)
     }
 
-    fn is_awake_pane_command(&self, _host: &dyn Host, _pane_id: &str, command: &str) -> bool {
-        command == Engine::Claude.process_name()
+    fn is_awake_pane_command(
+        &self,
+        _host: &dyn Host,
+        _session: &Session,
+        command: &str,
+    ) -> Result<bool> {
+        Ok(command == Engine::Claude.process_name())
     }
 
     /// An unrelated process that happens to be named `claude` in the pane
@@ -160,9 +170,19 @@ impl EnginePolicy for CodexPolicy {
 
     /// `a` can remain the foreground command while Codex runs as its child,
     /// so confirm the pane process tree before treating it as awake.
-    fn is_awake_pane_command(&self, host: &dyn Host, pane_id: &str, command: &str) -> bool {
-        command == Engine::Codex.process_name()
-            || (command == "a" && host.pane_has_agent_process(pane_id, Engine::Codex))
+    fn is_awake_pane_command(
+        &self,
+        host: &dyn Host,
+        session: &Session,
+        command: &str,
+    ) -> Result<bool> {
+        if command == Engine::Codex.process_name() {
+            return Ok(true);
+        }
+        if command == "a" {
+            return host.pane_has_agent_process(session);
+        }
+        Ok(false)
     }
 
     /// Nothing to wait for: there is no name to resolve, and the resumed
@@ -187,11 +207,12 @@ fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
         .tmux_info
         .as_ref()
         .ok_or_else(|| CcError::NoTmuxInfo(session_id.to_string()))?;
-    let recorded = resolve_session_option(|option| host.pane_option(&tmux_info.pane_id, option));
+    let recorded = resolve_session_option(|option| {
+        host.pane_option(tmux_info.socket_path.as_deref(), &tmux_info.pane_id, option)
+    });
     check_pane_matches_target(recorded.as_deref(), session_id)?;
 
-    let pane_id = &tmux_info.pane_id;
-    if let Some(name) = respawn_unless_awake(host, policy, &sessions_dir, &session, pane_id)? {
+    if let Some(name) = respawn_unless_awake(host, policy, &sessions_dir, &session, tmux_info)? {
         return Ok(Some(name));
     }
     policy.await_awake(host, session_id)
@@ -215,13 +236,15 @@ fn respawn_unless_awake(
     policy: &dyn EnginePolicy,
     sessions_dir: &Path,
     session: &Session,
-    pane_id: &str,
+    tmux_info: &crate::commands::agent::types::TmuxInfo,
 ) -> Result<Option<String>> {
     let _lock = store::lock_session_for_update(sessions_dir, &session.session_id)?;
     if let Some(name) = policy.already_awake(host, &session.session_id) {
         return Ok(Some(name));
     }
-    let respawned_at = host.pane_option(pane_id, RESPAWNED_AT_OPTION);
+    let socket_path = tmux_info.socket_path.as_deref();
+    let pane_id = &tmux_info.pane_id;
+    let respawned_at = host.pane_option(socket_path, pane_id, RESPAWNED_AT_OPTION);
     if respawned_recently(respawned_at.as_deref(), host.now_unix_secs()) {
         return Ok(None);
     }
@@ -230,6 +253,7 @@ fn respawn_unless_awake(
             // Best effort: the pane is already respawned, so failing to mark
             // it must not fail the wake.
             let _ = host.set_pane_option(
+                socket_path,
                 pane_id,
                 RESPAWNED_AT_OPTION,
                 &host.now_unix_secs().to_string(),
@@ -237,7 +261,12 @@ fn respawn_unless_awake(
         }
         // Another wake or the user may have resumed the session while we
         // waited for the lock. Let the engine decide whether the pane is live.
-        Err(RespawnError::PaneBusy(cmd)) if policy.is_awake_pane_command(host, pane_id, &cmd) => {}
+        Err(RespawnError::PaneBusy(cmd)) => {
+            if !policy.is_awake_pane_command(host, session, &cmd)? {
+                return Err(RespawnError::PaneBusy(cmd))
+                    .context("failed to resume the session's tmux pane");
+            }
+        }
         Err(e) => return Err(e).context("failed to resume the session's tmux pane"),
     }
     Ok(None)
@@ -257,10 +286,17 @@ fn respawned_recently(respawned_at: Option<&str>, now: i64) -> bool {
 /// particular a race between two wakes) without tmux or Claude Code.
 trait Host {
     fn sessions_dir(&self) -> Result<PathBuf>;
-    fn pane_option(&self, pane_id: &str, option: &str) -> Option<String>;
-    fn set_pane_option(&self, pane_id: &str, option: &str, value: &str) -> Result<()>;
+    fn pane_option(&self, socket_path: Option<&str>, pane_id: &str, option: &str)
+    -> Option<String>;
+    fn set_pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<()>;
     fn respawn(&self, session: &Session) -> Result<String, RespawnError>;
-    fn pane_has_agent_process(&self, pane_id: &str, engine: Engine) -> bool;
+    fn pane_has_agent_process(&self, session: &Session) -> Result<bool>;
     fn registered_name(&self, session_id: &str) -> Option<String>;
     fn now_unix_secs(&self) -> i64;
 }
@@ -272,26 +308,51 @@ impl Host for System {
         store::sessions_dir()
     }
 
-    fn pane_option(&self, pane_id: &str, option: &str) -> Option<String> {
-        tmux::get_pane_option(pane_id, option)
+    fn pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+    ) -> Option<String> {
+        tmux::get_pane_option_for_socket(socket_path, pane_id, option)
     }
 
-    fn set_pane_option(&self, pane_id: &str, option: &str, value: &str) -> Result<()> {
-        Ok(tmux::set_pane_option(pane_id, option, value)?)
+    fn set_pane_option(
+        &self,
+        socket_path: Option<&str>,
+        pane_id: &str,
+        option: &str,
+        value: &str,
+    ) -> Result<()> {
+        Ok(tmux::set_pane_option_for_socket(
+            socket_path,
+            pane_id,
+            option,
+            value,
+        )?)
     }
 
     fn respawn(&self, session: &Session) -> Result<String, RespawnError> {
         respawn_paused_session(session)
     }
 
-    fn pane_has_agent_process(&self, pane_id: &str, engine: Engine) -> bool {
-        let Some(pane_pid) = tmux::get_pane_pid(pane_id) else {
-            return false;
+    fn pane_has_agent_process(&self, session: &Session) -> Result<bool> {
+        let Some(tmux_info) = session.tmux_info.as_ref() else {
+            return Ok(false);
+        };
+        let Some(pane_pid) =
+            tmux::get_pane_pid_for_socket(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)?
+        else {
+            return Ok(false);
         };
         let Some(snapshot) = ProcessSnapshot::capture() else {
-            return false;
+            return Ok(false);
         };
-        pane_has_live_agent_process(pane_pid, engine, Some(&snapshot))
+        Ok(pane_has_live_agent_process(
+            pane_pid,
+            session.engine,
+            Some(&snapshot),
+        ))
     }
 
     fn registered_name(&self, session_id: &str) -> Option<String> {
@@ -357,6 +418,9 @@ mod tests {
     const PANE_ID: &str = "%0";
     const NAME: &str = "agent-1";
 
+    type PaneOptionCall = (Option<String>, String, String);
+    type SetPaneOptionCall = (Option<String>, String, String, String);
+
     #[rstest]
     #[case::matches(Some("abc"), "abc", Ok(()))]
     #[case::mismatched(
@@ -401,6 +465,7 @@ mod tests {
                 window_name: "editor".to_string(),
                 window_index: 0,
                 pane_id: PANE_ID.to_string(),
+                socket_path: None,
             }),
             status,
             created_at: Utc::now(),
@@ -433,10 +498,13 @@ mod tests {
         dir: TempDir,
         pane_cmd: Mutex<&'static str>,
         pane_options: Mutex<HashMap<String, String>>,
+        pane_option_calls: Mutex<Vec<PaneOptionCall>>,
+        set_pane_option_calls: Mutex<Vec<SetPaneOptionCall>>,
         registered: Mutex<Option<String>>,
         respawns: AtomicUsize,
         now: AtomicI64,
         live_agent_in_pane: bool,
+        pane_agent_query_error: bool,
         /// Whether the agent is up as soon as the pane is respawned. A real
         /// respawn is not: the pane runs an interactive login shell (rc
         /// files and all) before `a agent resume` execs the agent, and
@@ -457,15 +525,31 @@ mod tests {
                     TMUX_SESSION_OPTION.to_string(),
                     SESSION_ID.to_string(),
                 )])),
+                pane_option_calls: Mutex::new(Vec::new()),
+                set_pane_option_calls: Mutex::new(Vec::new()),
                 registered: Mutex::new(None),
                 respawns: AtomicUsize::new(0),
                 now: AtomicI64::new(1_000_000),
                 live_agent_in_pane: false,
+                pane_agent_query_error: false,
             }
         }
 
         fn slow_startup(mut self) -> Self {
             self.agent_up_on_respawn = false;
+            self
+        }
+
+        fn with_socket_path(self, socket_path: &str) -> Self {
+            let mut session = store::load_session_from(self.dir.path(), SESSION_ID)
+                .expect("session load should succeed")
+                .expect("session should exist");
+            session
+                .tmux_info
+                .as_mut()
+                .expect("session should have tmux info")
+                .socket_path = Some(socket_path.to_string());
+            store::save_session_to(self.dir.path(), &session).expect("session save should succeed");
             self
         }
 
@@ -476,6 +560,11 @@ mod tests {
 
         fn with_live_agent_in_pane(mut self) -> Self {
             self.live_agent_in_pane = true;
+            self
+        }
+
+        fn with_pane_agent_query_error(mut self) -> Self {
+            self.pane_agent_query_error = true;
             self
         }
 
@@ -493,11 +582,36 @@ mod tests {
             Ok(self.dir.path().to_path_buf())
         }
 
-        fn pane_option(&self, _pane_id: &str, option: &str) -> Option<String> {
+        fn pane_option(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+            option: &str,
+        ) -> Option<String> {
+            self.pane_option_calls.lock().ok()?.push((
+                socket_path.map(str::to_string),
+                pane_id.to_string(),
+                option.to_string(),
+            ));
             self.pane_options.lock().ok()?.get(option).cloned()
         }
 
-        fn set_pane_option(&self, _pane_id: &str, option: &str, value: &str) -> Result<()> {
+        fn set_pane_option(
+            &self,
+            socket_path: Option<&str>,
+            pane_id: &str,
+            option: &str,
+            value: &str,
+        ) -> Result<()> {
+            self.set_pane_option_calls
+                .lock()
+                .expect("pane option calls lock")
+                .push((
+                    socket_path.map(str::to_string),
+                    pane_id.to_string(),
+                    option.to_string(),
+                    value.to_string(),
+                ));
             self.pane_options
                 .lock()
                 .expect("pane options lock")
@@ -519,8 +633,11 @@ mod tests {
             Ok(PANE_ID.to_string())
         }
 
-        fn pane_has_agent_process(&self, _pane_id: &str, _engine: Engine) -> bool {
-            self.live_agent_in_pane
+        fn pane_has_agent_process(&self, _session: &Session) -> Result<bool> {
+            if self.pane_agent_query_error {
+                bail!("tmux query failed");
+            }
+            Ok(self.live_agent_in_pane)
         }
 
         fn registered_name(&self, _session_id: &str) -> Option<String> {
@@ -546,6 +663,50 @@ mod tests {
         wake_with(host, SESSION_ID).map_err(|e| e.to_string())
     }
 
+    #[test]
+    fn wake_uses_the_recorded_socket_for_pane_options() {
+        let socket_path = "/tmp/armyknife-test/private.sock";
+        let host =
+            FakeHost::new(Engine::Codex, SessionStatus::Paused).with_socket_path(socket_path);
+
+        let result = wake_result(&host);
+        let pane_option_calls = host
+            .pane_option_calls
+            .lock()
+            .expect("pane option calls lock")
+            .clone();
+        let set_pane_option_calls = host
+            .set_pane_option_calls
+            .lock()
+            .expect("pane option calls lock")
+            .clone();
+
+        assert_eq!(
+            (result, pane_option_calls, set_pane_option_calls),
+            (
+                Ok(None),
+                vec![
+                    (
+                        Some(socket_path.to_string()),
+                        PANE_ID.to_string(),
+                        TMUX_SESSION_OPTION.to_string(),
+                    ),
+                    (
+                        Some(socket_path.to_string()),
+                        PANE_ID.to_string(),
+                        RESPAWNED_AT_OPTION.to_string(),
+                    ),
+                ],
+                vec![(
+                    Some(socket_path.to_string()),
+                    PANE_ID.to_string(),
+                    RESPAWNED_AT_OPTION.to_string(),
+                    "1000000".to_string(),
+                )],
+            ),
+        );
+    }
+
     /// The locked respawn step of one wake, without the wait that follows it
     /// -- a wake of a Claude session whose agent never registers would
     /// otherwise block until `NAME_POLL_TIMEOUT`.
@@ -554,8 +715,18 @@ mod tests {
         engine: Engine,
     ) -> std::result::Result<Option<String>, String> {
         let session = session(engine, SessionStatus::Paused);
-        respawn_unless_awake(host, policy_for(engine), host.dir.path(), &session, PANE_ID)
-            .map_err(|e| e.to_string())
+        let tmux_info = session
+            .tmux_info
+            .as_ref()
+            .expect("test session has tmux info");
+        respawn_unless_awake(
+            host,
+            policy_for(engine),
+            host.dir.path(),
+            &session,
+            tmux_info,
+        )
+        .map_err(|e| e.to_string())
     }
 
     #[rstest]
@@ -706,6 +877,18 @@ mod tests {
         assert_eq!(
             (respawn_once(&host, engine), host.respawns()),
             (expected, expected_respawns)
+        );
+    }
+
+    #[test]
+    fn codex_busy_pane_query_error_is_returned() {
+        let host = FakeHost::new(Engine::Codex, SessionStatus::Paused)
+            .with_pane_cmd("a")
+            .with_pane_agent_query_error();
+
+        assert_eq!(
+            (respawn_once(&host, Engine::Codex), host.respawns()),
+            (Err("tmux query failed".to_string()), 0)
         );
     }
 

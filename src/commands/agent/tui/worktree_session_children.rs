@@ -159,6 +159,7 @@ mod tests {
                 window_name: "w".to_string(),
                 window_index: 0,
                 pane_id: p.to_string(),
+                socket_path: None,
             }),
             status: SessionStatus::Running,
             created_at: updated_at,

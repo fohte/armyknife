@@ -120,6 +120,8 @@ pub struct TmuxInfo {
     pub window_name: String,
     pub window_index: u32,
     pub pane_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

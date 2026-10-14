@@ -42,7 +42,7 @@ pub(crate) mod test_support {
     #[derive(Default)]
     pub(crate) struct RecordingSender {
         pub calls: RefCell<Vec<(u32, i32)>>,
-        pub ctrl_d_calls: RefCell<Vec<String>>,
+        pub ctrl_d_calls: RefCell<Vec<(Option<String>, String)>>,
         pub graceful_exit_result: RefCell<bool>,
         /// When set, the next `send` call fails with ESRCH (process not found).
         pub fail_with_esrch: RefCell<bool>,

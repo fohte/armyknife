@@ -353,12 +353,17 @@ fn process_hook_event_impl_with_instruction(
         );
     }
 
-    let tmux_info = pane_info.map(|info| TmuxInfo {
-        session_name: info.session_name,
-        window_name: info.window_name,
-        window_index: info.window_index,
-        pane_id: info.pane_id,
-    });
+    let tmux_info = if let Some(info) = pane_info {
+        Some(TmuxInfo {
+            session_name: info.session_name,
+            window_name: info.window_name,
+            window_index: info.window_index,
+            pane_id: info.pane_id,
+            socket_path: tmux::current_socket_path()?,
+        })
+    } else {
+        None
+    };
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);
@@ -1702,6 +1707,7 @@ mod tests {
             window_name: "dev".to_string(),
             window_index: 1,
             pane_id: "%123".to_string(),
+            socket_path: None,
         }));
         session.status = SessionStatus::Stopped;
         let notification =
@@ -1750,6 +1756,7 @@ mod tests {
             window_name: "dev".to_string(),
             window_index: 1,
             pane_id: "%123".to_string(),
+            socket_path: None,
         }));
         session.status = SessionStatus::Stopped;
         let mut config = Config::default();
@@ -2403,6 +2410,7 @@ mod tests {
             window_name: "claude".to_string(),
             window_index: 0,
             pane_id: "%42".to_string(),
+            socket_path: None,
         }));
         session.session_id = "pane-sess".to_string();
         session.engine = engine;
@@ -3438,6 +3446,7 @@ mod tests {
                         window_name: "delegate".to_string(),
                         window_index: 1,
                         pane_id: "%1".to_string(),
+                        socket_path: None,
                     });
                 }
             });
@@ -4094,6 +4103,7 @@ mod tests {
                 window_name: "example".to_string(),
                 window_index: 0,
                 pane_id: "%1".to_string(),
+                socket_path: None,
             }));
             previous.session_id = "previous-session".to_string();
             store::save_session_to(temp_dir.path(), &previous).expect("session should save");
@@ -4183,6 +4193,7 @@ mod tests {
                     window_name: "win".into(),
                     window_index: 0,
                     pane_id: pane_id.to_string(),
+                    socket_path: None,
                 }),
                 status: SessionStatus::Paused,
                 created_at: now,

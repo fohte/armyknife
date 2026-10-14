@@ -211,7 +211,7 @@ where
 pub(crate) trait SessionProbe: DraftProbe {
     /// Returns the pid of the live process hosting `session` (per
     /// `session.engine`), if one can be located via the session's tmux pane.
-    fn resolve_pid(&self, session: &Session) -> Option<u32>;
+    fn resolve_pid(&self, session: &Session) -> Result<Option<u32>>;
 
     /// Returns whether armyknife is tracking a detached background command
     /// for this session.
@@ -252,19 +252,30 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
         }
     }
 
-    fn resolve_pid(&self, session: &Session) -> Option<u32> {
-        let pane_id = &session.tmux_info.as_ref()?.pane_id;
-        let pane_pid = crate::infra::tmux::get_pane_pid(pane_id)?;
+    fn resolve_pid(&self, session: &Session) -> Result<Option<u32>> {
+        let Some(tmux_info) = session.tmux_info.as_ref() else {
+            return Ok(None);
+        };
+        let Some(pane_pid) = crate::infra::tmux::get_pane_pid_for_socket(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+        )?
+        else {
+            return Ok(None);
+        };
         // When the agent is launched directly as the pane command (no shell
         // wrapper), pane_pid itself is the agent process -- BFS from
         // pane_pid (exclusive) would miss it. Use the inclusive variant so
         // both "pane_pid is the agent" and "pane_pid is zsh, child is the
         // agent" resolve correctly.
-        self.snapshot?.find_self_or_descendant_by_command(
+        let snapshot = self
+            .snapshot
+            .context("Could not inspect running processes during agent sweep")?;
+        Ok(snapshot.find_self_or_descendant_by_command(
             pane_pid,
             session.engine.process_name(),
             MAX_DESCENDANT_NODES,
-        )
+        ))
     }
 }
 
@@ -351,17 +362,31 @@ where
         // protection. Once sweep can independently confirm no `claude` pid
         // resolves for the session, treat any pending ids as stale and drop
         // them before making the pause decision.
-        if session.has_pending_bg_tasks() && probe.resolve_pid(&session).is_none() {
-            tracing::info!(
-                event = "agent.sweep.stale_pending_tasks_cleared",
-                session = %session.session_id,
-                pending_bg_tasks = session.pending_bg_task_ids.len(),
-                pending_agent_tasks = session.pending_agent_task_ids.len(),
-            );
-            session.pending_bg_task_ids.clear();
-            session.pending_agent_task_ids.clear();
-            if !dry_run {
-                store::save_session_to(sessions_dir, &session)?;
+        if session.has_pending_bg_tasks() {
+            match probe.resolve_pid(&session) {
+                Ok(None) => {
+                    tracing::info!(
+                        event = "agent.sweep.stale_pending_tasks_cleared",
+                        session = %session.session_id,
+                        pending_bg_tasks = session.pending_bg_task_ids.len(),
+                        pending_agent_tasks = session.pending_agent_task_ids.len(),
+                    );
+                    session.pending_bg_task_ids.clear();
+                    session.pending_agent_task_ids.clear();
+                    if !dry_run {
+                        store::save_session_to(sessions_dir, &session)?;
+                    }
+                }
+                Ok(Some(_)) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.sweep.pane_query_failed",
+                        session = %session.session_id,
+                        error = %error,
+                    );
+                    report.active += 1;
+                    continue;
+                }
             }
         }
 
@@ -375,7 +400,7 @@ where
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => match probe.resolve_pid(&session) {
-                Some(pid) => {
+                Ok(Some(pid)) => {
                     // Still resolves to a live agent pid -- a shutdown request
                     // does not guarantee prompt exit (see module docs), so we
                     // cannot confirm Paused yet. Request shutdown and leave
@@ -410,7 +435,7 @@ where
                         ShutdownOutcome::StillRunning => report.signaled += 1,
                     }
                 }
-                None => {
+                Ok(None) => {
                     // No live claude process found -- the process has
                     // actually exited (from an earlier sweep's SIGTERM, or
                     // on its own). Confirm the pause now.
@@ -432,6 +457,14 @@ where
                     );
                     confirm_paused(sessions_dir, session, syncer)?;
                     report.paused += 1;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        event = "agent.sweep.pane_query_failed",
+                        session = %session.session_id,
+                        error = %error,
+                    );
+                    report.active += 1;
                 }
             },
             PauseDecision::NotYetElapsed => {
@@ -481,9 +514,10 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
 
     if session.engine == Engine::Codex
         && first_request
-        && let Some(pane_id) = session.tmux_info.as_ref().map(|info| info.pane_id.as_str())
+        && let Some(tmux_info) = session.tmux_info.as_ref()
     {
-        match sender.request_and_wait(pane_id, pid) {
+        let pane_id = &tmux_info.pane_id;
+        match sender.request_and_wait(tmux_info.socket_path.as_deref(), pane_id, pid) {
             Ok(true) => return Ok(ShutdownOutcome::Exited),
             Ok(false) => {
                 tracing::info!(
@@ -583,6 +617,7 @@ mod tests {
     struct FakeProbe {
         pids: RefCell<HashMap<String, u32>>,
         drafts: RefCell<HashSet<String>>,
+        failed_queries: RefCell<HashSet<String>>,
     }
 
     impl FakeProbe {
@@ -597,6 +632,15 @@ mod tests {
         fn with_drafts(mut self, session_ids: &[&str]) -> Self {
             for session_id in session_ids {
                 self.drafts.get_mut().insert((*session_id).to_string());
+            }
+            self
+        }
+
+        fn with_failed_queries(mut self, session_ids: &[&str]) -> Self {
+            for session_id in session_ids {
+                self.failed_queries
+                    .get_mut()
+                    .insert((*session_id).to_string());
             }
             self
         }
@@ -616,8 +660,11 @@ mod tests {
     }
 
     impl SessionProbe for FakeProbe {
-        fn resolve_pid(&self, session: &Session) -> Option<u32> {
-            self.pids.borrow().get(&session.session_id).copied()
+        fn resolve_pid(&self, session: &Session) -> Result<Option<u32>> {
+            if self.failed_queries.borrow().contains(&session.session_id) {
+                return Err(anyhow::anyhow!("fixture tmux query failure"));
+            }
+            Ok(self.pids.borrow().get(&session.session_id).copied())
         }
     }
 
@@ -663,6 +710,7 @@ mod tests {
                 window_name: "example-window".to_string(),
                 window_index: 1,
                 pane_id: "%42".to_string(),
+                socket_path: None,
             }),
             ..make_session(id, SessionStatus::Stopped, updated_at)
         }
@@ -722,7 +770,7 @@ mod tests {
 
     type SweepObservation = (
         SweepReport,
-        Vec<String>,
+        Vec<(Option<String>, String)>,
         Vec<(u32, i32)>,
         SessionStatus,
         bool,
@@ -763,8 +811,11 @@ mod tests {
         let old = Utc::now() - TimeDelta::hours(1);
         let sender = RecordingSender::default();
         sender.graceful_exit_result.replace(true);
-        let actual =
-            observe_codex_sweep(&test_dir, &sender, make_codex_session("codex", old), false);
+        let mut session = make_codex_session("codex", old);
+        if let Some(tmux_info) = session.tmux_info.as_mut() {
+            tmux_info.socket_path = Some("/tmp/armyknife-test/server.sock".to_string());
+        }
+        let actual = observe_codex_sweep(&test_dir, &sender, session, false);
 
         assert_eq!(
             actual,
@@ -776,7 +827,10 @@ mod tests {
                     waiting: 0,
                     active: 0,
                 },
-                vec!["%42".to_string()],
+                vec![(
+                    Some("/tmp/armyknife-test/server.sock".to_string()),
+                    "%42".to_string(),
+                )],
                 Vec::new(),
                 SessionStatus::Paused,
                 false,
@@ -806,7 +860,7 @@ mod tests {
         sender.fail_ctrl_d.replace(ctrl_d_fails);
         let actual = observe_codex_sweep(&test_dir, &sender, session, false);
         let expected_ctrl_d_calls = has_tmux_info
-            .then(|| "%42".to_string())
+            .then(|| (None, "%42".to_string()))
             .filter(|_| !already_signaled)
             .into_iter()
             .collect::<Vec<_>>();
@@ -1080,6 +1134,114 @@ mod tests {
             .expect("load")
             .expect("session exists");
         assert_eq!(reloaded.status, SessionStatus::Paused);
+    }
+
+    #[rstest]
+    fn keeps_stopped_session_when_tmux_server_query_fails(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("sess-server-error", SessionStatus::Stopped, old);
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "fixture-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%731".to_string(),
+            socket_path: Some("/tmp/armyknife-test/private".to_string()),
+        });
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::default().with_failed_queries(&["sess-server-error"]),
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep should continue after a server query failure");
+        let reloaded = store::load_session_from(&test_dir.path, "sess-server-error")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                reloaded.status,
+                reloaded.sweep_signaled,
+                sender.calls.borrow().clone(),
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                SessionStatus::Stopped,
+                false,
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn keeps_pending_task_ids_when_tmux_server_query_fails(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("sess-pending-query-error", SessionStatus::Stopped, old);
+        session
+            .pending_bg_task_ids
+            .insert("bg-query-pending".to_string());
+        session
+            .pending_agent_task_ids
+            .insert("agent-query-pending".to_string());
+        session.tmux_info = Some(super::super::types::TmuxInfo {
+            session_name: "fixture-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%812347".to_string(),
+            socket_path: Some("/tmp/armyknife-test/pending.sock".to_string()),
+        });
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::default().with_failed_queries(&["sess-pending-query-error"]),
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep should keep pending task state after a server query failure");
+        let reloaded = store::load_session_from(&test_dir.path, "sess-pending-query-error")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids,
+                reloaded.sweep_signaled,
+                sender.calls.borrow().clone(),
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                SessionStatus::Stopped,
+                std::collections::BTreeSet::from(["bg-query-pending".to_string()]),
+                std::collections::BTreeSet::from(["agent-query-pending".to_string()]),
+                false,
+                Vec::new(),
+            ),
+        );
     }
 
     #[rstest]
@@ -1384,6 +1546,7 @@ mod tests {
             window_name: "claude".to_string(),
             window_index: 0,
             pane_id: "%42".to_string(),
+            socket_path: None,
         });
         save_session_to(&test_dir.path, &session).expect("save");
 
@@ -1424,6 +1587,7 @@ mod tests {
             window_name: "claude".to_string(),
             window_index: 0,
             pane_id: "%42".to_string(),
+            socket_path: None,
         });
         save_session_to(&test_dir.path, &session).expect("save");
 

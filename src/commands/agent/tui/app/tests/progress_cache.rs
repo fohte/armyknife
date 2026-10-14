@@ -76,6 +76,7 @@ fn cached_work_rows_refresh_status_and_rebind_live_pane_ids(
         window_name: "window-placeholder".to_string(),
         window_index: 0,
         pane_id: "%42".to_string(),
+        socket_path: None,
     });
     app_with_task.restore_progress_cache(HashMap::from([(
         "task-placeholder".to_string(),

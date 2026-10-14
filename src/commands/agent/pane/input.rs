@@ -4,8 +4,9 @@
 //! [`get_pane_input_text`], which is also used by `auto_compact`. Codex is
 //! detected from the `›` line in an ANSI-styled capture; its dim placeholder
 //! marks an empty composer without depending on placeholder wording.
-//! [`pane_has_draft`] returns `None` when capture or layout cannot be parsed;
-//! callers then use `session.updated_at` as the fallback.
+//! [`pane_has_draft_for_socket`] returns `None` when capture or layout cannot be parsed.
+//! The active-session probe then falls back to `session.updated_at`; `agent close`
+//! refuses an unrecognized capture unless `--force` is used.
 
 use crate::commands::agent::types::Engine;
 use crate::infra::tmux;
@@ -17,15 +18,30 @@ pub fn get_pane_input_text(pane_id: &str) -> Option<String> {
     extract_input_text(&raw)
 }
 
-/// Returns whether `pane_id` contains an unsent composer draft for `engine`.
-/// Returns `None` when the composer cannot be recognized.
-pub fn pane_has_draft(pane_id: &str, engine: Engine) -> Option<bool> {
-    match engine {
-        Engine::Claude => get_pane_input_text(pane_id).map(|text| !text.is_empty()),
-        Engine::Codex => {
-            let raw = tmux::capture_pane_with_escapes(pane_id)?;
-            extract_codex_composer_has_draft(&raw)
+/// Returns whether a pane on its recorded server contains an unsent composer
+/// draft for `engine`. Returns `None` when the composer cannot be recognized.
+pub fn pane_has_draft_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    engine: Engine,
+) -> Option<bool> {
+    pane_has_draft_with_capture(engine, |with_escapes| {
+        if with_escapes {
+            tmux::capture_pane_with_escapes_for_socket(socket_path, pane_id)
+        } else {
+            tmux::capture_pane_for_socket(socket_path, pane_id)
         }
+    })
+}
+
+fn pane_has_draft_with_capture(
+    engine: Engine,
+    capture: impl FnOnce(bool) -> Option<String>,
+) -> Option<bool> {
+    let raw = capture(engine == Engine::Codex)?;
+    match engine {
+        Engine::Claude => extract_input_text(&raw).map(|text| !text.is_empty()),
+        Engine::Codex => extract_codex_composer_has_draft(&raw),
     }
 }
 
@@ -371,5 +387,32 @@ mod tests {
     #[case::malformed_escape_is_unknown(format!("{ESC}[1m›{ESC}[2"), None)]
     fn detects_codex_composer_draft(#[case] raw: String, #[case] expected: Option<bool>) {
         assert_eq!(extract_codex_composer_has_draft(&raw), expected);
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude, false)]
+    #[case::codex(Engine::Codex, true)]
+    fn pane_has_draft_uses_engine_capture(
+        #[case] engine: Engine,
+        #[case] expected_with_escapes: bool,
+    ) {
+        let raw = match engine {
+            Engine::Claude => render(indoc! {"
+                {rule}
+                ❯ draft text
+                {rule}
+            "}),
+            Engine::Codex => format!("{ESC}[1m›{ESC}[0m draft text"),
+        };
+        let mut capture_mode = None;
+        let result = pane_has_draft_with_capture(engine, |with_escapes| {
+            capture_mode = Some(with_escapes);
+            Some(raw)
+        });
+
+        assert_eq!(
+            (capture_mode, result),
+            (Some(expected_with_escapes), Some(true))
+        );
     }
 }

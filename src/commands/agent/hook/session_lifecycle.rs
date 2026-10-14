@@ -212,6 +212,7 @@ mod tests {
                 window_name: "agent".to_string(),
                 window_index: 0,
                 pane_id: "%42".to_string(),
+                socket_path: None,
             }),
             status,
             created_at: now,
