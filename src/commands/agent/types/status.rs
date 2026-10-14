@@ -21,6 +21,14 @@ impl Session {
         !self.pending_permission_agent_ids.is_empty()
     }
 
+    pub(crate) fn status_after_interrupted_codex_turn(&self) -> SessionStatus {
+        if self.has_pending_permission_requests() {
+            SessionStatus::WaitingInput
+        } else {
+            SessionStatus::Stopped
+        }
+    }
+
     /// Presentation status for this session. A stopped main loop with pending
     /// background work is `WaitingInput` when a crit review is linked or a
     /// Human-in-the-Loop review is pending, and `Background` otherwise. Codex
