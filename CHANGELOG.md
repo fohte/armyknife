@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.419](https://github.com/fohte/armyknife/compare/v0.1.418...v0.1.419) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent:** reconcile interrupted Codex sessions ([#1173](https://github.com/fohte/armyknife/issues/1173)) ([c18d67e](https://github.com/fohte/armyknife/commit/c18d67e6c946ec54da7f345a0f9fb83b16d440e5))
+
 ## [0.1.418](https://github.com/fohte/armyknife/compare/v0.1.417...v0.1.418) (2026-10-14)
 
 
