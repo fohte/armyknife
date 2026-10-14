@@ -11,7 +11,7 @@ use crate::commands::agent::tui::progress_batches::{
 };
 use crate::commands::agent::tui::session_rows::SessionTask;
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Session, SessionPrContext, SessionStatus};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
@@ -1223,6 +1223,134 @@ fn reopening_unmatched_delegates_keeps_cached_rows_after_session_reload_is_incom
         })
         .collect::<Vec<_>>();
     assert_eq!(delegate_ids, vec!["alpha", "bravo", "charlie"]);
+}
+
+#[rstest]
+fn task_refresh_keeps_cached_unmatched_prs_when_sessions_are_missing(timestamp: DateTime<Utc>) {
+    let selected = create_test_session_at("selected", timestamp);
+    let make_cached_pr_delegate = |session_id: &str, number| {
+        let mut session = progress_delegate(session_id, timestamp);
+        session.status = SessionStatus::Ended;
+        session.pr_context = Some(SessionPrContext {
+            owner: "example-owner".to_string(),
+            repo: "example-project".to_string(),
+            branch: format!("work-{number}"),
+            checklist_item_id: None,
+        });
+        FetchedDelegate {
+            session,
+            checklist_item_id: None,
+            pull_request: Some(PrProgressInfo {
+                pull_request: PrInfo {
+                    number,
+                    title: format!("{session_id} change"),
+                    state: PrState::Merged,
+                    url: format!("https://github.com/example-owner/example-project/pull/{number}"),
+                },
+                ci_state: PrCiState::Successful,
+            }),
+            lookup_unavailable: false,
+        }
+    };
+    let first_delegate = make_cached_pr_delegate("cached-alpha", 314);
+    let second_delegate = make_cached_pr_delegate("cached-bravo", 315);
+    let cached_sessions = [
+        first_delegate.session.clone(),
+        second_delegate.session.clone(),
+    ];
+    let fetched_delegates = vec![first_delegate, second_delegate];
+    let mut app = create_test_app(vec![
+        selected,
+        cached_sessions[0].clone(),
+        cached_sessions[1].clone(),
+    ]);
+    app.update_row_order(&[
+        None,
+        Some("selected"),
+        Some("cached-alpha"),
+        Some("cached-bravo"),
+    ]);
+    app.list_state.select(Some(1));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([(
+        "selected".to_string(),
+        vec![task_link("task-a")],
+    )])));
+    let request_scope = app
+        .progress_scope_for_session("selected")
+        .and_then(|scope| scope.fetch_scope());
+    let plan = unmatched_progress_plan(&fetched_delegates);
+
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope: request_scope.clone(),
+            delegated: fetched_delegates,
+            implementation: Some(plan),
+            github_error: None,
+        }),
+    );
+    app.sessions
+        .retain(|session| session.session_id == "selected");
+    app.begin_progress_refresh("selected");
+    app.apply_progress_result(
+        "selected",
+        Ok(FetchedProgress {
+            selected_session_id: "selected".to_string(),
+            request_scope,
+            delegated: Vec::new(),
+            implementation: Some(unmatched_progress_plan(&[])),
+            github_error: None,
+        }),
+    );
+
+    assert_eq!(
+        app.progress_rows,
+        vec![
+            expected_work_row("selected", "session"),
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::UnmatchedDelegatesHeader { collapsed: false },
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "cached-alpha".to_string(),
+                repo: Some("example-project".to_string()),
+                title: "cached-alpha change".to_string(),
+                number: Some(314),
+                url: Some("https://github.com/example-owner/example-project/pull/314".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::Done,
+                    pr_body: ProgressMark::Done,
+                    ci: ProgressMark::Done,
+                    merge: ProgressMark::Done,
+                },
+            }),
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "cached-bravo".to_string(),
+                repo: Some("example-project".to_string()),
+                title: "cached-bravo change".to_string(),
+                number: Some(315),
+                url: Some("https://github.com/example-owner/example-project/pull/315".to_string()),
+                pane_id: None,
+                is_ended: true,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::Done,
+                    pr_body: ProgressMark::Done,
+                    ci: ProgressMark::Done,
+                    merge: ProgressMark::Done,
+                },
+            }),
+        ],
+    );
 }
 
 #[rstest]

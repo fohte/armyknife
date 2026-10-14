@@ -69,10 +69,14 @@ impl App {
                     same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
                 });
                 let cached_implementation =
-                    reusable_cache.and_then(|cached| cached.implementation.clone());
-                let implementation = includes_fetched_progress
-                    .then(|| progress.implementation.or(cached_implementation))
-                    .flatten();
+                    reusable_cache.and_then(|cached| cached.implementation.as_ref());
+                let mut implementation = if includes_fetched_progress {
+                    progress
+                        .implementation
+                        .or_else(|| cached_implementation.cloned())
+                } else {
+                    None
+                };
                 let mut delegated = if includes_fetched_progress {
                     progress
                         .delegated
@@ -101,6 +105,30 @@ impl App {
                             lookup_unavailable: false,
                         });
                     }
+                }
+                if let (Some(implementation), Some(cached_implementation), Some(cached)) = (
+                    implementation.as_mut(),
+                    cached_implementation,
+                    reusable_cache,
+                ) {
+                    let current_delegate_ids = delegated
+                        .iter()
+                        .map(|delegate| delegate.session.session_id.clone())
+                        .collect::<Vec<_>>();
+                    let missing_cached_sessions = cached
+                        .delegated_sessions
+                        .iter()
+                        .filter(|session| {
+                            self.session_by_id(&session.session_id).is_none()
+                                && !current_delegate_ids.contains(&session.session_id)
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    delegated.extend(implementation.restore_cached_unmatched_delegates(
+                        cached_implementation,
+                        &missing_cached_sessions,
+                        &current_delegate_ids,
+                    ));
                 }
                 if let Some(cached) = reusable_cache {
                     delegated.sort_by_key(|delegate| {
