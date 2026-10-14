@@ -387,34 +387,34 @@ a gh pr-merge <pr-number> [options]
 
 Claude Code session monitoring with tmux integration. The canonical command is `a agent` (alias `a ag`); `a cc` is kept as a hidden backward-compatible alias, so existing hook and tmux configs that invoke `a cc ...` keep working unchanged.
 
-| Action                                            | Aliases | Description                                                                                 |
-| ------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
-| `new [--worktree[=<branch>]] [options]`           |         | Start a Claude Code session, optionally in a new worktree                                   |
-| `codex [<args>...]`                               |         | Start Codex and bind its thread ID to the current tmux pane                                 |
-| `close [target] [--force] [--skip-hooks]`         | `c`     | Close an agent session and its linked worktree                                              |
-| `clean [--dry-run] [--all] [--force]`             |         | Delete merged or closed worktrees                                                           |
-| `hook <event>`                                    |         | Record session events (called from Claude Code hooks)                                       |
-| `list`                                            | `ls`    | List all Claude Code sessions with status                                                   |
-| `focus <session_id> [--review-pane-id <pane_id>]` |         | Focus the review pane when available, then the session's tmux pane                          |
-| `mark-read [-t <pane_id>]`                        |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
-| `status set <kind> <note>`                        |         | Set the calling session's reason for stopping                                               |
-| `vibe on / off / status`                          |         | Enable, disable, or check vibe mode for the session tree                                    |
-| `resume [session_id]`                             | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
-| `resurrect save`                                  |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                          |
-| `resurrect restore`                               |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
-| `peer parent`                                     |         | List the session that delegated to this one, if any (JSON)                                  |
-| `peer children`                                   |         | List the sessions this one delegated to (JSON)                                              |
-| `peer list [-R <repo>]`                           |         | List tracked sessions, with their SendMessage names (JSON)                                  |
-| `peer me`                                         |         | Print the session running in the caller's own tmux pane (JSON)                              |
-| `peer wake <session_id>`                          |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
-| `peer notify <session_id> -m <text>`              |         | Send a message to another session (SendMessage socket / Codex app-server)                   |
-| `crit add <url>`                                  |         | Associate a crit review with the calling session                                            |
-| `crit open [--session <id> \| --pane <pane_id>]`  |         | Toggle the latest associated review in a tmux floating pane                                 |
-| `bg run -- <cmd> [args...]`                       |         | Run a command detached and notify this session when it finishes                             |
-| `sweep`                                           |         | Reconcile failed or interrupted Codex turns, pause idle sessions, and close merged sessions |
-| `auto-compact schedule --session <id>`            |         | Detached worker spawned by the Stop hook (not for direct use)                               |
-| `window-status <window_id>`                       |         | Print status symbols for the sessions in a tmux window                                      |
-| `pane-has-paused <pane_id>`                       |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+| Action                                              | Aliases | Description                                                                                 |
+| --------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `new [--worktree[=<branch>]] [options]`             |         | Start a Claude Code session, optionally in a new worktree                                   |
+| `codex [<args>...]`                                 |         | Start Codex and bind its thread ID to the current tmux pane                                 |
+| `close [target] [--child] [--force] [--skip-hooks]` | `c`     | Close an agent session and its linked worktree                                              |
+| `clean [--dry-run] [--all] [--force]`               |         | Delete merged or closed worktrees                                                           |
+| `hook <event>`                                      |         | Record session events (called from Claude Code hooks)                                       |
+| `list`                                              | `ls`    | List all Claude Code sessions with status                                                   |
+| `focus <session_id> [--review-pane-id <pane_id>]`   |         | Focus the review pane when available, then the session's tmux pane                          |
+| `mark-read [-t <pane_id>]`                          |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
+| `status set <kind> <note>`                          |         | Set the calling session's reason for stopping                                               |
+| `vibe on / off / status`                            |         | Enable, disable, or check vibe mode for the session tree                                    |
+| `resume [session_id]`                               | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
+| `resurrect save`                                    |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                          |
+| `resurrect restore`                                 |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
+| `peer parent`                                       |         | List the session that delegated to this one, if any (JSON)                                  |
+| `peer children`                                     |         | List the sessions this one delegated to (JSON)                                              |
+| `peer list [-R <repo>]`                             |         | List tracked sessions, with their SendMessage names (JSON)                                  |
+| `peer me`                                           |         | Print the session running in the caller's own tmux pane (JSON)                              |
+| `peer wake <session_id>`                            |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
+| `peer notify <session_id> -m <text>`                |         | Send a message to another session (SendMessage socket / Codex app-server)                   |
+| `crit add <url>`                                    |         | Associate a crit review with the calling session                                            |
+| `crit open [--session <id> \| --pane <pane_id>]`    |         | Toggle the latest associated review in a tmux floating pane                                 |
+| `bg run -- <cmd> [args...]`                         |         | Run a command detached and notify this session when it finishes                             |
+| `sweep`                                             |         | Reconcile failed or interrupted Codex turns, pause idle sessions, and close merged sessions |
+| `auto-compact schedule --session <id>`              |         | Detached worker spawned by the Stop hook (not for direct use)                               |
+| `window-status <window_id>`                         |         | Print status symbols for the sessions in a tmux window                                      |
+| `pane-has-paused <pane_id>`                         |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
@@ -492,7 +492,7 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [target] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch. A worktree target with multiple tracked sessions is ambiguous; pass a session ID to select one.
+`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch. A worktree target with multiple tracked sessions is ambiguous; pass a session ID to select one. `--child` requires a target that resolves to a tracked direct child session; it rejects targets without a unique tracked session. `--force` does not bypass this check.
 
 The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked while an agent process is present. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it skips the draft check and allows closing only for sessions marked ended or paused. It also refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
 

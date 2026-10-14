@@ -189,7 +189,7 @@ fn filter_parent<'a>(sessions: &'a [Session], session: &Session) -> Vec<&'a Sess
 fn filter_children<'a>(sessions: &'a [Session], self_id: &str) -> Vec<&'a Session> {
     sessions
         .iter()
-        .filter(|s| s.ancestor_session_ids.last().map(String::as_str) == Some(self_id))
+        .filter(|session| session.is_direct_child_of(self_id))
         .collect()
 }
 

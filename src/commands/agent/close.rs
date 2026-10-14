@@ -8,6 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
+mod child;
+
 use super::graceful_quit::GracefulQuitRequester;
 use super::resume;
 use super::signal::{LibcSignalSender, SignalSender};
@@ -22,11 +24,15 @@ use crate::shared::worktree_delete;
 const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
 
-#[derive(Args, Clone, PartialEq, Eq)]
+#[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
     /// Session ID, worktree name, or worktree path to close.
     /// Defaults to the session in the current pane or the current worktree.
     pub target: Option<String>,
+
+    /// Refuse to close the target unless it is a direct child session.
+    #[arg(long)]
+    pub child: bool,
 
     /// Override session safety checks and unmerged-worktree confirmation.
     #[arg(long)]
@@ -38,8 +44,10 @@ pub struct CloseArgs {
 }
 
 pub async fn run(args: &CloseArgs) -> Result<()> {
+    let child_parent_session_id = child::parent_session_id(args)?;
+
     if let Some(target) = args.target.as_deref() {
-        return close_target(target, args).await;
+        return close_target(target, args, child_parent_session_id.as_deref()).await;
     }
 
     let current_worktree_root = || {
@@ -51,8 +59,10 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         super::store::load_session,
         current_worktree_root,
     )? {
-        DefaultTarget::Session(session) => close_session_value(&session, args).await,
-        DefaultTarget::Worktree(worktree_root) => close_worktree(&worktree_root, args, false).await,
+        DefaultTarget::Session(session) => close_session_value(&session, args, None).await,
+        DefaultTarget::Worktree(worktree_root) => {
+            close_worktree(&worktree_root, args, false, None).await
+        }
     }
 }
 
@@ -80,13 +90,17 @@ fn resolve_default_target(
     }
 }
 
-async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
+async fn close_target(
+    target: &str,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+) -> Result<()> {
     if !target.contains('/')
         && !target.contains('\\')
         && !target.contains("..")
         && let Some(session) = super::store::load_session(target)?
     {
-        return close_session_value(&session, args).await;
+        return close_session_value(&session, args, child_parent_session_id).await;
     }
 
     let config = load_config()?;
@@ -97,10 +111,16 @@ async fn close_target(target: &str, args: &CloseArgs) -> Result<()> {
     )?;
     let worktree_path = PathBuf::from(worktree_path);
     let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
-    close_worktree(&worktree_root, args, false).await
+    close_worktree(&worktree_root, args, false, child_parent_session_id).await
 }
 
-async fn close_session_value(session: &Session, args: &CloseArgs) -> Result<()> {
+async fn close_session_value(
+    session: &Session,
+    args: &CloseArgs,
+    child_parent_session_id: Option<&str>,
+) -> Result<()> {
+    child::ensure_target_session(Some(session), child_parent_session_id)?;
+
     let Some(worktree_root) = linked_worktree_root(&session.cwd) else {
         return close_tracked_session(session, args.force);
     };
@@ -120,6 +140,7 @@ async fn close_worktree(
     worktree_root: &Path,
     args: &CloseArgs,
     refuse_current_session: bool,
+    child_parent_session_id: Option<&str>,
 ) -> Result<()> {
     let sessions = super::store::list_sessions()?;
     let session = select_worktree_session(&sessions, worktree_root)?;
@@ -136,6 +157,7 @@ async fn close_worktree(
     let context = WorktreeCloseContext {
         args,
         session,
+        child_parent_session_id,
         caller_session_id: caller_session_id.as_deref(),
         caller_pane_id: caller_pane_id.as_deref(),
     };
@@ -151,21 +173,14 @@ async fn close_worktree(
 }
 
 pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
-    let args = close_worktree_path_args();
-    close_worktree(worktree_path, &args, true).await
-}
-
-fn close_worktree_path_args() -> CloseArgs {
-    CloseArgs {
-        target: None,
-        force: false,
-        skip_hooks: false,
-    }
+    let args = CloseArgs::default();
+    close_worktree(worktree_path, &args, true, None).await
 }
 
 struct WorktreeCloseContext<'a> {
     args: &'a CloseArgs,
     session: Option<&'a Session>,
+    child_parent_session_id: Option<&'a str>,
     caller_session_id: Option<&'a str>,
     caller_pane_id: Option<&'a str>,
 }
@@ -180,6 +195,8 @@ async fn close_worktree_with<P, F>(
 where
     F: Future<Output = Result<()>>,
 {
+    child::ensure_target_session(context.session, context.child_parent_session_id)?;
+
     if refuse_current_session {
         ensure_not_closing_current_session(
             context.session,
@@ -1349,11 +1366,12 @@ mod tests {
     #[tokio::test]
     async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
         let target_session = session();
-        let args = close_worktree_path_args();
+        let args = CloseArgs::default();
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
             session: Some(&target_session),
+            child_parent_session_id: None,
             caller_session_id: Some("session-1"),
             caller_pane_id: None,
         };
@@ -1390,13 +1408,166 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_merge_close_refuses_to_close_other_sessions_without_force() {
-        let target_session = session();
-        let args = close_worktree_path_args();
+    async fn child_close_rejects_non_children_before_prepare_even_with_force() {
+        let mut target_session = session();
+        target_session.ancestor_session_ids = vec!["other-parent".to_string()];
+        let args = CloseArgs {
+            target: Some("session-1".to_string()),
+            child: true,
+            force: true,
+            skip_hooks: false,
+        };
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
             session: Some(&target_session),
+            child_parent_session_id: Some("parent-session"),
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (
+                Err(
+                    "Agent session `session-1` is not a direct child of the calling session"
+                        .to_string()
+                ),
+                vec![],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn child_worktree_close_without_a_tracked_session_refuses_before_prepare() {
+        let args = CloseArgs {
+            target: Some("target-worktree".to_string()),
+            child: true,
+            force: false,
+            skip_hooks: false,
+        };
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: None,
+            child_parent_session_id: Some("parent-session"),
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("close session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (
+                Err(
+                    "The target worktree has no tracked agent session; cannot verify --child"
+                        .to_string()
+                ),
+                vec![],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn child_close_allows_a_direct_child_with_force() {
+        let mut target_session = session();
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let args = CloseArgs {
+            target: Some("session-1".to_string()),
+            child: true,
+            force: true,
+            skip_hooks: false,
+        };
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: Some(&target_session),
+            child_parent_session_id: Some("parent-session"),
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, force, _| {
+                calls.borrow_mut().push(if force {
+                    "close session with force"
+                } else {
+                    "close session safely"
+                });
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (result.is_ok(), calls.into_inner()),
+            (
+                true,
+                vec!["prepare", "close session with force", "remove worktree"],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn pr_merge_close_refuses_to_close_other_sessions_without_force() {
+        let target_session = session();
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            session: Some(&target_session),
+            child_parent_session_id: None,
             caller_session_id: Some("caller-session"),
             caller_pane_id: None,
         };
@@ -1556,6 +1727,7 @@ mod tests {
             "ag",
             "c",
             "feature/worktree",
+            "--child",
             "--force",
             "--skip-hooks",
         ])
@@ -1563,14 +1735,14 @@ mod tests {
 
         let close_args = match parsed.command {
             crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => {
-                Some((args.target, args.force, args.skip_hooks))
+                Some((args.target, args.child, args.force, args.skip_hooks))
             }
             _ => None,
         };
 
         assert_eq!(
             close_args,
-            Some((Some("feature/worktree".to_string()), true, true))
+            Some((Some("feature/worktree".to_string()), true, true, true))
         );
     }
 

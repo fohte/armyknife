@@ -198,6 +198,7 @@ where
 fn close_args(session_id: &str) -> super::super::close::CloseArgs {
     super::super::close::CloseArgs {
         target: Some(session_id.to_string()),
+        child: false,
         force: false,
         skip_hooks: false,
     }
