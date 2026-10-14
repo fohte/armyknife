@@ -4,8 +4,9 @@
 //! [`get_pane_input_text`], which is also used by `auto_compact`. Codex is
 //! detected from the `›` line in an ANSI-styled capture; its dim placeholder
 //! marks an empty composer without depending on placeholder wording.
-//! [`pane_has_draft_for_socket`] returns `None` when capture or layout cannot be parsed;
-//! callers then use `session.updated_at` as the fallback.
+//! [`pane_has_draft_for_socket`] returns `None` when capture or layout cannot be parsed.
+//! The active-session probe then falls back to `session.updated_at`; `agent close`
+//! refuses an unrecognized capture unless `--force` is used.
 
 use crate::commands::agent::types::Engine;
 use crate::infra::tmux;

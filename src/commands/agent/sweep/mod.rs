@@ -517,7 +517,7 @@ fn signal_session<S: SignalSender + GracefulQuitRequester>(
         && let Some(tmux_info) = session.tmux_info.as_ref()
     {
         let pane_id = &tmux_info.pane_id;
-        match sender.request_and_wait_for_socket(tmux_info.socket_path.as_deref(), pane_id, pid) {
+        match sender.request_and_wait(tmux_info.socket_path.as_deref(), pane_id, pid) {
             Ok(true) => return Ok(ShutdownOutcome::Exited),
             Ok(false) => {
                 tracing::info!(
@@ -799,7 +799,7 @@ mod tests {
 
         (
             report,
-            sender.ctrl_d_socket_calls.borrow().clone(),
+            sender.ctrl_d_calls.borrow().clone(),
             sender.calls.borrow().clone(),
             reloaded.status,
             reloaded.sweep_signaled,

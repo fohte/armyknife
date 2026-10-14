@@ -351,11 +351,7 @@ impl CloseRuntime for LiveCloseRuntime {
     }
 
     fn request_graceful_quit(&self, tmux_info: &TmuxInfo, pid: u32) -> io::Result<bool> {
-        LibcSignalSender.request_and_wait_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-            pid,
-        )
+        LibcSignalSender.request_and_wait(tmux_info.socket_path.as_deref(), &tmux_info.pane_id, pid)
     }
 
     fn send_sigterm(&self, pid: u32) -> io::Result<()> {

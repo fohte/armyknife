@@ -622,14 +622,15 @@ async fn collect_worktrees(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::types::SessionStatus;
+    use crate::commands::agent::types::{SessionStatus, TmuxInfo};
     use crate::shared::active_session::NoDraftProbe;
     use crate::shared::testing::TestRepo;
-    use chrono::Utc;
+    use chrono::{DateTime, TimeDelta, Utc};
     use indoc::indoc;
     use rstest::rstest;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::{cell::RefCell, time::Duration};
 
     #[test]
     fn agent_clean_accepts_worktree_cleanup_options() {
@@ -1057,6 +1058,85 @@ mod tests {
 
         assert_eq!(to_delete.len(), 1);
         assert!(to_keep.is_empty());
+    }
+
+    struct DraftOnRecordedSocket {
+        observed_socket_paths: RefCell<Vec<Option<String>>>,
+    }
+
+    impl DraftProbe for DraftOnRecordedSocket {
+        fn draft_observed_at(
+            &self,
+            session: &Session,
+            now: DateTime<Utc>,
+        ) -> Option<DateTime<Utc>> {
+            let socket_path = session
+                .tmux_info
+                .as_ref()
+                .and_then(|tmux_info| tmux_info.socket_path.clone());
+            self.observed_socket_paths
+                .borrow_mut()
+                .push(socket_path.clone());
+            (socket_path.as_deref() == Some("/tmp/armyknife-test/clean.sock")).then_some(now)
+        }
+    }
+
+    #[test]
+    fn protection_keeps_stopped_worktree_with_draft_on_recorded_server() {
+        let wt_path = PathBuf::from("/tmp/wt-draft");
+        let mut to_delete = vec![make_clean_info(
+            "wt-draft",
+            wt_path.clone(),
+            "example/wt-draft",
+            MergeStatus::Merged {
+                reason: "merged".to_string(),
+            },
+        )];
+        let mut to_keep = Vec::new();
+
+        let mut session = make_session_at("drafted-session", SessionStatus::Stopped, wt_path);
+        let old = Utc::now() - TimeDelta::hours(1);
+        session.created_at = old;
+        session.updated_at = old;
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "work".to_string(),
+            window_name: "agent".to_string(),
+            window_index: 0,
+            pane_id: "%7".to_string(),
+            socket_path: Some("/tmp/armyknife-test/clean.sock".to_string()),
+        });
+        let sessions = vec![session];
+        let probe = DraftOnRecordedSocket {
+            observed_socket_paths: RefCell::new(Vec::new()),
+        };
+
+        protect_active_worktrees(
+            &mut to_delete,
+            &mut to_keep,
+            &sessions,
+            Duration::from_secs(60),
+            &probe,
+        );
+
+        let actual = (
+            to_delete
+                .iter()
+                .map(|info| info.wt.name.clone())
+                .collect::<Vec<_>>(),
+            to_keep
+                .iter()
+                .map(|info| (info.wt.name.clone(), info.has_active_session))
+                .collect::<Vec<_>>(),
+            probe.observed_socket_paths.borrow().clone(),
+        );
+        assert_eq!(
+            actual,
+            (
+                Vec::<String>::new(),
+                vec![("wt-draft".to_string(), true)],
+                vec![Some("/tmp/armyknife-test/clean.sock".to_string())],
+            )
+        );
     }
 
     #[rstest]

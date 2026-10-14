@@ -411,11 +411,13 @@ pub fn focus_pane(pane_id: &str) -> Result<()> {
 }
 
 /// Returns the current command running in the pane (e.g., `zsh`, `nvim`).
+#[deprecated(note = "Use get_pane_current_command_for_socket for stored session panes")]
 pub fn get_pane_current_command(pane_id: &str) -> Option<String> {
     query_pane_value(pane_id, "#{pane_current_command}")
 }
 
 /// Kills the process in the pane and restarts it with `command`.
+#[deprecated(note = "Use respawn_pane_for_socket for stored session panes")]
 pub fn respawn_pane(pane_id: &str, command: &str) -> Result<()> {
     run_tmux(&["respawn-pane", "-k", "-t", pane_id, command])
 }
@@ -735,6 +737,7 @@ pub fn capture_pane(pane_id: &str) -> Option<String> {
 ///
 /// Thin wrapper over `tmux capture-pane -p -e -t <pane>`. Returns `None`
 /// under the same conditions as [`capture_pane`].
+#[deprecated(note = "Use capture_pane_with_escapes_for_socket for stored session panes")]
 pub fn capture_pane_with_escapes(pane_id: &str) -> Option<String> {
     run_tmux_output(&["capture-pane", "-p", "-e", "-t", pane_id]).ok()
 }

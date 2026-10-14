@@ -212,8 +212,7 @@ fn wake_with(host: &dyn Host, session_id: &str) -> Result<Option<String>> {
     });
     check_pane_matches_target(recorded.as_deref(), session_id)?;
 
-    let pane_id = &tmux_info.pane_id;
-    if let Some(name) = respawn_unless_awake(host, policy, &sessions_dir, &session, pane_id)? {
+    if let Some(name) = respawn_unless_awake(host, policy, &sessions_dir, &session, tmux_info)? {
         return Ok(Some(name));
     }
     policy.await_awake(host, session_id)
@@ -237,16 +236,14 @@ fn respawn_unless_awake(
     policy: &dyn EnginePolicy,
     sessions_dir: &Path,
     session: &Session,
-    pane_id: &str,
+    tmux_info: &crate::commands::agent::types::TmuxInfo,
 ) -> Result<Option<String>> {
     let _lock = store::lock_session_for_update(sessions_dir, &session.session_id)?;
     if let Some(name) = policy.already_awake(host, &session.session_id) {
         return Ok(Some(name));
     }
-    let socket_path = session
-        .tmux_info
-        .as_ref()
-        .and_then(|tmux_info| tmux_info.socket_path.as_deref());
+    let socket_path = tmux_info.socket_path.as_deref();
+    let pane_id = &tmux_info.pane_id;
     let respawned_at = host.pane_option(socket_path, pane_id, RESPAWNED_AT_OPTION);
     if respawned_recently(respawned_at.as_deref(), host.now_unix_secs()) {
         return Ok(None);
@@ -718,8 +715,18 @@ mod tests {
         engine: Engine,
     ) -> std::result::Result<Option<String>, String> {
         let session = session(engine, SessionStatus::Paused);
-        respawn_unless_awake(host, policy_for(engine), host.dir.path(), &session, PANE_ID)
-            .map_err(|e| e.to_string())
+        let tmux_info = session
+            .tmux_info
+            .as_ref()
+            .expect("test session has tmux info");
+        respawn_unless_awake(
+            host,
+            policy_for(engine),
+            host.dir.path(),
+            &session,
+            tmux_info,
+        )
+        .map_err(|e| e.to_string())
     }
 
     #[rstest]
