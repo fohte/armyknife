@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use super::super::progress::{
-    FetchedDelegate, FetchedProgress, ProgressFetchScope, ProgressRow, ProgressSelectionKey,
+    FetchedProgress, ProgressFetchScope, ProgressRow, ProgressSelectionKey,
     build_task_progress_rows, refresh_task_rows_from_sessions, table_selection_index,
 };
 use super::super::progress_batches::{
@@ -69,14 +69,10 @@ impl App {
                     same_implementation_scope(cached.request_scope.as_ref(), request_scope.as_ref())
                 });
                 let cached_implementation =
-                    reusable_cache.and_then(|cached| cached.implementation.as_ref());
-                let mut implementation = if includes_fetched_progress {
-                    progress
-                        .implementation
-                        .or_else(|| cached_implementation.cloned())
-                } else {
-                    None
-                };
+                    reusable_cache.and_then(|cached| cached.implementation.clone());
+                let implementation = includes_fetched_progress
+                    .then(|| progress.implementation.or(cached_implementation))
+                    .flatten();
                 let mut delegated = if includes_fetched_progress {
                     progress
                         .delegated
@@ -105,18 +101,6 @@ impl App {
                             lookup_unavailable: false,
                         });
                     }
-                }
-                if let (Some(implementation), Some(cached_implementation), Some(cached)) = (
-                    implementation.as_mut(),
-                    cached_implementation,
-                    reusable_cache,
-                ) {
-                    delegated.extend(self.restore_missing_cached_delegates(
-                        implementation,
-                        cached_implementation,
-                        cached,
-                        &delegated,
-                    ));
                 }
                 if let Some(cached) = reusable_cache {
                     delegated.sort_by_key(|delegate| {
@@ -172,31 +156,6 @@ impl App {
         self.cached_progress(session_id)
             .map(|snapshot| snapshot.rows.clone())
             .unwrap_or_default()
-    }
-
-    fn restore_missing_cached_delegates(
-        &self,
-        implementation: &mut ImplementationPlan,
-        cached_implementation: &ImplementationPlan,
-        cached: &CachedProgress,
-        current_delegates: &[FetchedDelegate],
-    ) -> Vec<FetchedDelegate> {
-        let current_delegate_ids = current_delegates
-            .iter()
-            .map(|delegate| delegate.session.session_id.as_str())
-            .collect::<Vec<_>>();
-        let missing_cached_sessions = cached
-            .delegated_sessions
-            .iter()
-            .filter(|session| {
-                self.session_by_id(&session.session_id).is_none()
-                    && !current_delegate_ids.contains(&session.session_id.as_str())
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-
-        implementation
-            .restore_cached_unmatched_delegates(cached_implementation, &missing_cached_sessions)
     }
 
     fn refresh_local_progress(

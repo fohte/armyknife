@@ -13,8 +13,6 @@ use super::progress::{
     delegate_row_is_displayable, has_delegated_descendant, pr_progress_row, work_progress_row,
 };
 
-mod restore_cached;
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ImplementationPlan {
     batches: Vec<ImplementationBatch>,
