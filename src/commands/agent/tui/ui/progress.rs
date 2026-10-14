@@ -11,6 +11,8 @@ use crate::commands::agent::tui::{
     progress::{PrProgressRow, ProgressMark, ProgressRow, WorkProgressRow, work_row_count},
 };
 
+use super::helpers::DIM_FG;
+
 pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
     let selected = app.selected_session();
     let title = selected
@@ -26,7 +28,7 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         .border_style(Style::default().fg(if app.progress_focused {
             Color::Cyan
         } else {
-            Color::DarkGray
+            DIM_FG
         }))
         .title(title);
     let inner = block.inner(area);
@@ -34,15 +36,14 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
 
     let Some(selected) = selected else {
         frame.render_widget(
-            Paragraph::new("No session selected").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("No session selected").style(Style::default().fg(DIM_FG)),
             inner,
         );
         return;
     };
     if app.progress_session_id.as_deref() != Some(selected.session_id.as_str()) {
         frame.render_widget(
-            Paragraph::new("Loading delegated progress...")
-                .style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("Loading delegated progress...").style(Style::default().fg(DIM_FG)),
             inner,
         );
         return;
@@ -60,7 +61,7 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         .collect::<Vec<_>>();
     if work_row_count == 0 {
         frame.render_widget(
-            Paragraph::new("No progress available").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("No progress available").style(Style::default().fg(DIM_FG)),
             inner,
         );
         return;
@@ -115,12 +116,12 @@ pub(super) fn render_progress(frame: &mut Frame, area: Rect, app: &mut App) {
         render_pr_rows(frame, rows_area, app);
     } else if let Some(error) = app.progress_error.as_deref() {
         frame.render_widget(
-            Paragraph::new(error).style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new(error).style(Style::default().fg(DIM_FG)),
             rows_area,
         );
     } else {
         frame.render_widget(
-            Paragraph::new("No delegated sessions").style(Style::default().fg(Color::DarkGray)),
+            Paragraph::new("No delegated sessions").style(Style::default().fg(DIM_FG)),
             rows_area,
         );
     }
@@ -187,10 +188,7 @@ fn render_work_row(
     }
     if let Some(note) = row.note.as_deref() {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            note.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
+        spans.push(Span::styled(note.to_string(), Style::default().fg(DIM_FG)));
     }
     let background = if selected {
         if app.progress_focused {
@@ -221,7 +219,7 @@ fn render_stage_header(frame: &mut Frame, area: Rect, width: u16) {
         Cell::from("CI"),
         Cell::from("merge"),
     ])
-    .style(Style::default().fg(Color::DarkGray));
+    .style(Style::default().fg(DIM_FG));
     let table = Table::new(std::iter::empty::<Row<'_>>(), stage_widths())
         .header(header)
         .column_spacing(1);
@@ -312,7 +310,7 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
             } else {
                 cells.extend((0..5).map(|_| Cell::from("")));
             }
-            Row::new(cells).style(Style::default().fg(Color::DarkGray))
+            Row::new(cells).style(Style::default().fg(DIM_FG))
         }
         ProgressRow::BatchHeader {
             title,
@@ -333,7 +331,7 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(DIM_FG))
         }
         ProgressRow::UnmatchedDelegatesHeader { collapsed } => {
             let disclosure = if *collapsed { "▸" } else { "▾" };
@@ -345,11 +343,11 @@ fn checklist_table_row(row: &ProgressRow) -> Row<'static> {
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(DIM_FG))
         }
         ProgressRow::ChecklistPullRequest { row, .. } => pr_table_row_with_indent(row, "    "),
         ProgressRow::PlannedPullRequest { title, .. } => Row::new(vec![
-            Cell::from(format!("    ○ {title}")).style(Style::default().fg(Color::DarkGray)),
+            Cell::from(format!("    ○ {title}")).style(Style::default().fg(DIM_FG)),
             Cell::from(""),
             Cell::from(""),
             Cell::from(""),
@@ -404,7 +402,7 @@ fn mark_style(mark: ProgressMark) -> Style {
         ProgressMark::User => Color::Yellow,
         ProgressMark::Working => Color::Green,
         ProgressMark::Waiting => Color::Cyan,
-        ProgressMark::NotStarted => Color::DarkGray,
+        ProgressMark::NotStarted => DIM_FG,
     };
     Style::default().fg(color)
 }
@@ -549,6 +547,28 @@ mod tests {
                 "│No delegated sessions",
             ],
         );
+    }
+
+    #[test]
+    fn renders_unstarted_marks_and_notes_with_palette_independent_dim_color() {
+        let mut app = App::with_sessions(vec![create_test_session("selected")]);
+        app.progress_session_id = Some("selected".to_string());
+        app.progress_rows = vec![ProgressRow::Work(WorkProgressRow {
+            session_id: "selected".to_string(),
+            role: "builder".to_string(),
+            mark: ProgressMark::NotStarted,
+            status_label: None,
+            note: Some("detail".to_string()),
+            pane_id: None,
+        })];
+
+        let mut terminal = Terminal::new(TestBackend::new(40, 3)).unwrap();
+        terminal
+            .draw(|frame| render_progress(frame, frame.area(), &mut app))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!([buffer[(3, 1)].fg, buffer[(13, 1)].fg], [DIM_FG, DIM_FG],);
     }
 
     #[test]

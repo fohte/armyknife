@@ -3,11 +3,13 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::ListItem;
 
 use crate::commands::agent::types::{DisplayStatus, Session};
+
+use super::ui::{DIM_FG, status_color};
 
 #[cfg(test)]
 use super::worktree::canonicalize_or_self;
@@ -82,19 +84,6 @@ fn short_label(session: &Session) -> String {
         .unwrap_or_else(|| session.cwd.display().to_string())
 }
 
-fn status_color(status: DisplayStatus) -> Color {
-    match status {
-        DisplayStatus::Running => Color::Green,
-        DisplayStatus::WaitingInput => Color::Yellow,
-        DisplayStatus::Background => Color::Cyan,
-        DisplayStatus::Failed => Color::Red,
-        DisplayStatus::Paused => Color::Indexed(245),
-        DisplayStatus::Stopped | DisplayStatus::UnreadStopped | DisplayStatus::Ended => {
-            Color::DarkGray
-        }
-    }
-}
-
 /// Renders one session-child row: `    <connector> <status> <label>  <time-ago>`.
 /// The leading spaces align the connector under the `▎` bar on the parent
 /// worktree row's second line.
@@ -105,7 +94,7 @@ pub fn create_session_child_list_item(
     let connector = if child.is_last { "└─" } else { "├─" };
     let symbol = child.display_symbol();
     let s_style = Style::default().fg(status_color(child.display_status));
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(DIM_FG);
     let time_ago = format_relative_time(child.updated_at, now);
 
     let line = Line::from(vec![
@@ -147,6 +136,7 @@ pub(super) fn format_relative_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> Str
 mod tests {
     use super::*;
     use crate::commands::agent::types::TmuxInfo;
+    use ratatui::{Terminal, backend::TestBackend, widgets::List};
     use rstest::{fixture, rstest};
     use std::collections::BTreeSet;
     use std::path::PathBuf;
@@ -256,6 +246,34 @@ mod tests {
                 &canonical_pairs(&sessions),
             ),
             Vec::<SessionChild>::new(),
+        );
+    }
+
+    #[test]
+    fn stopped_child_rows_use_palette_independent_dim_color() {
+        let now = Utc::now();
+        let child = SessionChild {
+            session_id: "fixture".to_string(),
+            pane_id: None,
+            display_status: DisplayStatus::Stopped,
+            updated_at: now,
+            label: "worker".to_string(),
+            is_last: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(32, 1)).unwrap();
+        terminal
+            .draw(|frame| {
+                frame.render_widget(
+                    List::new(vec![create_session_child_list_item(&child, now)]),
+                    frame.area(),
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(
+            [buffer[(4, 0)].fg, buffer[(7, 0)].fg, buffer[(17, 0)].fg],
+            [DIM_FG, DIM_FG, DIM_FG],
         );
     }
 

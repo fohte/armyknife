@@ -15,7 +15,7 @@ use crate::commands::agent::user_turn::user_turns;
 
 use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
-use super::helpers::{count_statuses, truncate};
+use super::helpers::{DIM_FG, count_statuses, truncate};
 use super::session_content::{minimum_two_pane_width, render_main_list};
 
 const HEADER_HEIGHT: u16 = 1;
@@ -146,7 +146,7 @@ fn render_header(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" · "),
-        Span::styled(idle_text, Style::default().fg(Color::DarkGray)),
+        Span::styled(idle_text, Style::default().fg(DIM_FG)),
     ]);
 
     frame.render_widget(Paragraph::new(line), area);
@@ -246,10 +246,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     spans.push(Span::raw(padding));
-    spans.push(Span::styled(
-        count_str,
-        Style::default().fg(Color::DarkGray),
-    ));
+    spans.push(Span::styled(count_str, Style::default().fg(DIM_FG)));
 
     let search_text = Line::from(spans);
     let search = Paragraph::new(search_text);
@@ -260,7 +257,7 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 mod tests {
     use super::*;
     use crate::commands::agent::tui::ui::test_support::{
-        create_test_session, render_to_string, render_to_string_with, wt_row,
+        create_test_session, render_buffer, render_to_string, render_to_string_with, wt_row,
     };
     use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
     use rstest::rstest;
@@ -282,13 +279,19 @@ mod tests {
         stopped.status = SessionStatus::Stopped;
 
         let sessions = vec![running, waiting, paused, stopped];
+        let buffer = render_buffer(&sessions, Some(0), now, 80, 20);
         let output = render_to_string(&sessions, Some(0), now, 80, 20);
         let header_line = output.lines().next().unwrap();
+        let idle_start = header_line
+            .find("2 idle")
+            .map(|byte_index| header_line[..byte_index].chars().count() as u16)
+            .unwrap();
 
         assert_eq!(
             header_line,
             " agent watch                                    1 needs you · 1 running · 2 idle"
         );
+        assert_eq!(buffer[(idle_start, 0)].fg, DIM_FG);
     }
 
     #[test]

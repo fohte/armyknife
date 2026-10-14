@@ -8,7 +8,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 /// headers, breadcrumbs, ...). A fixed 256-color grayscale index rather than
 /// the ANSI-16 `Color::Gray`/`Color::DarkGray` names, whose actual rendered
 /// brightness depends on the terminal's configurable palette.
-pub(super) const DIM_FG: Color = Color::Indexed(245);
+pub(in crate::commands::agent::tui) const DIM_FG: Color = Color::Indexed(245);
 
 /// Distance beyond which a kin relationship no longer gets a distinct
 /// color and renders with the normal (non-kin) title style, e.g. a
@@ -69,7 +69,7 @@ pub(super) fn kin_color(direction: KinDirection, distance: usize) -> Option<Colo
 /// Amber for waiting-for-user, green for running, cyan for a session whose
 /// main loop is idle but a background task is still in flight, and a single
 /// neutral color for every idle status (paused/stopped/ended).
-pub(super) fn status_color(status: DisplayStatus) -> Color {
+pub(in crate::commands::agent::tui) fn status_color(status: DisplayStatus) -> Color {
     match status {
         DisplayStatus::Running => Color::Green,
         DisplayStatus::WaitingInput => Color::Yellow,

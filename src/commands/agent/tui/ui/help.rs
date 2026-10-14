@@ -8,8 +8,10 @@ use ratatui::{
 
 use crate::commands::agent::tui::app::{App, AppMode, View};
 
+use super::helpers::DIM_FG;
+
 pub(super) fn render_help_lines(frame: &mut Frame, area: Rect, lines: Vec<Line<'static>>) {
-    let help = Paragraph::new(Text::from(lines)).style(Style::default().fg(Color::DarkGray));
+    let help = Paragraph::new(Text::from(lines)).style(Style::default().fg(DIM_FG));
     frame.render_widget(help, area);
 }
 
@@ -232,7 +234,7 @@ fn build_full_session_list_help_lines(bold: Style) -> Vec<Line<'static>> {
 
 fn build_clean_help_lines(app: &App) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
-    let dim = Style::default().fg(Color::DarkGray);
+    let dim = Style::default().fg(DIM_FG);
     let warn = Style::default()
         .fg(Color::Yellow)
         .add_modifier(Modifier::BOLD);
