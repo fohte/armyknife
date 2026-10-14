@@ -1158,6 +1158,65 @@ mod tests {
     }
 
     #[rstest]
+    fn keeps_pending_task_ids_when_tmux_server_query_fails(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        let mut session = make_session("sess-pending-query-error", SessionStatus::Stopped, old);
+        session
+            .pending_bg_task_ids
+            .insert("bg-query-pending".to_string());
+        session
+            .pending_agent_task_ids
+            .insert("agent-query-pending".to_string());
+        session.tmux_info = Some(super::super::types::TmuxInfo {
+            session_name: "fixture-session".to_string(),
+            window_name: "fixture-window".to_string(),
+            window_index: 0,
+            pane_id: "%812347".to_string(),
+            socket_path: Some("/tmp/armyknife-test/pending.sock".to_string()),
+        });
+        save_session_to(&test_dir.path, &session).expect("save");
+
+        let sender = RecordingSender::default();
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &FakeProbe::default().with_failed_queries(&["sess-pending-query-error"]),
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep should keep pending task state after a server query failure");
+        let reloaded = store::load_session_from(&test_dir.path, "sess-pending-query-error")
+            .expect("load")
+            .expect("session exists");
+
+        assert_eq!(
+            (
+                report,
+                reloaded.status,
+                reloaded.pending_bg_task_ids,
+                reloaded.pending_agent_task_ids,
+                reloaded.sweep_signaled,
+                sender.calls.borrow().clone(),
+            ),
+            (
+                SweepReport {
+                    scanned: 1,
+                    paused: 0,
+                    signaled: 0,
+                    waiting: 0,
+                    active: 1,
+                },
+                SessionStatus::Stopped,
+                std::collections::BTreeSet::from(["bg-query-pending".to_string()]),
+                std::collections::BTreeSet::from(["agent-query-pending".to_string()]),
+                false,
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[rstest]
     fn esrch_does_not_confirm_paused(test_dir: TestDir) {
         // resolve_pid still finds a pid, but the SIGTERM races with the
         // process actually exiting and comes back ESRCH. Confirmation is

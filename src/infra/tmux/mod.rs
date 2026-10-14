@@ -25,6 +25,7 @@ pub(crate) use crit_pane::{
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;
 pub use pane_info::get_pane_info_by_pane_id;
+pub(crate) use server::PaneLiveness;
 pub use server::{
     current_socket_path, get_pane_pid_for_socket, is_pane_alive_for_socket,
     list_all_pane_ids_for_socket, send_sigterm_to_pane_for_socket,
@@ -152,6 +153,18 @@ fn query_tmux_value(format_string: &str) -> Option<String> {
     }
 
     run_tmux_output(&["display-message", "-p", format_string]).ok()
+}
+
+/// Checks whether the caller-selected tmux server is available.
+#[deprecated(note = "Use list_all_pane_ids_for_socket for stored session servers")]
+pub fn is_server_available() -> bool {
+    run_tmux_output(&["list-sessions"]).is_ok()
+}
+
+/// Checks whether a pane exists on the tmux server selected by the caller.
+#[deprecated(note = "Use is_pane_alive_for_socket for stored session liveness")]
+pub fn is_pane_alive(pane_id: &str) -> bool {
+    run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()
 }
 
 /// Query a tmux value for a specific pane using display-message with a format string.
@@ -513,19 +526,6 @@ pub fn refresh_status() -> Result<()> {
     run_tmux(&["refresh-client", "-S"])
 }
 
-/// Check if the tmux server is available (running and responsive).
-pub fn is_server_available() -> bool {
-    run_tmux_output(&["list-sessions"]).is_ok()
-}
-
-/// Checks if a tmux pane with the given pane_id exists.
-/// Returns false if pane doesn't exist OR if tmux server is not available.
-/// Caller should check is_server_available() first if distinction matters.
-pub fn is_pane_alive(pane_id: &str) -> bool {
-    // Use list-panes to check if pane exists (returns error if pane not found)
-    run_tmux_output(&["list-panes", "-t", pane_id]).is_ok()
-}
-
 /// Returns the set of all currently alive pane IDs.
 /// Uses a single `tmux list-panes -a` call instead of per-pane queries.
 ///
@@ -663,8 +663,8 @@ pub fn get_pane_pid(pane_id: &str) -> Option<u32> {
         .ok()
 }
 
-/// Sends SIGTERM to the process running in the given tmux pane.
-/// No-op if the pane doesn't exist or the PID can't be resolved.
+/// Sends SIGTERM to the process running in a pane on the caller-selected server.
+#[deprecated(note = "Use send_sigterm_to_pane_for_socket for stored session panes")]
 pub fn send_sigterm_to_pane(pane_id: &str) {
     if let Some(pid) = get_pane_pid(pane_id) {
         // SAFETY: libc::kill with SIGTERM is safe for any valid PID.

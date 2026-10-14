@@ -353,13 +353,17 @@ fn process_hook_event_impl_with_instruction(
         );
     }
 
-    let tmux_info = pane_info.map(|info| TmuxInfo {
-        session_name: info.session_name,
-        window_name: info.window_name,
-        window_index: info.window_index,
-        pane_id: info.pane_id,
-        socket_path: tmux::current_socket_path(),
-    });
+    let tmux_info = if let Some(info) = pane_info {
+        Some(TmuxInfo {
+            session_name: info.session_name,
+            window_name: info.window_name,
+            window_index: info.window_index,
+            pane_id: info.pane_id,
+            socket_path: tmux::current_socket_path()?,
+        })
+    } else {
+        None
+    };
 
     let mut status = determine_status(event, &input);
     let may_contain_work_type = work_type::may_contain_work_type(event, &input);

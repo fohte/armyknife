@@ -2,10 +2,10 @@ use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
-};
+use std::{cell::RefCell, collections::HashSet};
+
+#[cfg(test)]
+use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -626,16 +626,17 @@ where
     F: FnMut(Option<&str>) -> tmux::Result<HashSet<String>>,
     G: Fn(&Path) -> bool,
 {
-    let cache = RefCell::new(HashMap::<Option<String>, Option<HashSet<String>>>::new());
+    let cache = RefCell::new(tmux::PaneLiveness::default());
     let list_panes = RefCell::new(list_panes);
     let is_pane_alive = |info: &super::types::TmuxInfo| {
-        let socket_path = info.socket_path.clone();
         cache
             .borrow_mut()
-            .entry(socket_path.clone())
-            .or_insert_with(|| (list_panes.borrow_mut())(socket_path.as_deref()).ok())
-            .as_ref()
-            .map(|panes| panes.contains(&info.pane_id))
+            .cache_socket(info.socket_path.as_deref(), |socket_path| {
+                (list_panes.borrow_mut())(socket_path)
+            });
+        cache
+            .borrow()
+            .is_alive(info.socket_path.as_deref(), &info.pane_id)
     };
     cleanup_stale_sessions_in(dir, is_pane_alive, cwd_exists)
 }

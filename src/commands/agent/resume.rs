@@ -111,7 +111,7 @@ fn run_codex_resume(
     let status = command
         .status()
         .map_err(|error| anyhow::anyhow!("Failed to start codex: {error}"))?;
-    let pane_id = current_tmux_info().map(|info| info.pane_id);
+    let pane_id = current_tmux_info().ok().flatten().map(|info| info.pane_id);
     finish_codex_resume(
         status,
         session_id,
@@ -152,7 +152,7 @@ fn run_codex_resume_with_status(
     launch: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
     let sessions_dir = store::sessions_dir()?;
-    run_codex_resume_with_status_in(&sessions_dir, session_id, current_tmux_info(), launch)
+    run_codex_resume_with_status_in(&sessions_dir, session_id, current_tmux_info()?, launch)
 }
 
 fn run_codex_resume_with_status_in(
@@ -180,14 +180,17 @@ fn run_codex_resume_with_status_in(
 /// Finds the pane that invoked `a agent resume`, if the command runs in tmux.
 /// The stored pane must follow the resumed process so stale-pane cleanup does
 /// not remove a session merely because its old pane was replaced.
-fn current_tmux_info() -> Option<TmuxInfo> {
-    tmux::get_pane_info_by_pid(std::process::id()).map(|pane| TmuxInfo {
+fn current_tmux_info() -> Result<Option<TmuxInfo>> {
+    let Some(pane) = tmux::get_pane_info_by_pid(std::process::id()) else {
+        return Ok(None);
+    };
+    Ok(Some(TmuxInfo {
         session_name: pane.session_name,
         window_name: pane.window_name,
         window_index: pane.window_index,
         pane_id: pane.pane_id,
-        socket_path: tmux::current_socket_path(),
-    })
+        socket_path: tmux::current_socket_path()?,
+    }))
 }
 
 /// Marks an ended or paused Codex session as stopped before launching

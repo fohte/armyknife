@@ -4,7 +4,7 @@
 //! need to clean up related resources. This module provides the shared logic to
 //! ensure consistent cleanup regardless of the entry point.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::commands::agent::store;
@@ -209,14 +209,14 @@ pub fn cleanup_sessions_in_path(worktree_path: &Path) -> anyhow::Result<usize> {
     ))
 }
 
-type AlivePanesBySocket = HashMap<Option<String>, Option<HashSet<String>>>;
+type AlivePanesBySocket = tmux::PaneLiveness;
 
 fn cache_alive_panes_by_socket(
     sessions: &[Session],
     worktree_path: &Path,
     mut list_panes: impl FnMut(Option<&str>) -> anyhow::Result<HashSet<String>>,
 ) -> AlivePanesBySocket {
-    let mut alive_panes_by_socket = HashMap::new();
+    let mut alive_panes_by_socket = tmux::PaneLiveness::default();
 
     for socket_path in sessions
         .iter()
@@ -226,9 +226,7 @@ fn cache_alive_panes_by_socket(
         .filter_map(|session| session.tmux_info.as_ref())
         .map(|info| info.socket_path.clone())
     {
-        alive_panes_by_socket
-            .entry(socket_path.clone())
-            .or_insert_with(|| list_panes(socket_path.as_deref()).ok());
+        alive_panes_by_socket.cache_socket(socket_path.as_deref(), &mut list_panes);
     }
 
     alive_panes_by_socket
@@ -351,9 +349,8 @@ fn cleanup_sessions(
                 && let Some(tmux_info) = session.tmux_info.as_ref()
                 && context
                     .alive_panes_by_socket
-                    .get(&tmux_info.socket_path)
-                    .and_then(Option::as_ref)
-                    .is_some_and(|panes| panes.contains(&tmux_info.pane_id))
+                    .is_alive(tmux_info.socket_path.as_deref(), &tmux_info.pane_id)
+                    == Some(true)
             {
                 send_sigterm(tmux_info.socket_path.as_deref(), &tmux_info.pane_id);
             }
@@ -539,7 +536,7 @@ mod tests {
             make_session("current-session", &worktree_path, Engine::Codex),
             make_session("other-session", &worktree_path, Engine::Codex),
         ];
-        let alive_panes_by_socket = HashMap::new();
+        let alive_panes_by_socket = tmux::PaneLiveness::default();
         let events = RefCell::new(Vec::new());
 
         let cleaned = cleanup_sessions_with_deferred_archive(
