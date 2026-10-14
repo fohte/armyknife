@@ -15,8 +15,8 @@ use crate::commands::agent::user_turn::UserTurn;
 use crate::shared::config::AgentWorkTypeConfig;
 
 use super::super::helpers::{
-    DIM_FG, get_session_info, get_title_display_name_fallback, highlight_matches, kin_color,
-    status_color, truncate,
+    DIM_FG, REPO_COLUMN_WIDTH, get_session_info, get_title_display_name_fallback,
+    highlight_matches, kin_color, status_color, truncate,
 };
 use super::task_number::task_number_style;
 
@@ -28,8 +28,6 @@ const MARKER_WIDTH: usize = 1;
 /// Status glyph (1 col, `session.display_symbol()` is always single-width)
 /// plus one space of padding before the repo column.
 const STATUS_COLUMN_WIDTH: usize = 2;
-/// Fixed width of the repo column, left-aligned and space-padded.
-const REPO_COLUMN_WIDTH: usize = 16;
 /// Fixed width of the task number column.
 pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 /// Minimum width of the work type icon plus its trailing gap. The icon portion
@@ -186,7 +184,7 @@ fn header_style(kind: Section) -> Style {
 }
 
 /// `◐` shares YOUR TURN's red so the user's own turns stand out in the tree.
-fn mark_glyph(mark: TaskMark, session: &Session) -> (&'static str, Color) {
+pub fn mark_glyph(mark: TaskMark, session: &Session) -> (&'static str, Color) {
     match mark {
         TaskMark::Done => ("✓", DIM_FG),
         TaskMark::UserTurn => ("◐", Color::Red),

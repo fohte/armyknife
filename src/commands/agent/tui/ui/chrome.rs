@@ -339,7 +339,7 @@ mod tests {
         "  Tab: pane".to_string(),
     ])]
     #[case::progress_view(View::Session, false, true, vec![
-        " ?: keys   j/k: move   h/l: fold/unfold   Enter: toggle/open   Tab: pane   Esc/←: tasks   q: quit".to_string(),
+        " ?: keys   j/k: move   h/l: fold/unfold   Enter: toggle/focus   o: open PR   Tab: pane   Esc/←: tasks   q: quit".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,
