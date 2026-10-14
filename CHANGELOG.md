@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.421](https://github.com/fohte/armyknife/compare/v0.1.420...v0.1.421) (2026-10-14)
+
+
+### Bug Fixes
+
+* **agent:** check panes on recorded tmux servers ([#1177](https://github.com/fohte/armyknife/issues/1177)) ([9dcf67b](https://github.com/fohte/armyknife/commit/9dcf67be13211050071ced031818fd0491daa4e4))
+
 ## [0.1.420](https://github.com/fohte/armyknife/compare/v0.1.419...v0.1.420) (2026-10-14)
 
 
