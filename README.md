@@ -43,7 +43,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
 
-`agent.bg_task_reminder.timeout` is an optional duration such as `13m`; when omitted, background task reminders are disabled. `message` overrides the reminder text. Entries in `excluded_commands` are substring matches against the command line and skip the reminder for matching commands.
+`agent.bg_task_reminder.timeout` is an optional duration such as `17m`; when omitted, background task reminders are disabled. `message` overrides the reminder text. Entries in `excluded_commands` are substring matches against the command line and skip the reminder for matching commands.
 
 For editor autocompletion, add the following to the top of your config file:
 
@@ -487,7 +487,7 @@ For Claude Code background Bash commands, add this entry alongside the existing 
             "type": "command",
             "command": "a agent bg reminder-hook",
             "asyncRewake": true,
-            "timeout": 781
+            "timeout": 1080
           }
         ]
       }
@@ -496,7 +496,7 @@ For Claude Code background Bash commands, add this entry alongside the existing 
 }
 ```
 
-Set the hook timeout in seconds to a value longer than `agent.bg_task_reminder.timeout` (the example above is longer than the `13m` config example). The existing `a agent hook post-tool-use` registration records each background Bash task ID, and the `Stop` hook in [Setup](#setup) refreshes that list from Claude Code's task registry at each Stop event. Both hooks must be registered for reminders to work. When the task remains pending after the configured timeout, the hook exits with status `2` and writes the reminder to stderr.
+Set the hook timeout in seconds to a value longer than `agent.bg_task_reminder.timeout` (the example above uses 18 minutes for the 17-minute config example). The existing `a agent hook post-tool-use` registration records each background Bash task ID, and the `Stop` hook in [Setup](#setup) refreshes that list from Claude Code's task registry at each Stop event. Both hooks must be registered for reminders to work. When the task remains pending after the configured timeout, the hook exits with status `2` and writes the reminder to stderr.
 
 `a agent list --tmux` prints one next user action for a tmux status line and includes the session name at the end. The shared action order is `failed`, `crit`, `body`, user-state status names, `allow`, `ask`, then `merge`; configured status names are shown as labels. The oldest session update wins within each action. `waiting` and `done` statuses produce no user action.
 
