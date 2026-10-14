@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::client::GitHubClient;
 use super::error::{GitHubError, Result};
@@ -20,7 +20,7 @@ pub struct CreatePrParams {
 }
 
 /// PR state from GitHub API.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrState {
     Open,
     Closed,
@@ -28,7 +28,7 @@ pub enum PrState {
 }
 
 /// PR information from GitHub API.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrInfo {
     pub number: u64,
     pub title: String,
@@ -37,7 +37,7 @@ pub struct PrInfo {
 }
 
 /// Aggregated check status for a pull request's latest commit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrCiState {
     Waiting,
     InProgress,
@@ -46,7 +46,7 @@ pub enum PrCiState {
 }
 
 /// Pull request details used by the agent watch progress pane.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PrProgressInfo {
     pub pull_request: PrInfo,
     pub ci_state: PrCiState,

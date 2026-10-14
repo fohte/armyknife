@@ -461,6 +461,9 @@ mod tests {
     #[path = "progress.rs"]
     mod progress;
 
+    #[path = "progress_cache.rs"]
+    mod progress_cache;
+
     /// Counter to assign distinct timestamps to test sessions.
     /// Each call returns a progressively older timestamp, so sessions
     /// created first sort first (most recent updated_at).

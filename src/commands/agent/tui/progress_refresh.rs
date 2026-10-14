@@ -1,10 +1,12 @@
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
+
 use super::app::App;
 use super::event::EventHandler;
 use super::tq_snapshot::TqSnapshot;
 
-const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+pub(super) const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
 pub(super) struct ProgressRefreshSchedule {
     pub(super) in_flight: bool,
@@ -87,6 +89,11 @@ pub(super) fn start_progress_refresh(
     else {
         return false;
     };
+    let now = Utc::now();
+    if !app.progress_refresh_due(&session_id, now, PROGRESS_REFRESH_INTERVAL) {
+        return false;
+    }
+    app.mark_progress_refresh_started(&session_id, now);
     event_handler.start_progress_fetch(session_id, fetch_scope);
     true
 }

@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurn, user_turns};
 use crate::infra::github::PrProgressInfo;
@@ -20,7 +22,7 @@ pub(super) struct FetchedProgress {
     pub github_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct ProgressFetchScope {
     pub task_id: Option<String>,
     pub session_ids: Option<Vec<String>>,
@@ -34,7 +36,7 @@ pub(super) struct FetchedDelegate {
     pub lookup_unavailable: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum ProgressMark {
     Done,
     User,
@@ -55,7 +57,7 @@ impl ProgressMark {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct StageMarks {
     pub implementation: ProgressMark,
     pub diff_review: ProgressMark,
@@ -64,7 +66,7 @@ pub(super) struct StageMarks {
     pub merge: ProgressMark,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum ProgressRow {
     Work(WorkProgressRow),
     PullRequest(PrProgressRow),
@@ -152,22 +154,24 @@ impl ProgressRow {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct WorkProgressRow {
     pub session_id: String,
     pub role: String,
     pub mark: ProgressMark,
     pub status_label: Option<String>,
     pub note: Option<String>,
+    #[serde(skip)]
     pub pane_id: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) struct PrProgressRow {
     pub session_id: String,
     pub title: String,
     pub number: Option<u64>,
     pub url: Option<String>,
+    #[serde(skip)]
     pub pane_id: Option<String>,
     pub is_ended: bool,
     pub lookup_unavailable: bool,

@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{Result, TQ_COMMAND_TIMEOUT, TqClient, TqError, process};
 use crate::infra::external_tool::ExternalTool;
@@ -35,7 +35,7 @@ pub struct TqChecklistItem {
     pub children: Vec<TqChecklistItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 /// GitHub metadata linked from a tq task.
 pub struct TqGithubLink {

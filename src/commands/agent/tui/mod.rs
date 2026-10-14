@@ -169,6 +169,9 @@ const MAX_DRAIN_PER_ITERATION: usize = 100;
 /// 5. The merged reload + render happens once per iteration
 fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut app = App::new()?;
+    if let Err(error) = app.load_progress_cache_from_disk() {
+        tracing::warn!("failed to load progress cache: {error}");
+    }
     match tq_cache::load() {
         Ok(Some(snapshot)) => {
             app.set_tq_snapshot(snapshot);
