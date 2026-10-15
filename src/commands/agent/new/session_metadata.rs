@@ -48,6 +48,7 @@ fn record_from_env_in(
     if metadata.label.is_none()
         && metadata.work_type.is_none()
         && !metadata.is_delegated
+        && !metadata.launched_with_vibe
         && metadata.ancestor_session_ids.is_empty()
     {
         return Ok(());
@@ -62,6 +63,7 @@ struct SessionMetadata<'a> {
     label: Option<&'a str>,
     work_type: Option<&'a str>,
     is_delegated: bool,
+    launched_with_vibe: bool,
     ancestor_session_ids: Vec<String>,
 }
 
@@ -78,6 +80,7 @@ fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
         label: non_empty_env(env_vars, EnvVars::session_label_name()),
         work_type: non_empty_env(env_vars, EnvVars::session_work_type_name()),
         is_delegated: non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some(),
+        launched_with_vibe: non_empty_env(env_vars, EnvVars::session_vibe_launch_name()).is_some(),
         ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
             .map(parse_ancestor_session_ids)
             .unwrap_or_default(),
@@ -100,6 +103,7 @@ fn record_in(
         is_delegated: false,
         work_type_pinned: false,
         vibe_enabled: false,
+        launched_with_vibe: false,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: cwd.to_path_buf(),
@@ -134,6 +138,7 @@ fn record_in(
         session.work_type_pinned = true;
     }
     session.is_delegated |= metadata.is_delegated;
+    session.launched_with_vibe |= metadata.launched_with_vibe;
     if !metadata.ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = metadata.ancestor_session_ids;
     }
@@ -167,6 +172,7 @@ mod tests {
             work_type: Some("detected-skill".to_string()),
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -224,6 +230,7 @@ mod tests {
                 label: Some("explicit label"),
                 work_type,
                 is_delegated: false,
+                launched_with_vibe: false,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             },
         )
@@ -268,6 +275,7 @@ mod tests {
     #[rstest]
     #[case::kind_only(EnvVars::session_work_type_name(), "sample-skill")]
     #[case::delegated_only(EnvVars::session_delegated_name(), "1")]
+    #[case::vibe_launch_only(EnvVars::session_vibe_launch_name(), "1")]
     fn records_single_launch_metadata(
         sessions_dir: TempDir,
         #[case] key: &str,
@@ -316,8 +324,10 @@ mod tests {
         if key == EnvVars::session_work_type_name() {
             expected["work_type"] = json!(value);
             expected["work_type_pinned"] = json!(true);
-        } else {
+        } else if key == EnvVars::session_delegated_name() {
             expected["is_delegated"] = json!(true);
+        } else {
+            expected["launched_with_vibe"] = json!(true);
         }
         assert_eq!(actual, expected);
     }
@@ -372,6 +382,7 @@ mod tests {
                 label,
                 work_type,
                 is_delegated: false,
+                launched_with_vibe: false,
                 ancestor_session_ids: ancestors,
             },
         )
@@ -398,6 +409,7 @@ mod tests {
                 label: None,
                 work_type: None,
                 is_delegated: false,
+                launched_with_vibe: true,
                 ancestor_session_ids: vec!["parent".to_string()],
             },
         )
@@ -433,6 +445,7 @@ mod tests {
             (EnvVars::session_label_name(), "delegate label"),
             (EnvVars::session_work_type_name(), "sample-skill"),
             (EnvVars::session_delegated_name(), "1"),
+            (EnvVars::session_vibe_launch_name(), "1"),
             (EnvVars::ancestor_session_ids_name(), "root, parent"),
         ];
 
@@ -442,6 +455,7 @@ mod tests {
                 label: Some("delegate label"),
                 work_type: Some("sample-skill"),
                 is_delegated: true,
+                launched_with_vibe: true,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             }
         );

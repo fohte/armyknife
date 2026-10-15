@@ -49,10 +49,10 @@ pub fn run(cmd: &ResurrectCommands) -> Result<()> {
 
 /// Saves all pane session IDs to the state file.
 ///
-/// Format: session_name:window_index.pane_index<TAB>session_id<TAB>ancestor_session_ids<TAB>engine
+/// Format: session_name:window_index.pane_index<TAB>session_id<TAB>ancestor_session_ids<TAB>engine<TAB>launched_with_vibe
 /// This format uses pane position (session:window.pane) rather than pane_id
-/// because pane_id changes after tmux-resurrect restore. `ancestor_session_ids`
-/// and `engine` are read from the store JSON now, at save time, because a tmux server
+/// because pane_id changes after tmux-resurrect restore. `ancestor_session_ids`,
+/// `engine`, and `launched_with_vibe` are read from the store JSON now, at save time, because a tmux server
 /// restart can wipe that JSON (see `store::cleanup_stale_sessions`) before
 /// restore gets a chance to run.
 fn run_save(_args: &SaveArgs) -> Result<()> {
@@ -87,6 +87,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
             pane.option_value.map(|session_id| {
                 let ancestor_session_ids = load_ancestor_session_ids(&sessions_dir, &session_id);
                 let engine = load_engine(&sessions_dir, &session_id);
+                let launched_with_vibe = load_launched_with_vibe(&sessions_dir, &session_id);
                 (
                     pane.session_name,
                     pane.window_index,
@@ -94,6 +95,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
                     session_id,
                     ancestor_session_ids,
                     engine,
+                    launched_with_vibe,
                 )
             })
         })
@@ -135,9 +137,19 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
     )
 }
 
+/// Reads whether `session_id` was launched with `--vibe` from the store.
+fn load_launched_with_vibe(sessions_dir: &Path, session_id: &str) -> bool {
+    load_session_field(
+        sessions_dir,
+        session_id,
+        "agent.resurrect.save.vibe_launch_load_failed",
+        |s| s.launched_with_vibe,
+    )
+}
+
 /// Shared "read one field off the stored session, defaulting on a missing
 /// file, or on a read error (logged as `log_event`)" pattern behind
-/// `load_engine` and `load_ancestor_session_ids`.
+/// `load_engine`, `load_ancestor_session_ids`, and `load_launched_with_vibe`.
 fn load_session_field<T: Default>(
     sessions_dir: &Path,
     session_id: &str,
@@ -217,7 +229,9 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 
     let mut commands = Vec::new();
     let mut queued_count = 0;
-    for (pane_position, (session_id, ancestor_session_ids, engine)) in &pane_sessions {
+    for (pane_position, (session_id, ancestor_session_ids, engine, launched_with_vibe)) in
+        &pane_sessions
+    {
         let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "agent.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
@@ -244,6 +258,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
             session_id,
             ancestor_session_ids,
             engine,
+            *launched_with_vibe,
             pane_has_agent,
         ));
 
@@ -280,6 +295,7 @@ fn restore_commands_for_pane(
     session_id: &str,
     ancestor_session_ids: &[String],
     engine: Engine,
+    launched_with_vibe: bool,
     pane_has_agent: bool,
 ) -> Vec<Vec<String>> {
     let mut commands = vec![vec![
@@ -291,9 +307,13 @@ fn restore_commands_for_pane(
         session_id.to_string(),
     ]];
 
-    if let Some(command) =
-        resume_command_for(session_id, ancestor_session_ids, engine, pane_has_agent)
-    {
+    if let Some(command) = resume_command_for(
+        session_id,
+        ancestor_session_ids,
+        engine,
+        launched_with_vibe,
+        pane_has_agent,
+    ) {
         commands.push(vec![
             "send-keys".to_string(),
             "-t".to_string(),
@@ -321,12 +341,13 @@ fn restore_commands_for_pane(
 /// `ancestor_session_ids`, when non-empty, is passed via
 /// `--ancestor-session-ids` so `a agent resume` can set
 /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
-/// `engine` is passed explicitly because the store record may have been
-/// removed before restore runs.
+/// `engine` and `launched_with_vibe` are passed explicitly because the store
+/// record may have been removed before restore runs.
 fn resume_command_for(
     session_id: &str,
     ancestor_session_ids: &[String],
     engine: Engine,
+    launched_with_vibe: bool,
     pane_has_agent: bool,
 ) -> Option<String> {
     if pane_has_agent {
@@ -347,6 +368,9 @@ fn resume_command_for(
             .map(|cow| cow.into_owned())
             .unwrap_or_else(|_| joined);
         command.push_str(&format!(" --ancestor-session-ids {quoted_ancestors}"));
+    }
+    if launched_with_vibe {
+        command.push_str(" --launched-with-vibe");
     }
     Some(command)
 }
@@ -373,6 +397,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                launched_with_vibe: false,
                 is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
@@ -424,6 +449,20 @@ mod tests {
                 Vec::<String>::new()
             );
         }
+
+        #[test]
+        fn returns_vibe_launch_marker_recorded_on_the_session() {
+            let sessions_dir = TempDir::new().expect("temp dir");
+            let mut session = session_with_ancestors("sess-1", Vec::new());
+            session.launched_with_vibe = true;
+            store::save_session_to(sessions_dir.path(), &session).expect("save session");
+
+            let expected = true;
+            assert_eq!(
+                load_launched_with_vibe(sessions_dir.path(), "sess-1"),
+                expected
+            );
+        }
     }
 
     mod load_engine_tests {
@@ -441,6 +480,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                launched_with_vibe: false,
                 is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
@@ -494,11 +534,12 @@ mod tests {
         // A pane whose process tree already has a live claude process must
         // never be typed into; the resume command would land mid-conversation.
         #[rstest]
-        #[case::pane_has_claude("abc-123", &[], Engine::Claude, true, None)]
+        #[case::pane_has_claude("abc-123", &[], Engine::Claude, false, true, None)]
         #[case::pane_is_free_no_ancestors(
             "abc-123",
             &[],
             Engine::Claude,
+            false,
             false,
             Some("a agent resume abc-123 --engine claude".to_string())
         )]
@@ -507,12 +548,14 @@ mod tests {
             &["root-1".to_string(), "parent-1".to_string()],
             Engine::Claude,
             false,
+            false,
             Some("a agent resume abc-123 --engine claude --ancestor-session-ids 'root-1,parent-1'".to_string())
         )]
         #[case::pane_is_free_codex(
             "abc-123",
             &[],
             Engine::Codex,
+            false,
             false,
             Some("a agent resume abc-123 --engine codex".to_string())
         )]
@@ -521,17 +564,33 @@ mod tests {
             &[],
             Engine::Claude,
             false,
+            false,
             Some("a agent resume 'id; rm -rf /' --engine claude".to_string())
+        )]
+        #[case::pane_is_free_with_vibe_launch(
+            "abc-123",
+            &[],
+            Engine::Claude,
+            true,
+            false,
+            Some("a agent resume abc-123 --engine claude --launched-with-vibe".to_string())
         )]
         fn resume_command_for_cases(
             #[case] session_id: &str,
             #[case] ancestor_session_ids: &[String],
             #[case] engine: Engine,
+            #[case] launched_with_vibe: bool,
             #[case] pane_has_claude: bool,
             #[case] expected: Option<String>,
         ) {
             assert_eq!(
-                resume_command_for(session_id, ancestor_session_ids, engine, pane_has_claude),
+                resume_command_for(
+                    session_id,
+                    ancestor_session_ids,
+                    engine,
+                    launched_with_vibe,
+                    pane_has_claude,
+                ),
                 expected
             );
         }
@@ -546,6 +605,7 @@ mod tests {
             "abc-123",
             &[],
             Engine::Claude,
+            false,
             true,
             vec![vec![
                 "set-option".to_string(),
@@ -561,6 +621,7 @@ mod tests {
             "abc-123",
             &[],
             Engine::Claude,
+            false,
             false,
             vec![
                 vec![
@@ -586,6 +647,7 @@ mod tests {
             &["root-1".to_string(), "parent-1".to_string()],
             Engine::Codex,
             false,
+            false,
             vec![
                 vec![
                     "set-option".to_string(),
@@ -604,11 +666,37 @@ mod tests {
                 ],
             ]
         )]
+        #[case::pane_is_free_with_vibe_launch(
+            "%5",
+            "abc-123",
+            &[],
+            Engine::Claude,
+            true,
+            false,
+            vec![
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    TMUX_SESSION_OPTION.to_string(),
+                    "abc-123".to_string(),
+                ],
+                vec![
+                    "send-keys".to_string(),
+                    "-t".to_string(),
+                    "%5".to_string(),
+                    "a agent resume abc-123 --engine claude --launched-with-vibe".to_string(),
+                    "Enter".to_string(),
+                ],
+            ]
+        )]
         fn restore_commands_for_pane_cases(
             #[case] pane_id: &str,
             #[case] session_id: &str,
             #[case] ancestor_session_ids: &[String],
             #[case] engine: Engine,
+            #[case] launched_with_vibe: bool,
             #[case] pane_has_claude: bool,
             #[case] expected: Vec<Vec<String>>,
         ) {
@@ -618,6 +706,7 @@ mod tests {
                     session_id,
                     ancestor_session_ids,
                     engine,
+                    launched_with_vibe,
                     pane_has_claude
                 ),
                 expected

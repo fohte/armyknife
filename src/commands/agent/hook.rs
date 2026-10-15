@@ -404,6 +404,7 @@ fn process_hook_event_impl_with_instruction(
                     )
                 }),
             vibe_enabled: false,
+            launched_with_vibe: env.session_vibe_launch,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: input.cwd.clone(),
@@ -1853,6 +1854,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -2315,6 +2317,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -2961,6 +2964,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -3777,6 +3781,7 @@ mod tests {
                     (EnvVars::session_label_name(), None::<&str>),
                     (EnvVars::session_work_type_name(), None::<&str>),
                     (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::session_vibe_launch_name(), None::<&str>),
                     (EnvVars::ancestor_session_ids_name(), None::<&str>),
                 ],
                 || {
@@ -3829,6 +3834,30 @@ mod tests {
                     "engine": "claude"
                 }),
             );
+        }
+
+        #[test]
+        fn session_creation_records_vibe_launch_env() {
+            let temp_dir = create_temp_sessions_dir();
+
+            let actual =
+                temp_env::with_vars([(EnvVars::session_vibe_launch_name(), Some("1"))], || {
+                    process_hook_event_impl(
+                        HookEvent::UserPromptSubmit,
+                        create_test_input(None),
+                        temp_dir.path(),
+                        &SideEffects::none(),
+                    )
+                    .expect("user-prompt-submit should succeed");
+
+                    store::load_session_from(temp_dir.path(), "test-123")
+                        .expect("session should load")
+                        .expect("session should exist")
+                        .launched_with_vibe
+                });
+
+            let expected = true;
+            assert_eq!(actual, expected);
         }
 
         #[rstest]
@@ -4266,6 +4295,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                launched_with_vibe: false,
                 is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),

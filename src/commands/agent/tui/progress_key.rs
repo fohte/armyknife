@@ -107,6 +107,7 @@ mod tests {
             label: None,
             work_type: None,
             vibe_enabled: false,
+            launched_with_vibe: false,
             work_type_pinned: false,
             is_delegated: false,
             ancestor_session_ids: Vec::new(),

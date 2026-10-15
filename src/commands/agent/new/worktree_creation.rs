@@ -184,7 +184,7 @@ pub(super) fn run_worktree_creation(
 
     drop(creation_lock);
 
-    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
+    let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))

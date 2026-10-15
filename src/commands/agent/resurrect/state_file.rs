@@ -15,10 +15,12 @@ const RESURRECT_STATE_DIR: &str = "resurrect";
 const RESURRECT_STATE_FILE: &str = "pane_sessions.txt";
 
 /// Session metadata captured for one pane during the pre-save hook.
-type SavedPaneSession = (String, u32, u32, String, Vec<String>, Engine);
+pub(super) type SavedPaneSession = (String, u32, u32, String, Vec<String>, Engine, bool);
 
 /// Session metadata restored by pane position from the state file.
-type RestoredPaneSession = (String, Vec<String>, Option<Engine>);
+pub(super) type RestoredPaneSession = (String, Vec<String>, Option<Engine>, bool);
+
+type ParsedStateLine<'a> = (&'a str, &'a str, Vec<String>, Option<Engine>, bool);
 /// Returns the path to the resurrect state file.
 pub(super) fn state_file_path() -> Result<PathBuf> {
     let base_dir =
@@ -29,27 +31,44 @@ pub(super) fn state_file_path() -> Result<PathBuf> {
         .join(RESURRECT_STATE_FILE))
 }
 
-/// Parses a state file line into (pane_position, session_id, ancestor_session_ids, engine).
-/// Format: "session_name:window_index.pane_index<TAB>session_id<TAB>ancestor_session_ids<TAB>engine".
-/// The ancestor and engine columns are optional for backwards compatibility;
-/// state files without an engine column resolve it from the current store.
-fn parse_state_line(line: &str) -> Option<(&str, &str, Vec<String>, Option<Engine>)> {
+/// Parses a state file line into its pane metadata.
+/// The ancestor, engine, and vibe columns are optional for backwards compatibility.
+fn parse_state_line(line: &str) -> Option<ParsedStateLine<'_>> {
     if line.is_empty() {
         return None;
     }
     match line.split('\t').collect::<Vec<_>>().as_slice() {
-        [pane_position, session_id] => Some((pane_position, session_id, Vec::new(), None)),
+        [pane_position, session_id] => Some((pane_position, session_id, Vec::new(), None, false)),
         [pane_position, session_id, ancestor_ids] => Some((
             pane_position,
             session_id,
             parse_ancestor_ids(ancestor_ids),
             None,
+            false,
         )),
         [pane_position, session_id, ancestor_ids, engine] => Some((
             pane_position,
             session_id,
             parse_ancestor_ids(ancestor_ids),
             Some(Engine::from_str(engine, false).ok()?),
+            false,
+        )),
+        [
+            pane_position,
+            session_id,
+            ancestor_ids,
+            engine,
+            launched_with_vibe,
+        ] => Some((
+            pane_position,
+            session_id,
+            parse_ancestor_ids(ancestor_ids),
+            Some(Engine::from_str(engine, false).ok()?),
+            match *launched_with_vibe {
+                "1" | "true" => true,
+                "0" | "false" => false,
+                _ => return None,
+            },
         )),
         _ => None,
     }
@@ -94,17 +113,25 @@ pub(super) fn write_state_file(
     let mut file = fs::File::create(state_file)
         .with_context(|| format!("Failed to create state file: {}", state_file.display()))?;
 
-    for (session_name, window_index, pane_index, session_id, ancestor_session_ids, engine) in
-        pane_sessions
+    for (
+        session_name,
+        window_index,
+        pane_index,
+        session_id,
+        ancestor_session_ids,
+        engine,
+        launched_with_vibe,
+    ) in pane_sessions
     {
         let pane_position = format_pane_position(session_name, *window_index, *pane_index);
         writeln!(
             file,
-            "{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}",
             pane_position,
             session_id,
             ancestor_session_ids.join(","),
             format_engine(*engine),
+            if *launched_with_vibe { "1" } else { "0" },
         )?;
     }
 
@@ -112,7 +139,7 @@ pub(super) fn write_state_file(
 }
 
 /// Reads pane sessions from a state file.
-/// Returns a map of pane_position -> (session_id, ancestor_session_ids, engine).
+/// Returns a map of pane_position -> (session_id, ancestor_session_ids, engine, launched_with_vibe).
 pub(super) fn read_state_file(
     state_file: &PathBuf,
 ) -> Result<HashMap<String, RestoredPaneSession>> {
@@ -123,12 +150,17 @@ pub(super) fn read_state_file(
     let mut pane_sessions = HashMap::new();
     for line in reader.lines() {
         let line = line?;
-        if let Some((pane_position, session_id, ancestor_session_ids, engine)) =
+        if let Some((pane_position, session_id, ancestor_session_ids, engine, launched_with_vibe)) =
             parse_state_line(&line)
         {
             pane_sessions.insert(
                 pane_position.to_string(),
-                (session_id.to_string(), ancestor_session_ids, engine),
+                (
+                    session_id.to_string(),
+                    ancestor_session_ids,
+                    engine,
+                    launched_with_vibe,
+                ),
             );
         }
     }
@@ -151,7 +183,7 @@ mod tests {
     #[rstest]
     #[case::valid_line_no_ancestors(
         "main:0.1\tabc-123",
-        Some(("main:0.1", "abc-123", Vec::new(), None))
+        Some(("main:0.1", "abc-123", Vec::new(), None, false))
     )]
     #[case::valid_uuid(
         "work:2.0\t550e8400-e29b-41d4-a716-446655440000",
@@ -159,12 +191,13 @@ mod tests {
             "work:2.0",
             "550e8400-e29b-41d4-a716-446655440000",
             Vec::new(),
-            None
+            None,
+            false,
         ))
     )]
     #[case::session_with_slash(
         "fohte/repo:1.2\txyz-456",
-        Some(("fohte/repo:1.2", "xyz-456", Vec::new(), None))
+        Some(("fohte/repo:1.2", "xyz-456", Vec::new(), None, false))
     )]
     #[case::with_ancestors(
         "main:0.1\tabc-123\troot-1,parent-1",
@@ -172,12 +205,13 @@ mod tests {
             "main:0.1",
             "abc-123",
             vec!["root-1".to_string(), "parent-1".to_string()],
-            None
+            None,
+            false,
         ))
     )]
     #[case::with_empty_ancestors_field(
         "main:0.1\tabc-123\t",
-        Some(("main:0.1", "abc-123", Vec::new(), None))
+        Some(("main:0.1", "abc-123", Vec::new(), None, false))
     )]
     #[case::with_codex_engine(
         "main:0.1\tabc-123\troot-1\tcodex",
@@ -185,17 +219,25 @@ mod tests {
             "main:0.1",
             "abc-123",
             vec!["root-1".to_string()],
-            Some(Engine::Codex)
+            Some(Engine::Codex),
+            false,
+        ))
+    )]
+    #[case::with_vibe_launch(
+        "main:0.1\tabc-123\troot-1\tclaude\t1",
+        Some((
+            "main:0.1",
+            "abc-123",
+            vec!["root-1".to_string()],
+            Some(Engine::Claude),
+            true
         ))
     )]
     #[case::missing_tab("main:0.1abc-123", None)]
     #[case::unknown_engine("main:0.1\tabc-123\t\tunknown", None)]
     #[case::too_many_tabs("main:0.1\tabc\t123\textra", None)]
     #[case::empty_line("", None)]
-    fn test_parse_state_line(
-        #[case] line: &str,
-        #[case] expected: Option<(&str, &str, Vec<String>, Option<Engine>)>,
-    ) {
+    fn test_parse_state_line(#[case] line: &str, #[case] expected: Option<ParsedStateLine<'_>>) {
         assert_eq!(parse_state_line(line), expected);
     }
 
@@ -228,6 +270,7 @@ mod tests {
                 "abc-123".to_string(),
                 Vec::new(),
                 Engine::Claude,
+                false,
             ),
             (
                 "work".to_string(),
@@ -236,6 +279,7 @@ mod tests {
                 "def-456".to_string(),
                 vec!["root-1".to_string(), "parent-1".to_string()],
                 Engine::Codex,
+                true,
             ),
             (
                 "fohte/repo".to_string(),
@@ -244,6 +288,7 @@ mod tests {
                 "550e8400-e29b-41d4-a716-446655440000".to_string(),
                 Vec::new(),
                 Engine::Claude,
+                false,
             ),
         ];
 
@@ -256,14 +301,20 @@ mod tests {
             HashMap::from([
                 (
                     "main:0.1".to_string(),
-                    ("abc-123".to_string(), Vec::new(), Some(Engine::Claude))
+                    (
+                        "abc-123".to_string(),
+                        Vec::new(),
+                        Some(Engine::Claude),
+                        false,
+                    )
                 ),
                 (
                     "work:2.0".to_string(),
                     (
                         "def-456".to_string(),
                         vec!["root-1".to_string(), "parent-1".to_string()],
-                        Some(Engine::Codex)
+                        Some(Engine::Codex),
+                        true,
                     )
                 ),
                 (
@@ -271,7 +322,8 @@ mod tests {
                     (
                         "550e8400-e29b-41d4-a716-446655440000".to_string(),
                         Vec::new(),
-                        Some(Engine::Claude)
+                        Some(Engine::Claude),
+                        false,
                     )
                 ),
             ])
@@ -290,6 +342,7 @@ mod tests {
             "session-id".to_string(),
             Vec::new(),
             Engine::Claude,
+            false,
         )];
 
         write_state_file(&state_file, &pane_sessions).expect("should write state file");
@@ -297,7 +350,12 @@ mod tests {
             read_state_file(&state_file).expect("should read state file"),
             HashMap::from([(
                 "main:0.0".to_string(),
-                ("session-id".to_string(), Vec::new(), Some(Engine::Claude),),
+                (
+                    "session-id".to_string(),
+                    Vec::new(),
+                    Some(Engine::Claude),
+                    false,
+                ),
             )])
         );
     }
@@ -328,18 +386,24 @@ mod tests {
             HashMap::from([
                 (
                     "main:0.1".to_string(),
-                    ("abc-123".to_string(), Vec::new(), None)
+                    ("abc-123".to_string(), Vec::new(), None, false)
                 ),
                 (
                     "work:2.0".to_string(),
-                    ("def-456".to_string(), vec!["root-1".to_string()], None)
+                    (
+                        "def-456".to_string(),
+                        vec!["root-1".to_string()],
+                        None,
+                        false,
+                    )
                 ),
                 (
                     "work-codex:3.0".to_string(),
                     (
                         "ghi-789".to_string(),
                         vec!["root-2".to_string()],
-                        Some(Engine::Codex)
+                        Some(Engine::Codex),
+                        false,
                     )
                 ),
             ])

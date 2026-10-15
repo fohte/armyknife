@@ -252,10 +252,10 @@ fn tq_parent_session_env_var() -> Option<(String, String)> {
         .map(|id| ("TQ_PARENT_SESSION_ID".to_string(), id))
 }
 
-/// Build tmux session-level env vars for the child session's `--label` and `--kind`,
+/// Build tmux session-level env vars for the child session's launch metadata,
 /// ancestor-session-id chain, and tq parent session ID. Shared between the
 /// worktree and no-worktree flows.
-fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
+fn build_env_vars(common: &CommonNewArgs, vibe: bool) -> Result<Vec<(String, String)>> {
     let mut env_vars: Vec<(String, String)> = Vec::new();
     if let Some(ref label) = common.label {
         env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
@@ -266,6 +266,12 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
     if common.agent {
         env_vars.push((
             EnvVars::session_delegated_name().to_string(),
+            "1".to_string(),
+        ));
+    }
+    if vibe {
+        env_vars.push((
+            EnvVars::session_vibe_launch_name().to_string(),
             "1".to_string(),
         ));
     }
@@ -293,8 +299,8 @@ fn build_env_vars(common: &CommonNewArgs) -> Result<Vec<(String, String)>> {
 
 /// Build the env vars and background flag shared by both the worktree and
 /// no-worktree tmux launch paths.
-fn tmux_launch_inputs(common: &CommonNewArgs) -> Result<(Vec<(String, String)>, bool)> {
-    let env_vars = build_env_vars(common)?;
+fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String, String)>, bool)> {
+    let env_vars = build_env_vars(common, vibe)?;
     // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
     let background = std::env::var("CLAUDECODE").is_ok();
     Ok((env_vars, background))
@@ -409,7 +415,7 @@ fn run_session_only_inner_with_launchers(
         args.common.prompt.clone()
     };
 
-    let (env_vars, background) = tmux_launch_inputs(&args.common)?;
+    let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
@@ -934,9 +940,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::omitted(None, false, vec![])]
+    #[case::omitted(None, false, false, vec![])]
     #[case::explicit_kind(
         Some("sample-skill"),
+        false,
         false,
         vec![(
             EnvVars::session_work_type_name().to_string(),
@@ -946,11 +953,22 @@ mod tests {
     #[case::agent_launch(
         None,
         true,
+        false,
         vec![(EnvVars::session_delegated_name().to_string(), "1".to_string())]
+    )]
+    #[case::vibe_launch(
+        None,
+        false,
+        true,
+        vec![(
+            EnvVars::session_vibe_launch_name().to_string(),
+            "1".to_string(),
+        )]
     )]
     fn build_env_vars_passes_launch_metadata(
         #[case] kind: Option<&str>,
         #[case] agent: bool,
+        #[case] vibe: bool,
         #[case] expected: Vec<(String, String)>,
     ) {
         temp_env::with_vars(
@@ -971,7 +989,7 @@ mod tests {
                     engine: None,
                     reasoning_effort: None,
                 };
-                assert_eq!(build_env_vars(&common).unwrap(), expected);
+                assert_eq!(build_env_vars(&common, vibe).unwrap(), expected);
             },
         );
     }

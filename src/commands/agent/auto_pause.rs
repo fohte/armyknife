@@ -177,6 +177,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),

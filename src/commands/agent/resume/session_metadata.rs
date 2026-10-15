@@ -9,15 +9,19 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::parse_ancestor_session_ids;
 
-pub(super) fn record_ancestor_session_ids_if_empty(
+pub(super) fn record_resume_metadata_if_needed(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,
-    ancestor_session_ids: &str,
+    ancestor_session_ids: Option<&str>,
+    launched_with_vibe: bool,
+    engine: Engine,
     capture_pr_context: Option<Capture>,
 ) -> Result<()> {
-    let ancestor_session_ids = parse_ancestor_session_ids(ancestor_session_ids);
-    if ancestor_session_ids.is_empty() {
+    let ancestor_session_ids = ancestor_session_ids
+        .map(parse_ancestor_session_ids)
+        .unwrap_or_default();
+    if ancestor_session_ids.is_empty() && !launched_with_vibe {
         return Ok(());
     }
 
@@ -29,6 +33,7 @@ pub(super) fn record_ancestor_session_ids_if_empty(
         work_type: None,
         work_type_pinned: false,
         vibe_enabled: false,
+        launched_with_vibe: false,
         is_delegated: false,
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
@@ -52,15 +57,23 @@ pub(super) fn record_ancestor_session_ids_if_empty(
         stop_blocked_by_armyknife: false,
         agent_status: None,
         agent_status_clear_pending: false,
-        engine: Engine::Codex,
+        engine,
     });
 
-    if !session.ancestor_session_ids.is_empty() {
-        return Ok(());
+    let mut changed = false;
+    if session.ancestor_session_ids.is_empty() && !ancestor_session_ids.is_empty() {
+        session.ancestor_session_ids = ancestor_session_ids;
+        changed = true;
     }
-
-    session.ancestor_session_ids = ancestor_session_ids;
-    session_lock.save(&session)
+    if launched_with_vibe && !session.launched_with_vibe {
+        session.launched_with_vibe = true;
+        changed = true;
+    }
+    if changed {
+        session_lock.save(&session)
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -89,6 +102,7 @@ mod tests {
             work_type: None,
             work_type_pinned: false,
             vibe_enabled: false,
+            launched_with_vibe: false,
             is_delegated: false,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
@@ -131,11 +145,13 @@ mod tests {
         store::save_session_to(sessions_dir.path(), &session(existing_ancestors))
             .expect("save should succeed");
 
-        record_ancestor_session_ids_if_empty(
+        record_resume_metadata_if_needed(
             sessions_dir.path(),
             "resume-target",
             Path::new("/workspace/project"),
-            "root, parent",
+            Some("root, parent"),
+            false,
+            Engine::Codex,
             None,
         )
         .expect("record should succeed");
@@ -155,11 +171,13 @@ mod tests {
 
     #[rstest]
     fn creates_missing_session_with_ancestor_chain(sessions_dir: TempDir) {
-        record_ancestor_session_ids_if_empty(
+        record_resume_metadata_if_needed(
             sessions_dir.path(),
             "missing-session",
             Path::new("/workspace/resume"),
-            "root, parent",
+            Some("root, parent"),
+            false,
+            Engine::Codex,
             Some(fixed_context_capture),
         )
         .expect("record should succeed");
@@ -200,6 +218,29 @@ mod tests {
                 "sweep_signaled": false,
                 "engine": "codex"
             })
+        );
+    }
+
+    #[rstest]
+    fn restores_vibe_launch_marker_when_session_record_is_missing(sessions_dir: TempDir) {
+        record_resume_metadata_if_needed(
+            sessions_dir.path(),
+            "missing-session",
+            Path::new("/workspace/resume"),
+            None,
+            true,
+            Engine::Claude,
+            Some(fixed_context_capture),
+        )
+        .expect("record should succeed");
+
+        let session = store::load_session_from(sessions_dir.path(), "missing-session")
+            .expect("load should succeed")
+            .expect("session should exist");
+
+        assert_eq!(
+            (session.launched_with_vibe, session.engine),
+            (true, Engine::Claude)
         );
     }
 }
