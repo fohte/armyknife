@@ -59,15 +59,14 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
     window_status::sync_window_status_for_session(&args.session);
 
     let message = completion_message(args, status.as_ref().ok(), execution_error.as_deref());
-    let notification = record_failed_completion_notification(
-        &args.session,
-        &args.task_id,
-        &message,
-        notify::notify(&args.session, &message, None, None),
-        undelivered::save,
-    );
     send_completion_before_joining_reminder(
-        || match notification {
+        || match record_failed_completion_notification(
+            &args.session,
+            &args.task_id,
+            &message,
+            notify::notify(&args.session, &message, None, None),
+            undelivered::save,
+        ) {
             Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
                 event = "agent.bg_run.notification_queued",
                 session = %args.session,

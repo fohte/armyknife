@@ -1,13 +1,16 @@
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use uuid::Uuid;
 
-use crate::shared::{cache, hex};
+use super::super::bg_storage;
+use crate::shared::cache;
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct UndeliveredNotification {
     pub task_id: String,
     pub message: String,
@@ -19,11 +22,11 @@ fn root_dir() -> Result<PathBuf> {
 }
 
 fn session_dir(root: &Path, session_id: &str) -> PathBuf {
-    root.join(hex::encode(session_id.as_bytes()))
+    bg_storage::session_dir(root, session_id)
 }
 
 fn message_path(root: &Path, session_id: &str, task_id: &str) -> Result<PathBuf> {
-    let task_id = Uuid::parse_str(task_id).context("invalid background task ID")?;
+    let task_id = bg_storage::task_id(task_id)?;
     Ok(session_dir(root, session_id).join(task_id.to_string()))
 }
 
@@ -36,41 +39,43 @@ fn save_in(root: &Path, session_id: &str, task_id: &str, message: &str) -> Resul
     let dir = path
         .parent()
         .context("undelivered notification path has no parent directory")?;
-    create_dir_secure(root)?;
-    create_dir_secure(dir).with_context(|| {
+    bg_storage::create_dir_secure(root)?;
+    bg_storage::create_dir_secure(dir).with_context(|| {
         format!(
             "failed to create undelivered notification directory: {}",
             dir.display()
         )
     })?;
 
-    let temp_path = dir.join(format!(".{}.tmp", Uuid::new_v4()));
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temp_path)
-            .with_context(|| {
-                format!(
-                    "failed to create temporary undelivered notification: {}",
-                    temp_path.display()
-                )
-            })?;
+    bg_storage::write_atomic(&path, |file| {
         file.write_all(message.as_bytes())?;
-        file.sync_all()?;
-        fs::rename(&temp_path, &path).with_context(|| {
-            format!(
-                "failed to save undelivered notification: {}",
-                path.display()
-            )
-        })?;
         Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp_path);
+    })
+}
+
+pub(super) fn try_lock_session(session_id: &str) -> Result<Option<File>> {
+    try_lock_session_in(&root_dir()?, session_id)
+}
+
+fn try_lock_session_in(root: &Path, session_id: &str) -> Result<Option<File>> {
+    let dir = session_dir(root, session_id);
+    if !dir.is_dir() {
+        return Ok(None);
     }
-    result
+    let lock_path = dir.join(".redelivery.lock");
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open redelivery lock: {}", lock_path.display()))?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(file)),
+        Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+        Err(std::fs::TryLockError::Error(error)) => Err(error)
+            .with_context(|| format!("failed to lock redelivery session: {}", lock_path.display())),
+    }
 }
 
 #[cfg(not(test))]
@@ -133,16 +138,27 @@ fn load_all_in(root: &Path, session_id: &str) -> Result<Vec<UndeliveredNotificat
             continue;
         };
         let path = entry.path();
+        let modified = entry
+            .metadata()?
+            .modified()
+            .unwrap_or(SystemTime::UNIX_EPOCH);
         let message = fs::read_to_string(&path).with_context(|| {
             format!(
                 "failed to read undelivered notification: {}",
                 path.display()
             )
         })?;
-        notifications.push(UndeliveredNotification { task_id, message });
+        notifications.push((modified, UndeliveredNotification { task_id, message }));
     }
-    notifications.sort_by(|left, right| left.task_id.cmp(&right.task_id));
-    Ok(notifications)
+    notifications.sort_by(|(left_modified, left), (right_modified, right)| {
+        left_modified
+            .cmp(right_modified)
+            .then_with(|| left.task_id.cmp(&right.task_id))
+    });
+    Ok(notifications
+        .into_iter()
+        .map(|(_, notification)| notification)
+        .collect())
 }
 
 pub(super) fn remove(session_id: &str, task_id: &str) -> Result<()> {
@@ -161,23 +177,6 @@ fn remove_in(root: &Path, session_id: &str, task_id: &str) -> Result<()> {
             )
         }),
     }
-}
-
-fn create_dir_secure(dir: &Path) -> std::io::Result<()> {
-    if !dir.exists() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-    }
-
-    let metadata = fs::metadata(dir)?;
-    let mut permissions = metadata.permissions();
-    if permissions.mode() & 0o077 != 0 {
-        permissions.set_mode(0o700);
-        fs::set_permissions(dir, permissions)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -208,15 +207,84 @@ mod tests {
             saved_path.clone(),
             fs::read_to_string(saved_path).expect("notification should be readable"),
             has_pending_in(&root, SESSION_ID).expect("pending scan should succeed"),
+            load_all_in(&root, SESSION_ID).expect("notifications should be loadable"),
         );
         assert_eq!(
             actual,
             (
-                root.join(hex::encode(SESSION_ID.as_bytes())).join(TASK_ID),
+                root.join(crate::shared::hex::encode(SESSION_ID.as_bytes()))
+                    .join(TASK_ID),
                 message.to_string(),
                 true,
+                vec![UndeliveredNotification {
+                    task_id: TASK_ID.to_string(),
+                    message: message.to_string(),
+                }],
             ),
         );
+    }
+
+    #[test]
+    fn loads_notifications_in_save_order() {
+        let (_temp_dir, root) = root();
+        let earlier_task_id = "a1b2c3d4-e5f6-4789-8abc-def012345678";
+        let later_task_id = "b2c3d4e5-f607-489a-bcde-f0123456789a";
+        save_in(&root, SESSION_ID, later_task_id, "later message")
+            .expect("later notification should be saved");
+        save_in(&root, SESSION_ID, earlier_task_id, "earlier message")
+            .expect("earlier notification should be saved");
+        let directory = session_dir(&root, SESSION_ID);
+        File::options()
+            .write(true)
+            .open(directory.join(later_task_id))
+            .expect("later notification should open")
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2)),
+            )
+            .expect("later timestamp should be set");
+        File::options()
+            .write(true)
+            .open(directory.join(earlier_task_id))
+            .expect("earlier notification should open")
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1)),
+            )
+            .expect("earlier timestamp should be set");
+
+        let actual = load_all_in(&root, SESSION_ID)
+            .expect("notifications should be loadable")
+            .into_iter()
+            .map(|notification| (notification.task_id, notification.message))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                (earlier_task_id.to_string(), "earlier message".to_string()),
+                (later_task_id.to_string(), "later message".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn holds_only_one_redelivery_lock_per_session() {
+        let (_temp_dir, root) = root();
+        save_in(&root, SESSION_ID, TASK_ID, "fixture message")
+            .expect("notification should be saved");
+
+        let first_lock = try_lock_session_in(&root, SESSION_ID)
+            .expect("first lock should be acquired")
+            .expect("first lock should be available");
+        let second_lock = try_lock_session_in(&root, SESSION_ID)
+            .expect("second lock attempt should succeed")
+            .is_some();
+        drop(first_lock);
+        let lock_after_release = try_lock_session_in(&root, SESSION_ID)
+            .expect("lock after release should succeed")
+            .is_some();
+
+        assert_eq!((second_lock, lock_after_release), (false, true));
     }
 
     #[test]

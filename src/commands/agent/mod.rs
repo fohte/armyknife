@@ -3,6 +3,7 @@ mod archive_tq_session_detached;
 mod auto_compact;
 pub(crate) mod auto_pause;
 mod bg;
+mod bg_storage;
 pub(crate) mod bg_tasks;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;

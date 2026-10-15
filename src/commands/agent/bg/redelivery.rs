@@ -42,6 +42,18 @@ pub(super) fn spawn_if_pending(session_id: &str) {
 }
 
 pub fn run(args: &RedeliverDetachedArgs) -> Result<()> {
+    let _lock = match undelivered::try_lock_session(&args.session) {
+        Ok(Some(lock)) => lock,
+        Ok(None) => return Ok(()),
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.bg_run.redelivery_lock_failed",
+                session = %args.session,
+                error = %format!("{error:#}"),
+            );
+            return Ok(());
+        }
+    };
     let notifications = match undelivered::load_all(&args.session) {
         Ok(notifications) => notifications,
         Err(error) => {
@@ -76,56 +88,48 @@ fn redeliver_messages(
     mut sleep: impl FnMut(Duration),
 ) {
     for notification in notifications {
-        let mut delivered = false;
-        let mut last_error = None;
         let deadline = now() + retry_window;
         let mut attempts = 0;
-        loop {
-            if attempts > 0 && now() >= deadline {
-                break;
-            }
+        let outcome = loop {
             attempts += 1;
             match send(session_id, &notification.message) {
-                Ok(delivery) => {
-                    tracing::info!(
-                        event = "agent.bg_run.redelivered",
-                        session = %session_id,
-                        task = %notification.task_id,
-                        delivery = ?delivery,
-                    );
-                    delivered = true;
-                    break;
-                }
+                Ok(delivery) => break Ok(delivery),
                 Err(error) => {
-                    last_error = Some(error);
                     let remaining = deadline.saturating_duration_since(now());
                     if remaining.is_zero() {
-                        break;
+                        break Err(error);
                     }
                     sleep(RETRY_INTERVAL.min(remaining));
+                    if now() >= deadline {
+                        break Err(error);
+                    }
                 }
             }
-        }
-
-        if delivered {
-            if let Err(error) = remove(session_id, &notification.task_id) {
-                tracing::warn!(
-                    event = "agent.bg_run.redelivery_remove_failed",
+        };
+        match outcome {
+            Ok(delivery) => {
+                tracing::info!(
+                    event = "agent.bg_run.redelivered",
                     session = %session_id,
                     task = %notification.task_id,
-                    error = %format!("{error:#}"),
+                    delivery = ?delivery,
                 );
+                if let Err(error) = remove(session_id, &notification.task_id) {
+                    tracing::warn!(
+                        event = "agent.bg_run.redelivery_remove_failed",
+                        session = %session_id,
+                        task = %notification.task_id,
+                        error = %format!("{error:#}"),
+                    );
+                }
             }
-        } else {
-            tracing::warn!(
+            Err(error) => tracing::warn!(
                 event = "agent.bg_run.redelivery_failed",
                 session = %session_id,
                 task = %notification.task_id,
                 attempts,
-                error = %last_error
-                    .map(|error| format!("{error:#}"))
-                    .unwrap_or_else(|| "no delivery attempts configured".to_string()),
-            );
+                error = %format!("{error:#}"),
+            ),
         }
     }
 }
