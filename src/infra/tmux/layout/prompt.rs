@@ -50,38 +50,72 @@ pub(super) fn clear_managed_codex_launch_env(
     format!("{command}; unset {}", EnvVars::codex_managed_launch_name())
 }
 
-/// Removes the launch kind from the pane shell and scopes it to one agent process.
-pub(super) fn scope_session_work_type(
+/// Removes launch metadata from the pane shell and scopes it to one agent process.
+pub(super) fn scope_session_launch_env(
     command: &str,
     engine: Engine,
     env_vars: &[(&str, &str)],
 ) -> String {
-    let Some((_, work_type)) = env_vars
+    let work_type = env_vars
         .iter()
         .find(|(key, _)| *key == EnvVars::session_work_type_name())
-    else {
+        .map(|(_, value)| *value);
+    let vibe_launch = env_vars
+        .iter()
+        .find(|(key, _)| *key == EnvVars::session_vibe_launch_name())
+        .map(|(_, value)| *value);
+    if work_type.is_none() && vibe_launch.is_none() {
         return command.to_string();
-    };
+    }
 
-    let key = EnvVars::session_work_type_name();
     // Managed Codex records the kind against its thread ID after launch.
     let managed_codex_launch = engine == Engine::Codex
         && env_vars
             .iter()
             .any(|(key, value)| *key == EnvVars::codex_managed_launch_name() && *value == "1");
-    let scoped_command = if is_engine_command(command, engine) && !managed_codex_launch {
-        let escaped_work_type = shlex::try_quote(work_type)
-            .map(|quoted| quoted.into_owned())
-            .unwrap_or_else(|_| format!("'{}'", work_type.replace('\'', "'\\''")));
-        format!("{key}={escaped_work_type} {command}")
-    } else {
+    let is_agent_command = is_engine_command(command, engine);
+    let mut assignments = Vec::new();
+    if is_agent_command
+        && !managed_codex_launch
+        && let Some(work_type) = work_type
+    {
+        assignments.push(shell_assignment(
+            EnvVars::session_work_type_name(),
+            work_type,
+        ));
+    }
+    if is_agent_command && let Some(vibe_launch) = vibe_launch {
+        assignments.push(shell_assignment(
+            EnvVars::session_vibe_launch_name(),
+            vibe_launch,
+        ));
+    }
+    let scoped_command = if assignments.is_empty() {
         command.to_string()
+    } else {
+        format!("{} {command}", assignments.join(" "))
     };
 
     // tmux unsets its session environment after pane creation, but the pane's
     // shell already inherited it. Clear it before running the first command so
-    // later agents launched from that shell cannot mistake it for a new kind.
-    format!("unset {key}; {scoped_command}")
+    // later agents launched from that shell cannot mistake it for launch metadata.
+    let unset_commands = [
+        work_type.map(|_| EnvVars::session_work_type_name()),
+        vibe_launch.map(|_| EnvVars::session_vibe_launch_name()),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|key| format!("unset {key}"))
+    .collect::<Vec<_>>()
+    .join("; ");
+    format!("{unset_commands}; {scoped_command}")
+}
+
+fn shell_assignment(key: &str, value: &str) -> String {
+    let escaped = shlex::try_quote(value)
+        .map(|quoted| quoted.into_owned())
+        .unwrap_or_else(|_| format!("'{}'", value.replace('\'', "'\\''")));
+    format!("{key}={escaped}")
 }
 
 /// If the command starts `engine`'s CLI, insert `--model <model>` and the
@@ -198,29 +232,57 @@ mod tests {
         let env_vars = [(EnvVars::session_work_type_name(), "sample-skill")];
 
         assert_eq!(
-            scope_session_work_type(command, engine, &env_vars),
+            scope_session_launch_env(command, engine, &env_vars),
             expected
         );
     }
 
     #[test]
-    fn scope_session_work_type_leaves_commands_without_kind_unchanged() {
+    fn scope_session_launch_env_leaves_commands_without_metadata_unchanged() {
         assert_eq!(
-            scope_session_work_type("claude", Engine::Claude, &[]),
+            scope_session_launch_env("claude", Engine::Claude, &[]),
             "claude"
         );
     }
 
     #[test]
-    fn scope_session_work_type_omits_managed_codex_environment() {
+    fn scope_session_launch_env_omits_managed_codex_work_type() {
         let env_vars = [
             (EnvVars::session_work_type_name(), "sample-skill"),
             (EnvVars::codex_managed_launch_name(), "1"),
         ];
 
         assert_eq!(
-            scope_session_work_type("codex", Engine::Codex, &env_vars),
+            scope_session_launch_env("codex", Engine::Codex, &env_vars),
             format!("unset {}; codex", EnvVars::session_work_type_name()),
+        );
+    }
+
+    #[rstest]
+    #[case::agent_command(
+        "claude",
+        "unset ARMYKNIFE_SESSION_VIBE_LAUNCH; ARMYKNIFE_SESSION_VIBE_LAUNCH=1 claude"
+    )]
+    #[case::non_agent_command("nvim", "unset ARMYKNIFE_SESSION_VIBE_LAUNCH; nvim")]
+    fn scopes_vibe_launch_marker_to_agent_process(#[case] command: &str, #[case] expected: &str) {
+        let env_vars = [(EnvVars::session_vibe_launch_name(), "1")];
+
+        assert_eq!(
+            scope_session_launch_env(command, Engine::Claude, &env_vars),
+            expected
+        );
+    }
+
+    #[test]
+    fn scopes_work_type_and_vibe_launch_marker_to_agent_process() {
+        let env_vars = [
+            (EnvVars::session_work_type_name(), "sample-skill"),
+            (EnvVars::session_vibe_launch_name(), "1"),
+        ];
+
+        assert_eq!(
+            scope_session_launch_env("claude", Engine::Claude, &env_vars),
+            "unset ARMYKNIFE_SESSION_WORK_TYPE; unset ARMYKNIFE_SESSION_VIBE_LAUNCH; ARMYKNIFE_SESSION_WORK_TYPE=sample-skill ARMYKNIFE_SESSION_VIBE_LAUNCH=1 claude"
         );
     }
 

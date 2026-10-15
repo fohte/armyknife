@@ -19,7 +19,7 @@ use execution::{find_new_window_index, rewrite_pane_targets, with_window_id_capt
 use launch::{Launch as AgentLaunch, RecoverySpec as AgentRecoverySpec};
 use prompt::{
     apply_prompt_if_agent, clear_managed_codex_launch_env, is_engine_command,
-    retarget_agent_command, scope_session_work_type,
+    retarget_agent_command, scope_session_launch_env,
 };
 pub use route::AgentLaunchRoute;
 #[cfg(test)]
@@ -244,7 +244,7 @@ fn build_layout_plan_with_managed_codex(
             cleanup,
         );
         let cmd = clear_managed_codex_launch_env(&cmd, engine, managed_codex_launch);
-        let cmd = scope_session_work_type(&cmd, engine, env_vars);
+        let cmd = scope_session_launch_env(&cmd, engine, env_vars);
         commands.push(TmuxCommand::new(&["select-pane", "-t", &pane_target]));
         // Use -l to send the command literally (prevents interpreting special key sequences),
         // then send Enter separately. In background mode the active pane stays
