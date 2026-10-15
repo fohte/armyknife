@@ -1,12 +1,12 @@
 use std::path::Path;
 
-#[cfg(not(test))]
-use super::super::archive_tq_session_detached;
 use super::super::session_pr_context::Capture;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
 use super::super::types::{Session, SessionStatus};
+#[cfg(not(test))]
+use super::super::{archive_tq_session_detached, bg};
 use crate::shared::config::AgentConfig;
 
 /// Controls which side effects `process_hook_event_impl` executes.
@@ -26,6 +26,8 @@ pub(super) struct SideEffects {
     pub(super) tq_archive: bool,
     /// Include `a agent bg run` state in Stop processing.
     pub(super) track_bg_run_tasks: bool,
+    /// Keep SessionStart(resume) from waiting for message delivery readiness.
+    pub(super) redeliver_bg_notifications: bool,
     /// Test-only sink that records the group ids passed to
     /// `remove_notification_group`. Lets tests assert the call happened
     /// without invoking hammerspoon.
@@ -46,6 +48,9 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records sessions passed to the redelivery worker.
+    #[cfg(test)]
+    pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
 }
 
 #[cfg(test)]
@@ -67,6 +72,7 @@ impl SideEffects {
             capture_pr_context: Some(super::super::session_pr_context::capture),
             tq_archive: true,
             track_bg_run_tasks: true,
+            redeliver_bg_notifications: true,
             #[cfg(test)]
             removed_notification_groups: None,
             #[cfg(test)]
@@ -77,6 +83,8 @@ impl SideEffects {
             notification_calls: None,
             #[cfg(test)]
             auto_compact_calls: None,
+            #[cfg(test)]
+            redelivery_calls: None,
         }
     }
 
@@ -89,11 +97,13 @@ impl SideEffects {
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
+            redeliver_bg_notifications: false,
             removed_notification_groups: None,
             tmux_sync_calls: None,
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            redelivery_calls: None,
         }
     }
 
@@ -117,6 +127,21 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         super::super::auto_compact::spawn_in_background(session_id);
+    }
+
+    pub(super) fn redeliver_bg_notifications(&self, session_id: &str) {
+        if !self.redeliver_bg_notifications {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(calls) = &self.redelivery_calls {
+            calls
+                .lock()
+                .expect("redelivery_calls mutex poisoned")
+                .push(session_id.to_string());
+        }
+        #[cfg(not(test))]
+        bg::spawn_redelivery_if_pending(session_id);
     }
 
     /// Pushes the latest pane / window status into tmux. In tests, also

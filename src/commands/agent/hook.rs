@@ -618,6 +618,10 @@ fn process_hook_event_impl_with_instruction(
     session_lock.save(&session)?;
     drop(session_lock);
 
+    if event == HookEvent::SessionStart && input.source.as_deref() == Some("resume") {
+        side_effects.redeliver_bg_notifications(&session.session_id);
+    }
+
     if !preserve_last_message {
         // The Stop payload's final assistant message is preferred when
         // present: the transcript may not hold it yet when the hook fires.
@@ -2428,11 +2432,13 @@ mod tests {
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
+            redeliver_bg_notifications: false,
             removed_notification_groups: None,
             tmux_sync_calls: Some(calls.clone()),
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            redelivery_calls: None,
         };
 
         let input: HookInput =
@@ -2864,11 +2870,13 @@ mod tests {
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
+            redeliver_bg_notifications: false,
             removed_notification_groups: Some(removed.clone()),
             tmux_sync_calls: None,
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            redelivery_calls: None,
         };
 
         let payload = format!(
@@ -3388,11 +3396,13 @@ mod tests {
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
+            redeliver_bg_notifications: false,
             removed_notification_groups: Some(removed_notification_groups.clone()),
             tmux_sync_calls: Some(tmux_sync_calls.clone()),
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            redelivery_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({
             "session_id": "test-123",
@@ -3624,6 +3634,50 @@ mod tests {
                 result, expected_result,
                 "source={:?} should return {:?}",
                 source, expected_result
+            );
+        }
+
+        #[rstest]
+        #[case::codex_resume(Some("resume"), Engine::Codex, ProcessResult::SessionSaved, true)]
+        #[case::claude_resume(Some("resume"), Engine::Claude, ProcessResult::SessionSaved, true)]
+        #[case::startup(Some("startup"), Engine::Codex, ProcessResult::Skipped, false)]
+        #[case::source_missing(None, Engine::Codex, ProcessResult::SessionSaved, false)]
+        fn session_resume_starts_redelivery_only_for_resume_source(
+            #[case] source: Option<&str>,
+            #[case] engine: Engine,
+            #[case] expected_result: ProcessResult,
+            #[case] expected_redelivery: bool,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            let mut side_effects = SideEffects::none();
+            side_effects.redeliver_bg_notifications = true;
+            side_effects.redelivery_calls = Some(calls.clone());
+            let mut input = create_test_input_with_source(None, source);
+            input.engine = engine;
+
+            let result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                input,
+                temp_dir.path(),
+                &side_effects,
+            )
+            .expect("session-start should succeed");
+            let redelivery_calls = calls
+                .lock()
+                .expect("redelivery calls should be readable")
+                .clone();
+
+            assert_eq!(
+                (result, redelivery_calls),
+                (
+                    expected_result,
+                    if expected_redelivery {
+                        vec!["test-123".to_string()]
+                    } else {
+                        Vec::new()
+                    },
+                ),
             );
         }
 

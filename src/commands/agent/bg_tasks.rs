@@ -1,16 +1,14 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use super::{bg_storage, store};
+use crate::infra::process;
+use crate::shared::cache;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-
-use super::store;
-use crate::infra::process;
-use crate::shared::{cache, hex};
 
 /// Covers the interval between task registration and the worker recording its PID.
 const UNREGISTERED_WORKER_GRACE: Duration = Duration::from_secs(5 * 60);
@@ -32,11 +30,11 @@ fn tasks_dir_in(base_dir: &Path) -> PathBuf {
 }
 
 fn session_tasks_dir(tasks_root: &Path, session_id: &str) -> PathBuf {
-    tasks_root.join(hex::encode(session_id.as_bytes()))
+    bg_storage::session_dir(tasks_root, session_id)
 }
 
 fn marker_path(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<PathBuf> {
-    let task_id = Uuid::parse_str(task_id).context("invalid background task ID")?;
+    let task_id = bg_storage::task_id(task_id)?;
     Ok(session_tasks_dir(tasks_root, session_id).join(format!("{task_id}.pending")))
 }
 
@@ -55,7 +53,7 @@ fn register_in(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<()>
     let dir = marker
         .parent()
         .context("background task marker has no parent directory")?;
-    create_dir_secure(dir).with_context(|| {
+    bg_storage::create_dir_secure(dir).with_context(|| {
         format!(
             "failed to create background task directory: {}",
             dir.display()
@@ -121,24 +119,11 @@ fn update_record(
 }
 
 fn write_record(marker: &Path, record: &TaskRecord) -> Result<()> {
-    let temp_path = marker.with_extension(format!("tmp.{}", Uuid::new_v4()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp_path)
-        .with_context(|| {
-            format!(
-                "failed to create task marker temp file: {}",
-                temp_path.display()
-            )
-        })?;
-    serde_json::to_writer(&mut file, record)?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temp_path, marker)
-        .with_context(|| format!("failed to update task marker: {}", marker.display()))?;
-    Ok(())
+    bg_storage::write_atomic(marker, |file| {
+        serde_json::to_writer(&mut *file, record)?;
+        file.write_all(b"\n")?;
+        Ok(())
+    })
 }
 
 pub(crate) fn has_pending_in(tasks_root: &Path, session_id: &str) -> Result<bool> {
@@ -299,7 +284,7 @@ fn clear_in(tasks_root: &Path, session_id: &str, task_id: &str) -> Result<()> {
 }
 
 fn with_registry_lock<T>(tasks_root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
-    create_dir_secure(tasks_root).with_context(|| {
+    bg_storage::create_dir_secure(tasks_root).with_context(|| {
         format!(
             "failed to create background task registry: {}",
             tasks_root.display()
@@ -317,22 +302,4 @@ fn with_registry_lock<T>(tasks_root: &Path, operation: impl FnOnce() -> Result<T
         .lock()
         .with_context(|| format!("failed to lock task registry: {}", lock_path.display()))?;
     operation()
-}
-
-fn create_dir_secure(dir: &Path) -> std::io::Result<()> {
-    if !dir.exists() {
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)?;
-        return Ok(());
-    }
-
-    let metadata = fs::metadata(dir)?;
-    let mut permissions = metadata.permissions();
-    if permissions.mode() & 0o077 != 0 {
-        permissions.set_mode(0o700);
-        fs::set_permissions(dir, permissions)?;
-    }
-    Ok(())
 }

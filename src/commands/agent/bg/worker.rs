@@ -12,6 +12,7 @@ use indoc::formatdoc;
 use super::super::{bg_tasks, peer::notify, window_status};
 use super::output;
 use super::reminder::{self, ReminderSettings};
+use super::undelivered;
 use crate::shared::command;
 use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
@@ -59,7 +60,13 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
 
     let message = completion_message(args, status.as_ref().ok(), execution_error.as_deref());
     send_completion_before_joining_reminder(
-        || match notify::notify(&args.session, &message, None, None) {
+        || match record_failed_completion_notification(
+            &args.session,
+            &args.task_id,
+            &message,
+            notify::notify(&args.session, &message, None, None),
+            undelivered::save,
+        ) {
             Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
                 event = "agent.bg_run.notification_queued",
                 session = %args.session,
@@ -93,6 +100,26 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn record_failed_completion_notification(
+    session_id: &str,
+    task_id: &str,
+    message: &str,
+    result: Result<notify::Delivery>,
+    mut save: impl FnMut(&str, &str, &str) -> Result<()>,
+) -> Result<notify::Delivery> {
+    if result.is_err()
+        && let Err(error) = save(session_id, task_id, message)
+    {
+        tracing::warn!(
+            event = "agent.bg_run.undelivered_save_failed",
+            session = %session_id,
+            task = %task_id,
+            error = %format!("{error:#}"),
+        );
+    }
+    result
 }
 
 fn send_completion_before_joining_reminder(
@@ -328,5 +355,64 @@ mod tests {
         completion.join().unwrap();
 
         assert_eq!((reminder_started, completion_sent), (true, true));
+    }
+
+    #[test]
+    fn saves_completion_message_when_notification_fails() {
+        let message = "fixture completion";
+        let mut saved = None;
+        let result = record_failed_completion_notification(
+            "fixture-session",
+            "a1b2c3d4-e5f6-4789-8abc-def012345678",
+            message,
+            Err(anyhow::anyhow!("fixture delivery failure")),
+            |session_id, task_id, saved_message| {
+                saved = Some((
+                    session_id.to_string(),
+                    task_id.to_string(),
+                    saved_message.to_string(),
+                ));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), saved,),
+            (
+                Err("fixture delivery failure".to_string()),
+                Some((
+                    "fixture-session".to_string(),
+                    "a1b2c3d4-e5f6-4789-8abc-def012345678".to_string(),
+                    message.to_string(),
+                )),
+            ),
+        );
+    }
+
+    #[test]
+    fn does_not_save_completion_message_when_notification_is_accepted() {
+        let mut save_called = false;
+        let result = record_failed_completion_notification(
+            "fixture-session",
+            "a1b2c3d4-e5f6-4789-8abc-def012345678",
+            "fixture completion",
+            Ok(notify::Delivery::Queued {
+                reason: "fixture queue fallback".to_string(),
+            }),
+            |_, _, _| {
+                save_called = true;
+                anyhow::bail!("save should not be called")
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), save_called),
+            (
+                Ok(notify::Delivery::Queued {
+                    reason: "fixture queue fallback".to_string(),
+                }),
+                false,
+            ),
+        );
     }
 }
