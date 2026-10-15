@@ -15,12 +15,34 @@ const RESURRECT_STATE_DIR: &str = "resurrect";
 const RESURRECT_STATE_FILE: &str = "pane_sessions.txt";
 
 /// Session metadata captured for one pane during the pre-save hook.
-pub(super) type SavedPaneSession = (String, u32, u32, String, Vec<String>, Engine, bool);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct SavedPaneSession {
+    pub(super) session_name: String,
+    pub(super) window_index: u32,
+    pub(super) pane_index: u32,
+    pub(super) session_id: String,
+    pub(super) ancestor_session_ids: Vec<String>,
+    pub(super) engine: Engine,
+    pub(super) launched_with_vibe: bool,
+}
 
 /// Session metadata restored by pane position from the state file.
-pub(super) type RestoredPaneSession = (String, Vec<String>, Option<Engine>, bool);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RestoredPaneSession {
+    pub(super) session_id: String,
+    pub(super) ancestor_session_ids: Vec<String>,
+    pub(super) engine: Option<Engine>,
+    pub(super) launched_with_vibe: bool,
+}
 
-type ParsedStateLine<'a> = (&'a str, &'a str, Vec<String>, Option<Engine>, bool);
+#[derive(Debug, PartialEq, Eq)]
+struct ParsedStateLine<'a> {
+    pane_position: &'a str,
+    session_id: &'a str,
+    ancestor_session_ids: Vec<String>,
+    engine: Option<Engine>,
+    launched_with_vibe: bool,
+}
 /// Returns the path to the resurrect state file.
 pub(super) fn state_file_path() -> Result<PathBuf> {
     let base_dir =
@@ -38,38 +60,44 @@ fn parse_state_line(line: &str) -> Option<ParsedStateLine<'_>> {
         return None;
     }
     match line.split('\t').collect::<Vec<_>>().as_slice() {
-        [pane_position, session_id] => Some((pane_position, session_id, Vec::new(), None, false)),
-        [pane_position, session_id, ancestor_ids] => Some((
+        [pane_position, session_id] => Some(ParsedStateLine {
             pane_position,
             session_id,
-            parse_ancestor_ids(ancestor_ids),
-            None,
-            false,
-        )),
-        [pane_position, session_id, ancestor_ids, engine] => Some((
+            ancestor_session_ids: Vec::new(),
+            engine: None,
+            launched_with_vibe: false,
+        }),
+        [pane_position, session_id, ancestor_ids] => Some(ParsedStateLine {
             pane_position,
             session_id,
-            parse_ancestor_ids(ancestor_ids),
-            Some(Engine::from_str(engine, false).ok()?),
-            false,
-        )),
+            ancestor_session_ids: parse_ancestor_ids(ancestor_ids),
+            engine: None,
+            launched_with_vibe: false,
+        }),
+        [pane_position, session_id, ancestor_ids, engine] => Some(ParsedStateLine {
+            pane_position,
+            session_id,
+            ancestor_session_ids: parse_ancestor_ids(ancestor_ids),
+            engine: Some(Engine::from_str(engine, false).ok()?),
+            launched_with_vibe: false,
+        }),
         [
             pane_position,
             session_id,
             ancestor_ids,
             engine,
             launched_with_vibe,
-        ] => Some((
+        ] => Some(ParsedStateLine {
             pane_position,
             session_id,
-            parse_ancestor_ids(ancestor_ids),
-            Some(Engine::from_str(engine, false).ok()?),
-            match *launched_with_vibe {
+            ancestor_session_ids: parse_ancestor_ids(ancestor_ids),
+            engine: Some(Engine::from_str(engine, false).ok()?),
+            launched_with_vibe: match *launched_with_vibe {
                 "1" | "true" => true,
                 "0" | "false" => false,
                 _ => return None,
             },
-        )),
+        }),
         _ => None,
     }
 }
@@ -113,25 +141,24 @@ pub(super) fn write_state_file(
     let mut file = fs::File::create(state_file)
         .with_context(|| format!("Failed to create state file: {}", state_file.display()))?;
 
-    for (
-        session_name,
-        window_index,
-        pane_index,
-        session_id,
-        ancestor_session_ids,
-        engine,
-        launched_with_vibe,
-    ) in pane_sessions
-    {
-        let pane_position = format_pane_position(session_name, *window_index, *pane_index);
+    for pane_session in pane_sessions {
+        let pane_position = format_pane_position(
+            &pane_session.session_name,
+            pane_session.window_index,
+            pane_session.pane_index,
+        );
         writeln!(
             file,
             "{}\t{}\t{}\t{}\t{}",
             pane_position,
-            session_id,
-            ancestor_session_ids.join(","),
-            format_engine(*engine),
-            if *launched_with_vibe { "1" } else { "0" },
+            pane_session.session_id,
+            pane_session.ancestor_session_ids.join(","),
+            format_engine(pane_session.engine),
+            if pane_session.launched_with_vibe {
+                "1"
+            } else {
+                "0"
+            },
         )?;
     }
 
@@ -139,7 +166,7 @@ pub(super) fn write_state_file(
 }
 
 /// Reads pane sessions from a state file.
-/// Returns a map of pane_position -> (session_id, ancestor_session_ids, engine, launched_with_vibe).
+/// Returns a map of pane position to its restored session metadata.
 pub(super) fn read_state_file(
     state_file: &PathBuf,
 ) -> Result<HashMap<String, RestoredPaneSession>> {
@@ -150,17 +177,15 @@ pub(super) fn read_state_file(
     let mut pane_sessions = HashMap::new();
     for line in reader.lines() {
         let line = line?;
-        if let Some((pane_position, session_id, ancestor_session_ids, engine, launched_with_vibe)) =
-            parse_state_line(&line)
-        {
+        if let Some(parsed) = parse_state_line(&line) {
             pane_sessions.insert(
-                pane_position.to_string(),
-                (
-                    session_id.to_string(),
-                    ancestor_session_ids,
-                    engine,
-                    launched_with_vibe,
-                ),
+                parsed.pane_position.to_string(),
+                RestoredPaneSession {
+                    session_id: parsed.session_id.to_string(),
+                    ancestor_session_ids: parsed.ancestor_session_ids,
+                    engine: parsed.engine,
+                    launched_with_vibe: parsed.launched_with_vibe,
+                },
             );
         }
     }
@@ -183,55 +208,73 @@ mod tests {
     #[rstest]
     #[case::valid_line_no_ancestors(
         "main:0.1\tabc-123",
-        Some(("main:0.1", "abc-123", Vec::new(), None, false))
+        Some(ParsedStateLine {
+            pane_position: "main:0.1",
+            session_id: "abc-123",
+            ancestor_session_ids: Vec::new(),
+            engine: None,
+            launched_with_vibe: false,
+        })
     )]
     #[case::valid_uuid(
         "work:2.0\t550e8400-e29b-41d4-a716-446655440000",
-        Some((
-            "work:2.0",
-            "550e8400-e29b-41d4-a716-446655440000",
-            Vec::new(),
-            None,
-            false,
-        ))
+        Some(ParsedStateLine {
+            pane_position: "work:2.0",
+            session_id: "550e8400-e29b-41d4-a716-446655440000",
+            ancestor_session_ids: Vec::new(),
+            engine: None,
+            launched_with_vibe: false,
+        })
     )]
     #[case::session_with_slash(
         "fohte/repo:1.2\txyz-456",
-        Some(("fohte/repo:1.2", "xyz-456", Vec::new(), None, false))
+        Some(ParsedStateLine {
+            pane_position: "fohte/repo:1.2",
+            session_id: "xyz-456",
+            ancestor_session_ids: Vec::new(),
+            engine: None,
+            launched_with_vibe: false,
+        })
     )]
     #[case::with_ancestors(
         "main:0.1\tabc-123\troot-1,parent-1",
-        Some((
-            "main:0.1",
-            "abc-123",
-            vec!["root-1".to_string(), "parent-1".to_string()],
-            None,
-            false,
-        ))
+        Some(ParsedStateLine {
+            pane_position: "main:0.1",
+            session_id: "abc-123",
+            ancestor_session_ids: vec!["root-1".to_string(), "parent-1".to_string()],
+            engine: None,
+            launched_with_vibe: false,
+        })
     )]
     #[case::with_empty_ancestors_field(
         "main:0.1\tabc-123\t",
-        Some(("main:0.1", "abc-123", Vec::new(), None, false))
+        Some(ParsedStateLine {
+            pane_position: "main:0.1",
+            session_id: "abc-123",
+            ancestor_session_ids: Vec::new(),
+            engine: None,
+            launched_with_vibe: false,
+        })
     )]
     #[case::with_codex_engine(
         "main:0.1\tabc-123\troot-1\tcodex",
-        Some((
-            "main:0.1",
-            "abc-123",
-            vec!["root-1".to_string()],
-            Some(Engine::Codex),
-            false,
-        ))
+        Some(ParsedStateLine {
+            pane_position: "main:0.1",
+            session_id: "abc-123",
+            ancestor_session_ids: vec!["root-1".to_string()],
+            engine: Some(Engine::Codex),
+            launched_with_vibe: false,
+        })
     )]
     #[case::with_vibe_launch(
         "main:0.1\tabc-123\troot-1\tclaude\t1",
-        Some((
-            "main:0.1",
-            "abc-123",
-            vec!["root-1".to_string()],
-            Some(Engine::Claude),
-            true
-        ))
+        Some(ParsedStateLine {
+            pane_position: "main:0.1",
+            session_id: "abc-123",
+            ancestor_session_ids: vec!["root-1".to_string()],
+            engine: Some(Engine::Claude),
+            launched_with_vibe: true,
+        })
     )]
     #[case::missing_tab("main:0.1abc-123", None)]
     #[case::unknown_engine("main:0.1\tabc-123\t\tunknown", None)]
@@ -263,33 +306,33 @@ mod tests {
         let state_file = temp_dir.path().join("pane_sessions.txt");
 
         let pane_sessions = vec![
-            (
-                "main".to_string(),
-                0,
-                1,
-                "abc-123".to_string(),
-                Vec::new(),
-                Engine::Claude,
-                false,
-            ),
-            (
-                "work".to_string(),
-                2,
-                0,
-                "def-456".to_string(),
-                vec!["root-1".to_string(), "parent-1".to_string()],
-                Engine::Codex,
-                true,
-            ),
-            (
-                "fohte/repo".to_string(),
-                1,
-                2,
-                "550e8400-e29b-41d4-a716-446655440000".to_string(),
-                Vec::new(),
-                Engine::Claude,
-                false,
-            ),
+            SavedPaneSession {
+                session_name: "main".to_string(),
+                window_index: 0,
+                pane_index: 1,
+                session_id: "abc-123".to_string(),
+                ancestor_session_ids: Vec::new(),
+                engine: Engine::Claude,
+                launched_with_vibe: false,
+            },
+            SavedPaneSession {
+                session_name: "work".to_string(),
+                window_index: 2,
+                pane_index: 0,
+                session_id: "def-456".to_string(),
+                ancestor_session_ids: vec!["root-1".to_string(), "parent-1".to_string()],
+                engine: Engine::Codex,
+                launched_with_vibe: true,
+            },
+            SavedPaneSession {
+                session_name: "fohte/repo".to_string(),
+                window_index: 1,
+                pane_index: 2,
+                session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                ancestor_session_ids: Vec::new(),
+                engine: Engine::Claude,
+                launched_with_vibe: false,
+            },
         ];
 
         write_state_file(&state_file, &pane_sessions).expect("should write state file");
@@ -301,30 +344,30 @@ mod tests {
             HashMap::from([
                 (
                     "main:0.1".to_string(),
-                    (
-                        "abc-123".to_string(),
-                        Vec::new(),
-                        Some(Engine::Claude),
-                        false,
-                    )
+                    RestoredPaneSession {
+                        session_id: "abc-123".to_string(),
+                        ancestor_session_ids: Vec::new(),
+                        engine: Some(Engine::Claude),
+                        launched_with_vibe: false,
+                    }
                 ),
                 (
                     "work:2.0".to_string(),
-                    (
-                        "def-456".to_string(),
-                        vec!["root-1".to_string(), "parent-1".to_string()],
-                        Some(Engine::Codex),
-                        true,
-                    )
+                    RestoredPaneSession {
+                        session_id: "def-456".to_string(),
+                        ancestor_session_ids: vec!["root-1".to_string(), "parent-1".to_string()],
+                        engine: Some(Engine::Codex),
+                        launched_with_vibe: true,
+                    }
                 ),
                 (
                     "fohte/repo:1.2".to_string(),
-                    (
-                        "550e8400-e29b-41d4-a716-446655440000".to_string(),
-                        Vec::new(),
-                        Some(Engine::Claude),
-                        false,
-                    )
+                    RestoredPaneSession {
+                        session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                        ancestor_session_ids: Vec::new(),
+                        engine: Some(Engine::Claude),
+                        launched_with_vibe: false,
+                    }
                 ),
             ])
         );
@@ -335,27 +378,27 @@ mod tests {
         let temp_dir = TempDir::new().expect("should create temp dir");
         let state_file = temp_dir.path().join("nested").join("dir").join("state.txt");
 
-        let pane_sessions = vec![(
-            "main".to_string(),
-            0,
-            0,
-            "session-id".to_string(),
-            Vec::new(),
-            Engine::Claude,
-            false,
-        )];
+        let pane_sessions = vec![SavedPaneSession {
+            session_name: "main".to_string(),
+            window_index: 0,
+            pane_index: 0,
+            session_id: "session-id".to_string(),
+            ancestor_session_ids: Vec::new(),
+            engine: Engine::Claude,
+            launched_with_vibe: false,
+        }];
 
         write_state_file(&state_file, &pane_sessions).expect("should write state file");
         assert_eq!(
             read_state_file(&state_file).expect("should read state file"),
             HashMap::from([(
                 "main:0.0".to_string(),
-                (
-                    "session-id".to_string(),
-                    Vec::new(),
-                    Some(Engine::Claude),
-                    false,
-                ),
+                RestoredPaneSession {
+                    session_id: "session-id".to_string(),
+                    ancestor_session_ids: Vec::new(),
+                    engine: Some(Engine::Claude),
+                    launched_with_vibe: false,
+                },
             )])
         );
     }
@@ -386,25 +429,30 @@ mod tests {
             HashMap::from([
                 (
                     "main:0.1".to_string(),
-                    ("abc-123".to_string(), Vec::new(), None, false)
+                    RestoredPaneSession {
+                        session_id: "abc-123".to_string(),
+                        ancestor_session_ids: Vec::new(),
+                        engine: None,
+                        launched_with_vibe: false,
+                    }
                 ),
                 (
                     "work:2.0".to_string(),
-                    (
-                        "def-456".to_string(),
-                        vec!["root-1".to_string()],
-                        None,
-                        false,
-                    )
+                    RestoredPaneSession {
+                        session_id: "def-456".to_string(),
+                        ancestor_session_ids: vec!["root-1".to_string()],
+                        engine: None,
+                        launched_with_vibe: false,
+                    }
                 ),
                 (
                     "work-codex:3.0".to_string(),
-                    (
-                        "ghi-789".to_string(),
-                        vec!["root-2".to_string()],
-                        Some(Engine::Codex),
-                        false,
-                    )
+                    RestoredPaneSession {
+                        session_id: "ghi-789".to_string(),
+                        ancestor_session_ids: vec!["root-2".to_string()],
+                        engine: Some(Engine::Codex),
+                        launched_with_vibe: false,
+                    }
                 ),
             ])
         );

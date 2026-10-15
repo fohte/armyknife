@@ -21,7 +21,8 @@ use crate::shared::log::short_run_id;
 
 mod state_file;
 use state_file::{
-    format_engine, format_pane_position, read_state_file, state_file_path, write_state_file,
+    RestoredPaneSession, SavedPaneSession, format_engine, format_pane_position, read_state_file,
+    state_file_path, write_state_file,
 };
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -88,15 +89,15 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
                 let ancestor_session_ids = load_ancestor_session_ids(&sessions_dir, &session_id);
                 let engine = load_engine(&sessions_dir, &session_id);
                 let launched_with_vibe = load_launched_with_vibe(&sessions_dir, &session_id);
-                (
-                    pane.session_name,
-                    pane.window_index,
-                    pane.pane_index,
+                SavedPaneSession {
+                    session_name: pane.session_name,
+                    window_index: pane.window_index,
+                    pane_index: pane.pane_index,
                     session_id,
                     ancestor_session_ids,
                     engine,
                     launched_with_vibe,
-                )
+                }
             })
         })
         .collect();
@@ -229,9 +230,7 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 
     let mut commands = Vec::new();
     let mut queued_count = 0;
-    for (pane_position, (session_id, ancestor_session_ids, engine, launched_with_vibe)) in
-        &pane_sessions
-    {
+    for (pane_position, pane_session) in &pane_sessions {
         let Some((pane_id, pane_pid)) = panes_by_position.get(pane_position) else {
             tracing::warn!(event = "agent.resurrect.restore.pane_skipped", pane_position = %pane_position);
             continue;
@@ -241,24 +240,24 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
         // sibling session's SessionStart hook observe a still-stale pane_id
         // (see `store::update_session_tmux_pane_id_in`).
         if let Err(error) =
-            store::update_session_tmux_pane_id_in(&sessions_dir, session_id, pane_id)
+            store::update_session_tmux_pane_id_in(&sessions_dir, &pane_session.session_id, pane_id)
         {
             tracing::warn!(
                 event = "agent.resurrect.restore.pane_id_update_failed",
-                session_id = %session_id,
+                session_id = %pane_session.session_id,
                 %error,
             );
         }
 
-        let engine = engine.unwrap_or_else(|| load_engine(&sessions_dir, session_id));
+        let engine = pane_session
+            .engine
+            .unwrap_or_else(|| load_engine(&sessions_dir, &pane_session.session_id));
         let pane_has_agent =
             pane::process::pane_has_live_agent_process(*pane_pid, engine, snapshot.as_ref());
         commands.extend(restore_commands_for_pane(
             pane_id,
-            session_id,
-            ancestor_session_ids,
+            pane_session,
             engine,
-            *launched_with_vibe,
             pane_has_agent,
         ));
 
@@ -292,10 +291,8 @@ fn run_restore(_args: &RestoreArgs) -> Result<()> {
 /// session id, plus an optional `send-keys` from `resume_command_for`.
 fn restore_commands_for_pane(
     pane_id: &str,
-    session_id: &str,
-    ancestor_session_ids: &[String],
+    pane_session: &RestoredPaneSession,
     engine: Engine,
-    launched_with_vibe: bool,
     pane_has_agent: bool,
 ) -> Vec<Vec<String>> {
     let mut commands = vec![vec![
@@ -304,16 +301,10 @@ fn restore_commands_for_pane(
         "-t".to_string(),
         pane_id.to_string(),
         TMUX_SESSION_OPTION.to_string(),
-        session_id.to_string(),
+        pane_session.session_id.clone(),
     ]];
 
-    if let Some(command) = resume_command_for(
-        session_id,
-        ancestor_session_ids,
-        engine,
-        launched_with_vibe,
-        pane_has_agent,
-    ) {
+    if let Some(command) = resume_command_for(pane_session, engine, pane_has_agent) {
         commands.push(vec![
             "send-keys".to_string(),
             "-t".to_string(),
@@ -338,16 +329,14 @@ fn restore_commands_for_pane(
 /// text into that pane is not: it would land in the middle of whatever the
 /// user or Claude Code is doing.
 ///
-/// `ancestor_session_ids`, when non-empty, is passed via
+/// `pane_session.ancestor_session_ids`, when non-empty, is passed via
 /// `--ancestor-session-ids` so `a agent resume` can set
 /// `ARMYKNIFE_ANCESTOR_SESSION_IDS` on the `claude` process it execs.
-/// `engine` and `launched_with_vibe` are passed explicitly because the store
-/// record may have been removed before restore runs.
+/// The saved launch metadata is used because the store record may have been
+/// removed before restore runs.
 fn resume_command_for(
-    session_id: &str,
-    ancestor_session_ids: &[String],
+    pane_session: &RestoredPaneSession,
     engine: Engine,
-    launched_with_vibe: bool,
     pane_has_agent: bool,
 ) -> Option<String> {
     if pane_has_agent {
@@ -355,21 +344,21 @@ fn resume_command_for(
     }
     // Quoted because `send-keys` types into an interactive shell where
     // metacharacters (spaces, `;`, backticks) would otherwise be parsed.
-    let quoted_id = shlex::try_quote(session_id)
+    let quoted_id = shlex::try_quote(&pane_session.session_id)
         .map(|cow| cow.into_owned())
-        .unwrap_or_else(|_| session_id.to_string());
+        .unwrap_or_else(|_| pane_session.session_id.clone());
     let mut command = format!(
         "a agent resume {quoted_id} --engine {}",
         format_engine(engine)
     );
-    if !ancestor_session_ids.is_empty() {
-        let joined = ancestor_session_ids.join(",");
+    if !pane_session.ancestor_session_ids.is_empty() {
+        let joined = pane_session.ancestor_session_ids.join(",");
         let quoted_ancestors = shlex::try_quote(&joined)
             .map(|cow| cow.into_owned())
             .unwrap_or_else(|_| joined);
         command.push_str(&format!(" --ancestor-session-ids {quoted_ancestors}"));
     }
-    if launched_with_vibe {
+    if pane_session.launched_with_vibe {
         command.push_str(" --launched-with-vibe");
     }
     Some(command)
@@ -381,6 +370,22 @@ mod tests {
     use rstest::rstest;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    fn restored_pane_session(
+        session_id: &str,
+        ancestor_session_ids: &[&str],
+        launched_with_vibe: bool,
+    ) -> RestoredPaneSession {
+        RestoredPaneSession {
+            session_id: session_id.to_string(),
+            ancestor_session_ids: ancestor_session_ids
+                .iter()
+                .map(|id| (*id).to_string())
+                .collect(),
+            engine: None,
+            launched_with_vibe,
+        }
+    }
 
     mod load_ancestor_session_ids_tests {
         use std::collections::BTreeSet;
@@ -534,63 +539,50 @@ mod tests {
         // A pane whose process tree already has a live claude process must
         // never be typed into; the resume command would land mid-conversation.
         #[rstest]
-        #[case::pane_has_claude("abc-123", &[], Engine::Claude, false, true, None)]
-        #[case::pane_is_free_no_ancestors(
-            "abc-123",
-            &[],
+        #[case::pane_has_claude(
+            restored_pane_session("abc-123", &[], false),
             Engine::Claude,
-            false,
+            true,
+            None
+        )]
+        #[case::pane_is_free_no_ancestors(
+            restored_pane_session("abc-123", &[], false),
+            Engine::Claude,
             false,
             Some("a agent resume abc-123 --engine claude".to_string())
         )]
         #[case::pane_is_free_with_ancestors(
-            "abc-123",
-            &["root-1".to_string(), "parent-1".to_string()],
+            restored_pane_session("abc-123", &["root-1", "parent-1"], false),
             Engine::Claude,
-            false,
             false,
             Some("a agent resume abc-123 --engine claude --ancestor-session-ids 'root-1,parent-1'".to_string())
         )]
         #[case::pane_is_free_codex(
-            "abc-123",
-            &[],
+            restored_pane_session("abc-123", &[], false),
             Engine::Codex,
-            false,
             false,
             Some("a agent resume abc-123 --engine codex".to_string())
         )]
         #[case::quotes_metacharacters(
-            "id; rm -rf /",
-            &[],
+            restored_pane_session("id; rm -rf /", &[], false),
             Engine::Claude,
-            false,
             false,
             Some("a agent resume 'id; rm -rf /' --engine claude".to_string())
         )]
         #[case::pane_is_free_with_vibe_launch(
-            "abc-123",
-            &[],
+            restored_pane_session("abc-123", &[], true),
             Engine::Claude,
-            true,
             false,
             Some("a agent resume abc-123 --engine claude --launched-with-vibe".to_string())
         )]
         fn resume_command_for_cases(
-            #[case] session_id: &str,
-            #[case] ancestor_session_ids: &[String],
+            #[case] pane_session: RestoredPaneSession,
             #[case] engine: Engine,
-            #[case] launched_with_vibe: bool,
-            #[case] pane_has_claude: bool,
+            #[case] pane_has_agent: bool,
             #[case] expected: Option<String>,
         ) {
             assert_eq!(
-                resume_command_for(
-                    session_id,
-                    ancestor_session_ids,
-                    engine,
-                    launched_with_vibe,
-                    pane_has_claude,
-                ),
+                resume_command_for(&pane_session, engine, pane_has_agent),
                 expected
             );
         }
@@ -602,10 +594,8 @@ mod tests {
         #[rstest]
         #[case::pane_has_claude(
             "%5",
-            "abc-123",
-            &[],
+            restored_pane_session("abc-123", &[], false),
             Engine::Claude,
-            false,
             true,
             vec![vec![
                 "set-option".to_string(),
@@ -618,10 +608,8 @@ mod tests {
         )]
         #[case::pane_is_free_no_ancestors(
             "%5",
-            "abc-123",
-            &[],
+            restored_pane_session("abc-123", &[], false),
             Engine::Claude,
-            false,
             false,
             vec![
                 vec![
@@ -643,10 +631,8 @@ mod tests {
         )]
         #[case::pane_is_free_with_ancestors(
             "%5",
-            "abc-123",
-            &["root-1".to_string(), "parent-1".to_string()],
+            restored_pane_session("abc-123", &["root-1", "parent-1"], false),
             Engine::Codex,
-            false,
             false,
             vec![
                 vec![
@@ -668,10 +654,8 @@ mod tests {
         )]
         #[case::pane_is_free_with_vibe_launch(
             "%5",
-            "abc-123",
-            &[],
+            restored_pane_session("abc-123", &[], true),
             Engine::Claude,
-            true,
             false,
             vec![
                 vec![
@@ -693,22 +677,13 @@ mod tests {
         )]
         fn restore_commands_for_pane_cases(
             #[case] pane_id: &str,
-            #[case] session_id: &str,
-            #[case] ancestor_session_ids: &[String],
+            #[case] pane_session: RestoredPaneSession,
             #[case] engine: Engine,
-            #[case] launched_with_vibe: bool,
-            #[case] pane_has_claude: bool,
+            #[case] pane_has_agent: bool,
             #[case] expected: Vec<Vec<String>>,
         ) {
             assert_eq!(
-                restore_commands_for_pane(
-                    pane_id,
-                    session_id,
-                    ancestor_session_ids,
-                    engine,
-                    launched_with_vibe,
-                    pane_has_claude
-                ),
+                restore_commands_for_pane(pane_id, &pane_session, engine, pane_has_agent),
                 expected
             );
         }
