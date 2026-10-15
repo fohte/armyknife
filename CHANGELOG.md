@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.426](https://github.com/fohte/armyknife/compare/v0.1.425...v0.1.426) (2026-10-15)
+
+
+### Bug Fixes
+
+* **agent/vibe:** honor explicit vibe launches ([#1187](https://github.com/fohte/armyknife/issues/1187)) ([5651352](https://github.com/fohte/armyknife/commit/5651352c9c8dcafc89b9acd2f44ebcf91d147e1f))
+
 ## [0.1.425](https://github.com/fohte/armyknife/compare/v0.1.424...v0.1.425) (2026-10-15)
 
 
