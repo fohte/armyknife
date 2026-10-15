@@ -34,6 +34,10 @@ pub struct ResumeArgs {
     /// then to Claude when no session record exists.
     #[arg(long, value_enum)]
     pub engine: Option<Engine>,
+
+    /// Restore the session's `a agent new --vibe` launch marker.
+    #[arg(long, hide = true)]
+    pub launched_with_vibe: bool,
 }
 
 /// Runs the resume command.
@@ -58,16 +62,15 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         .as_deref()
         .filter(|s| !s.is_empty());
 
-    // Codex delays its resume SessionStart hook until the first turn. Make
-    // the restored session visible while it is waiting for that turn.
     if engine == Engine::Codex {
-        if let Some(ancestor_session_ids) = ancestor_session_ids {
+        if args.launched_with_vibe || ancestor_session_ids.is_some() {
             let cwd = std::env::current_dir()?;
-            session_metadata::record_ancestor_session_ids_if_empty(
+            session_metadata::record_codex_resume_metadata_if_needed(
                 &store::sessions_dir()?,
                 &session_id,
                 &cwd,
                 ancestor_session_ids,
+                args.launched_with_vibe,
                 Some(super::session_pr_context::capture),
             )?;
         }
@@ -76,14 +79,12 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
         });
     }
 
-    let err = match ancestor_session_ids {
-        Some(ancestor_ids) => process::exec_replace_with_env(
-            &binary_path,
-            resume_args,
-            &[(EnvVars::ancestor_session_ids_name(), ancestor_ids)],
-        ),
-        None => process::exec_replace(&binary_path, resume_args),
-    };
+    if args.launched_with_vibe {
+        // SessionStart restores the ancestor chain when it creates a missing Claude record.
+        session_metadata::mark_vibe_launch_if_session_exists(&store::sessions_dir()?, &session_id)?;
+    }
+    let env_vars = resume_environment_variables(ancestor_session_ids, args.launched_with_vibe);
+    let err = process::exec_replace_with_env(&binary_path, resume_args, &env_vars);
 
     bail!("Failed to exec {}: {}", binary_name, err)
 }
@@ -92,6 +93,20 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 /// override an explicit engine supplied by a restore state file or the user.
 fn resolve_resume_engine(explicit: Option<Engine>, stored: Option<Engine>) -> Engine {
     explicit.or(stored).unwrap_or_default()
+}
+
+fn resume_environment_variables(
+    ancestor_session_ids: Option<&str>,
+    launched_with_vibe: bool,
+) -> Vec<(&'static str, &str)> {
+    let mut env_vars = Vec::with_capacity(2);
+    if let Some(ancestor_session_ids) = ancestor_session_ids {
+        env_vars.push((EnvVars::ancestor_session_ids_name(), ancestor_session_ids));
+    }
+    if launched_with_vibe {
+        env_vars.push((EnvVars::session_vibe_launch_name(), "1"));
+    }
+    env_vars
 }
 
 /// Runs Codex as a child so an unsuccessful resume can restore the original
@@ -481,6 +496,42 @@ mod tests {
         }
     }
 
+    mod resume_environment_variables_tests {
+        use rstest::rstest;
+
+        use super::*;
+
+        #[rstest]
+        #[case::ancestor_ids_only(
+            Some("root, parent"),
+            false,
+            vec![(EnvVars::ancestor_session_ids_name(), "root, parent")]
+        )]
+        #[case::vibe_marker_only(
+            None,
+            true,
+            vec![(EnvVars::session_vibe_launch_name(), "1")]
+        )]
+        #[case::vibe_marker_and_ancestors(
+            Some("root, parent"),
+            true,
+            vec![
+                (EnvVars::ancestor_session_ids_name(), "root, parent"),
+                (EnvVars::session_vibe_launch_name(), "1"),
+            ]
+        )]
+        fn creates_environment_for_resumed_session(
+            #[case] ancestor_session_ids: Option<&str>,
+            #[case] launched_with_vibe: bool,
+            #[case] expected: Vec<(&'static str, &'static str)>,
+        ) {
+            assert_eq!(
+                resume_environment_variables(ancestor_session_ids, launched_with_vibe),
+                expected
+            );
+        }
+    }
+
     mod resume_binary_and_args_tests {
         use super::*;
 
@@ -525,6 +576,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                launched_with_vibe: true,
                 is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
@@ -575,7 +627,12 @@ mod tests {
                 .expect("session should exist");
 
             assert_eq!(
-                (change.is_some(), reloaded.status, reloaded.read_at),
+                (
+                    change.is_some(),
+                    reloaded.status,
+                    reloaded.read_at,
+                    reloaded.launched_with_vibe,
+                ),
                 (
                     expected_change,
                     expected_status,
@@ -584,6 +641,7 @@ mod tests {
                     } else {
                         expected_read_at
                     },
+                    true,
                 )
             );
         }
@@ -601,6 +659,7 @@ mod tests {
                 original.read_at,
                 original.updated_at,
                 original.tmux_info.clone(),
+                original.launched_with_vibe,
             );
             store::save_session_to(temp_dir.path(), &original).expect("save should succeed");
 
@@ -620,6 +679,7 @@ mod tests {
                         reloaded.read_at,
                         reloaded.updated_at,
                         reloaded.tmux_info,
+                        reloaded.launched_with_vibe,
                     ),
                 ),
                 (Some("resume failed".to_string()), expected)
@@ -651,11 +711,13 @@ mod tests {
                     result.err().map(|error| error.to_string()),
                     reloaded.status,
                     reloaded.updated_at,
+                    reloaded.launched_with_vibe,
                 ),
                 (
                     Some("resume failed".to_string()),
                     SessionStatus::Running,
                     hook_updated_at,
+                    true,
                 )
             );
         }
@@ -688,18 +750,20 @@ mod tests {
                     reloaded.status,
                     reloaded.read_at,
                     reloaded.tmux_info,
+                    reloaded.launched_with_vibe,
                 ),
-                (true, SessionStatus::Stopped, None, current_tmux_info)
+                (true, SessionStatus::Stopped, None, current_tmux_info, true)
             );
         }
 
         #[rstest]
         fn missing_record_is_marked_as_resumed(temp_dir: TempDir) {
-            session_metadata::record_ancestor_session_ids_if_empty(
+            session_metadata::record_codex_resume_metadata_if_needed(
                 temp_dir.path(),
                 "resume-target",
                 Path::new("/tmp/test"),
-                "root",
+                Some("root"),
+                false,
                 None,
             )
             .expect("metadata should be recorded");
@@ -792,6 +856,7 @@ mod tests {
                 work_type: None,
                 work_type_pinned: false,
                 vibe_enabled: false,
+                launched_with_vibe: false,
                 is_delegated: false,
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),

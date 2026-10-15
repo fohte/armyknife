@@ -12,7 +12,7 @@ pub enum VibeCommands {
     On,
     /// Clear the calling session's explicit vibe setting; inherited settings still apply
     Off,
-    /// Check whether this session or an ancestor enabled vibe mode
+    /// Check whether this session enabled vibe mode or inherited it via `--vibe`
     Status,
 }
 
@@ -31,7 +31,7 @@ pub fn run(command: &VibeCommands) -> Result<()> {
     }
 }
 
-/// Returns whether the calling session or a stored ancestor explicitly enabled vibe mode.
+/// Returns whether the calling session enabled vibe mode or inherited it through `--vibe`.
 ///
 /// An ancestor's flag is inherited only while its session record exists. Returns `false` outside a tracked
 /// session or when the caller's session record is missing.
@@ -57,6 +57,9 @@ fn is_vibe_enabled_for(sessions_dir: &std::path::Path, session_id: &str) -> Resu
     };
     if session.vibe_enabled {
         return Ok(true);
+    }
+    if !session.launched_with_vibe {
+        return Ok(false);
     }
 
     for ancestor_session_id in session.ancestor_session_ids {
@@ -149,6 +152,7 @@ mod tests {
             label: None,
             work_type: None,
             vibe_enabled,
+            launched_with_vibe: false,
             work_type_pinned: false,
             is_delegated: false,
             ancestor_session_ids: ancestors.iter().map(|id| (*id).to_string()).collect(),
@@ -230,7 +234,8 @@ mod tests {
     #[rstest]
     fn disabling_the_enabling_ancestor_disables_descendant_status(test_store: TestStore) {
         let root = session("root", &[], false);
-        let child = session("child", &["root"], false);
+        let mut child = session("child", &["root"], false);
+        child.launched_with_vibe = true;
         store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
         store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
         let cache_home = test_store
@@ -271,7 +276,8 @@ mod tests {
     fn vibe_status_uses_the_full_ancestor_chain(test_store: TestStore) {
         let root = session("root", &[], true);
         let parent = session("parent", &["root"], false);
-        let child = session("child", &["root", "parent"], false);
+        let mut child = session("child", &["root", "parent"], false);
+        child.launched_with_vibe = true;
         store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
         store::save_session_to(&test_store.sessions_dir, &parent).expect("parent should save");
         store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
@@ -284,6 +290,33 @@ mod tests {
         });
 
         assert!(actual);
+    }
+
+    #[rstest]
+    #[case::launched_child_inherits_active_ancestor(true, true, true)]
+    #[case::ordinary_child_does_not_inherit(true, false, false)]
+    #[case::launched_child_requires_active_ancestor(false, true, false)]
+    fn status_inherits_only_for_vibe_launched_sessions(
+        test_store: TestStore,
+        #[case] ancestor_vibe_enabled: bool,
+        #[case] launched_with_vibe: bool,
+        #[case] expected: bool,
+    ) {
+        let root = session("root", &[], ancestor_vibe_enabled);
+        let mut child = session("child", &["root"], false);
+        child.launched_with_vibe = launched_with_vibe;
+        store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
+        store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
+        let cache_home = test_store
+            .cache_home
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+
+        let actual = with_session_env(cache_home, Some("child"), || {
+            is_vibe_enabled().expect("vibe status should load")
+        });
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]

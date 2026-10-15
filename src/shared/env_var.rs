@@ -9,6 +9,7 @@ const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const SESSION_WORK_TYPE: &str = "ARMYKNIFE_SESSION_WORK_TYPE";
 const SESSION_DELEGATED: &str = "ARMYKNIFE_SESSION_DELEGATED";
+const SESSION_VIBE_LAUNCH: &str = "ARMYKNIFE_SESSION_VIBE_LAUNCH";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
 const CODEX_MANAGED_LAUNCH: &str = "ARMYKNIFE_CODEX_MANAGED_LAUNCH";
 const CC_HOOK_LOG: &str = "ARMYKNIFE_CC_HOOK_LOG";
@@ -50,6 +51,9 @@ pub struct EnvVars {
     /// Whether this session was launched by `a agent new --agent`.
     pub session_delegated: bool,
 
+    /// Whether this session was launched with `a agent new --vibe`.
+    pub session_vibe_launch: bool,
+
     /// Comma-separated ancestor session IDs from root to immediate parent.
     pub ancestor_session_ids: Option<String>,
 
@@ -83,6 +87,7 @@ impl EnvVars {
             session_label: non_empty_var(SESSION_LABEL),
             session_work_type: non_empty_var(SESSION_WORK_TYPE),
             session_delegated: non_empty_var(SESSION_DELEGATED).is_some(),
+            session_vibe_launch: non_empty_var(SESSION_VIBE_LAUNCH).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
             cc_notify: non_empty_var(CC_NOTIFY),
@@ -117,6 +122,11 @@ impl EnvVars {
     /// Returns the env var name that marks an `--agent` launch.
     pub fn session_delegated_name() -> &'static str {
         SESSION_DELEGATED
+    }
+
+    /// Returns the env var name that marks a `--vibe` launch.
+    pub fn session_vibe_launch_name() -> &'static str {
+        SESSION_VIBE_LAUNCH
     }
 
     /// Returns the env var name for ANCESTOR_SESSION_IDS (used as key in env var pairs).
