@@ -243,4 +243,32 @@ mod tests {
             (true, Engine::Claude)
         );
     }
+
+    #[rstest]
+    fn updates_existing_session_with_vibe_launch_marker(sessions_dir: TempDir) {
+        let mut expected_session = session(Vec::new());
+        store::save_session_to(sessions_dir.path(), &expected_session)
+            .expect("existing session should be saved");
+        expected_session.launched_with_vibe = true;
+
+        record_resume_metadata_if_needed(
+            sessions_dir.path(),
+            "resume-target",
+            Path::new("/workspace/project"),
+            None,
+            true,
+            Engine::Codex,
+            None,
+        )
+        .expect("record should succeed");
+
+        let actual = store::load_session_from(sessions_dir.path(), "resume-target")
+            .expect("load should succeed")
+            .expect("session should exist");
+
+        assert_eq!(
+            serde_json::to_value(actual).expect("actual session should serialize"),
+            serde_json::to_value(expected_session).expect("expected session should serialize")
+        );
+    }
 }
