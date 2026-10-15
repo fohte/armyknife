@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.427](https://github.com/fohte/armyknife/compare/v0.1.426...v0.1.427) (2026-10-15)
+
+
+### Bug Fixes
+
+* **agent:** unify app-server response timeouts ([#1189](https://github.com/fohte/armyknife/issues/1189)) ([604796e](https://github.com/fohte/armyknife/commit/604796ea29d719a1b1eb425476cad81609596dc2))
+
 ## [0.1.426](https://github.com/fohte/armyknife/compare/v0.1.425...v0.1.426) (2026-10-15)
 
 
