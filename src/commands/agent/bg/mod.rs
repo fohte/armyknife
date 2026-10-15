@@ -1,12 +1,15 @@
 mod output;
+mod redelivery;
 mod reminder;
 mod reminder_hook;
 mod run;
+mod undelivered;
 mod worker;
 
 use anyhow::Result;
 use clap::Subcommand;
 
+pub use redelivery::RedeliverDetachedArgs;
 pub use reminder_hook::ReminderHookArgs;
 pub use run::RunArgs;
 pub use worker::RunDetachedArgs;
@@ -19,6 +22,10 @@ pub enum BgCommands {
     /// Internal: wait for a background command and report its result
     #[command(name = "run-detached", hide = true)]
     RunDetached(RunDetachedArgs),
+
+    /// Internal: retry completion notifications saved for a resumed session
+    #[command(name = "redeliver-detached", hide = true)]
+    RedeliverDetached(RedeliverDetachedArgs),
 
     /// Internal: wake Claude Code when a background Bash task runs too long
     #[command(name = "reminder-hook", hide = true)]
@@ -35,6 +42,15 @@ pub fn run(command: &BgCommands) -> Result<Option<i32>> {
             worker::run(args)?;
             Ok(None)
         }
+        BgCommands::RedeliverDetached(args) => {
+            redelivery::run(args)?;
+            Ok(None)
+        }
         BgCommands::ReminderHook(args) => reminder_hook::run(args),
     }
+}
+
+#[cfg(not(test))]
+pub(super) fn spawn_redelivery_if_pending(session_id: &str) {
+    redelivery::spawn_if_pending(session_id);
 }
