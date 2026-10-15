@@ -64,7 +64,7 @@ pub fn run(args: &ResumeArgs) -> Result<()> {
 
     // Codex delays its resume SessionStart hook until the first turn, and
     // resurrect may have removed the session record entirely.
-    if ancestor_session_ids.is_some() || args.launched_with_vibe {
+    if args.launched_with_vibe || (engine == Engine::Codex && ancestor_session_ids.is_some()) {
         let cwd = std::env::current_dir()?;
         session_metadata::record_resume_metadata_if_needed(
             &store::sessions_dir()?,
