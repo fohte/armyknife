@@ -1,6 +1,5 @@
 use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
 
 use anyhow::{Context, anyhow};
 use serde_json::{Value, json};
@@ -8,7 +7,7 @@ use tungstenite::{Message, WebSocket};
 
 use crate::commands::agent::types::ReasoningEffort;
 
-use super::{DeliveryError, RequestError, RpcRequest, TURN_START_RESPONSE_TIMEOUT};
+use super::{DeliveryError, RequestError, RpcRequest};
 mod history;
 use history::{
     MatchingItemSnapshot, has_completed_turn_notification, has_recorded_message,
@@ -27,7 +26,6 @@ struct DeliveryContext<'a> {
     client_user_message_id: &'a str,
     content: &'a str,
     snapshot: &'a MatchingItemSnapshot,
-    read_timeout: Duration,
 }
 
 pub(super) fn send_and_confirm(
@@ -37,32 +35,9 @@ pub(super) fn send_and_confirm(
     effort: Option<ReasoningEffort>,
     client_user_message_id: &str,
 ) -> super::Result<()> {
-    send_and_confirm_with_read_timeout(
-        socket,
-        thread_id,
-        content,
-        effort,
-        client_user_message_id,
-        super::RESPONSE_TIMEOUT,
-    )
-}
-
-fn send_and_confirm_with_read_timeout(
-    socket: &mut WebSocket<UnixStream>,
-    thread_id: &str,
-    content: &str,
-    effort: Option<ReasoningEffort>,
-    client_user_message_id: &str,
-    read_timeout: Duration,
-) -> super::Result<()> {
     // A thread without a user message yet has no history to read, so the app-server
     // rejects `includeTurns`; treat it as having no turns.
-    let snapshot_thread = match read_thread(
-        socket,
-        thread_id,
-        PRE_TURN_READ_REQUEST_ID,
-        read_timeout,
-    ) {
+    let snapshot_thread = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
         Ok((response, _)) => response.get("thread").cloned().ok_or_else(|| {
             DeliveryError::NotDelivered(anyhow!(
                 "Codex app-server thread/read response did not contain a thread before turn/start"
@@ -79,12 +54,6 @@ fn send_and_confirm_with_read_timeout(
         }
     };
     let snapshot = matching_user_message_snapshot(&snapshot_thread, content);
-
-    socket
-        .get_ref()
-        .set_read_timeout(Some(TURN_START_RESPONSE_TIMEOUT))
-        .context("failed to set Codex app-server turn/start response timeout")
-        .map_err(DeliveryError::NotDelivered)?;
 
     let turn_start_response = super::send_request_response(
         socket,
@@ -105,7 +74,6 @@ fn send_and_confirm_with_read_timeout(
         client_user_message_id,
         content,
         snapshot: &snapshot,
-        read_timeout,
     };
 
     // `turn/start` only acknowledges queueing, so resume to observe the userMessage item event.
@@ -129,7 +97,7 @@ fn send_and_confirm_with_read_timeout(
     }
 
     let (read_response, read_notifications) =
-        read_thread(socket, thread_id, THREAD_READ_REQUEST_ID, read_timeout)
+        read_thread(socket, thread_id, THREAD_READ_REQUEST_ID)
             .map_err(|error| uncertain_request_error(error, "thread/read"))?;
     let thread = read_response.get("thread").ok_or_else(|| {
         DeliveryError::Unconfirmed(anyhow!(
@@ -199,13 +167,8 @@ where
             Ok(None) => continue,
             Err(error) if is_read_timeout(&error) => {
                 let request_id = take_request_id(next_read_request_id)?;
-                let (response, notifications) = read_thread(
-                    socket,
-                    delivery.thread_id,
-                    request_id,
-                    delivery.read_timeout,
-                )
-                .map_err(|error| uncertain_request_error(error, "thread/read"))?;
+                let (response, notifications) = read_thread(socket, delivery.thread_id, request_id)
+                    .map_err(|error| uncertain_request_error(error, "thread/read"))?;
                 let thread = response.get("thread").ok_or_else(|| {
                     DeliveryError::Unconfirmed(anyhow!(
                         "Codex app-server thread/read response did not contain a thread"
@@ -284,13 +247,8 @@ fn confirm_after_turn_end(
     next_read_request_id: &mut u64,
 ) -> super::Result<()> {
     let request_id = take_request_id(next_read_request_id)?;
-    let (response, notifications) = read_thread(
-        socket,
-        delivery.thread_id,
-        request_id,
-        delivery.read_timeout,
-    )
-    .map_err(|error| uncertain_request_error(error, "thread/read"))?;
+    let (response, notifications) = read_thread(socket, delivery.thread_id, request_id)
+        .map_err(|error| uncertain_request_error(error, "thread/read"))?;
     let thread = response.get("thread").ok_or_else(|| {
         DeliveryError::Unconfirmed(anyhow!(
             "Codex app-server thread/read response did not contain a thread"
@@ -313,11 +271,10 @@ fn read_thread(
     socket: &mut WebSocket<UnixStream>,
     thread_id: &str,
     request_id: u64,
-    read_timeout: Duration,
 ) -> std::result::Result<(Value, Vec<Value>), RequestError> {
     socket
         .get_ref()
-        .set_read_timeout(Some(read_timeout))
+        .set_read_timeout(Some(super::RESPONSE_TIMEOUT))
         .context("failed to set Codex app-server thread/read response timeout")
         .map_err(RequestError::Transport)?;
     super::send_request_and_collect_notifications(
@@ -331,8 +288,8 @@ pub(super) fn latest_turn_status(
     thread_id: &str,
     request_id: u64,
 ) -> anyhow::Result<Option<String>> {
-    let (response, _) = read_thread(socket, thread_id, request_id, super::RESPONSE_TIMEOUT)
-        .map_err(super::request_error_to_anyhow)?;
+    let (response, _) =
+        read_thread(socket, thread_id, request_id).map_err(super::request_error_to_anyhow)?;
     let thread = response
         .get("thread")
         .ok_or_else(|| anyhow!("Codex app-server thread/read response did not contain a thread"))?;
@@ -609,7 +566,6 @@ mod tests {
             client_user_message_id: CLIENT_USER_MESSAGE_ID,
             content: "hello there",
             snapshot: &snapshot,
-            read_timeout: Duration::from_secs(1),
         };
         let mut messages = [
             Err(tungstenite::Error::Io(std::io::Error::from(
@@ -1072,58 +1028,49 @@ mod tests {
         let (mut client_socket, server_socket) = connected_sockets()?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            let snapshot_request = read_empty_snapshot(&mut socket)?;
-            let turn_request = read_request(&mut socket)?;
-            send_response(
-                &mut socket,
-                TURN_START_REQUEST_ID,
-                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
-            )?;
-            let resume_request = read_request(&mut socket)?;
-            send_response(
-                &mut socket,
-                THREAD_RESUME_REQUEST_ID,
-                thread_response("inProgress", None, None),
-            )?;
-            let history_request = read_request(&mut socket)?;
-            send_response(
-                &mut socket,
-                THREAD_READ_REQUEST_ID,
-                thread_response("inProgress", None, None),
-            )?;
             let polled_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
                 NEXT_THREAD_READ_REQUEST_ID,
                 thread_response("inProgress", None, Some("hello there")),
             )?;
-            Ok(vec![
-                snapshot_request,
-                turn_request,
-                resume_request,
-                history_request,
-                polled_history_request,
-            ])
+            Ok(vec![polled_history_request])
         });
 
-        let result = result_text(send_and_confirm_with_read_timeout(
+        let snapshot = MatchingItemSnapshot::default();
+        let delivery = DeliveryContext {
+            thread_id: THREAD_ID,
+            turn_id: TURN_ID,
+            client_user_message_id: CLIENT_USER_MESSAGE_ID,
+            content: "hello there",
+            snapshot: &snapshot,
+        };
+        let mut next_read_request_id = NEXT_THREAD_READ_REQUEST_ID;
+        let mut should_timeout = true;
+        let actual = wait_for_delivery_with_reader(
             &mut client_socket,
-            THREAD_ID,
-            "hello there",
-            None,
-            CLIENT_USER_MESSAGE_ID,
-            Duration::from_millis(10),
-        ));
+            &delivery,
+            &mut next_read_request_id,
+            |_| {
+                if std::mem::replace(&mut should_timeout, false) {
+                    Err(tungstenite::Error::Io(std::io::Error::from(
+                        ErrorKind::WouldBlock,
+                    )))
+                } else {
+                    Err(tungstenite::Error::ConnectionClosed)
+                }
+            },
+        );
+        let result = result_text(actual);
         let requests = join_server(&client_socket, &result, server)?;
-        let expected_requests = start_and_subscribe_requests()
-            .into_iter()
-            .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
-            ])
-            .collect::<Vec<_>>();
 
-        assert_eq!((result, requests), (Ok(()), expected_requests));
+        assert_eq!(
+            (result, requests),
+            (
+                Ok(()),
+                vec![thread_read_request(NEXT_THREAD_READ_REQUEST_ID)]
+            ),
+        );
         Ok(())
     }
 }
