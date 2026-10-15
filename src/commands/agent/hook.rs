@@ -3837,26 +3837,46 @@ mod tests {
         }
 
         #[test]
-        fn session_creation_records_vibe_launch_env() {
+        fn session_creation_restores_vibe_launch_and_ancestor_env() {
             let temp_dir = create_temp_sessions_dir();
 
-            let actual =
-                temp_env::with_vars([(EnvVars::session_vibe_launch_name(), Some("1"))], || {
+            let actual = temp_env::with_vars(
+                [
+                    (EnvVars::session_label_name(), None::<&str>),
+                    (EnvVars::session_work_type_name(), None::<&str>),
+                    (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::session_vibe_launch_name(), Some("1")),
+                    (EnvVars::ancestor_session_ids_name(), Some("root, parent")),
+                ],
+                || {
                     process_hook_event_impl(
-                        HookEvent::UserPromptSubmit,
-                        create_test_input(None),
+                        HookEvent::SessionStart,
+                        create_test_input_with_source(None, Some("resume")),
                         temp_dir.path(),
                         &SideEffects::none(),
                     )
-                    .expect("user-prompt-submit should succeed");
+                    .expect("session-start should succeed");
 
-                    store::load_session_from(temp_dir.path(), "test-123")
+                    let session = store::load_session_from(temp_dir.path(), "test-123")
                         .expect("session should load")
-                        .expect("session should exist")
-                        .launched_with_vibe
-                });
+                        .expect("session should exist");
+                    let mut actual =
+                        serde_json::to_value(session).expect("session should serialize");
+                    actual["created_at"] = serde_json::json!("<timestamp>");
+                    actual["updated_at"] = serde_json::json!("<timestamp>");
+                    actual
+                },
+            );
 
-            let expected = true;
+            let mut expected = create_test_session(None);
+            expected.launched_with_vibe = true;
+            expected.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
+            expected.status = SessionStatus::Stopped;
+            let mut expected =
+                serde_json::to_value(expected).expect("expected session should serialize");
+            expected["created_at"] = serde_json::json!("<timestamp>");
+            expected["updated_at"] = serde_json::json!("<timestamp>");
+
             assert_eq!(actual, expected);
         }
 

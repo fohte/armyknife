@@ -9,22 +9,17 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::parse_ancestor_session_ids;
 
-pub(super) fn record_resume_metadata_if_needed(
+pub(super) fn record_codex_resume_metadata_if_needed(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,
     ancestor_session_ids: Option<&str>,
     launched_with_vibe: bool,
-    engine: Engine,
     capture_pr_context: Option<Capture>,
 ) -> Result<()> {
-    let ancestor_session_ids = if engine == Engine::Codex {
-        ancestor_session_ids
-            .map(parse_ancestor_session_ids)
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
+    let ancestor_session_ids = ancestor_session_ids
+        .map(parse_ancestor_session_ids)
+        .unwrap_or_default();
     if ancestor_session_ids.is_empty() && !launched_with_vibe {
         return Ok(());
     }
@@ -61,7 +56,7 @@ pub(super) fn record_resume_metadata_if_needed(
         stop_blocked_by_armyknife: false,
         agent_status: None,
         agent_status_clear_pending: false,
-        engine,
+        engine: Engine::Codex,
     });
 
     let mut changed = false;
@@ -78,6 +73,19 @@ pub(super) fn record_resume_metadata_if_needed(
     } else {
         Ok(())
     }
+}
+
+pub(super) fn mark_vibe_launch_if_session_exists(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<()> {
+    store::update_session_in(sessions_dir, session_id, |session| {
+        if session.launched_with_vibe {
+            return false;
+        }
+        session.launched_with_vibe = true;
+        true
+    })
 }
 
 #[cfg(test)]
@@ -149,13 +157,12 @@ mod tests {
         store::save_session_to(sessions_dir.path(), &session(existing_ancestors))
             .expect("save should succeed");
 
-        record_resume_metadata_if_needed(
+        record_codex_resume_metadata_if_needed(
             sessions_dir.path(),
             "resume-target",
             Path::new("/workspace/project"),
             Some("root, parent"),
             false,
-            Engine::Codex,
             None,
         )
         .expect("record should succeed");
@@ -175,13 +182,12 @@ mod tests {
 
     #[rstest]
     fn creates_missing_session_with_ancestor_chain(sessions_dir: TempDir) {
-        record_resume_metadata_if_needed(
+        record_codex_resume_metadata_if_needed(
             sessions_dir.path(),
             "missing-session",
             Path::new("/workspace/resume"),
             Some("root, parent"),
             false,
-            Engine::Codex,
             Some(fixed_context_capture),
         )
         .expect("record should succeed");
@@ -226,52 +232,11 @@ mod tests {
     }
 
     #[rstest]
-    fn restores_vibe_launch_marker_when_session_record_is_missing(sessions_dir: TempDir) {
-        record_resume_metadata_if_needed(
-            sessions_dir.path(),
-            "missing-session",
-            Path::new("/workspace/resume"),
-            Some("root, parent"),
-            true,
-            Engine::Claude,
-            Some(fixed_context_capture),
-        )
-        .expect("record should succeed");
+    fn does_not_precreate_missing_claude_session_for_vibe_resume(sessions_dir: TempDir) {
+        mark_vibe_launch_if_session_exists(sessions_dir.path(), "missing-session")
+            .expect("marker update should succeed");
 
-        let actual_session = store::load_session_from(sessions_dir.path(), "missing-session")
-            .expect("load should succeed")
-            .expect("session should exist");
-
-        let mut expected = session(Vec::new());
-        expected.session_id = "missing-session".to_string();
-        expected.cwd = PathBuf::from("/workspace/resume");
-        expected.pr_context = fixed_context_capture(Path::new("/workspace/resume"));
-        expected.launched_with_vibe = true;
-        expected.engine = Engine::Claude;
-        let mut actual = serde_json::to_value(actual_session).expect("session should serialize");
-        let mut expected =
-            serde_json::to_value(expected).expect("expected session should serialize");
-        actual["created_at"] = serde_json::json!("<timestamp>");
-        actual["updated_at"] = serde_json::json!("<timestamp>");
-        expected["created_at"] = serde_json::json!("<timestamp>");
-        expected["updated_at"] = serde_json::json!("<timestamp>");
-        assert_eq!(actual, expected);
-    }
-
-    #[rstest]
-    fn does_not_record_ancestor_chain_for_claude_resume(sessions_dir: TempDir) {
-        record_resume_metadata_if_needed(
-            sessions_dir.path(),
-            "resume-target",
-            Path::new("/workspace/project"),
-            Some("root, parent"),
-            false,
-            Engine::Claude,
-            Some(fixed_context_capture),
-        )
-        .expect("record should succeed");
-
-        let actual = store::load_session_from(sessions_dir.path(), "resume-target")
+        let actual = store::load_session_from(sessions_dir.path(), "missing-session")
             .expect("load should succeed")
             .map(|session| serde_json::to_value(session).expect("session should serialize"));
 
@@ -279,22 +244,32 @@ mod tests {
     }
 
     #[rstest]
-    fn updates_existing_session_with_vibe_launch_marker(sessions_dir: TempDir) {
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn updates_existing_session_with_vibe_launch_marker(
+        sessions_dir: TempDir,
+        #[case] engine: Engine,
+    ) {
         let mut expected_session = session(Vec::new());
+        expected_session.engine = engine;
         store::save_session_to(sessions_dir.path(), &expected_session)
             .expect("existing session should be saved");
         expected_session.launched_with_vibe = true;
 
-        record_resume_metadata_if_needed(
-            sessions_dir.path(),
-            "resume-target",
-            Path::new("/workspace/project"),
-            None,
-            true,
-            Engine::Codex,
-            None,
-        )
-        .expect("record should succeed");
+        if engine == Engine::Codex {
+            record_codex_resume_metadata_if_needed(
+                sessions_dir.path(),
+                "resume-target",
+                Path::new("/workspace/project"),
+                None,
+                true,
+                None,
+            )
+            .expect("record should succeed");
+        } else {
+            mark_vibe_launch_if_session_exists(sessions_dir.path(), "resume-target")
+                .expect("marker update should succeed");
+        }
 
         let actual = store::load_session_from(sessions_dir.path(), "resume-target")
             .expect("load should succeed")
@@ -304,5 +279,35 @@ mod tests {
             serde_json::to_value(actual).expect("actual session should serialize"),
             serde_json::to_value(expected_session).expect("expected session should serialize")
         );
+    }
+
+    #[rstest]
+    fn creates_missing_codex_session_with_vibe_marker_and_ancestors(sessions_dir: TempDir) {
+        record_codex_resume_metadata_if_needed(
+            sessions_dir.path(),
+            "missing-session",
+            Path::new("/workspace/resume"),
+            Some("root, parent"),
+            true,
+            Some(fixed_context_capture),
+        )
+        .expect("record should succeed");
+
+        let actual_session = store::load_session_from(sessions_dir.path(), "missing-session")
+            .expect("load should succeed")
+            .expect("session should exist");
+        let mut expected = session(vec!["root".to_string(), "parent".to_string()]);
+        expected.session_id = "missing-session".to_string();
+        expected.cwd = PathBuf::from("/workspace/resume");
+        expected.pr_context = fixed_context_capture(Path::new("/workspace/resume"));
+        expected.launched_with_vibe = true;
+        let mut actual = serde_json::to_value(actual_session).expect("session should serialize");
+        let mut expected =
+            serde_json::to_value(expected).expect("expected session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+        assert_eq!(actual, expected);
     }
 }
