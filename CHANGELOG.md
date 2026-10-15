@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.425](https://github.com/fohte/armyknife/compare/v0.1.424...v0.1.425) (2026-10-15)
+
+
+### Bug Fixes
+
+* **agent/bg:** redeliver completion notices ([#1185](https://github.com/fohte/armyknife/issues/1185)) ([a875fd1](https://github.com/fohte/armyknife/commit/a875fd149149c139dc74a9f4ed1f6003ed577a48))
+
 ## [0.1.424](https://github.com/fohte/armyknife/compare/v0.1.423...v0.1.424) (2026-10-14)
 
 
