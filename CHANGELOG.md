@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.428](https://github.com/fohte/armyknife/compare/v0.1.427...v0.1.428) (2026-10-16)
+
+
+### Bug Fixes
+
+* **agent:** reject delegated calls to a agent new ([#1191](https://github.com/fohte/armyknife/issues/1191)) ([6b604ac](https://github.com/fohte/armyknife/commit/6b604ac0e23aa7969709bf036b4d56b7b7782331))
+
 ## [0.1.427](https://github.com/fohte/armyknife/compare/v0.1.426...v0.1.427) (2026-10-15)
 
 
