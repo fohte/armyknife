@@ -122,16 +122,14 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
     }
 }
 
-pub(super) fn current_session_id() -> Option<String> {
-    EnvVars::load().own_session_id()
-}
-
-fn require_current_session_id() -> Result<String> {
-    current_session_id().ok_or_else(|| CcError::SelfSessionUnknown.into())
+fn current_session_id() -> Result<String> {
+    EnvVars::load()
+        .own_session_id()
+        .ok_or_else(|| CcError::SelfSessionUnknown.into())
 }
 
 fn run_parent() -> Result<()> {
-    let self_id = require_current_session_id()?;
+    let self_id = current_session_id()?;
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
     let session = find_session_by_id(&sessions, &self_id)?;
@@ -139,7 +137,7 @@ fn run_parent() -> Result<()> {
 }
 
 fn run_children() -> Result<()> {
-    let self_id = require_current_session_id()?;
+    let self_id = current_session_id()?;
     store::cleanup_stale_sessions()?;
     let sessions = store::list_sessions()?;
     print_peers(&filter_children(&sessions, &self_id))

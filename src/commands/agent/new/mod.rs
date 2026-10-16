@@ -3,12 +3,13 @@ use clap::Args;
 use std::path::{Path, PathBuf};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
-use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled, peer, store};
+use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 
 mod delegation;
+mod delegation_guard;
 mod prompt;
 mod session_metadata;
 mod session_mode;
@@ -119,35 +120,13 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
-    ensure_caller_not_delegated()?;
+    delegation_guard::ensure_caller_not_delegated()?;
     run_with_vibe_access(
         args,
         is_vibe_enabled,
         |args| ensure_target_repo_vibe_access(args, resolve_target_repo_identity, load_config),
         || run_inner(args),
     )
-}
-
-fn ensure_caller_not_delegated() -> Result<()> {
-    let caller_session_id = peer::current_session_id();
-    ensure_session_not_delegated(caller_session_id.as_deref(), |session_id| {
-        Ok(store::load_session(session_id)?.map(|session| session.is_delegated))
-    })
-}
-
-fn ensure_session_not_delegated(
-    caller_session_id: Option<&str>,
-    load_is_delegated: impl FnOnce(&str) -> Result<Option<bool>>,
-) -> Result<()> {
-    let Some(caller_session_id) = caller_session_id else {
-        return Ok(());
-    };
-
-    if load_is_delegated(caller_session_id)?.unwrap_or(false) {
-        bail!("A delegated session cannot start another agent session.");
-    }
-
-    Ok(())
 }
 
 fn run_with_vibe_access(
@@ -755,48 +734,6 @@ mod tests {
                 expected_launch,
             ),
         );
-    }
-
-    #[rstest]
-    #[case::unknown_caller(None, None, None, Ok(()))]
-    #[case::missing_record(Some("session-a"), None, Some("session-a"), Ok(()))]
-    #[case::non_delegated_record(Some("session-a"), Some(false), Some("session-a"), Ok(()))]
-    #[case::delegated_record(
-        Some("session-a"),
-        Some(true),
-        Some("session-a"),
-        Err("A delegated session cannot start another agent session.")
-    )]
-    fn blocks_only_known_delegated_callers(
-        #[case] caller_session_id: Option<&str>,
-        #[case] record_is_delegated: Option<bool>,
-        #[case] expected_loaded_session_id: Option<&str>,
-        #[case] expected_result: std::result::Result<(), &'static str>,
-    ) {
-        let loaded_session_id = Cell::new(None);
-        let result = ensure_session_not_delegated(caller_session_id, |session_id| {
-            loaded_session_id.set(Some(session_id.to_string()));
-            Ok(record_is_delegated)
-        })
-        .map_err(|error| error.to_string());
-
-        assert_eq!(
-            (result, loaded_session_id.into_inner()),
-            (
-                expected_result.map_err(str::to_owned),
-                expected_loaded_session_id.map(str::to_owned),
-            ),
-        );
-    }
-
-    #[test]
-    fn propagates_caller_session_lookup_errors() {
-        let result = ensure_session_not_delegated(Some("session-a"), |_| {
-            Err(anyhow::anyhow!("session lookup failed"))
-        })
-        .map_err(|error| error.to_string());
-
-        assert_eq!(result, Err("session lookup failed".to_string()));
     }
 
     #[test]
