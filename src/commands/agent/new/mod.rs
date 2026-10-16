@@ -9,6 +9,7 @@ use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 
 mod delegation;
+mod delegation_guard;
 mod prompt;
 mod session_metadata;
 mod session_mode;
@@ -119,6 +120,7 @@ pub struct NewArgs {
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
+    delegation_guard::ensure_caller_not_delegated()?;
     run_with_vibe_access(
         args,
         is_vibe_enabled,
