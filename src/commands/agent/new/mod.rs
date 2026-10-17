@@ -14,6 +14,7 @@ mod delegation_guard;
 mod prompt;
 mod session_metadata;
 mod session_mode;
+mod session_start_hook;
 mod tmux;
 mod worktree;
 mod worktree_creation;
@@ -21,6 +22,7 @@ mod worktree_creation;
 use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_mode::{caller_repo_root, should_open_window};
+use session_start_hook::{run_pre_session_start_hook, run_pre_session_start_hook_with_rollback};
 use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
 use worktree_creation::run_worktree_creation;
 
@@ -484,39 +486,6 @@ fn run_session_only_inner_with_launchers(
             )?;
             println!("Opened tmux window in '{cwd}'{background_suffix}{route_suffix}");
         }
-    }
-
-    Ok(())
-}
-
-pub(super) fn run_pre_session_start_hook(
-    skip_hooks: bool,
-    session_cwd: &Path,
-    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
-) -> Result<()> {
-    if skip_hooks {
-        eprintln!("Skipping pre-session-start hook (--skip-hooks)");
-        return Ok(());
-    }
-
-    let session_cwd = session_cwd
-        .to_str()
-        .context("Session CWD is not valid UTF-8")?;
-    run_hook(
-        "pre-session-start",
-        &[(EnvVars::session_cwd_name(), session_cwd)],
-    )
-}
-
-pub(super) fn run_pre_session_start_hook_with_rollback(
-    skip_hooks: bool,
-    session_cwd: &Path,
-    rollback: impl FnOnce(),
-    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
-) -> Result<()> {
-    if let Err(error) = run_pre_session_start_hook(skip_hooks, session_cwd, run_hook) {
-        rollback();
-        return Err(error);
     }
 
     Ok(())
