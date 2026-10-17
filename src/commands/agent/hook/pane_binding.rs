@@ -51,7 +51,8 @@ pub(super) fn has_other_session_on_pane(
             .ok()
             .and_then(|content| serde_json::from_str::<Session>(&content).ok())
             .is_some_and(|session| {
-                session.session_id != session_id
+                session.archived_at.is_none()
+                    && session.session_id != session_id
                     && session
                         .tmux_info
                         .as_ref()

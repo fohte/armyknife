@@ -487,7 +487,8 @@ pub(crate) fn update_session_label_if_unchanged_in(
     Ok(applied)
 }
 
-/// Overwrites a session's `tmux_info.pane_id`. No-op if `tmux_info` is unset.
+/// Rebinds a session to a restored tmux pane and clears its archive marker.
+/// The archive marker is cleared even when `tmux_info` is unset.
 ///
 /// tmux-resurrect restarts the tmux server, renumbering every pane_id, so a
 /// stale on-disk pane_id can coincidentally match an unrelated session's new
@@ -499,7 +500,7 @@ pub(crate) fn update_session_tmux_pane_id_in(
     pane_id: &str,
 ) -> Result<()> {
     update_session_in(sessions_dir, session_id, |session| {
-        let mut changed = session.archived_at.take().is_some();
+        let mut changed = session.restore_from_archive();
         let Some(tmux_info) = session.tmux_info.as_mut() else {
             return changed;
         };
@@ -643,7 +644,7 @@ where
     cleanup_stale_sessions_in(dir, is_pane_alive, cwd_exists)
 }
 
-/// Returns whether at least one session file was removed.
+/// Returns whether cleanup archived or removed at least one session file.
 fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
     F: Fn(&super::types::TmuxInfo) -> Option<bool>,
@@ -668,10 +669,11 @@ where
     G: Fn(&Path) -> bool,
     A: FnMut(&str) -> anyhow::Result<()>,
 {
-    archive::cleanup_stale_sessions_in_with_archive(
+    archive::cleanup_stale_sessions_in_with_archive_at(
         dir,
         is_pane_alive,
         cwd_exists,
+        Utc::now(),
         archive_codex_thread,
     )
 }
@@ -1032,12 +1034,7 @@ mod tests {
                 mock_pane_always_alive,
                 mock_cwd_always_missing,
                 archived_at,
-                |thread_id| {
-                    archive_calls
-                        .borrow_mut()
-                        .push((thread_id.to_string(), path.exists()));
-                    Ok(())
-                },
+                |_| Ok(()),
             )
             .expect("cleanup should succeed");
             let archived_record = load_session_from(&temp_session_dir.sessions_path, session_id)
@@ -1051,9 +1048,13 @@ mod tests {
                 mock_cwd_always_exists,
                 archived_at + TimeDelta::days(8),
                 |thread_id| {
-                    archive_calls
-                        .borrow_mut()
-                        .push((thread_id.to_string(), path.exists()));
+                    let lock_available =
+                        lock_session_for_update(&temp_session_dir.sessions_path, thread_id).is_ok();
+                    archive_calls.borrow_mut().push((
+                        thread_id.to_string(),
+                        path.exists(),
+                        lock_available,
+                    ));
                     Err(anyhow::anyhow!("fixture archive failure"))
                 },
             )
@@ -1073,10 +1074,54 @@ mod tests {
                     Some(Some(archived_at)),
                     Vec::new(),
                     true,
-                    vec![("stale-codex-session".to_string(), true)],
+                    vec![("stale-codex-session".to_string(), false, true)],
                     false,
                 ),
             );
+        }
+
+        #[rstest]
+        fn continues_cleanup_when_one_session_lock_times_out(temp_session_dir: TempSessionDir) {
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            for session_id in ["locked-session", "available-session"] {
+                let mut session = create_test_session(session_id);
+                session.tmux_info = Some(TmuxInfo {
+                    session_name: "test".to_string(),
+                    window_name: "test".to_string(),
+                    window_index: 0,
+                    pane_id: "%99999".to_string(),
+                    socket_path: None,
+                });
+                save_session_to(&temp_session_dir.sessions_path, &session)
+                    .expect("save should succeed");
+            }
+
+            let held_lock =
+                lock_session_for_update(&temp_session_dir.sessions_path, "locked-session")
+                    .expect("test should hold the session lock");
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_dead,
+                mock_cwd_always_exists,
+                now,
+                |_| Ok(()),
+            )
+            .expect("one locked session should not abort cleanup");
+            drop(held_lock);
+
+            let actual = (
+                changed,
+                load_session_from(&temp_session_dir.sessions_path, "locked-session")
+                    .expect("load should succeed")
+                    .map(|session| session.archived_at),
+                load_session_from(&temp_session_dir.sessions_path, "available-session")
+                    .expect("load should succeed")
+                    .map(|session| session.archived_at),
+            );
+            assert_eq!(actual, (true, Some(None), Some(Some(now))));
         }
 
         #[rstest]

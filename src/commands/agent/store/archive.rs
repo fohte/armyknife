@@ -1,4 +1,5 @@
 use std::fs;
+use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::Result;
@@ -63,26 +64,6 @@ pub(crate) fn archive_codex_thread_before_delete_with(
     }
 }
 
-pub(super) fn cleanup_stale_sessions_in_with_archive<F, G, A>(
-    dir: &Path,
-    is_pane_alive: F,
-    cwd_exists: G,
-    archive_codex_thread: A,
-) -> Result<bool>
-where
-    F: Fn(&TmuxInfo) -> Option<bool>,
-    G: Fn(&Path) -> bool,
-    A: FnMut(&str) -> anyhow::Result<()>,
-{
-    cleanup_stale_sessions_in_with_archive_at(
-        dir,
-        is_pane_alive,
-        cwd_exists,
-        Utc::now(),
-        archive_codex_thread,
-    )
-}
-
 pub(super) fn cleanup_stale_sessions_in_with_archive_at<F, G, A>(
     dir: &Path,
     is_pane_alive: F,
@@ -103,7 +84,18 @@ where
     let mut changed_any = false;
 
     for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(
+                    target: "armyknife::commands::agent::store",
+                    event = "agent.store.cleanup_entry_failed",
+                    operation = "read_directory_entry",
+                    error = %error,
+                );
+                continue;
+            }
+        };
         let path = entry.path();
 
         if path.extension().is_none_or(|ext| ext != "json") {
@@ -113,28 +105,49 @@ where
         let Some(session_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
             continue;
         };
-        let Some(session) = super::load_session_from(dir, session_id)? else {
-            continue;
+        let session = match super::load_session_from(dir, session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => continue,
+            Err(error) => {
+                warn_cleanup_entry_failure(session_id, "load", &error);
+                continue;
+            }
         };
 
-        if session.archived_at.is_some() {
-            let session_lock = super::lock_session_for_update(dir, session_id)?;
-            if let Some(current) = session_lock.load()?
-                && is_expired_archive(&current, now, retention)
-            {
-                changed_any |=
-                    delete_session_and_archive_codex(&current, &path, &mut archive_codex_thread);
-            }
-            continue;
-        }
-
-        if is_expired_ended(&session, now, retention) {
-            let session_lock = super::lock_session_for_update(dir, session_id)?;
-            if let Some(current) = session_lock.load()?
-                && is_expired_ended(&current, now, retention)
-            {
-                changed_any |=
-                    delete_session_and_archive_codex(&current, &path, &mut archive_codex_thread);
+        if is_collectable(&session, now, retention) {
+            let session_lock = match super::lock_session_for_update(dir, session_id) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    warn_cleanup_entry_failure(session_id, "lock_for_collection", &error);
+                    continue;
+                }
+            };
+            let current = match session_lock.load() {
+                Ok(Some(session)) => session,
+                Ok(None) => continue,
+                Err(error) => {
+                    warn_cleanup_entry_failure(session_id, "reload_for_collection", &error);
+                    continue;
+                }
+            };
+            if is_collectable(&current, now, retention) {
+                let removed = match fs::remove_file(&path) {
+                    Ok(()) => true,
+                    Err(error) if error.kind() == ErrorKind::NotFound => false,
+                    Err(error) => {
+                        warn_cleanup_entry_failure(session_id, "delete", &error);
+                        false
+                    }
+                };
+                drop(session_lock);
+                if removed {
+                    archive_codex_thread_before_delete_with(
+                        &current,
+                        &mut archive_codex_thread,
+                        ArchiveLogContext::Store,
+                    );
+                    changed_any = true;
+                }
             }
             continue;
         }
@@ -147,9 +160,20 @@ where
         let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
 
         if stale_pane || orphaned {
-            let session_lock = super::lock_session_for_update(dir, session_id)?;
-            let Some(mut current) = session_lock.load()? else {
-                continue;
+            let session_lock = match super::lock_session_for_update(dir, session_id) {
+                Ok(lock) => lock,
+                Err(error) => {
+                    warn_cleanup_entry_failure(session_id, "lock_for_archive", &error);
+                    continue;
+                }
+            };
+            let mut current = match session_lock.load() {
+                Ok(Some(session)) => session,
+                Ok(None) => continue,
+                Err(error) => {
+                    warn_cleanup_entry_failure(session_id, "reload_for_archive", &error);
+                    continue;
+                }
             };
             if current.archived_at.is_some()
                 || current.updated_at != session.updated_at
@@ -166,12 +190,33 @@ where
             }
 
             current.archived_at = Some(now);
-            session_lock.save(&current)?;
+            if let Err(error) = session_lock.save(&current) {
+                warn_cleanup_entry_failure(session_id, "save_archive_state", &error);
+                continue;
+            }
             changed_any = true;
         }
     }
 
     Ok(changed_any)
+}
+
+fn warn_cleanup_entry_failure(session_id: &str, operation: &str, error: &impl std::fmt::Display) {
+    tracing::warn!(
+        target: "armyknife::commands::agent::store",
+        event = "agent.store.cleanup_entry_failed",
+        session = session_id,
+        operation,
+        error = %error,
+    );
+}
+
+fn is_collectable(session: &Session, now: DateTime<Utc>, retention: TimeDelta) -> bool {
+    if session.archived_at.is_some() {
+        is_expired_archive(session, now, retention)
+    } else {
+        is_expired_ended(session, now, retention)
+    }
 }
 
 fn is_expired_archive(session: &Session, now: DateTime<Utc>, retention: TimeDelta) -> bool {
@@ -184,22 +229,6 @@ fn is_expired_archive(session: &Session, now: DateTime<Utc>, retention: TimeDelt
 fn is_expired_ended(session: &Session, now: DateTime<Utc>, retention: TimeDelta) -> bool {
     matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
         && now - session.updated_at > retention
-}
-
-fn delete_session_and_archive_codex(
-    session: &Session,
-    path: &Path,
-    archive_codex_thread: &mut impl FnMut(&str) -> anyhow::Result<()>,
-) -> bool {
-    archive_codex_thread_before_delete_with(
-        session,
-        archive_codex_thread,
-        ArchiveLogContext::Store,
-    );
-    let removed = fs::remove_file(path).is_ok();
-    let lock_path = path.with_extension("json.lock");
-    let _ = fs::remove_file(lock_path);
-    removed
 }
 
 #[cfg(test)]

@@ -50,7 +50,7 @@ pub(super) fn codex_session_end_hook_in(
                 return false;
             }
             SweepPauseOutcome::Confirmed => {
-                session.archived_at = None;
+                session.restore_from_archive();
                 session_for_sync = Some(session.clone());
                 return true;
             }
@@ -59,7 +59,7 @@ pub(super) fn codex_session_end_hook_in(
 
         session.status = SessionStatus::Stopped;
         session.updated_at = Utc::now();
-        session.archived_at = None;
+        session.restore_from_archive();
         session_for_sync = Some(session.clone());
         true
     })?;
@@ -128,7 +128,7 @@ fn end_codex_session_with_policy(
         session.status = SessionStatus::Ended;
         session.sweep_signaled = false;
         session.updated_at = Utc::now();
-        session.archived_at = None;
+        session.restore_from_archive();
         ended_session = Some(session.clone());
         true
     })?;
@@ -288,6 +288,7 @@ mod tests {
             sinks.removed.lock().expect("removed lock").clone(),
             sinks.archived.lock().expect("archive lock").clone(),
             sinks.synced.lock().expect("sync lock").clone(),
+            updated.archived_at,
         );
         let expected_sync = if expected_status == SessionStatus::Ended {
             vec![(
@@ -306,7 +307,27 @@ mod tests {
                 expected_removed.into_iter().map(str::to_string).collect(),
                 expected_archived.into_iter().map(str::to_string).collect(),
                 expected_sync,
+                None,
             ),
+        );
+    }
+
+    #[rstest]
+    fn process_exit_restores_archived_codex_session(lifecycle_test_context: LifecycleTestContext) {
+        let LifecycleTestContext { temp_dir, sinks } = lifecycle_test_context;
+        let mut archived = session(Engine::Codex, SessionStatus::Stopped, false);
+        archived.archived_at = Some(Utc::now());
+        store::save_session_to(temp_dir.path(), &archived).expect("save session");
+
+        codex_process_exited_in("thread-one", temp_dir.path(), &sinks.side_effects)
+            .expect("process exit should be recorded");
+
+        let updated = store::load_session_from(temp_dir.path(), "thread-one")
+            .expect("load session")
+            .expect("session exists");
+        assert_eq!(
+            (updated.status, updated.archived_at),
+            (SessionStatus::Ended, None)
         );
     }
 

@@ -136,6 +136,12 @@ pub struct Session {
     pub engine: Engine,
 }
 
+impl Session {
+    pub(crate) fn restore_from_archive(&mut self) -> bool {
+        self.archived_at.take().is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPrContext {
     pub owner: String,
