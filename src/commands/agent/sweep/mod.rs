@@ -47,7 +47,6 @@ use crate::shared::log::short_run_id;
 mod codex_turn_status;
 mod merged_close;
 mod service;
-mod session_files;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SweepArgs {
@@ -308,10 +307,9 @@ enum ShutdownOutcome {
     StillRunning,
 }
 
-/// Testable core of `run`. Reads every `*.json` session file under
-/// `sessions_dir`, evaluates `decide_pause`, and pauses sessions whose
-/// timeout has elapsed. Ended sessions are ignored entirely so that the
-/// counts match what `a agent list` displays.
+/// Testable core of `run`. Reads sessions under `sessions_dir`, evaluates
+/// `decide_pause`, and pauses sessions whose timeout has elapsed. Ended
+/// sessions are ignored entirely so that the counts match `a agent list`.
 pub(crate) fn sweep_impl<S, P, T>(
     sessions_dir: &Path,
     timeout: Duration,
@@ -329,12 +327,7 @@ where
 
     let now = Utc::now();
 
-    for session_id in session_files::session_ids_in(sessions_dir)? {
-        let mut session = match store::load_session_from(sessions_dir, &session_id)? {
-            Some(s) => s,
-            None => continue,
-        };
-
+    for mut session in store::list_all_sessions_from(sessions_dir)? {
         // Skip ended sessions so the scanned count lines up with `a agent list`.
         // Ended sessions are retained on disk only so that `claude -c` can
         // restore their label / ancestor chain -- they never need pausing.

@@ -551,17 +551,15 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Reads every session file from disk, regardless of status.
-fn read_all_sessions() -> Result<Vec<Session>> {
-    let dir = sessions_dir()?;
-
+/// Reads every non-archived session file from a specific directory.
+fn read_all_sessions_from(dir: &Path) -> Result<Vec<Session>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
 
     let mut sessions = Vec::new();
 
-    for entry in fs::read_dir(&dir)? {
+    for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
 
@@ -579,18 +577,23 @@ fn read_all_sessions() -> Result<Vec<Session>> {
 
 /// Lists all active sessions from disk, excluding ended sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
-    let mut sessions = read_all_sessions()?;
+    let mut sessions = read_all_sessions_from(&sessions_dir()?)?;
     sessions.retain(|s| s.status != SessionStatus::Ended);
     sort_sessions(&mut sessions);
     Ok(sessions)
 }
 
-/// Lists every session from disk, including ended ones. Unlike
+/// Lists every non-archived session from disk, including ended ones. Unlike
 /// `list_sessions`, callers use this when a session must be resolvable
 /// after it ended -- e.g. reading `ancestor_session_ids` off a delegated
 /// session that already exited by the time its PR merged.
 pub fn list_all_sessions() -> Result<Vec<Session>> {
-    let mut sessions = read_all_sessions()?;
+    list_all_sessions_from(&sessions_dir()?)
+}
+
+/// Lists every non-archived session from a specific directory, including ended ones.
+pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>> {
+    let mut sessions = read_all_sessions_from(sessions_dir)?;
     sort_sessions(&mut sessions);
     Ok(sessions)
 }
@@ -792,6 +795,39 @@ mod tests {
                 vec!["ended-1".to_string(), "running-1".to_string()],
                 Some(Some(archived_at)),
             )
+        );
+    }
+
+    #[rstest::rstest]
+    fn list_all_sessions_from_skips_archived_and_malformed_sessions(
+        temp_session_dir: TempSessionDir,
+    ) {
+        let running = create_test_session("running-session");
+        let mut ended = create_test_session("ended-session");
+        ended.status = SessionStatus::Ended;
+        let mut archived = create_test_session("archived-session");
+        archived.archived_at = Some(Utc::now());
+        save_session_to(&temp_session_dir.sessions_path, &running).expect("save running session");
+        save_session_to(&temp_session_dir.sessions_path, &ended).expect("save ended session");
+        save_session_to(&temp_session_dir.sessions_path, &archived).expect("save archived session");
+        fs::write(
+            temp_session_dir
+                .sessions_path
+                .join("malformed-session.json"),
+            "not json",
+        )
+        .expect("write malformed session");
+
+        let mut actual = list_all_sessions_from(&temp_session_dir.sessions_path)
+            .expect("list should succeed")
+            .into_iter()
+            .map(|session| session.session_id)
+            .collect::<Vec<_>>();
+        actual.sort();
+
+        assert_eq!(
+            actual,
+            vec!["ended-session".to_string(), "running-session".to_string()]
         );
     }
 

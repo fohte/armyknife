@@ -156,24 +156,11 @@ fn end_sessions_on_pane_takeover(
     current_session_id: &str,
     side_effects: &SideEffects,
 ) {
-    let Ok(entries) = fs::read_dir(sessions_dir) else {
+    let Ok(sessions) = store::list_all_sessions_from(sessions_dir) else {
         return;
     };
     let now = Utc::now();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
-            continue;
-        };
-        if session.archived_at.is_some() {
-            continue;
-        }
+    for mut session in sessions {
         let matches_pane = session
             .tmux_info
             .as_ref()
