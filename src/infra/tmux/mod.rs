@@ -112,6 +112,11 @@ const TMUX_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Run a tmux command and return stdout on success.
 pub(crate) fn run_tmux_output<S: AsRef<OsStr>>(args: &[S]) -> Result<String> {
+    run_tmux_output_untrimmed(args).map(|output| output.trim().to_string())
+}
+
+/// Run a tmux command and return stdout on success without trimming it.
+pub(crate) fn run_tmux_output_untrimmed<S: AsRef<OsStr>>(args: &[S]) -> Result<String> {
     let mut command = ExternalTool::Tmux.command();
     command.args(args);
     let display_args = args
@@ -123,7 +128,7 @@ pub(crate) fn run_tmux_output<S: AsRef<OsStr>>(args: &[S]) -> Result<String> {
         .map_err(|e| TmuxError::command_failed(&display_args, e.to_string(), None))?;
 
     if output.status.success() {
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         Err(TmuxError::command_failed(
