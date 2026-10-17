@@ -22,52 +22,28 @@ pub(super) fn import_legacy_json(connection: &mut Connection, sessions_dir: &Pat
     let legacy_locks = loop {
         let locks = lock_legacy_files(&paths)?;
         let current_paths = legacy_json_paths(sessions_dir)?;
-        if current_paths
-            .iter()
-            .any(|path| paths.binary_search(path).is_err())
-        {
+        if current_paths != paths {
             drop(locks);
             paths = current_paths;
+            if paths.is_empty() {
+                return Ok(());
+            }
             continue;
         }
-        paths = current_paths;
         break locks;
     };
+
+    let importable_sessions = decode_legacy_sessions(&paths)?;
+    if importable_sessions.is_empty() {
+        remove_locked_legacy_lock_files(&paths);
+        drop(legacy_locks);
+        return Ok(());
+    }
 
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut valid_paths = Vec::new();
 
-    for path in &paths {
-        let bytes = match fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) if error.kind() == ErrorKind::NotFound => continue,
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("reading legacy session {}", path.display()));
-            }
-        };
-        let session = match serde_json::from_slice::<Session>(&bytes) {
-            Ok(session) => session,
-            Err(error) => {
-                tracing::warn!(
-                    target: "armyknife::commands::agent::store",
-                    event = "agent.store.legacy_session_decode_failed",
-                    path = %path.display(),
-                    error = %error,
-                );
-                continue;
-            }
-        };
-        if let Err(error) = super::validate_session_id(&session.session_id) {
-            tracing::warn!(
-                target: "armyknife::commands::agent::store",
-                event = "agent.store.legacy_session_id_invalid",
-                path = %path.display(),
-                error = %error,
-            );
-            continue;
-        }
-
+    for (path, session) in importable_sessions {
         let current = super::read_session(&transaction, &session.session_id)?;
         let should_import = current
             .as_ref()
@@ -75,7 +51,7 @@ pub(super) fn import_legacy_json(connection: &mut Connection, sessions_dir: &Pat
         if should_import {
             super::write_session(&transaction, &session)?;
         }
-        valid_paths.push(path.clone());
+        valid_paths.push(path);
     }
 
     if !valid_paths.is_empty() {
@@ -209,6 +185,38 @@ fn legacy_json_paths(sessions_dir: &Path) -> Result<Vec<PathBuf>> {
     }
     paths.sort();
     Ok(paths)
+}
+
+fn decode_legacy_sessions(paths: &[PathBuf]) -> Result<Vec<(PathBuf, Session)>> {
+    let mut sessions = Vec::new();
+    for path in paths {
+        let bytes = match fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("reading legacy session {}", path.display()));
+            }
+        };
+        match serde_json::from_slice::<Session>(&bytes) {
+            Ok(session) => match super::validate_session_id(&session.session_id) {
+                Ok(()) => sessions.push((path.clone(), session)),
+                Err(error) => tracing::warn!(
+                    target: "armyknife::commands::agent::store",
+                    event = "agent.store.legacy_session_id_invalid",
+                    path = %path.display(),
+                    error = %error,
+                ),
+            },
+            Err(error) => tracing::warn!(
+                target: "armyknife::commands::agent::store",
+                event = "agent.store.legacy_session_decode_failed",
+                path = %path.display(),
+                error = %error,
+            ),
+        }
+    }
+    Ok(sessions)
 }
 
 fn lock_legacy_files(paths: &[PathBuf]) -> Result<Vec<File>> {

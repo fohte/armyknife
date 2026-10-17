@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OptionalExtension, Transaction, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rusqlite_migration::{M, Migrations};
 
 use crate::commands::agent::error::CcError;
@@ -123,7 +123,7 @@ impl SessionLock {
             "session ID cannot change while its store lock is held"
         );
         self.ensure_transaction()?;
-        write_session_on_connection(&self.connection, session)?;
+        write_session(&self.connection, session)?;
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(())
@@ -131,7 +131,7 @@ impl SessionLock {
 
     pub(crate) fn delete(&self) -> Result<bool> {
         self.ensure_transaction()?;
-        let removed = delete_session_on_connection(&self.connection, &self.session_id)?;
+        let removed = delete_session_row(&self.connection, &self.session_id)?;
         self.connection.execute_batch("COMMIT")?;
         self.transaction_active.set(false);
         Ok(removed)
@@ -210,7 +210,7 @@ pub(crate) fn delete_session(sessions_dir: &Path, session_id: &str) -> Result<bo
     }
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let removed = delete_session_in_transaction(&transaction, session_id)?;
+    let removed = delete_session_row(&transaction, session_id)?;
     transaction.commit()?;
     Ok(removed)
 }
@@ -309,20 +309,9 @@ pub(crate) fn serialize_session(session: &Session) -> Result<String> {
     Ok(serde_json::to_string(&persisted)?)
 }
 
-pub(crate) fn write_session(transaction: &Transaction<'_>, session: &Session) -> Result<i64> {
+pub(crate) fn write_session(connection: &Connection, session: &Session) -> Result<i64> {
     let data = serialize_session(session)?;
-    let revision = increment_revision(transaction)?;
-    transaction.execute(
-        "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, ?3)
-         ON CONFLICT(session_id) DO UPDATE SET data = excluded.data, rev = excluded.rev",
-        params![session.session_id, data, revision],
-    )?;
-    Ok(revision)
-}
-
-fn write_session_on_connection(connection: &Connection, session: &Session) -> Result<i64> {
-    let data = serialize_session(session)?;
-    let revision = increment_revision_on_connection(connection)?;
+    let revision = increment_revision(connection)?;
     connection.execute(
         "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, ?3)
          ON CONFLICT(session_id) DO UPDATE SET data = excluded.data, rev = excluded.rev",
@@ -331,15 +320,7 @@ fn write_session_on_connection(connection: &Connection, session: &Session) -> Re
     Ok(revision)
 }
 
-pub(crate) fn increment_revision(transaction: &Transaction<'_>) -> Result<i64> {
-    transaction.execute(
-        "UPDATE session_store_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'revision'",
-        [],
-    )?;
-    read_revision(transaction)
-}
-
-fn increment_revision_on_connection(connection: &Connection) -> Result<i64> {
+pub(crate) fn increment_revision(connection: &Connection) -> Result<i64> {
     connection.execute(
         "UPDATE session_store_meta SET value = CAST(value AS INTEGER) + 1 WHERE key = 'revision'",
         [],
@@ -355,19 +336,10 @@ fn read_revision(connection: &Connection) -> Result<i64> {
     )?)
 }
 
-fn delete_session_on_connection(connection: &Connection, session_id: &str) -> Result<bool> {
+fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
     let changed = connection.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
     if changed > 0 {
-        increment_revision_on_connection(connection)?;
-    }
-    Ok(changed > 0)
-}
-
-fn delete_session_in_transaction(transaction: &Transaction<'_>, session_id: &str) -> Result<bool> {
-    let changed =
-        transaction.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
-    if changed > 0 {
-        increment_revision(transaction)?;
+        increment_revision(connection)?;
     }
     Ok(changed > 0)
 }

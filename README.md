@@ -735,7 +735,7 @@ $ a agent peer notify --parent -m "The delegated work is complete"
 
 Pane user options are not preserved by tmux-resurrect, so `a agent resurrect save` persists them to `~/.cache/armyknife/cc/resurrect/pane_sessions.txt`, and `a agent resurrect restore` re-applies them and types `a agent resume <session-id>` into each pane, so the coding agent comes back automatically after a tmux server crash or restart. Restore skips typing the resume command into any pane whose process tree already has a live process for the selected engine, so re-running it against a session that is already active does not retype the command into its input box.
 
-`a agent resurrect save` also records each session's engine, `ancestor_session_ids` (used by `a agent peer parent`/`children`, see above), and `--vibe` launch marker alongside its session ID, since a tmux server restart can wipe the session's store JSON before restore runs. `a agent resurrect restore` passes the snapshot to `a agent resume --engine ... --ancestor-session-ids ...`, restoring the launch marker when present so `a agent vibe status` keeps its result after the store JSON is rebuilt.
+`a agent resurrect save` also records each session's engine, `ancestor_session_ids` (used by `a agent peer parent`/`children`, see above), and `--vibe` launch marker alongside its session ID, since a tmux server restart can wipe the session database before restore runs. `a agent resurrect restore` passes the snapshot to `a agent resume --engine ... --ancestor-session-ids ...`, restoring the launch marker when present so `a agent vibe status` keeps its result after the database is rebuilt.
 
 Wire the commands into tmux-resurrect via its post-save / post-restore hooks:
 
@@ -748,11 +748,11 @@ Use `$HOME` rather than `~`: tmux escapes a leading `~` in option values, which 
 
 #### Auto-pause
 
-Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated to free up system resources. The session file is preserved and the status is flipped to `paused` once the process is confirmed gone, so `a agent resume` can restore the conversation.
+Sessions that stay in the `stopped` state for longer than the configured timeout are automatically terminated to free up system resources. The session record is preserved in the database and the status is flipped to `paused` once the process is confirmed gone, so `a agent resume` can restore the conversation.
 
 Sweep also checks the latest app-server turn for each running Codex session. It marks failed turns as `failed` and interrupted turns as `stopped`, or `waiting` when a permission request is pending. If the app-server cannot be reached, that session is skipped for the current pass.
 
-`a agent sweep` scans every session file once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
+`a agent sweep` scans every stored session record once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
 Each pass also checks `stopped` and `paused` sessions with linked worktrees. When the worktree branch has a merged pull request and no background task is pending, sweep closes the session through the regular `a agent close` path, which removes the worktree and notifies its delegator. Open pull requests, closed unmerged pull requests, and sessions without linked worktrees remain untouched. A successful automatic close sends a desktop notification with the PR number and title. If `magick` (ImageMagick) is installed, the notification uses a git-merge icon downloaded from Octicons and cached under `~/.cache/armyknife`; download or conversion failures leave the notification without an icon.
 

@@ -390,6 +390,7 @@ fn process_hook_event_impl_with_instruction(
         |cwd| {
             side_effects
                 .capture_pr_context
+                .as_ref()
                 .and_then(|capture| capture(cwd))
         },
         || {
@@ -3987,7 +3988,7 @@ mod tests {
         fn user_prompt_submit_persists_captured_pr_context() {
             let temp_dir = create_temp_sessions_dir();
             let mut side_effects = SideEffects::none();
-            side_effects.capture_pr_context = Some(fixed_context_capture);
+            side_effects.capture_pr_context = Some(std::sync::Arc::new(fixed_context_capture));
 
             let actual = temp_env::with_vars(
                 [
@@ -4046,6 +4047,77 @@ mod tests {
                     "sweep_signaled": false,
                     "engine": "claude"
                 }),
+            );
+        }
+
+        #[test]
+        fn concurrent_permission_hooks_preserve_both_agent_mutations() {
+            let temp_dir = create_temp_sessions_dir();
+            let (capture_started_tx, capture_started_rx) = std::sync::mpsc::channel();
+            let (resume_capture_tx, resume_capture_rx) = std::sync::mpsc::channel();
+            let resume_capture_rx = std::sync::Arc::new(std::sync::Mutex::new(resume_capture_rx));
+            let mut waiting_side_effects = SideEffects::none();
+            waiting_side_effects.capture_pr_context = Some(std::sync::Arc::new(move |_| {
+                capture_started_tx
+                    .send(())
+                    .expect("capture should signal the unlocked interval");
+                resume_capture_rx
+                    .lock()
+                    .expect("capture gate should not be poisoned")
+                    .recv()
+                    .expect("capture gate should be released");
+                None
+            }));
+
+            let worker_dir = temp_dir.path().to_path_buf();
+            let worker = std::thread::spawn(move || {
+                let mut input =
+                    create_test_input_with_session_and_source("race-session", None, None);
+                input.agent_id = Some("waiting-hook".to_string());
+                process_hook_event_impl(
+                    HookEvent::PermissionRequest,
+                    input,
+                    &worker_dir,
+                    &waiting_side_effects,
+                )
+                .expect("waiting hook should save its mutation")
+            });
+
+            capture_started_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("first hook should reach context capture after releasing its lock");
+
+            let mut competing_input =
+                create_test_input_with_session_and_source("race-session", None, None);
+            competing_input.agent_id = Some("competing-hook".to_string());
+            let competing_result = process_hook_event_impl(
+                HookEvent::PermissionRequest,
+                competing_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("competing hook should create the session");
+            resume_capture_tx
+                .send(())
+                .expect("first hook should resume after the competing write");
+            let waiting_result = worker.join().expect("first hook should finish");
+
+            let session = store::load_session_from(temp_dir.path(), "race-session")
+                .expect("session should load")
+                .expect("competing hook should have created the session");
+            assert_eq!(
+                (
+                    competing_result,
+                    waiting_result,
+                    session.status,
+                    session.pending_permission_agent_ids,
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    ProcessResult::SessionSaved,
+                    SessionStatus::WaitingInput,
+                    BTreeSet::from(["competing-hook".to_string(), "waiting-hook".to_string(),]),
+                ),
             );
         }
 

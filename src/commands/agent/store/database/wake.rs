@@ -24,6 +24,14 @@ pub(super) struct WakeLock {
 }
 
 pub(super) fn acquire(sessions_dir: &Path, session_id: &str) -> Result<WakeLock> {
+    acquire_inner(sessions_dir, session_id, || {})
+}
+
+fn acquire_inner(
+    sessions_dir: &Path,
+    session_id: &str,
+    mut on_existing_claim: impl FnMut(),
+) -> Result<WakeLock> {
     let mut connection = open_connection(sessions_dir)?;
     let key = format!("wake-lock:{session_id}");
     let started_at = Instant::now();
@@ -81,6 +89,7 @@ pub(super) fn acquire(sessions_dir: &Path, session_id: &str) -> Result<WakeLock>
             });
         }
         transaction.commit()?;
+        on_existing_claim();
 
         if started_at.elapsed() >= WAKE_WAIT_TIMEOUT {
             anyhow::bail!("timed out waiting for session wake lock: {session_id}");
@@ -162,18 +171,26 @@ mod tests {
         let sessions_dir = temp_dir.path().join("sessions");
         let lock = acquire(&sessions_dir, "wake-target").expect("first claim should succeed");
         let worker_dir = sessions_dir.clone();
-        let (started_tx, started_rx) = mpsc::channel();
+        let (claim_seen_tx, claim_seen_rx) = mpsc::channel();
         let (acquired_tx, acquired_rx) = mpsc::channel();
         let worker = thread::spawn(move || {
-            started_tx.send(()).expect("worker should signal its start");
-            let result = acquire(&worker_dir, "wake-target").is_ok();
+            let mut claim_seen = false;
+            let result = acquire_inner(&worker_dir, "wake-target", || {
+                if !claim_seen {
+                    claim_seen = true;
+                    claim_seen_tx
+                        .send(())
+                        .expect("worker should signal the existing claim");
+                }
+            })
+            .is_ok();
             acquired_tx
                 .send(result)
                 .expect("worker should report its claim");
         });
-        started_rx
+        claim_seen_rx
             .recv_timeout(Duration::from_secs(1))
-            .expect("worker should start");
+            .expect("worker should observe the existing claim");
 
         let acquired_while_owned = acquired_rx.recv_timeout(Duration::from_millis(100));
         drop(lock);

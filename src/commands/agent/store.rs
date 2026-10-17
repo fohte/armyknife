@@ -426,7 +426,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::SessionStatus;
     use chrono::{TimeDelta, TimeZone, Utc};
-    use rstest::fixture;
+    use rstest::{fixture, rstest};
     use std::fs::OpenOptions;
     use tempfile::TempDir;
 
@@ -436,35 +436,32 @@ mod tests {
         sessions_path: PathBuf,
     }
 
-    struct SessionRecordProbe {
+    struct StoredSessionProbe {
         sessions_dir: PathBuf,
         session_id: String,
         legacy_json_path: PathBuf,
     }
 
-    impl SessionRecordProbe {
-        fn exists(&self) -> bool {
+    impl StoredSessionProbe {
+        fn is_stored(&self) -> bool {
             database::load_session(&self.sessions_dir, &self.session_id)
                 .ok()
                 .flatten()
                 .is_some()
-                || self.as_ref().exists()
         }
 
-        fn with_extension(&self, extension: &str) -> PathBuf {
-            self.as_ref().with_extension(extension)
-        }
-    }
-
-    impl AsRef<Path> for SessionRecordProbe {
-        fn as_ref(&self) -> &Path {
+        fn legacy_json_path(&self) -> &Path {
             &self.legacy_json_path
         }
+
+        fn legacy_json_lock_path(&self) -> PathBuf {
+            self.legacy_json_path.with_extension("json.lock")
+        }
     }
 
-    fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<SessionRecordProbe> {
+    fn session_record_in(sessions_dir: &Path, session_id: &str) -> Result<StoredSessionProbe> {
         database::validate_session_id(session_id)?;
-        Ok(SessionRecordProbe {
+        Ok(StoredSessionProbe {
             sessions_dir: sessions_dir.to_path_buf(),
             session_id: session_id.to_string(),
             legacy_json_path: sessions_dir.join(format!("{session_id}.json")),
@@ -836,14 +833,22 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_session_id_rejects_path_traversal() {
-        assert!(database::validate_session_id("../etc/passwd").is_err());
-        assert!(database::validate_session_id("foo/bar").is_err());
-        assert!(database::validate_session_id("foo\\bar").is_err());
-        assert!(database::validate_session_id("..").is_err());
-        assert!(database::validate_session_id("valid-session-id").is_ok());
-        assert!(database::validate_session_id("session_123").is_ok());
+    #[rstest]
+    #[case::empty_id("", false)]
+    #[case::parent_traversal("../etc/passwd", false)]
+    #[case::nested_path("foo/bar", false)]
+    #[case::windows_nested_path("foo\\bar", false)]
+    #[case::dot_dot("..", false)]
+    #[case::valid_hyphenated_id("valid-session-id", true)]
+    #[case::valid_underscored_id("session_123", true)]
+    fn session_store_rejects_invalid_ids_at_its_api(
+        temp_session_dir: TempSessionDir,
+        #[case] session_id: &str,
+        #[case] expected_to_load: bool,
+    ) {
+        let actual_to_load = load_session_from(&temp_session_dir.sessions_path, session_id).is_ok();
+
+        assert_eq!(actual_to_load, expected_to_load);
     }
 
     mod session_lock_tests {
@@ -1014,8 +1019,8 @@ mod tests {
             #[case] status: SessionStatus,
         ) {
             let session_id = "dead-pane-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.status = status;
@@ -1034,7 +1039,10 @@ mod tests {
                 .insert("background-task".to_string());
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
-            assert!(path.exists(), "session record should exist before cleanup");
+            assert!(
+                path.is_stored(),
+                "session record should exist before cleanup"
+            );
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1061,7 +1069,7 @@ mod tests {
                     )
                 });
             assert_eq!(
-                (changed, path.exists(), restored),
+                (changed, path.is_stored(), restored),
                 (
                     true,
                     true,
@@ -1081,8 +1089,8 @@ mod tests {
             temp_session_dir: TempSessionDir,
         ) {
             let session_id = "stale-codex-session";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
             let mut session = create_test_session(session_id);
             session.engine = Engine::Codex;
             save_session_to(&temp_session_dir.sessions_path, &session)
@@ -1116,7 +1124,7 @@ mod tests {
                         lock_session_for_update(&temp_session_dir.sessions_path, thread_id).is_ok();
                     archive_calls.borrow_mut().push((
                         thread_id.to_string(),
-                        path.exists(),
+                        path.is_stored(),
                         lock_available,
                     ));
                     Err(anyhow::anyhow!("fixture archive failure"))
@@ -1131,7 +1139,7 @@ mod tests {
                     calls_before_collection,
                     removed_after_retention,
                     archive_calls.into_inner(),
-                    path.exists(),
+                    path.is_stored(),
                 ),
                 (
                     true,
@@ -1147,8 +1155,8 @@ mod tests {
         #[rstest]
         fn keeps_session_restored_during_codex_archiving(temp_session_dir: TempSessionDir) {
             let session_id = "restored-during-gc";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
             let now = Utc
                 .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
                 .single()
@@ -1182,7 +1190,12 @@ mod tests {
                 .expect("load should succeed")
                 .map(|session| (session.archived_at, session.status));
             assert_eq!(
-                (changed, archive_calls.into_inner(), path.exists(), restored),
+                (
+                    changed,
+                    archive_calls.into_inner(),
+                    path.is_stored(),
+                    restored
+                ),
                 (
                     false,
                     vec!["restored-during-gc".to_string()],
@@ -1235,8 +1248,8 @@ mod tests {
         #[rstest]
         fn keeps_session_with_alive_pane(temp_session_dir: TempSessionDir) {
             let session_id = "alive-pane-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.tmux_info = Some(TmuxInfo {
@@ -1256,14 +1269,14 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
-            assert!(path.exists(), "session with alive pane should be kept");
+            assert!(path.is_stored(), "session with alive pane should be kept");
         }
 
         #[rstest]
         fn keeps_session_without_tmux_info(temp_session_dir: TempSessionDir) {
             let session_id = "no-tmux-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.tmux_info = None;
@@ -1279,14 +1292,14 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
-            assert!(path.exists(), "session without tmux_info should be kept");
+            assert!(path.is_stored(), "session without tmux_info should be kept");
         }
 
         #[rstest]
         fn archives_session_without_creating_a_lock_file(temp_session_dir: TempSessionDir) {
             let session_id = "with-lock-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.tmux_info = Some(TmuxInfo {
@@ -1299,8 +1312,8 @@ mod tests {
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
 
-            let lock_path = path.with_extension("json.lock");
-            assert!(path.exists(), "session record should exist");
+            let lock_path = path.legacy_json_lock_path();
+            assert!(path.is_stored(), "session record should exist");
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1321,7 +1334,7 @@ mod tests {
             assert_eq!(
                 (
                     changed,
-                    path.exists(),
+                    path.is_stored(),
                     lock_path.exists(),
                     stored_archived_at
                 ),
@@ -1339,8 +1352,8 @@ mod tests {
             #[case] status: SessionStatus,
         ) {
             let session_id = "orphan-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.status = status;
@@ -1349,7 +1362,10 @@ mod tests {
             // no pane info, so `stale_pane` alone would never catch it.
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
-            assert!(path.exists(), "session record should exist before cleanup");
+            assert!(
+                path.is_stored(),
+                "session record should exist before cleanup"
+            );
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1368,7 +1384,7 @@ mod tests {
                 .expect("load should succeed")
                 .map(|session| session.archived_at);
             assert_eq!(
-                (changed, path.exists(), stored_archived_at),
+                (changed, path.is_stored(), stored_archived_at),
                 (true, true, Some(Some(archived_at))),
             );
         }
@@ -1383,8 +1399,8 @@ mod tests {
             #[case] status: SessionStatus,
         ) {
             let session_id = "live-test";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.status = status;
@@ -1398,14 +1414,17 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
-            assert!(path.exists(), "session should be kept while its cwd exists");
+            assert!(
+                path.is_stored(),
+                "session should be kept while its cwd exists"
+            );
         }
 
         #[rstest]
         fn keeps_ended_session_when_cwd_is_gone_but_not_expired(temp_session_dir: TempSessionDir) {
             let session_id = "ended-not-expired";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
 
             let mut session = create_test_session(session_id);
             session.status = SessionStatus::Ended;
@@ -1420,7 +1439,7 @@ mod tests {
             .expect("cleanup should succeed");
 
             assert!(
-                path.exists(),
+                path.is_stored(),
                 "ended session should rely on retention, not cwd existence"
             );
         }
@@ -1435,9 +1454,9 @@ mod tests {
             #[case] archived: bool,
         ) {
             let session_id = "expired-session";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
-            let lock_path = path.with_extension("json.lock");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
+            let lock_path = path.legacy_json_lock_path();
             let now = Utc
                 .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
                 .single()
@@ -1462,7 +1481,7 @@ mod tests {
             .expect("cleanup should succeed");
 
             assert_eq!(
-                (removed, path.exists(), lock_path.exists()),
+                (removed, path.is_stored(), lock_path.exists()),
                 (true, false, false),
             );
         }
@@ -1472,8 +1491,8 @@ mod tests {
             temp_session_dir: TempSessionDir,
         ) {
             let session_id = "recently-archived";
-            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_record_in should succeed");
             let now = Utc
                 .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
                 .single()
@@ -1497,7 +1516,7 @@ mod tests {
                 .map(|session| session.archived_at);
 
             assert_eq!(
-                (changed, path.exists(), stored_archived_at),
+                (changed, path.is_stored(), stored_archived_at),
                 (false, true, Some(Some(archived_at))),
             );
         }
@@ -1527,7 +1546,7 @@ mod tests {
                     pane_id: pane_id.to_string(),
                     socket_path: socket_path.map(str::to_owned),
                 });
-                let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                let path = session_record_in(&temp_session_dir.sessions_path, session_id)
                     .expect("session path should be valid");
                 save_session_to(&temp_session_dir.sessions_path, &session)
                     .expect("session should save");
@@ -1561,10 +1580,10 @@ mod tests {
             assert_eq!(
                 (
                     removed,
-                    paths["default-live"].exists(),
-                    paths["default-stale"].exists(),
-                    paths["private-live"].exists(),
-                    paths["unavailable-server"].exists(),
+                    paths["default-live"].is_stored(),
+                    paths["default-stale"].is_stored(),
+                    paths["private-live"].is_stored(),
+                    paths["unavailable-server"].is_stored(),
                     query_counts.into_inner(),
                 ),
                 (
@@ -1926,6 +1945,30 @@ mod tests {
         use super::*;
         use rstest::rstest;
 
+        #[test]
+        fn invalid_legacy_json_does_not_require_the_writer_lock_for_reads() {
+            let temp_session_dir = temp_session_dir();
+            let legacy_json = temp_session_dir.sessions_path.join("invalid.json");
+            fs::write(&legacy_json, "{").expect("invalid legacy JSON should be written");
+            let mut connection = database::open_connection(&temp_session_dir.sessions_path)
+                .expect("session database should open");
+            let writer = connection
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .expect("writer transaction should start");
+
+            let loaded = load_session_from(&temp_session_dir.sessions_path, "not-present")
+                .expect("read should not wait for a writer transaction");
+
+            assert_eq!(
+                (
+                    loaded.is_none(),
+                    legacy_json.with_extension("json.lock").exists()
+                ),
+                (true, false)
+            );
+            drop(writer);
+        }
+
         #[rstest]
         #[case::corrupted_with_extra_data(
             r#"{"session_id": "test", "current_tool": "Bash(cd ...)"}>/dev/null)"}"#,
@@ -1939,16 +1982,20 @@ mod tests {
             #[case] prefix: &str,
         ) {
             let session_id = format!("{}-test", prefix);
-            let path = session_file_in(&temp_session_dir.sessions_path, &session_id)
-                .expect("session_file_in should succeed");
+            let path = session_record_in(&temp_session_dir.sessions_path, &session_id)
+                .expect("session_record_in should succeed");
 
-            fs::write(&path, content).expect("write should succeed");
+            fs::write(path.legacy_json_path(), content).expect("write should succeed");
 
             let result = load_session_from(&temp_session_dir.sessions_path, &session_id)
                 .expect("load should not error");
             assert!(result.is_none(), "{} session should return None", prefix);
             // Invalid legacy JSON is preserved for inspection.
-            assert!(path.exists(), "{} JSON should still exist", prefix);
+            assert!(
+                path.legacy_json_path().exists(),
+                "{} JSON should still exist",
+                prefix
+            );
         }
 
         #[rstest]
