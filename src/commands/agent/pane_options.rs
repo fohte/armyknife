@@ -4,6 +4,7 @@ use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeNamedC
 
 pub(crate) const TMUX_CC_PANE_STATUS_OPTION: &str = "@armyknife-cc-pane-status";
 pub(crate) const TMUX_CC_PANE_WORK_TYPE_OPTION: &str = "@armyknife-cc-pane-work-type";
+pub(crate) const TMUX_AGENT_STATUS_KIND_OPTION: &str = "@armyknife-agent-status-kind";
 
 pub(crate) fn tmux_option_commands(
     pane_id: &str,
@@ -17,9 +18,16 @@ pub(crate) fn tmux_option_commands(
         .and_then(|session| session.work_type.as_deref())
         .and_then(|work_type| config.work_type(work_type))
         .map(|config| format!("#[fg={}]{}", tmux_color(config.color), config.icon));
+    let agent_status_kind = session.and_then(|session| {
+        session
+            .agent_status
+            .as_ref()
+            .map(|status| status.kind.as_str())
+    });
 
     vec![
         tmux::pane_option_command(pane_id, TMUX_CC_PANE_STATUS_OPTION, status.as_deref()),
+        tmux::pane_option_command(pane_id, TMUX_AGENT_STATUS_KIND_OPTION, agent_status_kind),
         tmux::pane_option_command(pane_id, TMUX_CC_PANE_WORK_TYPE_OPTION, work_type.as_deref()),
     ]
 }
@@ -67,7 +75,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::commands::agent::types::Engine;
+    use crate::commands::agent::types::{AgentStatus, Engine};
     use crate::shared::config::{AgentWorkTypeColor, AgentWorkTypeConfig};
 
     fn session(status: SessionStatus, work_type: Option<&str>) -> Session {
@@ -120,10 +128,16 @@ mod tests {
 
     #[test]
     fn tmux_options_use_session_display_and_configured_work_type() {
+        let mut session = session(SessionStatus::Running, Some("review"));
+        session.agent_status = Some(AgentStatus {
+            kind: "review_pending".to_string(),
+            note: "inspect the result".to_string(),
+        });
+
         assert_eq!(
             tmux_option_commands(
                 "%42",
-                Some(&session(SessionStatus::Running, Some("review"))),
+                Some(&session),
                 &config_with_work_type(AgentWorkTypeColor::Rgb([12, 34, 56])),
             ),
             vec![
@@ -134,6 +148,14 @@ mod tests {
                     "%42",
                     "@armyknife-cc-pane-status",
                     "●",
+                ],
+                vec![
+                    "set-option",
+                    "-p",
+                    "-t",
+                    "%42",
+                    "@armyknife-agent-status-kind",
+                    "review_pending",
                 ],
                 vec![
                     "set-option",
@@ -215,6 +237,14 @@ mod tests {
                     "@armyknife-cc-pane-status".to_string(),
                     "●".to_string(),
                 ],
+                vec![
+                    "set-option".to_string(),
+                    "-p".to_string(),
+                    "-u".to_string(),
+                    "-t".to_string(),
+                    "%42".to_string(),
+                    "@armyknife-agent-status-kind".to_string(),
+                ],
                 expected_work_type,
             ],
         );
@@ -247,6 +277,14 @@ mod tests {
                 "✱",
             ]
         };
+        let expected_agent_status_kind = vec![
+            "set-option",
+            "-p",
+            "-u",
+            "-t",
+            "%42",
+            "@armyknife-agent-status-kind",
+        ];
         let expected_work_type = if work_type == Some("review") {
             vec![
                 "set-option",
@@ -272,7 +310,11 @@ mod tests {
                 Some(&session(status, work_type)),
                 &config_with_work_type(AgentWorkTypeColor::Rgb([12, 34, 56])),
             ),
-            vec![expected_status, expected_work_type],
+            vec![
+                expected_status,
+                expected_agent_status_kind,
+                expected_work_type
+            ],
         );
     }
 
@@ -288,6 +330,14 @@ mod tests {
                     "-t",
                     "%42",
                     "@armyknife-cc-pane-status",
+                ],
+                vec![
+                    "set-option",
+                    "-p",
+                    "-u",
+                    "-t",
+                    "%42",
+                    "@armyknife-agent-status-kind",
                 ],
                 vec![
                     "set-option",
