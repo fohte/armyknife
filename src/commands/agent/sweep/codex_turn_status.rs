@@ -7,7 +7,6 @@ use super::super::codex_steer::Client;
 use super::super::store;
 use super::super::tmux_sync::TmuxStatusSyncer;
 use super::super::types::{Engine, SessionStatus};
-use super::session_files::session_ids_in;
 
 #[derive(Default)]
 struct AppServerTurnStatusReader {
@@ -68,11 +67,15 @@ where
 {
     let mut updates = CodexTurnUpdates::default();
 
-    for session_id in session_ids_in(sessions_dir)? {
-        let Some(session) = store::load_session_from(sessions_dir, &session_id)? else {
+    for listed_session in store::list_all_sessions_from(sessions_dir)? {
+        let Some(session) = store::load_session_from(sessions_dir, &listed_session.session_id)?
+        else {
             continue;
         };
-        if session.engine != Engine::Codex || session.status != SessionStatus::Running {
+        if session.archived_at.is_some()
+            || session.engine != Engine::Codex
+            || session.status != SessionStatus::Running
+        {
             continue;
         }
 
