@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.440](https://github.com/fohte/armyknife/compare/v0.1.439...v0.1.440) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** add archived_at to notify fixture ([#1215](https://github.com/fohte/armyknife/issues/1215)) ([5345193](https://github.com/fohte/armyknife/commit/53451932135ed2157e8c2639bf75232a7d880d1f))
+
 ## [0.1.439](https://github.com/fohte/armyknife/compare/v0.1.438...v0.1.439) (2026-10-17)
 
 
