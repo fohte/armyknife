@@ -399,7 +399,7 @@ fn run_session_only_inner_with_launchers(
     resolve_caller_pane: impl FnOnce() -> Option<String>,
     launch_split: impl FnOnce(TmuxSplitPaneSpec<'_>) -> Result<String>,
     launch_window: impl FnOnce(TmuxWindowSpec<'_>, &Config) -> Result<String>,
-    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
+    mut run_hook: impl FnMut(&str, &[(&str, &str)]) -> Result<()>,
 ) -> Result<()> {
     let cwd = context
         .repo
@@ -438,8 +438,12 @@ fn run_session_only_inner_with_launchers(
     );
 
     let caller_pane = resolve_caller_pane();
-    let session_cwd = std::fs::canonicalize(&cwd).context("Failed to resolve session CWD")?;
-    run_pre_session_start_hook(args.skip_hooks, &session_cwd, run_hook)?;
+    let session_cwd = if args.skip_hooks {
+        None
+    } else {
+        Some(std::fs::canonicalize(&cwd).context("Failed to resolve session CWD")?)
+    };
+    run_pre_session_start_hook(args.skip_hooks, session_cwd.as_deref(), &mut run_hook)?;
 
     // Window mode doesn't need a pane, so it remains the fallback when no
     // caller pane can be resolved.
@@ -683,7 +687,10 @@ mod tests {
 
         assert_eq!(
             (result.err().map(|error| error.to_string()), launched.get()),
-            (Some("hook failed".to_string()), false),
+            (
+                Some("Failed to run pre-session-start hook".to_string()),
+                false
+            ),
         );
     }
 
@@ -695,6 +702,46 @@ mod tests {
         let result = run_session_only_inner_with_launchers(
             &args,
             session_only_root.context(),
+            || Some("%caller-pane".to_string()),
+            |_| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |_, _| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |name, _| {
+                events.borrow_mut().push(name.to_string());
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (result.is_ok(), events.into_inner()),
+            (true, vec!["launch".to_string()]),
+        );
+    }
+
+    #[rstest]
+    fn skip_hooks_does_not_resolve_session_cwd(session_only_root: SessionOnlyRootFixture) {
+        let args = TestCli::try_parse_from(["a", "--skip-hooks"]).unwrap().args;
+        let missing_cwd = Path::new(&session_only_root.cwd)
+            .join("missing")
+            .to_string_lossy()
+            .to_string();
+        let context = SessionOnlyRunContext {
+            repo: None,
+            repo_root: &missing_cwd,
+            caller_repo_root: &missing_cwd,
+            current_dir: &missing_cwd,
+            config: &session_only_root.config,
+        };
+        let events = RefCell::new(Vec::new());
+
+        let result = run_session_only_inner_with_launchers(
+            &args,
+            context,
             || Some("%caller-pane".to_string()),
             |_| {
                 events.borrow_mut().push("launch".to_string());
