@@ -404,7 +404,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`   |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                          |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                          |         | Set the calling session's reason for stopping                                               |
-| `vibe on / off / status`                            |         | Enable, disable, or check this session's vibe mode                                          |
+| `vibe on / off / status / grant <session-id>`       |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                               | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
 | `resurrect save`                                    |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                          |
 | `resurrect restore`                                 |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
@@ -436,7 +436,7 @@ if a agent vibe status >/dev/null 2>&1; then
 fi
 ```
 
-Run `a agent vibe on` in a tracked session to enable the marker. A descendant inherits it only when it was launched with `a agent new --vibe`, and only while an ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's own marker; a session launched with `--vibe` continues to inherit an active ancestor marker. Run `off` in the enabling session to disable vibe mode for descendants.
+Run `a agent vibe on` in a tracked session to enable the marker. A descendant inherits it when it was launched with `a agent new --vibe`, or when an enabled ancestor runs `a agent vibe grant <session-id>` for it. In either case, inheritance remains active only while an ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's own marker; a session launched with `--vibe` or granted inheritance continues to inherit an active ancestor marker. Run `off` in the enabling session to disable vibe mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
