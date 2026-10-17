@@ -62,11 +62,54 @@ pub fn current_socket_path() -> Result<Option<String>> {
     Ok((!path.is_empty()).then_some(path))
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PaneIdsParseError {
+    Empty,
+    InvalidPaneId,
+}
+
+fn parse_pane_ids(output: &str) -> std::result::Result<HashSet<String>, PaneIdsParseError> {
+    let mut pane_ids = HashSet::new();
+
+    for pane_id in output.lines() {
+        let Some(suffix) = pane_id.strip_prefix('%') else {
+            return Err(PaneIdsParseError::InvalidPaneId);
+        };
+        if suffix.is_empty() || !suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(PaneIdsParseError::InvalidPaneId);
+        }
+        pane_ids.insert(pane_id.to_owned());
+    }
+
+    if pane_ids.is_empty() {
+        return Err(PaneIdsParseError::Empty);
+    }
+
+    Ok(pane_ids)
+}
+
 /// Lists pane IDs from the recorded server. An error means liveness is unknown.
+///
+/// Empty output is ambiguous because a successful command may omit pane IDs entirely.
 pub fn list_all_pane_ids_for_socket(socket_path: Option<&str>) -> Result<HashSet<String>> {
-    let output =
-        run_tmux_output_for_socket(socket_path, &["list-panes", "-a", "-F", "#{pane_id}"])?;
-    Ok(output.lines().map(str::to_owned).collect())
+    let output = super::run_tmux_output_untrimmed(&socket_command_args(
+        socket_path,
+        &["list-panes", "-a", "-F", "#{pane_id}"],
+    ))?;
+    parse_pane_ids(&output).map_err(|error| {
+        let (reason, message) = match error {
+            PaneIdsParseError::Empty => ("empty output", "tmux returned no pane IDs"),
+            PaneIdsParseError::InvalidPaneId => {
+                ("invalid pane ID", "tmux returned an invalid pane ID")
+            }
+        };
+        tracing::warn!(
+            ?socket_path,
+            reason,
+            "tmux list-panes output is untrusted; pane liveness is unknown"
+        );
+        TmuxError::Internal(message.to_owned())
+    })
 }
 
 /// Returns whether a pane exists in its recorded server.
@@ -211,6 +254,7 @@ pub fn respawn_pane_for_socket(
 mod tests {
     use std::ffi::OsString;
 
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -248,6 +292,32 @@ mod tests {
             socket_command_args(socket_path, &args),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
         );
+    }
+
+    #[rstest]
+    #[case::single_pane("%47\n", Ok(HashSet::from(["%47".to_owned()])))]
+    #[case::multiple_panes(
+        indoc! {"
+            %47
+            %48
+        "},
+        Ok(HashSet::from(["%47".to_owned(), "%48".to_owned()]))
+    )]
+    #[case::empty_output("", Err(PaneIdsParseError::Empty))]
+    #[case::non_pane_output("tmux unavailable\n", Err(PaneIdsParseError::InvalidPaneId))]
+    #[case::malformed_pane_id(
+        indoc! {"
+            %47
+            %48x
+        "},
+        Err(PaneIdsParseError::InvalidPaneId)
+    )]
+    #[case::surrounding_whitespace_is_invalid(" %47 \n", Err(PaneIdsParseError::InvalidPaneId))]
+    fn parses_pane_ids(
+        #[case] output: &str,
+        #[case] expected: std::result::Result<HashSet<String>, PaneIdsParseError>,
+    ) {
+        assert_eq!(parse_pane_ids(output), expected);
     }
 
     #[rstest]
