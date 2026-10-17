@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
 use clap::Args;
 
 use super::{CcError, current_session_id, store};
-use crate::commands::agent::types::SessionStatus;
+use crate::commands::agent::types::{Session, SessionStatus};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct AdoptArgs {
@@ -33,11 +34,7 @@ fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) 
 
     let caller = store::load_session_from(sessions_dir, caller_id)?
         .ok_or_else(|| CcError::SessionNotFound(caller_id.to_string()))?;
-    if caller
-        .ancestor_session_ids
-        .iter()
-        .any(|ancestor_id| ancestor_id == target_id)
-    {
+    if has_ancestor(sessions_dir, &caller, caller_id, target_id)? {
         return Err(CcError::CannotAdoptAncestor(target_id.to_string()).into());
     }
 
@@ -66,13 +63,45 @@ fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) 
 
     target.ancestor_session_ids = caller.ancestor_session_ids;
     target.ancestor_session_ids.push(caller_id.to_string());
+    target.launched_with_vibe = false;
     lock.save(&target)
+}
+
+fn has_ancestor(
+    sessions_dir: &Path,
+    caller: &Session,
+    caller_id: &str,
+    target_id: &str,
+) -> Result<bool> {
+    if caller
+        .ancestor_session_ids
+        .iter()
+        .any(|ancestor_id| ancestor_id == target_id)
+    {
+        return Ok(true);
+    }
+
+    // Adopt leaves descendant chains unchanged, so resolve their parent links through the store.
+    let mut visited = HashSet::from([caller_id.to_string()]);
+    let mut parent_id = caller.ancestor_session_ids.last().cloned();
+    while let Some(current_id) = parent_id {
+        if current_id == target_id {
+            return Ok(true);
+        }
+        if !visited.insert(current_id.clone()) {
+            break;
+        }
+        parent_id = store::load_session_from(sessions_dir, &current_id)?
+            .and_then(|parent| parent.ancestor_session_ids.last().cloned());
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::{store, types::Session};
+    use crate::commands::agent::store;
     use chrono::Utc;
     use clap::Parser;
     use rstest::{fixture, rstest};
@@ -241,7 +270,7 @@ mod tests {
     fn adopt_requires_force_when_current_parent_is_alive() {
         let store = session_store();
         seed_caller_and_target(&store, &[], &["old-parent"]);
-        store.save(&session("old-parent", &[], SessionStatus::Stopped));
+        store.save(&session("old-parent", &[], SessionStatus::Running));
 
         let error = store
             .adopt("caller", "target", false)
@@ -281,6 +310,7 @@ mod tests {
     fn adopt_force_reparents_target_and_leaves_descendant_chain_unchanged() {
         let store = session_store();
         seed_caller_and_target(&store, &["root"], &["old-parent"]);
+        store.save(&session("old-parent", &[], SessionStatus::Stopped));
         store.save(&session(
             "descendant",
             &["old-parent", "target"],
@@ -315,6 +345,56 @@ mod tests {
                 true,
                 descendant_before,
             )
+        );
+    }
+
+    #[test]
+    fn adopt_rejects_ancestor_reached_through_a_reparented_parent() {
+        let store = session_store();
+        store.save(&session("caller", &[], SessionStatus::Running));
+        store.save(&session("old-parent", &[], SessionStatus::Running));
+        store.save(&session("target", &["old-parent"], SessionStatus::Running));
+        store.save(&session(
+            "descendant",
+            &["old-parent", "target"],
+            SessionStatus::Running,
+        ));
+        store
+            .adopt("caller", "target", true)
+            .expect("force should permit the first reparenting");
+
+        let result = store
+            .adopt("descendant", "caller", false)
+            .map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err(
+                "Cannot adopt ancestor session 'caller' because it would create a cycle"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn adopt_clears_inherited_vibe_for_the_new_parent() {
+        let store = session_store();
+        let mut caller = session("caller", &[], SessionStatus::Running);
+        caller.vibe_enabled = true;
+        store.save(&caller);
+        store.save(&session("old-parent", &[], SessionStatus::Running));
+        let mut target = session("target", &["old-parent"], SessionStatus::Running);
+        target.launched_with_vibe = true;
+        store.save(&target);
+
+        store
+            .adopt("caller", "target", true)
+            .expect("force should permit the adoption");
+
+        let adopted = store.load("target");
+        assert_eq!(
+            (adopted.ancestor_session_ids, adopted.launched_with_vibe),
+            (vec!["caller".to_string()], false)
         );
     }
 }

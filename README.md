@@ -693,12 +693,6 @@ Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaq
 
 `a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, agent_status, pane_id, engine}`. `agent_status` is `{kind, note}` when set and omitted otherwise; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
-Run `a agent peer adopt <session_id>` from a tracked Claude Code or Codex session to make an existing session its direct child. This updates the target's `ancestor_session_ids` to the caller's ancestors followed by the caller, so `peer children` lists it and `a agent close --child <session_id>` accepts it. If the target already is a direct child, the command succeeds without writing. It refuses a missing or Ended target. It also refuses to change a target whose current parent record exists and is not Ended; pass `--force` to take it from that parent. A missing or Ended current parent does not require `--force`.
-
-```console
-$ a agent peer adopt session-x --force
-```
-
 ```console
 $ a agent peer parent
 [{"name":"myproject-4f","session_id":"1111...","cwd":"/Users/example/ghq/github.com/example/myproject","label":null,"status":"running","agent_status":{"kind":"wait","note":"waiting for job-42"},"pane_id":"%3","engine":"claude"}]
@@ -706,6 +700,15 @@ $ a agent peer parent | jq -r '.[0].name // empty'
 myproject-4f
 $ a agent peer list -R myproject
 [{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running","pane_id":"%7","engine":"claude"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped","pane_id":null,"engine":"codex"}]
+```
+
+Run `a agent peer adopt <session_id>` from a tracked Claude Code or Codex session to make an existing session its direct child. The command updates the target's `ancestor_session_ids` to the caller's ancestors followed by the caller, so `peer children` lists it and `a agent close --child <session_id>` accepts it. It prints nothing on success; list the adopted session with `peer children`. If the target already is a direct child, the command succeeds without writing. It refuses a missing or Ended target, the calling session itself, and any of the caller's ancestors because those would create a cycle. A target whose current parent record exists and is not Ended requires `--force`; a missing or Ended current parent does not. Adoption clears the target's inherited vibe marker, so an enabled ancestor must explicitly grant it again with `a agent vibe grant <session_id>`.
+
+```console
+$ a agent peer adopt session-x
+$ a agent peer children | jq -r '.[].session_id'
+session-x
+$ a agent peer adopt session-y --force
 ```
 
 `a agent peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-agent-session-id` user option (see above), the same mechanism `a agent resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a agent peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a agent sweep`).
