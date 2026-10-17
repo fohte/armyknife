@@ -320,7 +320,12 @@ mod tests {
                 .title("Test Issue")
                 .body("This is the body.\n")
                 .labels(vec!["bug"])
-                .create()
+                .create_matching_body(serde_json::json!({
+                    "title": "Test Issue",
+                    "body": "This is the body.",
+                    "labels": ["bug"],
+                    "assignees": ["testuser"],
+                }))
                 .await;
 
             let client = mock.client();

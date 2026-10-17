@@ -173,6 +173,32 @@ mod tests {
         use super::*;
 
         #[rstest]
+        fn test_parse_submit_true() {
+            let content = indoc! {"
+                ---
+                title: Approved Issue
+                submit: true
+                ---
+
+                Body.
+            "};
+
+            assert_eq!(
+                NewIssue::parse(content).unwrap(),
+                NewIssue {
+                    frontmatter: NewIssueFrontmatter {
+                        fields: EditableIssueFields {
+                            title: "Approved Issue".to_string(),
+                            ..Default::default()
+                        },
+                        submit: true,
+                    },
+                    body: "Body.".to_string(),
+                },
+            );
+        }
+
+        #[rstest]
         fn test_parse_full_format() {
             let content = indoc! {"
                 ---

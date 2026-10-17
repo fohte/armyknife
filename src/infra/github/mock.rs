@@ -37,7 +37,7 @@
 //! ```
 
 use serde_json::json;
-use wiremock::matchers::{body_string_contains, method, path, path_regex, query_param};
+use wiremock::matchers::{body_json, body_string_contains, method, path, path_regex, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 mod pr_number;
@@ -898,24 +898,36 @@ impl<'a> MockIssueBuilder<'a> {
 
     /// Mount mock for POST /repos/{owner}/{repo}/issues (create new issue).
     pub async fn create(self) {
+        self.mount_create(None).await;
+    }
+
+    /// Require an exact request body so create-payload regressions fail the caller's test.
+    pub async fn create_matching_body(self, expected_body: serde_json::Value) {
+        self.mount_create(Some(expected_body)).await;
+    }
+
+    async fn mount_create(self, expected_body: Option<serde_json::Value>) {
         let owner = self.owner;
         let repo = self.repo;
         let number = self.number;
-        Mock::given(method("POST"))
-            .and(path(format!("/repos/{owner}/{repo}/issues")))
-            .respond_with(
-                ResponseTemplate::new(201).set_body_json(mock_issue_with_labels(
-                    owner,
-                    repo,
-                    number,
-                    self.title,
-                    self.body,
-                    self.updated_at,
-                    &self.labels,
-                )),
-            )
-            .mount(self.server)
-            .await;
+        let mut mock =
+            Mock::given(method("POST")).and(path(format!("/repos/{owner}/{repo}/issues")));
+        if let Some(expected_body) = expected_body {
+            mock = mock.and(body_json(expected_body));
+        }
+        mock.respond_with(
+            ResponseTemplate::new(201).set_body_json(mock_issue_with_labels(
+                owner,
+                repo,
+                number,
+                self.title,
+                self.body,
+                self.updated_at,
+                &self.labels,
+            )),
+        )
+        .mount(self.server)
+        .await;
     }
 
     /// Mount mock for POST /repos/{owner}/{repo}/issues/{number}/comments.
