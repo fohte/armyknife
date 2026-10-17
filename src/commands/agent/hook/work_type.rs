@@ -1,4 +1,5 @@
 use super::super::types::{Engine, HookEvent, HookInput, Session};
+use super::prompt_skill;
 use crate::shared::config::AgentConfig;
 
 pub(super) fn may_contain_work_type(event: HookEvent, input: &HookInput) -> bool {
@@ -80,7 +81,7 @@ fn work_type_candidate(event: HookEvent, input: &HookInput) -> Option<WorkTypeCa
 }
 
 fn claude_prompt_skill(prompt: &str) -> Option<&str> {
-    prompt.split_whitespace().next()?.strip_prefix('/')
+    prompt_skill::leading_prompt_skill(Engine::Claude, prompt)
 }
 
 fn codex_prompt_skill(prompt: &str, agent_config: &AgentConfig) -> Option<String> {
