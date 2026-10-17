@@ -503,6 +503,7 @@ mod tests {
 
     fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),
             work_type: None,

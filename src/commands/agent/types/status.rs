@@ -134,6 +134,7 @@ mod tests {
 
     fn session(status: SessionStatus, read_at: Option<DateTime<Utc>>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "s".to_string(),
             work_type: None,

@@ -12,6 +12,9 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub session_id: String,
+    /// When set, the session is hidden from active listings until restored or collected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<DateTime<Utc>>,
     /// GitHub lookup data retained after a delegated worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
@@ -134,6 +137,12 @@ pub struct Session {
     pub engine: Engine,
 }
 
+impl Session {
+    pub(crate) fn restore_from_archive(&mut self) -> bool {
+        self.archived_at.take().is_some()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionPrContext {
     pub owner: String,
@@ -164,6 +173,7 @@ mod tests {
             serde_json::from_value(json).expect("legacy session should deserialize");
         assert_eq!(
             (
+                session.archived_at,
                 session.read_at,
                 session.work_type,
                 session.vibe_enabled,
@@ -177,6 +187,7 @@ mod tests {
                 session.pr_context,
             ),
             (
+                None,
                 None,
                 None,
                 false,

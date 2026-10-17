@@ -72,6 +72,7 @@ mod tests {
 
     fn session(status: SessionStatus, work_type: Option<&str>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "session-test".to_string(),
             crit_urls: Vec::new(),

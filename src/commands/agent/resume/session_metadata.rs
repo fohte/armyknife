@@ -27,6 +27,7 @@ pub(super) fn record_codex_resume_metadata_if_needed(
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        archived_at: None,
         pr_context: capture_pr_context.and_then(|capture| capture(cwd)),
         session_id: session_id.to_string(),
         work_type: None,
@@ -109,6 +110,7 @@ mod tests {
     fn session(ancestor_session_ids: Vec<String>) -> Session {
         let now = Utc::now();
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "resume-target".to_string(),
             work_type: None,

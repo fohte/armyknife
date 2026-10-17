@@ -171,6 +171,9 @@ fn end_sessions_on_pane_takeover(
         let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
             continue;
         };
+        if session.archived_at.is_some() {
+            continue;
+        }
         let matches_pane = session
             .tmux_info
             .as_ref()
@@ -268,11 +271,13 @@ fn process_hook_event_impl_with_instruction(
                 match session_lifecycle::preserve_sweep_pause(&mut session) {
                     session_lifecycle::SweepPauseOutcome::AlreadyPaused => {}
                     session_lifecycle::SweepPauseOutcome::Confirmed => {
+                        session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
                     }
                     session_lifecycle::SweepPauseOutcome::NotRequested => {
                         session.status = SessionStatus::Ended;
                         session.updated_at = Utc::now();
+                        session.restore_from_archive();
                         store::save_session_to(sessions_dir, &session)?;
                         side_effects.remove_notification_group(&input.session_id);
                         side_effects.archive_tq_session(&input.session_id);
@@ -389,6 +394,7 @@ fn process_hook_event_impl_with_instruction(
             .unwrap_or_default();
 
         Session {
+            archived_at: None,
             pr_context: side_effects
                 .capture_pr_context
                 .and_then(|capture| capture(&input.cwd)),
@@ -433,6 +439,7 @@ fn process_hook_event_impl_with_instruction(
             engine: input.engine,
         }
     });
+    session.restore_from_archive();
     let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
     let had_pending_permission_requests = session.has_pending_permission_requests();
     let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
@@ -1939,6 +1946,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            archived_at: None,
             pr_context: None,
             session_id: "paused-sess".to_string(),
             work_type: None,
@@ -2349,6 +2357,7 @@ mod tests {
         SessionStatus::Running,
         false,
         SessionStatus::Ended,
+        false,
         vec!["end-sess".to_string()],
     )]
     #[case::claude_sweep_paused_keeps_notification_and_session(
@@ -2356,6 +2365,7 @@ mod tests {
         SessionStatus::Paused,
         false,
         SessionStatus::Paused,
+        true,
         Vec::<String>::new(),
     )]
     #[case::claude_sweep_signaled_stopped_keeps_notification_and_session(
@@ -2363,6 +2373,7 @@ mod tests {
         SessionStatus::Stopped,
         true,
         SessionStatus::Paused,
+        false,
         Vec::<String>::new(),
     )]
     #[case::codex_session_end_stops_without_finalizing(
@@ -2370,6 +2381,7 @@ mod tests {
         SessionStatus::Running,
         false,
         SessionStatus::Stopped,
+        false,
         Vec::<String>::new(),
     )]
     #[case::codex_already_ended_stays_ended_without_repeating_side_effects(
@@ -2377,6 +2389,7 @@ mod tests {
         SessionStatus::Ended,
         false,
         SessionStatus::Ended,
+        true,
         Vec::<String>::new(),
     )]
     #[case::codex_sweep_signaled_confirms_pause(
@@ -2384,6 +2397,7 @@ mod tests {
         SessionStatus::Stopped,
         true,
         SessionStatus::Paused,
+        false,
         Vec::<String>::new(),
     )]
     fn session_end_applies_engine_specific_lifecycle(
@@ -2391,6 +2405,7 @@ mod tests {
         #[case] initial_status: SessionStatus,
         #[case] sweep_signaled: bool,
         #[case] expected_status: SessionStatus,
+        #[case] expected_archived: bool,
         #[case] expected_removed: Vec<String>,
         tq_archive_context: TqArchiveContext,
     ) {
@@ -2402,6 +2417,7 @@ mod tests {
         let sessions_dir = temp_dir.path();
 
         let session = Session {
+            archived_at: Some(Utc::now()),
             pr_context: None,
             session_id: "end-sess".to_string(),
             work_type: None,
@@ -2450,12 +2466,18 @@ mod tests {
             .expect("session exists");
         let recorded = (
             reloaded.status,
+            reloaded.archived_at.is_some(),
             removed.lock().expect("lock").clone(),
             archived_calls.lock().expect("lock").clone(),
         );
         assert_eq!(
             recorded,
-            (expected_status, expected_removed.clone(), expected_removed),
+            (
+                expected_status,
+                expected_archived,
+                expected_removed.clone(),
+                expected_removed,
+            ),
         );
     }
 
@@ -3049,6 +3071,7 @@ mod tests {
 
     fn create_test_session(tmux_info: Option<TmuxInfo>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "test-123".to_string(),
             work_type: None,
@@ -3699,6 +3722,61 @@ mod tests {
         /// Creates a temporary directory for session storage.
         fn create_temp_sessions_dir() -> TempDir {
             TempDir::new().expect("temp dir creation should succeed")
+        }
+
+        #[test]
+        fn hook_unarchives_existing_session_without_dropping_metadata() {
+            let temp_dir = create_temp_sessions_dir();
+            let sessions_dir = temp_dir.path();
+            let mut session = create_test_session(None);
+            session.archived_at = Some(Utc::now());
+            session.label = Some("retained label".to_string());
+            session.crit_urls = vec!["https://example.invalid/review".to_string()];
+            session.ancestor_session_ids = vec!["parent-session".to_string()];
+            session
+                .pending_human_review_ids
+                .insert("review-id".to_string());
+            session
+                .pending_bg_task_ids
+                .insert("background-task".to_string());
+            session
+                .pending_agent_task_ids
+                .insert("agent-task".to_string());
+            store::save_session_to(sessions_dir, &session).expect("save should succeed");
+
+            process_hook_event_impl(
+                HookEvent::UserPromptSubmit,
+                create_test_input(None),
+                sessions_dir,
+                &SideEffects::none(),
+            )
+            .expect("hook should succeed");
+
+            let reloaded = store::load_session_from(sessions_dir, "test-123")
+                .expect("load should succeed")
+                .expect("session should remain available by id");
+            assert_eq!(
+                (
+                    reloaded.status,
+                    reloaded.archived_at,
+                    reloaded.label,
+                    reloaded.crit_urls,
+                    reloaded.ancestor_session_ids,
+                    reloaded.pending_human_review_ids,
+                    reloaded.pending_bg_task_ids,
+                    reloaded.pending_agent_task_ids,
+                ),
+                (
+                    SessionStatus::Running,
+                    None,
+                    Some("retained label".to_string()),
+                    vec!["https://example.invalid/review".to_string()],
+                    vec!["parent-session".to_string()],
+                    BTreeSet::from(["review-id".to_string()]),
+                    BTreeSet::from(["background-task".to_string()]),
+                    BTreeSet::from(["agent-task".to_string()]),
+                ),
+            );
         }
 
         #[rstest]
@@ -4378,6 +4456,28 @@ mod tests {
         }
 
         #[test]
+        fn archived_session_does_not_block_reused_pane() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut archived = create_test_session(Some(TmuxInfo {
+                session_name: "main".to_string(),
+                window_name: "example".to_string(),
+                window_index: 0,
+                pane_id: "%1".to_string(),
+                socket_path: None,
+            }));
+            archived.session_id = "archived-session".to_string();
+            archived.archived_at = Some(Utc::now());
+            store::save_session_to(temp_dir.path(), &archived).expect("session should save");
+
+            let actual = [pane_binding::has_other_session_on_pane(
+                temp_dir.path(),
+                "new-session",
+                "%1",
+            )];
+            assert_eq!(actual, [false]);
+        }
+
+        #[test]
         fn new_session_full_flow_startup_then_user_prompt() {
             let temp_dir = create_temp_sessions_dir();
 
@@ -4437,6 +4537,7 @@ mod tests {
         fn make_session(session_id: &str, pane_id: &str) -> Session {
             let now = Utc::now();
             Session {
+                archived_at: None,
                 pr_context: None,
                 session_id: session_id.to_string(),
                 work_type: None,
@@ -4591,6 +4692,45 @@ mod tests {
                 removed.lock().expect("lock").clone(),
             );
             assert_eq!(recorded, expected);
+        }
+
+        #[rstest]
+        fn archived_codex_session_is_ignored_on_pane_takeover(
+            tq_archive_context: TqArchiveContext,
+        ) {
+            let TqArchiveContext {
+                temp_dir,
+                archived_calls,
+                mut side_effects,
+            } = tq_archive_context;
+            let archived_at = Utc::now();
+            let mut session = make_session("archived-codex", "%42");
+            session.engine = Engine::Codex;
+            session.status = SessionStatus::Stopped;
+            session.archived_at = Some(archived_at);
+            store::save_session_to(temp_dir.path(), &session).expect("save");
+            let removed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+            side_effects.removed_notification_groups = Some(removed.clone());
+
+            end_sessions_on_pane_takeover(temp_dir.path(), "%42", "new-codex", &side_effects);
+
+            let reloaded = store::load_session_from(temp_dir.path(), "archived-codex")
+                .expect("load")
+                .expect("session exists");
+            assert_eq!(
+                (
+                    reloaded.status,
+                    reloaded.archived_at,
+                    archived_calls.lock().expect("lock").clone(),
+                    removed.lock().expect("lock").clone(),
+                ),
+                (
+                    SessionStatus::Stopped,
+                    Some(archived_at),
+                    Vec::<String>::new(),
+                    Vec::<String>::new(),
+                ),
+            );
         }
 
         #[rstest]

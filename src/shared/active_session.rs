@@ -192,6 +192,7 @@ mod tests {
         cwd: PathBuf,
     ) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: id.to_string(),
             work_type: None,

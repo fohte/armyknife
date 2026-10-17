@@ -89,6 +89,7 @@ mod tests {
     fn session(session_id: &str) -> Session {
         let now = Utc::now();
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),

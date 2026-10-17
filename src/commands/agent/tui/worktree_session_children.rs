@@ -143,6 +143,7 @@ mod tests {
 
     fn session(id: &str, cwd: &Path, updated_at: DateTime<Utc>, pane: Option<&str>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: id.to_string(),
             work_type: None,

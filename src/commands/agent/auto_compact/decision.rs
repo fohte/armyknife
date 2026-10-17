@@ -155,6 +155,7 @@ mod tests {
 
     fn stopped_session(updated_at: DateTime<Utc>) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "sess".to_string(),
             work_type: None,
