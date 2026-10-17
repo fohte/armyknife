@@ -97,6 +97,7 @@ fn record_in(
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+        archived_at: None,
         pr_context,
         session_id: session_id.to_string(),
         work_type: None,
@@ -167,6 +168,7 @@ mod tests {
             .single()
             .expect("timestamp should be valid");
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "thread-a".to_string(),
             work_type: Some("detected-skill".to_string()),

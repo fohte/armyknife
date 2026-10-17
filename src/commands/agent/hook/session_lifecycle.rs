@@ -50,6 +50,7 @@ pub(super) fn codex_session_end_hook_in(
                 return false;
             }
             SweepPauseOutcome::Confirmed => {
+                session.archived_at = None;
                 session_for_sync = Some(session.clone());
                 return true;
             }
@@ -58,6 +59,7 @@ pub(super) fn codex_session_end_hook_in(
 
         session.status = SessionStatus::Stopped;
         session.updated_at = Utc::now();
+        session.archived_at = None;
         session_for_sync = Some(session.clone());
         true
     })?;
@@ -126,6 +128,7 @@ fn end_codex_session_with_policy(
         session.status = SessionStatus::Ended;
         session.sweep_signaled = false;
         session.updated_at = Utc::now();
+        session.archived_at = None;
         ended_session = Some(session.clone());
         true
     })?;
@@ -196,6 +199,7 @@ mod tests {
     fn session(engine: Engine, status: SessionStatus, sweep_signaled: bool) -> Session {
         let now = Utc::now();
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "thread-one".to_string(),
             work_type: None,

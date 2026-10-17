@@ -8,7 +8,7 @@ use std::{cell::RefCell, collections::HashSet};
 use std::collections::HashMap;
 
 use anyhow::Result;
-use chrono::{DateTime, TimeDelta, Utc};
+use chrono::{DateTime, Utc};
 
 use super::error::CcError;
 #[cfg(test)]
@@ -499,14 +499,15 @@ pub(crate) fn update_session_tmux_pane_id_in(
     pane_id: &str,
 ) -> Result<()> {
     update_session_in(sessions_dir, session_id, |session| {
+        let mut changed = session.archived_at.take().is_some();
         let Some(tmux_info) = session.tmux_info.as_mut() else {
-            return false;
+            return changed;
         };
-        if tmux_info.pane_id == pane_id {
-            return false;
+        if tmux_info.pane_id != pane_id {
+            tmux_info.pane_id = pane_id.to_string();
+            changed = true;
         }
-        tmux_info.pane_id = pane_id.to_string();
-        true
+        changed
     })
 }
 
@@ -566,6 +567,7 @@ fn read_all_sessions() -> Result<Vec<Session>> {
         if path.extension().is_some_and(|ext| ext == "json")
             && let Ok(content) = fs::read_to_string(&path)
             && let Ok(session) = serde_json::from_str::<Session>(&content)
+            && session.archived_at.is_none()
         {
             sessions.push(session);
         }
@@ -600,9 +602,9 @@ fn serialize_session(session: &Session) -> Result<String> {
     Ok(serde_json::to_string_pretty(&persisted)?)
 }
 
-/// Removes stale sessions from disk.
+/// Archives stale sessions and removes records whose retention period expired.
 ///
-/// A session is considered stale and removed if its tmux pane no longer exists.
+/// A session is considered stale if its tmux pane no longer exists.
 /// Sessions without tmux_info are kept (they may be running outside tmux).
 /// Sessions are checked against their recorded server; failed server queries
 /// leave those sessions untouched.
@@ -659,82 +661,26 @@ fn cleanup_stale_sessions_in_with_archive<F, G, A>(
     dir: &Path,
     is_pane_alive: F,
     cwd_exists: G,
-    mut archive_codex_thread: A,
+    archive_codex_thread: A,
 ) -> Result<bool>
 where
     F: Fn(&super::types::TmuxInfo) -> Option<bool>,
     G: Fn(&Path) -> bool,
     A: FnMut(&str) -> anyhow::Result<()>,
 {
-    if !dir.exists() {
-        return Ok(false);
-    }
-
-    let now = Utc::now();
-    let retention = TimeDelta::days(ENDED_SESSION_RETENTION_DAYS);
-    let mut removed_any = false;
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-
-        let Ok(content) = fs::read_to_string(&path) else {
-            continue;
-        };
-
-        let Ok(session) = serde_json::from_str::<Session>(&content) else {
-            continue;
-        };
-
-        // Resume relies on `tmux respawn-pane`, which fails once the original
-        // pane is gone. A Paused session whose pane has died is therefore
-        // unrecoverable and should be cleaned up immediately rather than waiting
-        // for the 7-day retention. Ended sessions stay until the retention check.
-        let stale_pane = session.status != SessionStatus::Ended
-            && session
-                .tmux_info
-                .as_ref()
-                .is_some_and(|info| is_pane_alive(info) == Some(false));
-
-        // Orphaned sessions: the worktree (cwd) is gone but the session file
-        // lingered after worktree cleanup raced with `kill_window`, the worktree
-        // was removed by another tool, or a straggler hook (a Notification
-        // fired after cleanup already removed the session file)
-        // recreated the file with no tmux_info. A deleted worktree means the
-        // session is done regardless of status, even if its tmux pane
-        // happens to still be attachable. Ended is handled by
-        // `expired_ended` below instead, since it has its own retention.
-        let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
-
-        let expired_ended = matches!(session.status, SessionStatus::Ended | SessionStatus::Paused)
-            && now - session.updated_at > retention;
-
-        if stale_pane || orphaned || expired_ended {
-            archive::archive_codex_thread_before_delete_with(
-                &session,
-                &mut archive_codex_thread,
-                ArchiveLogContext::Store,
-            );
-            if fs::remove_file(&path).is_ok() {
-                removed_any = true;
-            }
-            let lock_path = path.with_extension("json.lock");
-            let _ = fs::remove_file(&lock_path);
-        }
-    }
-
-    Ok(removed_any)
+    archive::cleanup_stale_sessions_in_with_archive(
+        dir,
+        is_pane_alive,
+        cwd_exists,
+        archive_codex_thread,
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::commands::agent::types::SessionStatus;
-    use chrono::{TimeZone, Utc};
+    use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::fixture;
     use tempfile::TempDir;
 
@@ -757,6 +703,7 @@ mod tests {
 
     fn create_test_session(id: &str) -> Session {
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: id.to_string(),
             work_type: None,
@@ -791,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn list_sessions_excludes_ended_but_list_all_sessions_includes_it() {
+    fn list_sessions_excludes_ended_and_both_lists_exclude_archived_sessions() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
         let cache_home = temp_dir.path().to_str().expect("utf8 path").to_string();
         let sessions_path = temp_dir
@@ -803,10 +750,17 @@ mod tests {
         let mut ended = create_test_session("ended-1");
         ended.status = SessionStatus::Ended;
         let running = create_test_session("running-1");
+        let archived_at = Utc
+            .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+            .single()
+            .expect("timestamp should be valid");
+        let mut archived = create_test_session("archived-1");
+        archived.archived_at = Some(archived_at);
         save_session_to(&sessions_path, &ended).expect("save should succeed");
         save_session_to(&sessions_path, &running).expect("save should succeed");
+        save_session_to(&sessions_path, &archived).expect("save should succeed");
 
-        let (mut active_ids, mut all_ids) =
+        let (mut active_ids, mut all_ids, archived_record) =
             temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home.as_str()))], || {
                 let active: Vec<String> = list_sessions()
                     .expect("list_sessions should succeed")
@@ -818,16 +772,23 @@ mod tests {
                     .into_iter()
                     .map(|s| s.session_id)
                     .collect();
-                (active, all)
+                let archived_record =
+                    load_session_from(&sessions_path, "archived-1").expect("load should succeed");
+                (
+                    active,
+                    all,
+                    archived_record.map(|session| session.archived_at),
+                )
             });
         active_ids.sort();
         all_ids.sort();
 
         assert_eq!(
-            (active_ids, all_ids),
+            (active_ids, all_ids, archived_record),
             (
                 vec!["running-1".to_string()],
                 vec!["ended-1".to_string(), "running-1".to_string()],
+                Some(Some(archived_at)),
             )
         );
     }
@@ -982,7 +943,7 @@ mod tests {
         #[rstest]
         #[case::running(SessionStatus::Running)]
         #[case::paused(SessionStatus::Paused)]
-        fn removes_session_with_dead_pane(
+        fn archives_session_with_dead_pane(
             temp_session_dir: TempSessionDir,
             #[case] status: SessionStatus,
         ) {
@@ -999,22 +960,60 @@ mod tests {
                 pane_id: "%99999".to_string(),
                 socket_path: None,
             });
+            session.label = Some("retained label".to_string());
+            session.crit_urls = vec!["https://example.invalid/review".to_string()];
+            session.ancestor_session_ids = vec!["parent-session".to_string()];
+            session
+                .pending_bg_task_ids
+                .insert("background-task".to_string());
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_stale_sessions_in(
+            let archived_at = Utc
+                .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
                 &temp_session_dir.sessions_path,
                 mock_pane_always_dead,
                 mock_cwd_always_exists,
+                archived_at,
+                |_| Ok(()),
             )
             .expect("cleanup should succeed");
 
-            assert!(!path.exists(), "session with dead pane should be removed");
+            let restored = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| {
+                    (
+                        session.archived_at,
+                        session.label,
+                        session.crit_urls,
+                        session.ancestor_session_ids,
+                        session.pending_bg_task_ids,
+                    )
+                });
+            assert_eq!(
+                (changed, path.exists(), restored),
+                (
+                    true,
+                    true,
+                    Some((
+                        Some(archived_at),
+                        Some("retained label".to_string()),
+                        vec!["https://example.invalid/review".to_string()],
+                        vec!["parent-session".to_string()],
+                        std::collections::BTreeSet::from(["background-task".to_string()]),
+                    )),
+                ),
+            );
         }
 
         #[rstest]
-        fn archives_codex_thread_before_removing_stale_session(temp_session_dir: TempSessionDir) {
+        fn archives_codex_thread_only_when_archived_session_is_collected(
+            temp_session_dir: TempSessionDir,
+        ) {
             let session_id = "stale-codex-session";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
@@ -1023,11 +1022,34 @@ mod tests {
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
             let archive_calls = std::cell::RefCell::new(Vec::new());
+            let archived_at = Utc
+                .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
 
-            let removed = cleanup_stale_sessions_in_with_archive(
+            let first_changed = archive::cleanup_stale_sessions_in_with_archive_at(
                 &temp_session_dir.sessions_path,
                 mock_pane_always_alive,
                 mock_cwd_always_missing,
+                archived_at,
+                |thread_id| {
+                    archive_calls
+                        .borrow_mut()
+                        .push((thread_id.to_string(), path.exists()));
+                    Ok(())
+                },
+            )
+            .expect("cleanup should succeed");
+            let archived_record = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| session.archived_at);
+            let calls_before_collection = archive_calls.borrow().clone();
+
+            let removed_after_retention = archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_alive,
+                mock_cwd_always_exists,
+                archived_at + TimeDelta::days(8),
                 |thread_id| {
                     archive_calls
                         .borrow_mut()
@@ -1035,11 +1057,25 @@ mod tests {
                     Err(anyhow::anyhow!("fixture archive failure"))
                 },
             )
-            .expect("cleanup should succeed after archive failure");
+            .expect("cleanup should continue after archive failure");
 
             assert_eq!(
-                (removed, archive_calls.into_inner(), path.exists()),
-                (true, vec![("stale-codex-session".to_string(), true)], false,),
+                (
+                    first_changed,
+                    archived_record,
+                    calls_before_collection,
+                    removed_after_retention,
+                    archive_calls.into_inner(),
+                    path.exists(),
+                ),
+                (
+                    true,
+                    Some(Some(archived_at)),
+                    Vec::new(),
+                    true,
+                    vec![("stale-codex-session".to_string(), true)],
+                    false,
+                ),
             );
         }
 
@@ -1094,7 +1130,7 @@ mod tests {
         }
 
         #[rstest]
-        fn also_removes_lock_file(temp_session_dir: TempSessionDir) {
+        fn keeps_session_and_lock_file_when_archiving(temp_session_dir: TempSessionDir) {
             let session_id = "with-lock-test";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
@@ -1113,15 +1149,31 @@ mod tests {
             let lock_path = path.with_extension("json.lock");
             assert!(path.exists(), "session file should exist");
 
-            cleanup_stale_sessions_in(
+            let archived_at = Utc
+                .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
                 &temp_session_dir.sessions_path,
                 mock_pane_always_dead,
                 mock_cwd_always_exists,
+                archived_at,
+                |_| Ok(()),
             )
             .expect("cleanup should succeed");
 
-            assert!(!path.exists(), "session file should be removed");
-            assert!(!lock_path.exists(), "lock file should also be removed");
+            let stored_archived_at = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| session.archived_at);
+            assert_eq!(
+                (
+                    changed,
+                    path.exists(),
+                    lock_path.exists(),
+                    stored_archived_at
+                ),
+                (true, true, true, Some(Some(archived_at))),
+            );
         }
 
         #[rstest]
@@ -1129,7 +1181,7 @@ mod tests {
         #[case::waiting(SessionStatus::WaitingInput)]
         #[case::stopped(SessionStatus::Stopped)]
         #[case::paused(SessionStatus::Paused)]
-        fn removes_session_when_cwd_is_gone(
+        fn archives_session_when_cwd_is_gone(
             temp_session_dir: TempSessionDir,
             #[case] status: SessionStatus,
         ) {
@@ -1146,16 +1198,25 @@ mod tests {
                 .expect("save should succeed");
             assert!(path.exists(), "session file should exist before cleanup");
 
-            cleanup_stale_sessions_in(
+            let archived_at = Utc
+                .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
                 &temp_session_dir.sessions_path,
                 mock_pane_always_alive,
                 mock_cwd_always_missing,
+                archived_at,
+                |_| Ok(()),
             )
             .expect("cleanup should succeed");
 
-            assert!(
-                !path.exists(),
-                "orphaned session (cwd gone) should be removed"
+            let stored_archived_at = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| session.archived_at);
+            assert_eq!(
+                (changed, path.exists(), stored_archived_at),
+                (true, true, Some(Some(archived_at))),
             );
         }
 
@@ -1208,6 +1269,73 @@ mod tests {
             assert!(
                 path.exists(),
                 "ended session should rely on retention, not cwd existence"
+            );
+        }
+
+        #[rstest]
+        #[case::ended(SessionStatus::Ended)]
+        #[case::paused(SessionStatus::Paused)]
+        fn removes_expired_ended_and_paused_sessions(
+            temp_session_dir: TempSessionDir,
+            #[case] status: SessionStatus,
+        ) {
+            let session_id = "expired-session";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let mut session = create_test_session(session_id);
+            session.status = status;
+            session.updated_at = now - TimeDelta::days(8);
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+
+            let removed = archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_alive,
+                mock_cwd_always_exists,
+                now,
+                |_| Ok(()),
+            )
+            .expect("cleanup should succeed");
+
+            assert_eq!((removed, path.exists()), (true, false));
+        }
+
+        #[rstest]
+        fn retains_archived_session_until_its_archive_retention_expires(
+            temp_session_dir: TempSessionDir,
+        ) {
+            let session_id = "recently-archived";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let archived_at = now - TimeDelta::days(3);
+            let mut session = create_test_session(session_id);
+            session.archived_at = Some(archived_at);
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_dead,
+                mock_cwd_always_missing,
+                now,
+                |_| Ok(()),
+            )
+            .expect("cleanup should succeed");
+            let stored_archived_at = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| session.archived_at);
+
+            assert_eq!(
+                (changed, path.exists(), stored_archived_at),
+                (false, true, Some(Some(archived_at))),
             );
         }
 
@@ -1279,7 +1407,7 @@ mod tests {
                 (
                     true,
                     true,
-                    false,
+                    true,
                     true,
                     true,
                     HashMap::from([
@@ -1499,31 +1627,54 @@ mod tests {
         }
 
         #[rstest]
-        fn overwrites_pane_id_and_keeps_other_fields(temp_session_dir: TempSessionDir) {
-            let session = make_session(Some(tmux_info("%1")));
+        #[case::new_pane_id("%1", "%42")]
+        #[case::same_pane_id("%42", "%42")]
+        fn updates_pane_id_and_clears_archive(
+            temp_session_dir: TempSessionDir,
+            #[case] existing_pane_id: &str,
+            #[case] restored_pane_id: &str,
+        ) {
+            let mut session = make_session(Some(tmux_info(existing_pane_id)));
+            let archived_at = Utc
+                .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            session.archived_at = Some(archived_at);
             save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
 
-            update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "pane-target", "%42")
-                .expect("update should succeed");
+            update_session_tmux_pane_id_in(
+                &temp_session_dir.sessions_path,
+                "pane-target",
+                restored_pane_id,
+            )
+            .expect("update should succeed");
 
             let reloaded = load_session_from(&temp_session_dir.sessions_path, "pane-target")
                 .expect("load")
                 .expect("session exists");
             assert_eq!(
-                reloaded.tmux_info,
-                Some(TmuxInfo {
-                    session_name: "main".to_string(),
-                    window_name: "dev".to_string(),
-                    window_index: 0,
-                    pane_id: "%42".to_string(),
-                    socket_path: Some("/tmp/armyknife-test/default".to_string()),
-                })
+                (reloaded.tmux_info, reloaded.archived_at),
+                (
+                    Some(TmuxInfo {
+                        session_name: "main".to_string(),
+                        window_name: "dev".to_string(),
+                        window_index: 0,
+                        pane_id: restored_pane_id.to_string(),
+                        socket_path: Some("/tmp/armyknife-test/default".to_string()),
+                    }),
+                    None,
+                ),
             );
         }
 
         #[rstest]
-        fn missing_tmux_info_is_noop(temp_session_dir: TempSessionDir) {
-            let session = make_session(None);
+        fn clears_archive_even_when_tmux_info_is_missing(temp_session_dir: TempSessionDir) {
+            let mut session = make_session(None);
+            session.archived_at = Some(
+                Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
+                    .single()
+                    .expect("timestamp should be valid"),
+            );
             save_session_to(&temp_session_dir.sessions_path, &session).expect("save");
 
             update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "pane-target", "%42")
@@ -1532,7 +1683,7 @@ mod tests {
             let reloaded = load_session_from(&temp_session_dir.sessions_path, "pane-target")
                 .expect("load")
                 .expect("session exists");
-            assert_eq!(reloaded.tmux_info, None);
+            assert_eq!((reloaded.tmux_info, reloaded.archived_at), (None, None));
         }
 
         #[rstest]
@@ -1669,6 +1820,7 @@ mod tests {
             updated_at: DateTime<Utc>,
         ) -> Session {
             Session {
+                archived_at: None,
                 pr_context: None,
                 session_id: id.to_string(),
                 work_type: None,

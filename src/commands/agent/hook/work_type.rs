@@ -184,6 +184,7 @@ mod tests {
     fn create_session(work_type: Option<&str>) -> Session {
         let now = Utc::now();
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: "session-test".to_owned(),
             crit_urls: Vec::new(),

@@ -442,6 +442,7 @@ mod tests {
     ) -> Session {
         let updated_at = Utc.timestamp_opt(updated_second, 0).single().unwrap();
         Session {
+            archived_at: None,
             pr_context: None,
             session_id: session_id.to_string(),
             crit_urls: Vec::new(),
