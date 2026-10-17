@@ -587,11 +587,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn waits_for_thread_started_for_ten_minutes_by_default() {
-        assert_eq!(DEFAULT_THREAD_STARTED_TIMEOUT, Duration::from_secs(600),);
-    }
-
     #[rstest]
     #[case::would_block(std::io::ErrorKind::WouldBlock)]
     #[case::timed_out(std::io::ErrorKind::TimedOut)]
@@ -1143,15 +1138,15 @@ mod tests {
         let thread_id = client
             .wait_for_thread_started(Path::new("/workspace/project-a"))
             .map_err(|error| error.to_string());
-        let timeout_exceeds_handshake = client
+        let timeout_seconds = client
             .socket
             .get_ref()
             .read_timeout()?
-            .is_some_and(|timeout| timeout > Duration::from_secs(30));
+            .map(|timeout| timeout.as_secs() + if timeout.subsec_nanos() == 0 { 0 } else { 1 });
 
         assert_eq!(
-            (thread_id, timeout_exceeds_handshake),
-            (Ok("thread-a".to_string()), true),
+            (thread_id, timeout_seconds),
+            (Ok("thread-a".to_string()), Some(600)),
         );
         Ok(())
     }
