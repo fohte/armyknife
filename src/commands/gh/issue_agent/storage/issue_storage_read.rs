@@ -5,14 +5,24 @@ use super::issue_storage::IssueStorage;
 use super::read::LocalComment;
 use crate::commands::gh::issue_agent::models::{IssueFrontmatter, IssueMetadata};
 
-/// Parsed issue content from issue.md.
-#[derive(Debug, Clone)]
+/// Parsed issue content from a local issue file.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IssueContent {
     pub frontmatter: IssueFrontmatter,
     pub body: String,
 }
 
 impl IssueStorage {
+    /// Read the last saved issue snapshot used for push change detection.
+    pub fn read_base_issue(&self) -> Result<Option<IssueContent>> {
+        let path = self.dir.join(".issue.base.md");
+        match fs::read_to_string(&path) {
+            Ok(content) => parse_issue_md(&content).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Read and parse issue.md with frontmatter.
     #[cfg(test)]
     pub fn read_issue(&self) -> Result<IssueContent> {
@@ -165,6 +175,14 @@ mod tests {
         assert_eq!(issue.frontmatter.fields.assignees, vec!["user1"]);
         assert_eq!(issue.frontmatter.readonly.number, 123);
         assert_eq!(issue.body, "Test issue body");
+    }
+
+    #[test]
+    fn test_read_base_issue_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+
+        assert_eq!(storage.read_base_issue().unwrap(), None);
     }
 
     #[test]

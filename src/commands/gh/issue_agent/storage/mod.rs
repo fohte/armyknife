@@ -9,6 +9,7 @@ mod read;
 
 pub use issue_storage::IssueStorage;
 pub use issue_storage_diff::LocalChanges;
+pub use issue_storage_read::IssueContent;
 #[cfg(test)]
 pub use read::CommentFileMetadata;
 pub use read::LocalComment;

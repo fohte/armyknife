@@ -1,7 +1,7 @@
 //! ChangeSet: Represents all detected changes between local and remote state.
 
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
+use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage, LocalComment};
 use crate::infra::github::GitHubClient;
 
 use crossterm::style::Color;
@@ -11,6 +11,7 @@ use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
     detect_sub_issue_change, detect_title_change,
 };
+use super::field_comparison::{IssueFieldComparisons, compare_issue_fields};
 use super::links::{
     add_sub_issue_by_ref, link_to_parent, remove_sub_issue_by_ref, unlink_from_parent,
 };
@@ -36,6 +37,7 @@ pub(crate) struct DetectOptions<'a> {
 }
 
 /// Represents all changes detected between local and remote state.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ChangeSet<'a> {
     pub(crate) body: Option<BodyChange<'a>>,
     pub(crate) title: Option<TitleChange<'a>>,
@@ -45,16 +47,19 @@ pub(crate) struct ChangeSet<'a> {
     pub(crate) comments: Vec<CommentChange<'a>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BodyChange<'a> {
     pub(crate) local: &'a str,
     pub(crate) remote: &'a str,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TitleChange<'a> {
     pub(crate) local: &'a str,
     pub(crate) remote: &'a str,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LabelChange {
     pub(crate) to_add: Vec<String>,
     pub(crate) to_remove: Vec<String>,
@@ -62,6 +67,7 @@ pub(crate) struct LabelChange {
     pub(crate) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SubIssueChange {
     /// Sub-issues to add (ref strings like "owner/repo#number")
     pub(crate) to_add: Vec<String>,
@@ -71,12 +77,13 @@ pub(crate) struct SubIssueChange {
     pub(crate) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ParentIssueChange {
     pub(crate) local: Option<String>,
     pub(crate) remote: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CommentChange<'a> {
     New {
         filename: &'a str,
@@ -103,11 +110,53 @@ impl<'a> ChangeSet<'a> {
         remote: &RemoteState<'a>,
         options: &DetectOptions<'a>,
     ) -> anyhow::Result<Self> {
-        let body = detect_body_change(local.body, remote.issue);
-        let title = detect_title_change(local.metadata, remote.issue);
-        let labels = detect_label_change(local.metadata, remote.issue);
-        let sub_issues = detect_sub_issue_change(local.metadata, remote.issue);
-        let parent_issue = detect_parent_issue_change(local.metadata, remote.issue);
+        Self::detect_with_base(local, remote, options, None)
+    }
+
+    pub(crate) fn detect_with_base(
+        local: &LocalState<'a>,
+        remote: &RemoteState<'a>,
+        options: &DetectOptions<'a>,
+        base_issue: Option<&IssueContent>,
+    ) -> anyhow::Result<Self> {
+        let field_comparisons = base_issue
+            .map(|base| compare_issue_fields(local.metadata, local.body, remote.issue, base));
+        Self::detect_with_comparisons(local, remote, options, field_comparisons)
+    }
+
+    pub(super) fn detect_with_comparisons(
+        local: &LocalState<'a>,
+        remote: &RemoteState<'a>,
+        options: &DetectOptions<'a>,
+        field_comparisons: Option<IssueFieldComparisons>,
+    ) -> anyhow::Result<Self> {
+        let body = if field_comparisons.is_some_and(|fields| !fields.body.local_changed) {
+            None
+        } else {
+            detect_body_change(local.body, remote.issue)
+        };
+        let title = if field_comparisons.is_some_and(|fields| !fields.title.local_changed) {
+            None
+        } else {
+            detect_title_change(local.metadata, remote.issue)
+        };
+        let labels = if field_comparisons.is_some_and(|fields| !fields.labels.local_changed) {
+            None
+        } else {
+            detect_label_change(local.metadata, remote.issue)
+        };
+        let sub_issues = if field_comparisons.is_some_and(|fields| !fields.sub_issues.local_changed)
+        {
+            None
+        } else {
+            detect_sub_issue_change(local.metadata, remote.issue)
+        };
+        let parent_issue =
+            if field_comparisons.is_some_and(|fields| !fields.parent_issue.local_changed) {
+                None
+            } else {
+                detect_parent_issue_change(local.metadata, remote.issue)
+            };
         let comments = detect_comment_changes(
             local.comments,
             remote.comments,
@@ -345,6 +394,97 @@ mod tests {
             sub_issues: None,
             parent_issue: None,
             comments: vec![],
+        }
+    }
+
+    mod detect_with_base_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::IssueMetadata;
+        use crate::commands::gh::issue_agent::testing::factories;
+        use rstest::rstest;
+
+        #[rstest]
+        fn test_remote_only_issue_field_changes_are_omitted() {
+            let base_issue = factories::base_issue_content();
+            let metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            let local_comments = [];
+            let local = LocalState {
+                metadata: &metadata,
+                body: &base_issue.body,
+                comments: &local_comments,
+            };
+            let remote_issue = factories::issue_with_fields(
+                "Remote title",
+                "Remote body",
+                &["remote-label"],
+                Some(30),
+                &[31],
+            );
+            let remote_comments = [];
+            let remote = RemoteState {
+                issue: &remote_issue,
+                comments: &remote_comments,
+            };
+            let options = DetectOptions {
+                current_user: "testuser",
+                edit_others: false,
+                allow_delete: false,
+            };
+
+            let changeset =
+                ChangeSet::detect_with_base(&local, &remote, &options, Some(&base_issue)).unwrap();
+
+            assert_eq!(changeset, empty_changeset());
+        }
+
+        #[rstest]
+        fn test_local_label_change_is_retained_against_unchanged_base() {
+            let base_issue = factories::base_issue_content();
+            let mut metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            metadata.labels = vec!["local-label".to_string()];
+            let local_comments = [];
+            let local = LocalState {
+                metadata: &metadata,
+                body: &base_issue.body,
+                comments: &local_comments,
+            };
+            let remote_issue = factories::issue_with_fields(
+                "Base title",
+                "Base body",
+                &["base-label"],
+                Some(10),
+                &[11],
+            );
+            let remote_comments = [];
+            let remote = RemoteState {
+                issue: &remote_issue,
+                comments: &remote_comments,
+            };
+            let options = DetectOptions {
+                current_user: "testuser",
+                edit_others: false,
+                allow_delete: false,
+            };
+
+            let changeset =
+                ChangeSet::detect_with_base(&local, &remote, &options, Some(&base_issue)).unwrap();
+
+            assert_eq!(
+                changeset,
+                ChangeSet {
+                    body: None,
+                    title: None,
+                    labels: Some(LabelChange {
+                        to_add: vec!["local-label".to_string()],
+                        to_remove: vec!["base-label".to_string()],
+                        local_sorted: vec!["local-label".to_string()],
+                        remote_sorted: vec!["base-label".to_string()],
+                    }),
+                    sub_issues: None,
+                    parent_issue: None,
+                    comments: vec![],
+                },
+            );
         }
     }
 

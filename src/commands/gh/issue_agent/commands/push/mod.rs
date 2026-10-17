@@ -3,6 +3,7 @@
 pub(crate) mod changeset;
 mod create;
 pub(crate) mod detect;
+mod field_comparison;
 #[cfg(test)]
 mod integration_tests;
 mod links;
@@ -19,6 +20,7 @@ use crate::shared::human_in_the_loop::ApprovalManager;
 
 use changeset::{ChangeSet, CommentChange, DetectOptions, LocalState, RemoteState};
 use detect::{ConflictCheckInput, check_conflicts};
+use field_comparison::compare_issue_fields;
 
 /// Target for push command: either an issue number or a path to new issue directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +150,9 @@ async fn run_with_context(
 ) -> anyhow::Result<()> {
     let remote = ctx.fetch_remote(client).await?;
     let local = ctx.load_local()?;
+    let field_comparisons = local.base_issue.as_ref().map(|base_issue| {
+        compare_issue_fields(&local.metadata, &local.body, &remote.issue, base_issue)
+    });
 
     // Check for field-level conflicts unless --force is specified
     if !args.force {
@@ -158,7 +163,7 @@ async fn run_with_context(
             remote_issue: &remote.issue,
             remote_comments: &remote.comments,
         };
-        let conflicts = check_conflicts(&conflict_input);
+        let conflicts = check_conflicts(&conflict_input, field_comparisons);
 
         if !conflicts.is_empty() {
             eprintln!();
@@ -190,7 +195,12 @@ async fn run_with_context(
         edit_others: args.edit_others,
         allow_delete: args.allow_delete,
     };
-    let changeset = ChangeSet::detect(&local_state, &remote_state, &options)?;
+    let changeset = ChangeSet::detect_with_comparisons(
+        &local_state,
+        &remote_state,
+        &options,
+        field_comparisons,
+    )?;
 
     // Display and apply changes
     let has_changes = changeset.has_changes();
@@ -227,6 +237,12 @@ async fn run_with_context(
 
         // Clean up approval records after successful push
         cleanup_approval_records(&changeset, ctx);
+    } else if !args.dry_run
+        && field_comparisons.is_some_and(|comparison| comparison.all_sides_equal())
+    {
+        let frontmatter = IssueFrontmatter::from_issue(&remote.issue);
+        let body = remote.issue.body.as_deref().unwrap_or("");
+        ctx.storage.save_base_issue(&frontmatter, body)?;
     }
 
     // Show result

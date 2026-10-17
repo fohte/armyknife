@@ -18,10 +18,13 @@ pub mod factories {
 
     use crate::commands::gh::issue_agent::models::{
         AssignedEvent, Author, ClosedEvent, Comment, CrossReferenceSource, CrossReferencedEvent,
-        Issue, IssueReference, Label, LabelInfo, LabeledEvent, PullRequestReference, ReopenedEvent,
-        RepositoryOwner, RepositoryReference, TimelineItem, UnassignedEvent, UnlabeledEvent,
+        Issue, IssueFrontmatter, IssueReference, Label, LabelInfo, LabeledEvent,
+        PullRequestReference, ReopenedEvent, RepositoryOwner, RepositoryReference, SubIssueRef,
+        TimelineItem, UnassignedEvent, UnlabeledEvent,
     };
-    use crate::commands::gh::issue_agent::storage::{CommentFileMetadata, LocalComment};
+    use crate::commands::gh::issue_agent::storage::{
+        CommentFileMetadata, IssueContent, LocalComment,
+    };
 
     // =========================================================================
     // Issue factories
@@ -54,6 +57,46 @@ pub mod factories {
         let mut i = issue();
         f(&mut i);
         i
+    }
+
+    /// Create an issue with explicit editable fields and issue relationships.
+    pub fn issue_with_fields(
+        title: &str,
+        body: &str,
+        label_names: &[&str],
+        parent_issue_number: Option<i64>,
+        sub_issue_numbers: &[i64],
+    ) -> Issue {
+        issue_with(|issue| {
+            issue.title = title.to_string();
+            issue.body = Some(body.to_string());
+            issue.labels = labels(label_names);
+            issue.parent_issue = parent_issue_number.map(sub_issue_ref);
+            issue.sub_issues = sub_issue_numbers
+                .iter()
+                .copied()
+                .map(sub_issue_ref)
+                .collect();
+        })
+    }
+
+    /// Create a sub-issue reference with synthetic repository coordinates.
+    pub fn sub_issue_ref(number: i64) -> SubIssueRef {
+        SubIssueRef {
+            id: number as u64,
+            number,
+            owner: "owner".to_string(),
+            repo: "repo".to_string(),
+        }
+    }
+
+    /// Create the shared baseline fixture used by issue-agent push tests.
+    pub fn base_issue_content() -> IssueContent {
+        let issue = issue_with_fields("Base title", "Base body", &["base-label"], Some(10), &[11]);
+        IssueContent {
+            frontmatter: IssueFrontmatter::from_issue(&issue),
+            body: "Base body".to_string(),
+        }
     }
 
     // =========================================================================
