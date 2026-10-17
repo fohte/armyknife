@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.431](https://github.com/fohte/armyknife/compare/v0.1.430...v0.1.431) (2026-10-17)
+
+
+### Features
+
+* **agent/peer:** suggest IDs for notify errors ([#1197](https://github.com/fohte/armyknife/issues/1197)) ([7b05a67](https://github.com/fohte/armyknife/commit/7b05a6738e9ad7a1e4de8ff0555f8c7b424a0bf7))
+
 ## [0.1.430](https://github.com/fohte/armyknife/compare/v0.1.429...v0.1.430) (2026-10-17)
 
 
