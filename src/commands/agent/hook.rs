@@ -34,6 +34,7 @@ pub(super) mod permission_notification;
 mod session_lifecycle;
 mod side_effects;
 mod stop;
+mod vibe;
 mod work_type;
 
 /// Delay between retries when waiting for transcript to be updated.
@@ -609,6 +610,7 @@ fn process_hook_event_impl_with_instruction(
     if let Some(config) = &work_type_config {
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
     }
+    vibe::enable_on_prompt_submit(event, &input, &mut session);
 
     // Save the session, then release the lock before the two slow steps
     // below (transcript read, tmux sync). Both can block for up to 500ms,
@@ -3767,6 +3769,43 @@ mod tests {
                 result,
                 ProcessResult::SessionSaved,
                 "user-prompt-submit should create the session"
+            );
+        }
+
+        #[rstest]
+        #[case::claude(Engine::Claude, "/enable-vibe-coding")]
+        #[case::codex(Engine::Codex, "$enable-vibe-coding")]
+        fn user_prompt_submit_persists_vibe_activation(
+            #[case] engine: Engine,
+            #[case] prompt: &str,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut input = create_test_input(None);
+            input.engine = engine;
+            input.prompt = Some(prompt.to_owned());
+
+            temp_env::with_vars(
+                [
+                    (EnvVars::session_label_name(), None::<&str>),
+                    (EnvVars::session_work_type_name(), None::<&str>),
+                    (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::session_vibe_launch_name(), None::<&str>),
+                    (EnvVars::ancestor_session_ids_name(), None::<&str>),
+                ],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::UserPromptSubmit,
+                        input,
+                        temp_dir.path(),
+                        &SideEffects::none(),
+                    )
+                    .expect("user-prompt-submit should succeed");
+
+                    let session = store::load_session_from(temp_dir.path(), "test-123")
+                        .expect("session should load")
+                        .expect("session should exist");
+                    assert!(session.vibe_enabled);
+                },
             );
         }
 
