@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.435](https://github.com/fohte/armyknife/compare/v0.1.434...v0.1.435) (2026-10-17)
+
+
+### Bug Fixes
+
+* **tmux:** reject invalid pane list output ([#1205](https://github.com/fohte/armyknife/issues/1205)) ([49516cd](https://github.com/fohte/armyknife/commit/49516cd90dfe2d218dcd0f0bdcf6b4d66829d367))
+
 ## [0.1.434](https://github.com/fohte/armyknife/compare/v0.1.433...v0.1.434) (2026-10-17)
 
 
