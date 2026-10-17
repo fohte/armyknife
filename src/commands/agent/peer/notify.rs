@@ -19,9 +19,13 @@ use crate::commands::agent::codex_queue;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::EnvVars;
 use crate::shared::sanitize::strip_angle_brackets;
+
+const MAX_SESSION_ID_SUGGESTIONS: usize = 3;
+const MAX_SESSION_ID_EDIT_DISTANCE: usize = 2;
+const MIN_SESSION_ID_PREFIX_LENGTH: usize = 3;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NotifyArgs {
@@ -134,6 +138,104 @@ fn ensure_not_self_notify(session_id: &str, from: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+fn session_not_found_error(session_id: &str) -> anyhow::Error {
+    let error = CcError::SessionNotFound(session_id.to_string());
+    let suggestions = match store::list_sessions() {
+        Ok(sessions) => similar_session_ids(session_id, &sessions),
+        // Suggestions are best effort; keep the original lookup error if listing fails.
+        Err(_) => Vec::new(),
+    };
+
+    if suggestions.is_empty() {
+        return error.into();
+    }
+
+    let suggestions = suggestions
+        .iter()
+        .map(|suggestion| format!("- {suggestion}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    anyhow::anyhow!(indoc::formatdoc! {"
+        {error}
+        Did you mean:
+        {suggestions}"
+    })
+}
+
+#[derive(Debug)]
+struct SessionIdSuggestion {
+    session_id: String,
+    edit_distance: usize,
+    common_prefix_length: usize,
+}
+
+fn similar_session_ids(session_id: &str, sessions: &[Session]) -> Vec<String> {
+    let mut suggestions: Vec<_> = sessions
+        .iter()
+        .filter(|session| session.status != SessionStatus::Ended)
+        .filter(|session| session.session_id != session_id)
+        .filter_map(|session| {
+            let edit_distance = levenshtein_distance(session_id, &session.session_id);
+            let common_prefix_length = common_prefix_length(session_id, &session.session_id);
+            (edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE
+                || common_prefix_length >= MIN_SESSION_ID_PREFIX_LENGTH)
+                .then(|| SessionIdSuggestion {
+                    session_id: session.session_id.clone(),
+                    edit_distance,
+                    common_prefix_length,
+                })
+        })
+        .collect();
+
+    suggestions.sort_by(|left, right| {
+        let left_is_edit_match = left.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE;
+        let right_is_edit_match = right.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE;
+
+        right_is_edit_match
+            .cmp(&left_is_edit_match)
+            .then_with(|| match (left_is_edit_match, right_is_edit_match) {
+                (true, true) => left.edit_distance.cmp(&right.edit_distance),
+                (false, false) => right.common_prefix_length.cmp(&left.common_prefix_length),
+                _ => std::cmp::Ordering::Equal,
+            })
+            .then_with(|| right.common_prefix_length.cmp(&left.common_prefix_length))
+            .then_with(|| left.edit_distance.cmp(&right.edit_distance))
+            .then_with(|| left.session_id.cmp(&right.session_id))
+    });
+    suggestions.truncate(MAX_SESSION_ID_SUGGESTIONS);
+    suggestions
+        .into_iter()
+        .map(|suggestion| suggestion.session_id)
+        .collect()
+}
+
+fn common_prefix_length(left: &str, right: &str) -> usize {
+    left.chars()
+        .zip(right.chars())
+        .take_while(|(left, right)| left == right)
+        .count()
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    let left: Vec<char> = left.chars().collect();
+    let right: Vec<char> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right.len()).collect();
+    let mut current = vec![0; right.len() + 1];
+
+    for (left_index, left_char) in left.iter().enumerate() {
+        current[0] = left_index + 1;
+        for (right_index, right_char) in right.iter().enumerate() {
+            let substitution_cost = if left_char == right_char { 0 } else { 1 };
+            current[right_index + 1] = (previous[right_index + 1] + 1)
+                .min(current[right_index] + 1)
+                .min(previous[right_index] + substitution_cost);
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right.len()]
+}
+
 pub fn notify(
     session_id: &str,
     message: &str,
@@ -142,8 +244,8 @@ pub fn notify(
 ) -> Result<Delivery> {
     ensure_not_self_notify(session_id, from)?;
 
-    let session = store::load_session(session_id)?
-        .ok_or_else(|| CcError::SessionNotFound(session_id.to_string()))?;
+    let session =
+        store::load_session(session_id)?.ok_or_else(|| session_not_found_error(session_id))?;
 
     match notify_readiness(session.status) {
         NotifyReadiness::Refused => {
@@ -267,7 +369,82 @@ fn notify_readiness(status: SessionStatus) -> NotifyReadiness {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use chrono::Utc;
+    use rstest::{fixture, rstest};
+    use std::path::PathBuf;
+
+    struct TestSessionStore {
+        _temp_dir: tempfile::TempDir,
+        cache_home: String,
+        sessions_dir: PathBuf,
+    }
+
+    #[fixture]
+    fn session_store() -> TestSessionStore {
+        let temp_dir = tempfile::tempdir().expect("temporary session store should be created");
+        let cache_home = temp_dir.path().to_string_lossy().into_owned();
+        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
+        TestSessionStore {
+            _temp_dir: temp_dir,
+            cache_home,
+            sessions_dir,
+        }
+    }
+
+    fn session(session_id: &str, status: SessionStatus) -> Session {
+        Session {
+            pr_context: None,
+            session_id: session_id.to_string(),
+            work_type: None,
+            work_type_pinned: false,
+            vibe_enabled: false,
+            launched_with_vibe: false,
+            is_delegated: false,
+            crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
+            cwd: PathBuf::from("/tmp/test-session"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: Default::default(),
+            pending_agent_task_ids: Default::default(),
+            pending_permission_agent_ids: Default::default(),
+            pending_permission_request_ids: Default::default(),
+            read_at: None,
+            sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
+            agent_status: None,
+            agent_status_clear_pending: false,
+            engine: Engine::Claude,
+        }
+    }
+
+    fn missing_session_error(
+        session_store: &TestSessionStore,
+        session_id: &str,
+        sessions: &[(&str, SessionStatus)],
+    ) -> String {
+        for (id, status) in sessions {
+            store::save_session_to(&session_store.sessions_dir, &session(id, *status))
+                .expect("test session should be stored");
+        }
+
+        temp_env::with_vars(
+            [("XDG_CACHE_HOME", Some(session_store.cache_home.as_str()))],
+            || {
+                notify(session_id, "hello", None, None)
+                    .expect_err("untracked session should be rejected")
+                    .to_string()
+            },
+        )
+    }
 
     #[rstest]
     #[case::same_session(
@@ -307,6 +484,72 @@ mod tests {
         assert_eq!(
             result.map_err(|error| error.to_string()),
             Err("Cannot notify your own session 'session-a'".to_string()),
+        );
+    }
+
+    #[rstest]
+    #[case::single_character_substitution(
+        "1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+        &[("1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5e", SessionStatus::Running)],
+        indoc::indoc! {"
+            Session not found: 1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
+            Did you mean:
+            - 1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5e
+        "}.trim_end()
+    )]
+    #[case::matching_first_uuid_block(
+        "5a6b7c8d-1029-4c8d-a1b2-c3d4e5f60718",
+        &[("5a6b7c8d-e9f0-4a1b-8c2d-3e4f5a6b7c8d", SessionStatus::Stopped)],
+        indoc::indoc! {"
+            Session not found: 5a6b7c8d-1029-4c8d-a1b2-c3d4e5f60718
+            Did you mean:
+            - 5a6b7c8d-e9f0-4a1b-8c2d-3e4f5a6b7c8d
+        "}.trim_end()
+    )]
+    #[case::matching_only_initial_characters(
+        "4f2a1111-1111-4111-8111-111111111111",
+        &[("4f2b2222-2222-4222-8222-222222222222", SessionStatus::Running)],
+        indoc::indoc! {"
+            Session not found: 4f2a1111-1111-4111-8111-111111111111
+            Did you mean:
+            - 4f2b2222-2222-4222-8222-222222222222
+        "}.trim_end()
+    )]
+    #[case::no_close_candidate(
+        "8f7e6d5c-4b3a-2910-a1b2-c3d4e5f60718",
+        &[("10293847-5647-4f3e-9d8c-7b6a5f4e3d2c", SessionStatus::Running)],
+        "Session not found: 8f7e6d5c-4b3a-2910-a1b2-c3d4e5f60718"
+    )]
+    #[case::ended_candidate_is_ignored(
+        "73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f506",
+        &[("73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f507", SessionStatus::Ended)],
+        "Session not found: 73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f506"
+    )]
+    #[case::candidate_count_is_limited(
+        "aabb0000-0000-0000-0000-000000000000",
+        &[
+            ("aabb1111-1111-1111-1111-111111111111", SessionStatus::Running),
+            ("aabb2222-2222-2222-2222-222222222222", SessionStatus::Running),
+            ("aabb3333-3333-3333-3333-333333333333", SessionStatus::Running),
+            ("aabb4444-4444-4444-4444-444444444444", SessionStatus::Running),
+        ],
+        indoc::indoc! {"
+            Session not found: aabb0000-0000-0000-0000-000000000000
+            Did you mean:
+            - aabb1111-1111-1111-1111-111111111111
+            - aabb2222-2222-2222-2222-222222222222
+            - aabb3333-3333-3333-3333-333333333333
+        "}.trim_end()
+    )]
+    fn missing_session_error_suggests_only_close_tracked_sessions(
+        session_store: TestSessionStore,
+        #[case] session_id: &str,
+        #[case] sessions: &[(&str, SessionStatus)],
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            missing_session_error(&session_store, session_id, sessions),
+            expected,
         );
     }
 
