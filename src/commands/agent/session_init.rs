@@ -3,43 +3,38 @@ use std::path::Path;
 use anyhow::Result;
 
 use super::store::{self, SessionLock};
-use super::types::{Session, SessionPrContext};
+use super::types::Session;
 
-pub(crate) struct InitializedSession {
+pub(crate) struct InitializedSession<T> {
     pub(crate) lock: SessionLock,
     pub(crate) existing_session: Option<Session>,
-    pub(crate) pr_context: Option<SessionPrContext>,
-    pub(crate) work_type_pinned: bool,
+    pub(crate) captured: Option<T>,
 }
 
-pub(crate) fn load_or_capture(
+pub(crate) fn load_or_capture<T>(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,
-    capture_pr_context: impl FnOnce(&Path) -> Option<SessionPrContext>,
-    determine_work_type_pin: impl FnOnce() -> bool,
-) -> Result<InitializedSession> {
+    capture: impl FnOnce(&Path) -> T,
+) -> Result<InitializedSession<T>> {
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let existing_session = lock.load()?;
     if existing_session.is_some() {
-        return Ok(InitializedSession {
+        return Ok(InitializedSession::<T> {
             lock,
             existing_session,
-            pr_context: None,
-            work_type_pinned: false,
+            captured: None,
         });
     }
 
     drop(lock);
-    let pr_context = capture_pr_context(cwd);
-    let work_type_pinned = determine_work_type_pin();
+    let captured = capture(cwd);
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let existing_session = lock.load()?;
 
     Ok(InitializedSession {
         lock,
         existing_session,
-        pr_context,
-        work_type_pinned,
+        captured: Some(captured),
     })
 }

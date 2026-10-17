@@ -90,10 +90,7 @@ pub(crate) fn load_session(sessions_dir: &Path, session_id: &str) -> Result<Opti
         return Ok(None);
     }
     let connection = open_connection(sessions_dir)?;
-    match read_stored_session(&connection, session_id)? {
-        StoredSession::Missing | StoredSession::Undecodable => Ok(None),
-        StoredSession::Decoded(session) => Ok(Some(*session)),
-    }
+    read_session_skipping_undecodable(&connection, session_id)
 }
 
 pub(crate) fn save_session(sessions_dir: &Path, session: &Session) -> Result<()> {
@@ -129,7 +126,7 @@ pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Re
 
 impl SessionLock {
     pub(crate) fn load(&self) -> Result<Option<Session>> {
-        read_session(&self.connection, &self.session_id)
+        read_session_strict(&self.connection, &self.session_id)
     }
 
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
@@ -180,10 +177,7 @@ pub(crate) fn update_session(
     }
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let Some(mut session) = (match read_stored_session(&transaction, session_id)? {
-        StoredSession::Missing | StoredSession::Undecodable => None,
-        StoredSession::Decoded(session) => Some(*session),
-    }) else {
+    let Some(mut session) = read_session_skipping_undecodable(&transaction, session_id)? else {
         transaction.commit()?;
         return Ok(());
     };
@@ -293,13 +287,23 @@ pub(crate) fn session_changes_since(
     Ok(changes)
 }
 
-fn read_session(connection: &Connection, session_id: &str) -> Result<Option<Session>> {
+fn read_session_strict(connection: &Connection, session_id: &str) -> Result<Option<Session>> {
     match read_stored_session(connection, session_id)? {
         StoredSession::Missing => Ok(None),
         StoredSession::Decoded(session) => Ok(Some(*session)),
         StoredSession::Undecodable => Err(anyhow!(
             "session {session_id} is stored but its data cannot be decoded"
         )),
+    }
+}
+
+fn read_session_skipping_undecodable(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<Option<Session>> {
+    match read_stored_session(connection, session_id)? {
+        StoredSession::Missing | StoredSession::Undecodable => Ok(None),
+        StoredSession::Decoded(session) => Ok(Some(*session)),
     }
 }
 

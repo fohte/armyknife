@@ -383,18 +383,13 @@ fn process_hook_event_impl_with_instruction(
     // saved separately, after this lock is released -- see the comment at
     // its update below.
     let now = Utc::now();
-    let initialized = session_init::load_or_capture(
-        sessions_dir,
-        &input.session_id,
-        &input.cwd,
-        |cwd| {
-            side_effects
+    let initialized =
+        session_init::load_or_capture(sessions_dir, &input.session_id, &input.cwd, |cwd| {
+            let pr_context = side_effects
                 .capture_pr_context
                 .as_ref()
-                .and_then(|capture| capture(cwd))
-        },
-        || {
-            env.session_work_type.is_some()
+                .and_then(|capture| capture(cwd));
+            let work_type_pinned = env.session_work_type.is_some()
                 && input.source.as_deref() != Some("clear")
                 && tmux_info.as_ref().is_none_or(|info| {
                     !pane_binding::has_other_session_on_pane(
@@ -402,13 +397,12 @@ fn process_hook_event_impl_with_instruction(
                         &input.session_id,
                         &info.pane_id,
                     )
-                })
-        },
-    )?;
+                });
+            (pr_context, work_type_pinned)
+        })?;
     let session_lock = initialized.lock;
     let existing_session = initialized.existing_session;
-    let pr_context = initialized.pr_context;
-    let work_type_pinned = initialized.work_type_pinned;
+    let (pr_context, work_type_pinned) = initialized.captured.unwrap_or_default();
     let mut session = existing_session.unwrap_or_else(|| {
         let ancestor_session_ids = env
             .ancestor_session_ids

@@ -25,19 +25,16 @@ pub(super) fn record_codex_resume_metadata_if_needed(
         return Ok(());
     }
 
-    let initialized = session_init::load_or_capture(
-        sessions_dir,
-        session_id,
-        cwd,
-        |cwd| capture_pr_context.and_then(|capture| capture(cwd)),
-        || false,
-    )?;
+    let initialized = session_init::load_or_capture(sessions_dir, session_id, cwd, |cwd| {
+        capture_pr_context.and_then(|capture| capture(cwd))
+    })?;
     let session_init::InitializedSession {
         lock: session_lock,
         existing_session,
-        pr_context,
+        captured,
         ..
     } = initialized;
+    let pr_context = captured.flatten();
     let now = Utc::now();
     let mut session = existing_session.unwrap_or_else(|| Session {
         archived_at: None,
