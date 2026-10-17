@@ -5,9 +5,10 @@ use crate::commands::gh::issue_agent::commands::test_helpers::{
     TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
 };
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
-use crate::commands::gh::issue_agent::storage::IssueStorage;
+use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
 use crate::infra::github::RemoteComment;
+use indoc::formatdoc;
 use rstest::rstest;
 use tempfile::TempDir;
 
@@ -51,11 +52,13 @@ fn issue_frontmatter(title: &str, labels: &[&str]) -> IssueFrontmatter {
 
 fn write_local_issue(storage: &IssueStorage, frontmatter: &IssueFrontmatter, body: &str) {
     let yaml = serde_yaml::to_string(frontmatter).unwrap();
-    std::fs::write(
-        storage.dir().join("issue.md"),
-        ["---", yaml.trim_end(), "---", "", body].join("\n"),
-    )
-    .unwrap();
+    let content = formatdoc! {"
+        ---
+        {}---
+
+        {}
+    ", yaml, body};
+    std::fs::write(storage.dir().join("issue.md"), content).unwrap();
 }
 
 fn remove_issue_approval(storage: &IssueStorage) {
@@ -306,6 +309,49 @@ async fn test_missing_base_snapshot_keeps_legacy_label_approval(test_dir: TempDi
     );
 
     assert_eq!(result, Err(expected_error));
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_converged_issue_fields_refresh_snapshot_without_rewriting_issue(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_title("Current title")
+        .build()
+        .await;
+    storage
+        .save_issue(&issue_frontmatter("Previous title", &["bug"]), "Body")
+        .unwrap();
+    let current_frontmatter = issue_frontmatter("Current title", &["bug"]);
+    write_local_issue(&storage, &current_frontmatter, "Body");
+    let expected_issue = IssueContent {
+        frontmatter: current_frontmatter,
+        body: "Body".to_string(),
+    };
+    let mut expected_base_frontmatter = issue_frontmatter("Current title", &["bug"]);
+    expected_base_frontmatter.readonly.created_at = "2024-01-01T00:00:00+00:00".to_string();
+    expected_base_frontmatter.readonly.updated_at = "2024-01-02T00:00:00+00:00".to_string();
+    let expected_base = IssueContent {
+        frontmatter: expected_base_frontmatter,
+        body: "Body".to_string(),
+    };
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    assert_eq!(
+        (
+            result,
+            storage.read_issue().unwrap(),
+            storage.read_base_issue().unwrap(),
+        ),
+        (Ok(()), expected_issue, Some(expected_base)),
+    );
 }
 
 // Remote changed detection

@@ -16,6 +16,17 @@ impl IssueStorage {
         let path = self.dir.join("issue.md");
         let content = format_issue_md(frontmatter, body);
         fs::write(&path, &content)?;
+        self.save_base_issue_content(&content)?;
+        Ok(())
+    }
+
+    /// Save the managed issue snapshot without changing the editable issue file.
+    pub fn save_base_issue(&self, frontmatter: &IssueFrontmatter, body: &str) -> Result<()> {
+        fs::create_dir_all(&self.dir)?;
+        self.save_base_issue_content(&format_issue_md(frontmatter, body))
+    }
+
+    fn save_base_issue_content(&self, content: &str) -> Result<()> {
         fs::write(self.dir.join(".issue.base.md"), content)?;
         Ok(())
     }
@@ -189,26 +200,24 @@ mod tests {
             .unwrap();
 
         let expected_content = format_issue_md(&frontmatter, "Test body content");
+        let expected_issue_content = super::super::issue_storage_read::IssueContent {
+            frontmatter,
+            body: "Test body content".to_string(),
+        };
+        let issue_content = storage.read_issue().unwrap();
         assert_eq!(
             (
                 fs::read_to_string(dir.path().join("issue.md")).unwrap(),
                 fs::read_to_string(dir.path().join(".issue.base.md")).unwrap(),
+                issue_content,
+                storage.read_base_issue().unwrap(),
             ),
-            (expected_content.clone(), expected_content),
-        );
-
-        // Verify by loading back the issue content
-        let issue_content = storage.read_issue().unwrap();
-        assert_eq!(
-            storage.read_base_issue().unwrap(),
-            Some(issue_content.clone())
-        );
-        assert_eq!(
-            issue_content,
-            super::super::issue_storage_read::IssueContent {
-                frontmatter,
-                body: "Test body content".to_string(),
-            }
+            (
+                expected_content.clone(),
+                expected_content,
+                expected_issue_content.clone(),
+                Some(expected_issue_content),
+            ),
         );
     }
 

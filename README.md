@@ -271,9 +271,10 @@ a gh issue-agent <command> <issue-number> [options]
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed snapshot of the last pull or successful push,
 and `comments/` for issue comments. Existing issue pushes compare title, body,
-labels, sub-issues, and parent issue against the snapshot so remote-only edits
-are preserved and divergent edits are reported as conflicts. Directories without
-`.issue.base.md` retain the legacy push behavior until the next pull.
+labels, sub-issues, and parent issue against the snapshot in `push` and `diff`,
+preserving remote-only edits and reporting divergent edits as conflicts.
+Directories without `.issue.base.md` retain legacy behavior until the next pull
+or successful push creates the snapshot.
 
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |

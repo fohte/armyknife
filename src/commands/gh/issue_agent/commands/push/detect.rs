@@ -1,6 +1,5 @@
 //! Change detection functions for push command.
 
-#[path = "detect/three_way_conflicts.rs"]
 mod three_way_conflicts;
 
 use std::collections::{HashMap, HashSet};
@@ -364,8 +363,8 @@ pub(crate) struct ConflictCheckInput<'a> {
 pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
     let mut conflicts = Vec::new();
 
-    if input.base_issue.is_some() {
-        conflicts.extend(three_way_conflicts::check_base_conflicts(input));
+    if let Some(base_issue) = input.base_issue {
+        conflicts.extend(three_way_conflicts::check_base_conflicts(input, base_issue));
     } else {
         // Check body conflict using lastEditedAt
         let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
@@ -446,11 +445,6 @@ pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
 /// Returns true if they differ (including when one is Some and one is None).
 fn timestamps_differ(local: Option<&str>, remote: Option<&str>) -> bool {
     local != remote
-}
-
-pub(super) fn string_sets_equal(left: &[String], right: &[String]) -> bool {
-    left.iter().map(String::as_str).collect::<HashSet<_>>()
-        == right.iter().map(String::as_str).collect::<HashSet<_>>()
 }
 
 #[cfg(test)]
@@ -649,35 +643,10 @@ mod tests {
 
     mod check_conflicts_base_tests {
         use super::*;
-        use crate::commands::gh::issue_agent::models::{
-            IssueFrontmatter, IssueMetadata, SubIssueRef,
-        };
+        use crate::commands::gh::issue_agent::models::IssueMetadata;
         use crate::commands::gh::issue_agent::storage::IssueContent;
         use crate::commands::gh::issue_agent::testing::factories;
         use rstest::rstest;
-
-        fn issue_ref(number: i64) -> SubIssueRef {
-            SubIssueRef {
-                id: number as u64,
-                number,
-                owner: "owner".to_string(),
-                repo: "repo".to_string(),
-            }
-        }
-
-        fn base_issue() -> IssueContent {
-            let issue = factories::issue_with(|issue| {
-                issue.title = "Base title".to_string();
-                issue.body = Some("Base body".to_string());
-                issue.labels = factories::labels(&["base-label"]);
-                issue.parent_issue = Some(issue_ref(10));
-                issue.sub_issues = vec![issue_ref(11)];
-            });
-            IssueContent {
-                frontmatter: IssueFrontmatter::from_issue(&issue),
-                body: "Base body".to_string(),
-            }
-        }
 
         fn local_metadata(base: &IssueContent) -> IssueMetadata {
             let mut metadata = IssueMetadata::from(base.frontmatter.clone());
@@ -686,22 +655,6 @@ mod tests {
             metadata.parent_issue = Some("owner/repo#20".to_string());
             metadata.sub_issues = vec!["owner/repo#21".to_string()];
             metadata
-        }
-
-        fn remote_issue(
-            title: &str,
-            body: &str,
-            label: &str,
-            parent_number: i64,
-            sub_issue_number: i64,
-        ) -> Issue {
-            factories::issue_with(|issue| {
-                issue.title = title.to_string();
-                issue.body = Some(body.to_string());
-                issue.labels = factories::labels(&[label]);
-                issue.parent_issue = Some(issue_ref(parent_number));
-                issue.sub_issues = vec![issue_ref(sub_issue_number)];
-            })
         }
 
         fn conflicts_for(
@@ -722,9 +675,15 @@ mod tests {
 
         #[rstest]
         fn test_divergent_local_and_remote_values_conflict_for_every_issue_field() {
-            let base_issue = base_issue();
+            let base_issue = factories::base_issue_content();
             let metadata = local_metadata(&base_issue);
-            let remote_issue = remote_issue("Remote title", "Remote body", "remote-label", 30, 31);
+            let remote_issue = factories::issue_with_fields(
+                "Remote title",
+                "Remote body",
+                &["remote-label"],
+                Some(30),
+                &[31],
+            );
 
             assert_eq!(
                 conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),
@@ -742,12 +701,47 @@ mod tests {
 
         #[rstest]
         fn test_matching_local_and_remote_changes_do_not_conflict() {
-            let base_issue = base_issue();
+            let base_issue = factories::base_issue_content();
             let metadata = local_metadata(&base_issue);
-            let remote_issue = remote_issue("Local title", "Local body", "local-label", 20, 21);
+            let remote_issue = factories::issue_with_fields(
+                "Local title",
+                "Local body",
+                &["local-label"],
+                Some(20),
+                &[21],
+            );
 
             assert_eq!(
                 conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),
+                Vec::<Conflict>::new(),
+            );
+        }
+
+        #[rstest]
+        #[case::body("Base title", "Remote body", "base-label", 10, 11)]
+        #[case::title("Remote title", "Base body", "base-label", 10, 11)]
+        #[case::labels("Base title", "Base body", "remote-label", 10, 11)]
+        #[case::parent_issue("Base title", "Base body", "base-label", 30, 11)]
+        #[case::sub_issues("Base title", "Base body", "base-label", 10, 31)]
+        fn test_remote_only_issue_field_changes_do_not_conflict(
+            #[case] title: &str,
+            #[case] body: &str,
+            #[case] label: &str,
+            #[case] parent_number: i64,
+            #[case] sub_issue_number: i64,
+        ) {
+            let base_issue = factories::base_issue_content();
+            let metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            let remote_issue = factories::issue_with_fields(
+                title,
+                body,
+                &[label],
+                Some(parent_number),
+                &[sub_issue_number],
+            );
+
+            assert_eq!(
+                conflicts_for(&base_issue, &metadata, &base_issue.body, &remote_issue),
                 Vec::<Conflict>::new(),
             );
         }
