@@ -185,15 +185,21 @@ mod tests {
         store.save(&session("target", target_ancestors, SessionStatus::Running));
     }
 
-    #[test]
-    fn adopt_command_parses_target_and_force_flag() {
+    #[rstest]
+    #[case::without_force(false)]
+    #[case::with_force(true)]
+    fn adopt_command_parses_target_and_force_flag(#[case] force: bool) {
         #[derive(Parser)]
         struct TestCli {
             #[command(subcommand)]
             command: crate::commands::agent::AgentCommands,
         }
 
-        let actual = TestCli::try_parse_from(["a", "peer", "adopt", "session-x", "--force"])
+        let mut argv = vec!["a", "peer", "adopt", "session-x"];
+        if force {
+            argv.push("--force");
+        }
+        let actual = TestCli::try_parse_from(argv)
             .expect("adopt command should parse")
             .command;
         assert!(
@@ -201,7 +207,7 @@ mod tests {
                 == crate::commands::agent::AgentCommands::Peer(super::super::PeerCommands::Adopt(
                     AdoptArgs {
                         session_id: "session-x".to_string(),
-                        force: true,
+                        force,
                     }
                 ))
         );
@@ -234,19 +240,28 @@ mod tests {
     }
 
     #[rstest]
-    #[case::missing(None)]
-    #[case::ended(Some(SessionStatus::Ended))]
+    #[case::missing_without_force(None, vec![], false)]
+    #[case::missing_with_force(None, vec![], true)]
+    #[case::ended_without_force(Some(SessionStatus::Ended), vec![], false)]
+    #[case::ended_with_force(Some(SessionStatus::Ended), vec![], true)]
+    #[case::ended_direct_child_without_force(
+        Some(SessionStatus::Ended),
+        vec!["caller"],
+        false
+    )]
     fn adopt_rejects_missing_or_ended_targets(
         session_store: TestSessionStore,
         #[case] target_status: Option<SessionStatus>,
+        #[case] target_ancestors: Vec<&str>,
+        #[case] force: bool,
     ) {
         session_store.save(&session("caller", &[], SessionStatus::Running));
         if let Some(status) = target_status {
-            session_store.save(&session("target", &[], status));
+            session_store.save(&session("target", &target_ancestors, status));
         }
 
         let error = session_store
-            .adopt("caller", "target", true)
+            .adopt("caller", "target", force)
             .expect_err("missing and ended targets cannot be adopted");
 
         assert_eq!(error.to_string(), "Session not found: target");
@@ -395,6 +410,105 @@ mod tests {
         assert_eq!(
             (adopted.ancestor_session_ids, adopted.launched_with_vibe),
             (vec!["caller".to_string()], false)
+        );
+    }
+
+    #[test]
+    fn concurrent_reciprocal_adoptions_do_not_create_a_cycle() {
+        use std::sync::{Arc, Barrier};
+
+        let session_store = session_store();
+        session_store.save(&session("a", &[], SessionStatus::Running));
+        session_store.save(&session("b", &[], SessionStatus::Running));
+
+        let barrier = Arc::new(Barrier::new(3));
+        let start_adoption = |caller_id: &'static str, target_id: &'static str| {
+            let sessions_dir = session_store.path.clone();
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                adopt_in(&sessions_dir, caller_id, target_id, true)
+                    .map_err(|error| error.to_string())
+            })
+        };
+        let adopt_b_from_a = start_adoption("a", "b");
+        let adopt_a_from_b = start_adoption("b", "a");
+        barrier.wait();
+
+        let adoption_results = [
+            (
+                "a",
+                "b",
+                adopt_b_from_a
+                    .join()
+                    .expect("first adoption thread should finish"),
+            ),
+            (
+                "b",
+                "a",
+                adopt_a_from_b
+                    .join()
+                    .expect("second adoption thread should finish"),
+            ),
+        ];
+        let session_a = session_store.load("a");
+        let session_b = session_store.load("b");
+        let parent_id = if session_a.ancestor_session_ids.is_empty() {
+            "a"
+        } else {
+            "b"
+        };
+        let role = |session_id: &str| {
+            if session_id == parent_id {
+                "parent"
+            } else {
+                "child"
+            }
+        };
+        let mut normalized_results = adoption_results
+            .iter()
+            .map(|(caller_id, target_id, result)| {
+                let outcome = match result {
+                    Ok(()) => "adopted",
+                    Err(error)
+                        if error
+                            == &format!(
+                                "Cannot adopt ancestor session '{target_id}' because it would create a cycle"
+                            ) =>
+                    {
+                        "cycle-rejected"
+                    }
+                    Err(_) => "other-error",
+                };
+                (role(caller_id), role(target_id), outcome)
+            })
+            .collect::<Vec<_>>();
+        normalized_results.sort_unstable();
+
+        let mut normalized_sessions = [(&session_a, "a"), (&session_b, "b")]
+            .iter()
+            .map(|(stored, session_id)| {
+                (
+                    role(session_id),
+                    stored
+                        .ancestor_session_ids
+                        .iter()
+                        .map(|ancestor_id| role(ancestor_id))
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        normalized_sessions.sort_unstable_by_key(|(session_role, _)| *session_role);
+
+        assert_eq!(
+            (normalized_results, normalized_sessions),
+            (
+                vec![
+                    ("child", "parent", "cycle-rejected"),
+                    ("parent", "child", "adopted"),
+                ],
+                vec![("child", vec!["parent"]), ("parent", vec![])],
+            )
         );
     }
 }
