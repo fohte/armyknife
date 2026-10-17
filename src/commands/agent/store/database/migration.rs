@@ -46,7 +46,9 @@ pub(super) fn import_legacy_json(connection: &mut Connection, sessions_dir: &Pat
     for (path, session) in importable_sessions {
         let should_import = match super::read_stored_session(&transaction, &session.session_id)? {
             super::StoredSession::Missing => true,
-            super::StoredSession::Decoded(current) => session.updated_at > current.updated_at,
+            super::StoredSession::Decoded(current) => {
+                session.created_at <= current.created_at && session.updated_at > current.updated_at
+            }
             super::StoredSession::Undecodable => continue,
         };
         if should_import {
