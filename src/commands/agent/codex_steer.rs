@@ -20,7 +20,7 @@ const TURN_STATUS_READ_REQUEST_ID_START: u64 = 100;
 const TURN_START_REQUEST_ID: u64 = 3;
 const THREAD_ARCHIVE_REQUEST_ID: u64 = 3;
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(30);
-const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(600);
 
 mod archive;
 mod delivery;
@@ -114,7 +114,7 @@ impl Client {
                     .get_ref()
                     .set_read_timeout(Some(remaining))
                     .context("failed to set Codex app-server read timeout")?;
-                ignore_interrupted_read(self.socket.read())
+                thread_started_read(self.socket.read())
                     .context("failed to read Codex app-server `thread/started` notification")
             },
             cwd,
@@ -226,7 +226,7 @@ fn wait_for_thread_started_with_reader<R>(
     timeout: Duration,
 ) -> anyhow::Result<String>
 where
-    R: FnMut(Duration) -> anyhow::Result<Option<Message>>,
+    R: FnMut(Duration) -> anyhow::Result<ThreadStartedRead>,
 {
     let deadline = Instant::now()
         .checked_add(timeout)
@@ -234,12 +234,12 @@ where
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return Err(anyhow!(
-                "timed out waiting for Codex app-server `thread/started` notification"
-            ));
+            return Err(thread_started_timeout_error(timeout));
         }
-        let Some(message) = read_with_timeout(remaining)? else {
-            continue;
+        let message = match read_with_timeout(remaining)? {
+            ThreadStartedRead::Message(message) => message,
+            ThreadStartedRead::Interrupted => continue,
+            ThreadStartedRead::TimedOut => return Err(thread_started_timeout_error(timeout)),
         };
         if let Some(thread_id) = thread_started_from_message(message, cwd)? {
             return Ok(thread_id);
@@ -254,11 +254,42 @@ where
 {
     wait_for_thread_started_with_reader(
         |_| {
-            ignore_interrupted_read(read())
+            thread_started_read(read())
                 .context("failed to read Codex app-server `thread/started` notification")
         },
         cwd,
         Duration::from_secs(1),
+    )
+}
+
+enum ThreadStartedRead {
+    Message(Message),
+    Interrupted,
+    TimedOut,
+}
+
+fn thread_started_read(result: tungstenite::Result<Message>) -> anyhow::Result<ThreadStartedRead> {
+    match result {
+        Ok(message) => Ok(ThreadStartedRead::Message(message)),
+        Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
+            Ok(ThreadStartedRead::Interrupted)
+        }
+        Err(tungstenite::Error::Io(error))
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+            ) =>
+        {
+            Ok(ThreadStartedRead::TimedOut)
+        }
+        Err(error) => Err(anyhow!(error)),
+    }
+}
+
+fn thread_started_timeout_error(timeout: Duration) -> anyhow::Error {
+    anyhow!(
+        "timed out waiting for Codex app-server `thread/started` notification after {} seconds",
+        timeout.as_secs_f64()
     )
 }
 
@@ -554,6 +585,31 @@ mod tests {
             .to_string()
             .into(),
         )
+    }
+
+    #[test]
+    fn waits_for_thread_started_for_ten_minutes_by_default() {
+        assert_eq!(DEFAULT_THREAD_STARTED_TIMEOUT, Duration::from_secs(600),);
+    }
+
+    #[rstest]
+    #[case::would_block(std::io::ErrorKind::WouldBlock)]
+    #[case::timed_out(std::io::ErrorKind::TimedOut)]
+    fn reports_socket_read_timeout_with_the_wait_duration(#[case] error_kind: std::io::ErrorKind) {
+        let actual = wait_for_thread_started_with_reader(
+            |_| {
+                thread_started_read(Err(tungstenite::Error::Io(std::io::Error::from(
+                    error_kind,
+                ))))
+            },
+            Path::new("/workspace/project-a"),
+            DEFAULT_THREAD_STARTED_TIMEOUT,
+        );
+
+        assert_eq!(
+            actual.map_err(|error| error.to_string()),
+            Err("timed out waiting for Codex app-server `thread/started` notification after 600 seconds".to_string()),
+        );
     }
 
     #[test]
