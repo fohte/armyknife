@@ -90,7 +90,10 @@ pub(crate) fn load_session(sessions_dir: &Path, session_id: &str) -> Result<Opti
         return Ok(None);
     }
     let connection = open_connection(sessions_dir)?;
-    read_session(&connection, session_id)
+    match read_stored_session(&connection, session_id)? {
+        StoredSession::Missing | StoredSession::Undecodable => Ok(None),
+        StoredSession::Decoded(session) => Ok(Some(*session)),
+    }
 }
 
 pub(crate) fn save_session(sessions_dir: &Path, session: &Session) -> Result<()> {
@@ -177,7 +180,10 @@ pub(crate) fn update_session(
     }
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let Some(mut session) = read_session(&transaction, session_id)? else {
+    let Some(mut session) = (match read_stored_session(&transaction, session_id)? {
+        StoredSession::Missing | StoredSession::Undecodable => None,
+        StoredSession::Decoded(session) => Some(*session),
+    }) else {
         transaction.commit()?;
         return Ok(());
     };

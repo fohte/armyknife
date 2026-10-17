@@ -2,17 +2,17 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::super::store::{self, SessionLock};
-use super::super::types::{Session, SessionPrContext};
+use super::store::{self, SessionLock};
+use super::types::{Session, SessionPrContext};
 
-pub(super) struct InitializedSession {
-    pub(super) lock: SessionLock,
-    pub(super) existing_session: Option<Session>,
-    pub(super) pr_context: Option<SessionPrContext>,
-    pub(super) work_type_pinned: bool,
+pub(crate) struct InitializedSession {
+    pub(crate) lock: SessionLock,
+    pub(crate) existing_session: Option<Session>,
+    pub(crate) pr_context: Option<SessionPrContext>,
+    pub(crate) work_type_pinned: bool,
 }
 
-pub(super) fn load_or_capture(
+pub(crate) fn load_or_capture(
     sessions_dir: &Path,
     session_id: &str,
     cwd: &Path,

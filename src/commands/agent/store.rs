@@ -427,6 +427,7 @@ mod tests {
     use crate::commands::agent::types::SessionStatus;
     use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
+    use rusqlite::OptionalExtension;
     use std::fs::OpenOptions;
     use tempfile::TempDir;
 
@@ -863,6 +864,18 @@ mod tests {
     }
 
     #[rstest::rstest]
+    fn load_skips_undecodable_records(undecodable_session: UndecodableSession) {
+        let actual = load_session_from(
+            &undecodable_session.temp_session_dir.sessions_path,
+            UNDECODABLE_SESSION_ID,
+        )
+        .expect("reading an undecodable session should succeed")
+        .map(|session| session.session_id);
+
+        assert_eq!(actual, None);
+    }
+
+    #[rstest::rstest]
     fn save_does_not_overwrite_undecodable_records(undecodable_session: UndecodableSession) {
         let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
         let save_result =
@@ -891,6 +904,36 @@ mod tests {
     }
 
     #[rstest::rstest]
+    fn update_skips_undecodable_records(undecodable_session: UndecodableSession) {
+        let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
+        let update_result = update_session_in(sessions_dir, UNDECODABLE_SESSION_ID, |session| {
+            session.label = Some("replacement".to_string());
+            true
+        });
+        let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        let stored_row = connection
+            .query_row(
+                "SELECT data, rev FROM sessions WHERE session_id = ?1",
+                [UNDECODABLE_SESSION_ID],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .expect("undecodable row should remain stored");
+        let revision = connection
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM session_store_meta WHERE key = 'revision'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("store revision should remain readable");
+
+        assert_eq!(
+            (update_result.is_ok(), stored_row, revision),
+            (true, (undecodable_session.data, 7), 7),
+        );
+    }
+
+    #[rstest::rstest]
     fn legacy_import_skips_undecodable_database_rows(undecodable_session: UndecodableSession) {
         let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
         let legacy_json = sessions_dir.join(format!("{UNDECODABLE_SESSION_ID}.json"));
@@ -898,6 +941,14 @@ mod tests {
             &legacy_json,
             serde_json::to_vec(&create_test_session(UNDECODABLE_SESSION_ID))
                 .expect("legacy session should serialize"),
+        )
+        .expect("legacy session should write");
+
+        let importable_session = create_test_session("valid-legacy-session");
+        let importable_legacy_json = sessions_dir.join("valid-legacy-session.json");
+        fs::write(
+            &importable_legacy_json,
+            serde_json::to_vec(&importable_session).expect("legacy session should serialize"),
         )
         .expect("legacy session should write");
 
@@ -913,10 +964,38 @@ mod tests {
         let backup_path = sessions_dir
             .join("legacy-json")
             .join(format!("{UNDECODABLE_SESSION_ID}.json"));
+        let imported_data: Option<String> = connection
+            .query_row(
+                "SELECT data FROM sessions WHERE session_id = ?1",
+                [importable_session.session_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .expect("valid legacy session should be queryable");
+        let importable_backup_path = sessions_dir
+            .join("legacy-json")
+            .join("valid-legacy-session.json");
 
         assert_eq!(
-            (stored_data, legacy_json.exists(), backup_path.exists()),
-            (undecodable_session.data, true, false),
+            (
+                stored_data,
+                legacy_json.exists(),
+                backup_path.exists(),
+                imported_data,
+                importable_legacy_json.exists(),
+                importable_backup_path.exists(),
+            ),
+            (
+                undecodable_session.data,
+                true,
+                false,
+                Some(
+                    database::serialize_session(&importable_session)
+                        .expect("legacy session should serialize"),
+                ),
+                false,
+                true,
+            ),
         );
     }
 

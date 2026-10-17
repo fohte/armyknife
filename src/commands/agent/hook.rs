@@ -15,6 +15,7 @@ use lazy_regex::regex_replace_all;
 use self::side_effects::SideEffects;
 use super::claude_sessions;
 use super::error::CcError;
+use super::session_init;
 use super::session_status;
 use super::store;
 use super::types::{
@@ -32,7 +33,6 @@ mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
 mod prompt_skill;
-mod session_init;
 mod session_lifecycle;
 mod side_effects;
 mod stop;

@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::Result;
 use chrono::Utc;
 
+use crate::commands::agent::session_init;
 use crate::commands::agent::session_pr_context::Capture;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
@@ -24,20 +25,21 @@ pub(super) fn record_codex_resume_metadata_if_needed(
         return Ok(());
     }
 
-    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
-    if let Some(mut session) = session_lock.load()? {
-        if apply_resume_metadata(&mut session, &ancestor_session_ids, launched_with_vibe) {
-            session_lock.save(&session)?;
-        }
-        return Ok(());
-    }
-
-    drop(session_lock);
-    let pr_context = capture_pr_context.and_then(|capture| capture(cwd));
-
-    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let initialized = session_init::load_or_capture(
+        sessions_dir,
+        session_id,
+        cwd,
+        |cwd| capture_pr_context.and_then(|capture| capture(cwd)),
+        || false,
+    )?;
+    let session_init::InitializedSession {
+        lock: session_lock,
+        existing_session,
+        pr_context,
+        ..
+    } = initialized;
     let now = Utc::now();
-    let mut session = session_lock.load()?.unwrap_or_else(|| Session {
+    let mut session = existing_session.unwrap_or_else(|| Session {
         archived_at: None,
         pr_context,
         session_id: session_id.to_string(),
