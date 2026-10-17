@@ -32,13 +32,13 @@ fn adopt_in(sessions_dir: &Path, caller_id: &str, target_id: &str, force: bool) 
         return Err(CcError::CannotAdoptSelf(target_id.to_string()).into());
     }
 
+    let lock = store::lock_session_for_update(sessions_dir, target_id)?;
     let caller = store::load_session_from(sessions_dir, caller_id)?
         .ok_or_else(|| CcError::SessionNotFound(caller_id.to_string()))?;
     if has_ancestor(sessions_dir, &caller, caller_id, target_id)? {
         return Err(CcError::CannotAdoptAncestor(target_id.to_string()).into());
     }
 
-    let lock = store::lock_session_for_update(sessions_dir, target_id)?;
     let mut target = lock
         .load()?
         .ok_or_else(|| CcError::SessionNotFound(target_id.to_string()))?;
