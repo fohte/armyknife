@@ -19,7 +19,7 @@ use crate::commands::agent::codex_queue;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, SessionStatus};
+use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::shared::env_var::EnvVars;
 use crate::shared::sanitize::strip_angle_brackets;
 
@@ -56,14 +56,21 @@ pub enum Delivery {
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
-    let session_id = resolve_target_session_id(args, || {
-        super::resolve_parent_session().map(|session| session.session_id)
-    })?;
+    run_with(args, super::resolve_parent_session, notify)
+}
+
+fn run_with(
+    args: &NotifyArgs,
+    resolve_parent: impl FnOnce() -> Result<Session>,
+    deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
+) -> Result<()> {
+    let session_id =
+        resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
     let (from, from_engine_hint) = match resolve_sender() {
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
-    let delivery = notify(
+    let delivery = deliver(
         &session_id,
         &args.message,
         from.as_deref(),
@@ -286,7 +293,46 @@ fn notify_readiness(status: SessionStatus) -> NotifyReadiness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
     use rstest::rstest;
+    use std::path::PathBuf;
+
+    use crate::commands::agent::types::TmuxInfo;
+
+    fn session(session_id: &str, cwd: &str, ancestor_session_ids: Vec<String>) -> Session {
+        Session {
+            pr_context: None,
+            session_id: session_id.to_string(),
+            work_type: None,
+            work_type_pinned: false,
+            vibe_enabled: false,
+            launched_with_vibe: false,
+            is_delegated: false,
+            crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
+            cwd: PathBuf::from(cwd),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None::<TmuxInfo>,
+            status: SessionStatus::Running,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids,
+            pending_bg_task_ids: Default::default(),
+            pending_agent_task_ids: Default::default(),
+            pending_permission_agent_ids: Default::default(),
+            pending_permission_request_ids: Default::default(),
+            read_at: None,
+            sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
+            agent_status: None,
+            agent_status_clear_pending: false,
+            engine: Engine::Claude,
+        }
+    }
 
     #[rstest]
     #[case::same_session(
@@ -327,6 +373,82 @@ mod tests {
         assert_eq!(
             result.map_err(|error| error.to_string()),
             Err("Cannot notify your own session 'session-a'".to_string()),
+        );
+    }
+
+    #[test]
+    fn parent_target_is_delivered_to_the_notifier() {
+        use clap::Parser;
+
+        let cache_dir = tempfile::tempdir().expect("cache directory should be created");
+        let cache_home = cache_dir.path().to_string_lossy().to_string();
+        let sessions_dir = cache_dir.path().join("armyknife/cc/sessions");
+        let child = session(
+            "child-session",
+            cache_dir
+                .path()
+                .to_str()
+                .expect("temporary path should be UTF-8"),
+            vec!["root-session".to_string(), "parent-session".to_string()],
+        );
+        let parent = session(
+            "parent-session",
+            cache_dir
+                .path()
+                .to_str()
+                .expect("temporary path should be UTF-8"),
+            vec![],
+        );
+        store::save_session_to(&sessions_dir, &child).expect("child session should be saved");
+        store::save_session_to(&sessions_dir, &parent).expect("parent session should be saved");
+
+        let cli = crate::cli::Cli::try_parse_from([
+            "a", "agent", "peer", "notify", "--parent", "-m", "hello",
+        ])
+        .expect("parent notification arguments should parse");
+        let crate::cli::Commands::Agent(crate::commands::agent::AgentCommands::Peer(
+            super::super::PeerCommands::Notify(args),
+        )) = cli.command
+        else {
+            panic!("CLI should parse a peer notify command");
+        };
+        let mut deliveries = Vec::new();
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home.as_str())),
+                ("ARMYKNIFE_SESSION_ID", Some("child-session")),
+                ("CODEX_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
+            ],
+            || {
+                run_with(
+                    &args,
+                    super::super::resolve_parent_session,
+                    |target, message, from, engine| {
+                        deliveries.push((
+                            target.to_string(),
+                            message.to_string(),
+                            from.map(str::to_string),
+                            engine,
+                        ));
+                        Ok(Delivery::Sent)
+                    },
+                )
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), deliveries),
+            (
+                Ok(()),
+                vec![(
+                    "parent-session".to_string(),
+                    "hello".to_string(),
+                    Some("child-session".to_string()),
+                    None,
+                )],
+            ),
         );
     }
 
