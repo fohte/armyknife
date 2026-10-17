@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.436](https://github.com/fohte/armyknife/compare/v0.1.435...v0.1.436) (2026-10-17)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** require new issue approval ([#1207](https://github.com/fohte/armyknife/issues/1207)) ([8538532](https://github.com/fohte/armyknife/commit/8538532d2faf6ef7e1cba08cbbca42044f8f9b56))
+
 ## [0.1.435](https://github.com/fohte/armyknife/compare/v0.1.434...v0.1.435) (2026-10-17)
 
 
