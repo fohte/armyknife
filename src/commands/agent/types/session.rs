@@ -52,7 +52,8 @@ pub struct Session {
     /// When true, this session explicitly enabled vibe mode.
     #[serde(default, skip_serializing_if = "is_false")]
     pub vibe_enabled: bool,
-    /// Whether this session was launched with `a agent new --vibe`.
+    /// Whether this session inherits vibe mode from an enabled ancestor.
+    /// Set by `a agent new --vibe` or `a agent vibe grant`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub launched_with_vibe: bool,
     /// When true, hook-detected skills cannot replace the `a agent new --kind` value.

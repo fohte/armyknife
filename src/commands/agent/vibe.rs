@@ -6,14 +6,19 @@ use super::store;
 use crate::shared::config::Config;
 use crate::shared::env_var::EnvVars;
 
-#[derive(Subcommand, Clone, Copy, PartialEq, Eq)]
+#[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum VibeCommands {
     /// Enable vibe mode for the calling session
     On,
     /// Clear the calling session's explicit vibe setting; inherited settings still apply
     Off,
-    /// Check whether this session enabled vibe mode or inherited it via `--vibe`
+    /// Check whether this session enabled vibe mode or inherited it from an ancestor
     Status,
+    /// Grant vibe inheritance to an existing descendant session
+    Grant {
+        /// ID of the descendant session
+        session_id: String,
+    },
 }
 
 pub fn run(command: &VibeCommands) -> Result<()> {
@@ -28,10 +33,11 @@ pub fn run(command: &VibeCommands) -> Result<()> {
                 bail!("Vibe mode is not enabled.")
             }
         }
+        VibeCommands::Grant { session_id } => grant(session_id),
     }
 }
 
-/// Returns whether the calling session enabled vibe mode or inherited it through `--vibe`.
+/// Returns whether the calling session enabled vibe mode or inherited it from an ancestor.
 ///
 /// An ancestor's flag is inherited only while its session record exists. Returns `false` outside a tracked
 /// session or when the caller's session record is missing.
@@ -87,6 +93,42 @@ fn set(enabled: bool) -> Result<()> {
     } else {
         println!("Vibe mode disabled.");
     }
+    Ok(())
+}
+
+fn grant(target_session_id: &str) -> Result<()> {
+    let caller_session_id = EnvVars::load()
+        .own_session_id()
+        .ok_or(CcError::SelfSessionUnknown)?;
+    let sessions_dir = store::sessions_dir()?;
+    if !is_vibe_enabled_for(&sessions_dir, &caller_session_id)? {
+        bail!("Vibe mode is not enabled for the calling session.");
+    }
+
+    grant_in(&sessions_dir, &caller_session_id, target_session_id)?;
+    println!("Vibe mode granted to session '{target_session_id}'.");
+    Ok(())
+}
+
+fn grant_in(
+    sessions_dir: &std::path::Path,
+    caller_session_id: &str,
+    target_session_id: &str,
+) -> Result<()> {
+    let lock = store::lock_session_for_update(sessions_dir, target_session_id)?;
+    let mut session = lock
+        .load()?
+        .ok_or_else(|| CcError::SessionNotFound(target_session_id.to_string()))?;
+    if !session
+        .ancestor_session_ids
+        .iter()
+        .any(|ancestor_id| ancestor_id == caller_session_id)
+    {
+        bail!("Session '{caller_session_id}' is not an ancestor of '{target_session_id}'.");
+    }
+
+    session.launched_with_vibe = true;
+    lock.save(&session)?;
     Ok(())
 }
 
@@ -177,6 +219,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vibe_grant_command_parses_a_session_id_from_the_cli() {
+        let cli = Cli::try_parse_from(["a", "agent", "vibe", "grant", "child-session"])
+            .expect("vibe grant command should parse");
+        let actual_session_id = match cli.command {
+            Commands::Agent(super::super::AgentCommands::Vibe(VibeCommands::Grant {
+                session_id,
+            })) => Some(session_id),
+            _ => None,
+        };
+
+        assert_eq!(actual_session_id, Some("child-session".to_string()));
+    }
+
     #[rstest]
     #[case::allowed(
         indoc! {"
@@ -229,6 +285,116 @@ mod tests {
         let actual = (enabled, disabled, child_enabled, root_enabled);
 
         assert_eq!(actual, (true, false, true, false));
+    }
+
+    #[rstest]
+    #[case::caller_enabled_directly(false)]
+    #[case::caller_inherits_from_ancestor(true)]
+    fn vibe_enabled_ancestor_can_grant_an_existing_descendant(
+        test_store: TestStore,
+        #[case] caller_inherits_vibe: bool,
+    ) {
+        let mut caller = session(
+            "caller-session",
+            if caller_inherits_vibe {
+                &["root-session"]
+            } else {
+                &[]
+            },
+            !caller_inherits_vibe,
+        );
+        caller.launched_with_vibe = caller_inherits_vibe;
+        let child_ancestors = if caller_inherits_vibe {
+            &["root-session", "caller-session"][..]
+        } else {
+            &["caller-session"][..]
+        };
+        let child = session("child-session", child_ancestors, false);
+        if caller_inherits_vibe {
+            let root = session("root-session", &[], true);
+            store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
+        }
+        store::save_session_to(&test_store.sessions_dir, &caller).expect("caller should save");
+        store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
+        let cache_home = test_store
+            .cache_home
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+
+        let grant_result = with_session_env(cache_home, Some("caller-session"), || {
+            run(&VibeCommands::Grant {
+                session_id: "child-session".to_string(),
+            })
+            .map_err(|error| error.to_string())
+        });
+        let status_result = with_session_env(cache_home, Some("child-session"), || {
+            run(&VibeCommands::Status).map_err(|error| error.to_string())
+        });
+        let saved_child = store::load_session_from(&test_store.sessions_dir, "child-session")
+            .expect("child should load")
+            .map(|session| serde_json::to_value(session).expect("child should serialize"));
+        let mut expected_child = child;
+        expected_child.launched_with_vibe = true;
+        let expected_child =
+            Some(serde_json::to_value(expected_child).expect("expected child should serialize"));
+
+        assert_eq!(
+            (grant_result, status_result, saved_child),
+            (Ok(()), Ok(()), expected_child),
+        );
+    }
+
+    #[rstest]
+    #[case::caller_is_not_an_ancestor(
+        true,
+        false,
+        true,
+        "Session 'caller-session' is not an ancestor of 'child-session'."
+    )]
+    #[case::caller_vibe_is_disabled(
+        false,
+        true,
+        true,
+        "Vibe mode is not enabled for the calling session."
+    )]
+    #[case::target_session_is_missing(true, true, false, "Session not found: child-session")]
+    fn invalid_vibe_grants_fail_without_changing_the_target(
+        test_store: TestStore,
+        #[case] caller_vibe_enabled: bool,
+        #[case] caller_is_ancestor: bool,
+        #[case] target_exists: bool,
+        #[case] expected_error: &str,
+    ) {
+        let caller = session("caller-session", &[], caller_vibe_enabled);
+        let ancestors = if caller_is_ancestor {
+            &["caller-session"][..]
+        } else {
+            &["other-session"][..]
+        };
+        let target = session("child-session", ancestors, false);
+        store::save_session_to(&test_store.sessions_dir, &caller).expect("caller should save");
+        if target_exists {
+            store::save_session_to(&test_store.sessions_dir, &target).expect("child should save");
+        }
+        let cache_home = test_store
+            .cache_home
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+        let before = store::load_session_from(&test_store.sessions_dir, "child-session")
+            .expect("child should load")
+            .map(|session| serde_json::to_value(session).expect("child should serialize"));
+
+        let result = with_session_env(cache_home, Some("caller-session"), || {
+            run(&VibeCommands::Grant {
+                session_id: "child-session".to_string(),
+            })
+            .map_err(|error| error.to_string())
+        });
+        let after = store::load_session_from(&test_store.sessions_dir, "child-session")
+            .expect("child should load")
+            .map(|session| serde_json::to_value(session).expect("child should serialize"));
+
+        assert_eq!((result, after), (Err(expected_error.to_string()), before));
     }
 
     #[rstest]
