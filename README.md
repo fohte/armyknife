@@ -424,6 +424,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `resurrect restore`                                 |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
 | `peer parent`                                       |         | List the session that delegated to this one, if any (JSON)                                  |
 | `peer children`                                     |         | List the sessions this one delegated to (JSON)                                              |
+| `peer adopt <session_id> [--force]`                 |         | Adopt an existing session as a direct child                                                 |
 | `peer list [-R <repo>]`                             |         | List tracked sessions, with their SendMessage names (JSON)                                  |
 | `peer me`                                           |         | Print the session running in the caller's own tmux pane (JSON)                              |
 | `peer wake <session_id>`                            |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
@@ -699,6 +700,15 @@ $ a agent peer parent | jq -r '.[0].name // empty'
 myproject-4f
 $ a agent peer list -R myproject
 [{"name":"myproject-9c","session_id":"2222...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-x","label":"fix login bug","status":"running","pane_id":"%7","engine":"claude"},{"name":null,"session_id":"3333...","cwd":"/Users/example/ghq/github.com/example/myproject/.worktrees/feature-y","label":null,"status":"stopped","pane_id":null,"engine":"codex"}]
+```
+
+Run `a agent peer adopt <session_id>` from a tracked Claude Code or Codex session to make an existing session its direct child. The command updates the target's `ancestor_session_ids` to the caller's ancestors followed by the caller, so `peer children` lists it and `a agent close --child <session_id>` accepts it. It prints nothing on success; list the adopted session with `peer children`. If the target already is a direct child, the command succeeds without writing. It refuses a missing or Ended target, the calling session itself, and any of the caller's ancestors because those would create a cycle. A target whose current parent record exists and is not Ended requires `--force`; a missing or Ended current parent does not. Adoption clears the target's inherited vibe marker, so an enabled ancestor must explicitly grant it again with `a agent vibe grant <session_id>`.
+
+```console
+$ a agent peer adopt session-x
+$ a agent peer children | jq -r '.[].session_id'
+session-x
+$ a agent peer adopt session-y --force
 ```
 
 `a agent peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-agent-session-id` user option (see above), the same mechanism `a agent resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a agent peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a agent sweep`).
