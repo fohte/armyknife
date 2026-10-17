@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.437](https://github.com/fohte/armyknife/compare/v0.1.436...v0.1.437) (2026-10-17)
+
+
+### Features
+
+* **agent/new:** add a pre-session-start hook ([#1209](https://github.com/fohte/armyknife/issues/1209)) ([1a45a53](https://github.com/fohte/armyknife/commit/1a45a53723bd5f6114ac54f07bbe18ed2e92b6be))
+
 ## [0.1.436](https://github.com/fohte/armyknife/compare/v0.1.435...v0.1.436) (2026-10-17)
 
 
