@@ -452,7 +452,7 @@
       "additionalProperties": false
     },
     "Engine": {
-      "description": "Which coding agent CLI hosts a session. Determines the process name to\nlook for in a tmux pane, and which binary/subcommand `a agent new` /\n`a agent resume` launch. Defaults to `Claude` (`#[serde(default)]` on\n`Session::engine`) so on-disk session files predating this field, and\nhook invocations that don't pass `--engine`, keep behaving exactly as\nbefore Codex support existed.",
+      "description": "Which coding agent CLI hosts a session. Determines the process name to\nlook for in a tmux pane, and which binary/subcommand `a agent new` /\n`a agent resume` launch. Defaults to `Claude` (`#[serde(default)]` on\n`Session::engine`) so stored session records predating this field, and\nhook invocations that don't pass `--engine`, keep behaving exactly as\nbefore Codex support existed.",
       "type": "string",
       "enum": [
         "claude",
