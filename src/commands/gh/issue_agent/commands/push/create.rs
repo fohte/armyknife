@@ -11,7 +11,7 @@ use crate::commands::gh::issue_agent::models::{
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
 use crate::infra::github::GitHubClient;
-use crate::shared::human_in_the_loop::{ApprovalManager, HumanInTheLoopError};
+use crate::shared::human_in_the_loop::ApprovalManager;
 
 /// Run create for new issue.
 pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
@@ -53,17 +53,7 @@ pub async fn run_create_with_client(
     }
 
     let approval = ApprovalManager::new(&issue_md_path);
-    if let Err(error) = approval.verify() {
-        match error {
-            HumanInTheLoopError::NotApproved | HumanInTheLoopError::ModifiedAfterApproval => {
-                anyhow::bail!(
-                    "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
-                    issue_md_path.display()
-                );
-            }
-            other => return Err(other.into()),
-        }
-    }
+    super::verify_approval_paths(std::slice::from_ref(&issue_md_path))?;
 
     // Create issue on GitHub
     println!();
@@ -79,6 +69,8 @@ pub async fn run_create_with_client(
             new_issue.assignees(),
         )
         .await?;
+    // Creating an issue is not idempotent, so consume approval before local steps can fail.
+    let _ = approval.remove();
 
     let issue_number = u64::try_from(created.number)
         .map_err(|_| anyhow::anyhow!("Invalid issue number returned: {}", created.number))?;
@@ -151,8 +143,6 @@ pub async fn run_create_with_client(
              Run 'pull --force {issue_number}' to refresh local state."
         );
     }
-
-    let _ = approval.remove();
 
     // Success message
     println!();
@@ -450,6 +440,63 @@ mod tests {
                 )
             );
             assert!(new_dir.exists());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_create_issue_consumes_approval_after_remote_create() {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    title: Existing Directory Conflict
+                    submit: true
+                    ---
+
+                    Body.
+                "},
+            );
+            let issue_md_path = new_dir.join("issue.md");
+            crate::commands::gh::issue_agent::commands::test_helpers::approve_file(&issue_md_path);
+
+            let issue_dir = new_dir.parent().unwrap().join("42");
+            std::fs::create_dir_all(&issue_dir).unwrap();
+
+            let mock = GitHubMockServer::start().await;
+            mock.repo("owner", "repo")
+                .issue(42)
+                .title("Existing Directory Conflict")
+                .body("Body.\n")
+                .labels(vec![])
+                .create()
+                .await;
+
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+            let retry_result = run_create_with_client(&args, new_dir, &client).await;
+
+            assert_eq!(
+                (
+                    result.unwrap_err().to_string(),
+                    retry_result.unwrap_err().to_string(),
+                    ApprovalManager::new(&issue_md_path).exists(),
+                ),
+                (
+                    format!(
+                        "Issue #42 created on GitHub, but directory '{}' already exists locally. \
+                         Remove or rename it, then run 'pull 42' to fetch the issue.",
+                        issue_dir.display()
+                    ),
+                    format!(
+                        "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+                        issue_md_path.display()
+                    ),
+                    false,
+                )
+            );
         }
 
         #[rstest]

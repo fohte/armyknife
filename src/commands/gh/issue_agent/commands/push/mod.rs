@@ -270,9 +270,13 @@ fn collect_approval_paths(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> Vec<
 /// Verify that all changed files have been approved via `a gh issue-agent review`.
 fn verify_changeset_approval(changeset: &ChangeSet<'_>, ctx: &IssueContext) -> anyhow::Result<()> {
     let paths = collect_approval_paths(changeset, ctx);
+    verify_approval_paths(&paths)
+}
+
+pub(super) fn verify_approval_paths(paths: &[PathBuf]) -> anyhow::Result<()> {
     let mut unapproved = Vec::new();
 
-    for path in &paths {
+    for path in paths {
         let manager = ApprovalManager::new(path);
         if let Err(e) = manager.verify() {
             use crate::shared::human_in_the_loop::HumanInTheLoopError;
