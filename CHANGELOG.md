@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.433](https://github.com/fohte/armyknife/compare/v0.1.432...v0.1.433) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** extend Codex startup wait to 10 min ([#1201](https://github.com/fohte/armyknife/issues/1201)) ([baf33e3](https://github.com/fohte/armyknife/commit/baf33e3f59ad3d42e3055e773689c8b94098931c))
+
 ## [0.1.432](https://github.com/fohte/armyknife/compare/v0.1.431...v0.1.432) (2026-10-17)
 
 
