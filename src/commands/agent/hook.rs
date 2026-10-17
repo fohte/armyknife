@@ -32,6 +32,7 @@ mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
 mod prompt_skill;
+mod session_init;
 mod session_lifecycle;
 mod side_effects;
 mod stop;
@@ -381,29 +382,32 @@ fn process_hook_event_impl_with_instruction(
     // `pending_permission_agent_ids` entry. `last_message` is deliberately
     // saved separately, after this lock is released -- see the comment at
     // its update below.
-    let mut session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
-    let mut existing_session = session_lock.load()?;
-    let mut pr_context = None;
-    let mut work_type_pinned = false;
-    if existing_session.is_none() {
-        // Git and tmux can block, so query them outside SQLite's writer transaction.
-        drop(session_lock);
-        pr_context = side_effects
-            .capture_pr_context
-            .and_then(|capture| capture(&input.cwd));
-        work_type_pinned = env.session_work_type.is_some()
-            && input.source.as_deref() != Some("clear")
-            && tmux_info.as_ref().is_none_or(|info| {
-                !pane_binding::has_other_session_on_pane(
-                    sessions_dir,
-                    &input.session_id,
-                    &info.pane_id,
-                )
-            });
-        session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
-        existing_session = session_lock.load()?;
-    }
+    let initialized = session_init::load_or_capture(
+        sessions_dir,
+        &input.session_id,
+        &input.cwd,
+        |cwd| {
+            side_effects
+                .capture_pr_context
+                .and_then(|capture| capture(cwd))
+        },
+        || {
+            env.session_work_type.is_some()
+                && input.source.as_deref() != Some("clear")
+                && tmux_info.as_ref().is_none_or(|info| {
+                    !pane_binding::has_other_session_on_pane(
+                        sessions_dir,
+                        &input.session_id,
+                        &info.pane_id,
+                    )
+                })
+        },
+    )?;
+    let session_lock = initialized.lock;
+    let existing_session = initialized.existing_session;
+    let pr_context = initialized.pr_context;
+    let work_type_pinned = initialized.work_type_pinned;
     let mut session = existing_session.unwrap_or_else(|| {
         let ancestor_session_ids = env
             .ancestor_session_ids
