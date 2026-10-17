@@ -435,6 +435,8 @@ if a agent vibe status >/dev/null 2>&1; then
 fi
 ```
 
+A non-delegated session also enables the marker when its main-thread user prompt starts with `/enable-vibe-coding` in Claude Code or `$enable-vibe-coding` in Codex.
+
 Run `a agent vibe on` in a tracked session to enable the marker. A descendant inherits it only when it was launched with `a agent new --vibe`, and only while an ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's own marker; a session launched with `--vibe` continues to inherit an active ancestor marker. Run `off` in the enabling session to disable vibe mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.

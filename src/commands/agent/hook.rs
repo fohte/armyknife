@@ -31,6 +31,7 @@ use crate::shared::log::short_run_id;
 mod background_tasks;
 mod pane_binding;
 pub(super) mod permission_notification;
+mod prompt_skill;
 mod session_lifecycle;
 mod side_effects;
 mod stop;
