@@ -194,6 +194,39 @@ async fn test_updates_labels(test_dir: TempDir) {
 
 #[rstest]
 #[tokio::test]
+async fn test_no_op_push_preserves_remote_only_edit_and_snapshot(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_labels(vec!["remote-label"])
+        .build()
+        .await;
+    storage
+        .save_issue(&issue_frontmatter("Title", &["bug"]), "Body")
+        .unwrap();
+    remove_issue_approval(&storage);
+    let expected_issue = storage.read_issue().unwrap();
+    let expected_base = storage.read_base_issue().unwrap();
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    assert_eq!(
+        (
+            result,
+            storage.read_issue().unwrap(),
+            storage.read_base_issue().unwrap(),
+        ),
+        (Ok(()), expected_issue, expected_base),
+    );
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_remote_label_change_is_preserved_when_pushing_comment(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_labels(vec!["remote-label"])

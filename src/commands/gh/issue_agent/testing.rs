@@ -90,30 +90,13 @@ pub mod factories {
         }
     }
 
-    /// Create a saved issue content fixture from editable field values.
-    pub fn issue_content_with_fields(
-        title: &str,
-        body: &str,
-        label_names: &[&str],
-        parent_issue_number: Option<i64>,
-        sub_issue_numbers: &[i64],
-    ) -> IssueContent {
-        let issue = issue_with_fields(
-            title,
-            body,
-            label_names,
-            parent_issue_number,
-            sub_issue_numbers,
-        );
-        IssueContent {
-            frontmatter: IssueFrontmatter::from_issue(&issue),
-            body: body.to_string(),
-        }
-    }
-
     /// Create the shared baseline fixture used by issue-agent push tests.
     pub fn base_issue_content() -> IssueContent {
-        issue_content_with_fields("Base title", "Base body", &["base-label"], Some(10), &[11])
+        let issue = issue_with_fields("Base title", "Base body", &["base-label"], Some(10), &[11]);
+        IssueContent {
+            frontmatter: IssueFrontmatter::from_issue(&issue),
+            body: "Base body".to_string(),
+        }
     }
 
     // =========================================================================
