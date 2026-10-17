@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.434](https://github.com/fohte/armyknife/compare/v0.1.433...v0.1.434) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** keep status on non-main events ([#1203](https://github.com/fohte/armyknife/issues/1203)) ([c32760f](https://github.com/fohte/armyknife/commit/c32760f68e9a44dabba83c02e0fd659cbb511b20))
+
 ## [0.1.433](https://github.com/fohte/armyknife/compare/v0.1.432...v0.1.433) (2026-10-17)
 
 
