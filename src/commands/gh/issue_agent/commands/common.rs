@@ -147,7 +147,7 @@ pub fn print_fetch_success(issue_number: u64, title: &str, dir: &Path) {
         dir.display()
     );
     eprintln!(
-        "  {}/.issue.base.md   - Last saved issue snapshot (managed)",
+        "  {}/.issue.base.md    - Last saved issue snapshot (managed)",
         dir.display()
     );
     eprintln!(
