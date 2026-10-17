@@ -136,6 +136,13 @@ fn run_parent() -> Result<()> {
     print_peers(&filter_parent(&sessions, session))
 }
 
+pub(super) fn resolve_parent_session() -> Result<Session> {
+    let self_id = current_session_id()?;
+    store::cleanup_stale_sessions()?;
+    let sessions = store::list_sessions()?;
+    Ok(resolve_parent_in_sessions(&sessions, &self_id)?.clone())
+}
+
 fn run_children() -> Result<()> {
     let self_id = current_session_id()?;
     store::cleanup_stale_sessions()?;
@@ -176,13 +183,25 @@ fn find_session_by_id<'a>(sessions: &'a [Session], self_id: &str) -> Result<&'a 
 /// containing zero entries (no parent tracked, or the tracked parent is no
 /// longer in `sessions`) or one.
 fn filter_parent<'a>(sessions: &'a [Session], session: &Session) -> Vec<&'a Session> {
+    find_tracked_parent(sessions, session).into_iter().collect()
+}
+
+fn find_tracked_parent<'a>(sessions: &'a [Session], session: &Session) -> Option<&'a Session> {
+    let parent_id = session.ancestor_session_ids.last()?;
+    sessions.iter().find(|s| &s.session_id == parent_id)
+}
+
+fn resolve_tracked_parent<'a>(sessions: &'a [Session], session: &Session) -> Result<&'a Session> {
     let Some(parent_id) = session.ancestor_session_ids.last() else {
-        return Vec::new();
+        return Err(CcError::NoTrackedParent.into());
     };
-    sessions
-        .iter()
-        .filter(|s| &s.session_id == parent_id)
-        .collect()
+    find_tracked_parent(sessions, session)
+        .ok_or_else(|| CcError::ParentSessionNotTracked(parent_id.clone()).into())
+}
+
+fn resolve_parent_in_sessions<'a>(sessions: &'a [Session], self_id: &str) -> Result<&'a Session> {
+    let session = find_session_by_id(sessions, self_id)?;
+    resolve_tracked_parent(sessions, session)
 }
 
 /// Sessions whose nearest ancestor (immediate parent) is `self_id`.
@@ -382,6 +401,62 @@ mod tests {
                 .map(|s| s.session_id.as_str())
                 .collect::<Vec<_>>(),
             expected_ids
+        );
+    }
+
+    #[rstest]
+    #[case::returns_the_tracked_parent(
+        vec!["root-session".to_string(), "parent-session".to_string()],
+        "child-session",
+        Ok("parent-session")
+    )]
+    #[case::errors_when_no_parent_is_recorded(
+        vec![],
+        "child-session",
+        Err("No tracked parent session is recorded for the current session")
+    )]
+    #[case::errors_when_parent_is_not_tracked(
+        vec!["root-session".to_string(), "missing-parent".to_string()],
+        "child-session",
+        Err("Parent session 'missing-parent' is not in the tracked session list")
+    )]
+    #[case::errors_when_current_session_is_not_tracked(
+        vec!["root-session".to_string(), "parent-session".to_string()],
+        "missing-child",
+        Err("Session not found: missing-child")
+    )]
+    fn resolve_parent_in_sessions_cases(
+        #[case] ancestor_session_ids: Vec<String>,
+        #[case] self_id: &str,
+        #[case] expected: std::result::Result<&str, &str>,
+    ) {
+        let sessions = vec![
+            session("parent-session", "/repo", vec![]),
+            session("child-session", "/repo", ancestor_session_ids),
+        ];
+
+        let actual = resolve_parent_in_sessions(&sessions, self_id)
+            .map(|parent| parent.session_id.as_str())
+            .map_err(|error| error.to_string());
+
+        assert_eq!(actual, expected.map_err(str::to_string));
+    }
+
+    #[test]
+    fn resolve_parent_session_errors_when_current_session_id_is_unknown() {
+        let result = temp_env::with_vars(
+            [
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            resolve_parent_session,
+        );
+
+        assert_eq!(
+            result
+                .map(|session| session.session_id)
+                .map_err(|error| error.to_string()),
+            Err("Neither ARMYKNIFE_SESSION_ID nor CODEX_SESSION_ID is set (not running inside an armyknife-tracked session)".to_string()),
         );
     }
 

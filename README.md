@@ -414,6 +414,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `peer me`                                           |         | Print the session running in the caller's own tmux pane (JSON)                              |
 | `peer wake <session_id>`                            |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
 | `peer notify <session_id> -m <text>`                |         | Send a message to another session (SendMessage socket / Codex app-server)                   |
+| `peer notify --parent -m <text>`                    |         | Send a message to the session that delegated to this one                                    |
 | `crit add <url>`                                    |         | Associate a crit review with the calling session                                            |
 | `crit open [--session <id> \| --pane <pane_id>]`    |         | Toggle the latest associated review in a tmux floating pane                                 |
 | `bg run -- <cmd> [args...]`                         |         | Run a command detached and notify this session when it finishes                             |
@@ -701,7 +702,7 @@ $ a agent peer wake 1111...
 myproject-7e
 ```
 
-`a agent peer notify <session_id> -m <text>` delivers a message to a Claude Code session's `SendMessage` socket directly (for a Codex target, see below), without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. When the caller's session ID is known, it refuses to notify that same session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
+`a agent peer notify <session_id> -m <text>` delivers a message to a Claude Code session's `SendMessage` socket directly (for a Codex target, see below), without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. Use `--parent` instead of `<session_id>` to send to the session that delegated to the caller; the current session and its recorded parent must both be tracked. When the caller's session ID is known, it refuses to notify that same session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
 
 For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If the app-server is unavailable, the thread belongs to an embedded app-server, or the server rejects the request, `notify` falls back to `codex queue --thread <session_id>` and prints the direct-delivery failure. The fallback requires `codex` in `PATH` with the target's `$CODEX_HOME`. A queued message is not delivered yet: the running `codex` polls about every 10 seconds and can start it only after the current turn finishes and the thread is idle. If both direct delivery and queueing fail, the command returns both errors. A `Paused` Codex target is resumed before delivery is attempted; if its thread is not registered yet, the resumed `codex` picks up the queued message when it loads the thread.
 
@@ -709,6 +710,7 @@ For a Codex target (see `engine` above), direct delivery requires the persistent
 
 ```console
 $ a agent peer notify 1111... -m "PR merged, worktree cleaned up"
+$ a agent peer notify --parent -m "The delegated work is complete"
 ```
 
 #### tmux-resurrect integration

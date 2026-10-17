@@ -28,6 +28,12 @@ pub enum CcError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
+    #[error("No tracked parent session is recorded for the current session")]
+    NoTrackedParent,
+
+    #[error("Parent session '{0}' is not in the tracked session list")]
+    ParentSessionNotTracked(String),
+
     #[error("Cannot notify your own session '{0}'")]
     SelfNotify(String),
 
