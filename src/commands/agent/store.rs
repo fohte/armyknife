@@ -7,7 +7,7 @@ use std::{cell::RefCell, collections::HashSet};
 #[cfg(test)]
 use std::collections::HashMap;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 
 use super::error::CcError;
@@ -559,8 +559,9 @@ fn read_all_sessions_from(dir: &Path) -> Result<Vec<Session>> {
 
     let mut sessions = Vec::new();
 
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
+    let entries =
+        fs::read_dir(dir).with_context(|| format!("reading sessions dir {}", dir.display()))?;
+    for entry in entries.flatten() {
         let path = entry.path();
 
         if path.extension().is_some_and(|ext| ext == "json")
