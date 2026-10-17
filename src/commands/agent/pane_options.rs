@@ -18,12 +18,10 @@ pub(crate) fn tmux_option_commands(
         .and_then(|session| session.work_type.as_deref())
         .and_then(|work_type| config.work_type(work_type))
         .map(|config| format!("#[fg={}]{}", tmux_color(config.color), config.icon));
-    let agent_status_kind = session.and_then(|session| {
-        session
-            .agent_status
-            .as_ref()
-            .map(|status| status.kind.as_str())
-    });
+    let agent_status_kind = session
+        .filter(|session| session.status != SessionStatus::Ended)
+        .and_then(|session| session.agent_status.as_ref())
+        .map(|status| status.kind.as_str());
 
     vec![
         tmux::pane_option_command(pane_id, TMUX_CC_PANE_STATUS_OPTION, status.as_deref()),
@@ -258,6 +256,14 @@ mod tests {
         #[case] status: SessionStatus,
         #[case] work_type: Option<&str>,
     ) {
+        let mut session = session(status, work_type);
+        if status == SessionStatus::Ended {
+            session.agent_status = Some(AgentStatus {
+                kind: "handoff_required".to_string(),
+                note: "continue elsewhere".to_string(),
+            });
+        }
+
         let expected_status = if status == SessionStatus::Ended {
             vec![
                 "set-option",
@@ -307,7 +313,7 @@ mod tests {
         assert_eq!(
             tmux_option_commands(
                 "%42",
-                Some(&session(status, work_type)),
+                Some(&session),
                 &config_with_work_type(AgentWorkTypeColor::Rgb([12, 34, 56])),
             ),
             vec![

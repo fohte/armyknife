@@ -844,12 +844,12 @@ set -g window-status-format '#{@armyknife-cc-window-status}#I:#{?#{@armyknife-cc
 
 #### Pane border metadata
 
-`a agent hook` writes the session status to the pane-scoped `@armyknife-cc-pane-status` option and the configured work type icon and foreground color to `@armyknife-cc-pane-work-type`. The status option is unset when the session ends; the work type option is unset when no configured work type applies. `a agent watch` also writes a linked tq task to `@armyknife-tq-task` as `##1234 Example task` (the doubled `#` is required by tmux format parsing), and sets `@armyknife-tq-closed` to `1` only for completed tasks. These tq options refresh when `a agent watch` fetches task data.
+`a agent hook` writes the session status to the pane-scoped `@armyknife-cc-pane-status` option, the agent status kind to `@armyknife-agent-status-kind`, and the configured work type icon and foreground color to `@armyknife-cc-pane-work-type`. The status and status-kind options are unset when the session ends; the status-kind option is also unset when no kind is set. The work type option is unset when no configured work type applies. `a agent watch` also writes a linked tq task to `@armyknife-tq-task` as `##1234 Example task` (the doubled `#` is required by tmux format parsing), and sets `@armyknife-tq-closed` to `1` only for completed tasks. These tq options refresh when `a agent watch` fetches task data.
 
 Reference the options from tmux's `pane-border-format` to display them in the pane border:
 
 ```tmux
-set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-cc-pane-work-type} #{@armyknife-tq-task}'
+set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-agent-status-kind}#{@armyknife-cc-pane-work-type} #{@armyknife-tq-task}'
 ```
 
 #### Pane has-paused flag
