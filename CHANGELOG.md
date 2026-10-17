@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.439](https://github.com/fohte/armyknife/compare/v0.1.438...v0.1.439) (2026-10-17)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** preserve remote edits ([#1212](https://github.com/fohte/armyknife/issues/1212)) ([a7f7941](https://github.com/fohte/armyknife/commit/a7f7941ab9a3a12ff5189fa3c5fc5ee21a8c26d1))
+
 ## [0.1.438](https://github.com/fohte/armyknife/compare/v0.1.437...v0.1.438) (2026-10-17)
 
 
