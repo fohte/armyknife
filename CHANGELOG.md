@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.438](https://github.com/fohte/armyknife/compare/v0.1.437...v0.1.438) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** archive stale session records ([#1211](https://github.com/fohte/armyknife/issues/1211)) ([dc177a9](https://github.com/fohte/armyknife/commit/dc177a9e62f9c71924a3992437894a1aa91676bf))
+
 ## [0.1.437](https://github.com/fohte/armyknife/compare/v0.1.436...v0.1.437) (2026-10-17)
 
 
