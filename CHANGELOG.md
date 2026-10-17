@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.429](https://github.com/fohte/armyknife/compare/v0.1.428...v0.1.429) (2026-10-17)
+
+
+### Features
+
+* **agent:** allow notifying the parent session ([#1193](https://github.com/fohte/armyknife/issues/1193)) ([e4a7fca](https://github.com/fohte/armyknife/commit/e4a7fca64f74ab184bf937c803d82108eec10179))
+
 ## [0.1.428](https://github.com/fohte/armyknife/compare/v0.1.427...v0.1.428) (2026-10-16)
 
 
