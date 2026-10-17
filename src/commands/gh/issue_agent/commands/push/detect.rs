@@ -6,11 +6,12 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::{IssueContent, LocalComment};
+use crate::commands::gh::issue_agent::storage::LocalComment;
 
 use super::changeset::{
     BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
 };
+use super::field_comparison::IssueFieldComparisons;
 
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
@@ -349,8 +350,6 @@ pub(crate) struct ConflictCheckInput<'a> {
     pub remote_issue: &'a Issue,
     /// Remote comments.
     pub remote_comments: &'a [Comment],
-    /// Last saved issue snapshot, when available.
-    pub base_issue: Option<&'a IssueContent>,
 }
 
 /// Check for field-level conflicts between local and remote state.
@@ -360,11 +359,14 @@ pub(crate) struct ConflictCheckInput<'a> {
 /// Issue fields use three-way value comparison when a saved snapshot exists.
 /// Legacy directories keep the timestamp checks for body/title. Comment
 /// conflicts always use their existing per-comment timestamps.
-pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
+pub(super) fn check_conflicts(
+    input: &ConflictCheckInput<'_>,
+    field_comparisons: Option<IssueFieldComparisons>,
+) -> Vec<Conflict> {
     let mut conflicts = Vec::new();
 
-    if let Some(base_issue) = input.base_issue {
-        conflicts.extend(three_way_conflicts::check_base_conflicts(input, base_issue));
+    if let Some(field_comparisons) = field_comparisons {
+        conflicts.extend(three_way_conflicts::check_base_conflicts(field_comparisons));
     } else {
         // Check body conflict using lastEditedAt
         let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
@@ -601,10 +603,9 @@ mod tests {
                 local_comments: &[],
                 remote_issue: &remote_issue,
                 remote_comments: &[],
-                base_issue: None,
             };
 
-            let conflicts = check_conflicts(&input);
+            let conflicts = check_conflicts(&input, None);
             assert!(
                 !conflicts.iter().any(|c| matches!(c, Conflict::Body { .. })),
                 "Expected no body conflict, got: {:?}",
@@ -629,10 +630,9 @@ mod tests {
                 local_comments: &[],
                 remote_issue: &remote_issue,
                 remote_comments: &[],
-                base_issue: None,
             };
 
-            let conflicts = check_conflicts(&input);
+            let conflicts = check_conflicts(&input, None);
             assert!(
                 conflicts.iter().any(|c| matches!(c, Conflict::Body { .. })),
                 "Expected a body conflict, got: {:?}",
@@ -643,6 +643,7 @@ mod tests {
 
     mod check_conflicts_base_tests {
         use super::*;
+        use crate::commands::gh::issue_agent::commands::push::field_comparison::compare_issue_fields;
         use crate::commands::gh::issue_agent::models::IssueMetadata;
         use crate::commands::gh::issue_agent::storage::IssueContent;
         use crate::commands::gh::issue_agent::testing::factories;
@@ -663,14 +664,20 @@ mod tests {
             local_body: &str,
             remote_issue: &Issue,
         ) -> Vec<Conflict> {
-            check_conflicts(&ConflictCheckInput {
+            let input = ConflictCheckInput {
                 local_metadata,
                 local_body,
                 local_comments: &[],
                 remote_issue,
                 remote_comments: &[],
-                base_issue: Some(base_issue),
-            })
+            };
+            let field_comparisons = Some(compare_issue_fields(
+                local_metadata,
+                local_body,
+                remote_issue,
+                base_issue,
+            ));
+            check_conflicts(&input, field_comparisons)
         }
 
         #[rstest]

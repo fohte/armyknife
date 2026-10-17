@@ -150,6 +150,9 @@ async fn run_with_context(
 ) -> anyhow::Result<()> {
     let remote = ctx.fetch_remote(client).await?;
     let local = ctx.load_local()?;
+    let field_comparisons = local.base_issue.as_ref().map(|base_issue| {
+        compare_issue_fields(&local.metadata, &local.body, &remote.issue, base_issue)
+    });
 
     // Check for field-level conflicts unless --force is specified
     if !args.force {
@@ -159,9 +162,8 @@ async fn run_with_context(
             local_comments: &local.comments,
             remote_issue: &remote.issue,
             remote_comments: &remote.comments,
-            base_issue: local.base_issue.as_ref(),
         };
-        let conflicts = check_conflicts(&conflict_input);
+        let conflicts = check_conflicts(&conflict_input, field_comparisons);
 
         if !conflicts.is_empty() {
             eprintln!();
@@ -188,19 +190,16 @@ async fn run_with_context(
         issue: &remote.issue,
         comments: &remote.comments,
     };
-    let field_comparisons = local.base_issue.as_ref().map(|base_issue| {
-        compare_issue_fields(&local.metadata, &local.body, &remote.issue, base_issue)
-    });
     let options = DetectOptions {
         current_user: &ctx.current_user,
         edit_others: args.edit_others,
         allow_delete: args.allow_delete,
     };
-    let changeset = ChangeSet::detect_with_base(
+    let changeset = ChangeSet::detect_with_comparisons(
         &local_state,
         &remote_state,
         &options,
-        local.base_issue.as_ref(),
+        field_comparisons,
     )?;
 
     // Display and apply changes

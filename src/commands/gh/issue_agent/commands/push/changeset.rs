@@ -11,7 +11,7 @@ use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
     detect_sub_issue_change, detect_title_change,
 };
-use super::field_comparison::compare_issue_fields;
+use super::field_comparison::{IssueFieldComparisons, compare_issue_fields};
 use super::links::{
     add_sub_issue_by_ref, link_to_parent, remove_sub_issue_by_ref, unlink_from_parent,
 };
@@ -121,6 +121,15 @@ impl<'a> ChangeSet<'a> {
     ) -> anyhow::Result<Self> {
         let field_comparisons = base_issue
             .map(|base| compare_issue_fields(local.metadata, local.body, remote.issue, base));
+        Self::detect_with_comparisons(local, remote, options, field_comparisons)
+    }
+
+    pub(super) fn detect_with_comparisons(
+        local: &LocalState<'a>,
+        remote: &RemoteState<'a>,
+        options: &DetectOptions<'a>,
+        field_comparisons: Option<IssueFieldComparisons>,
+    ) -> anyhow::Result<Self> {
         let body = if field_comparisons.is_some_and(|fields| !fields.body.local_changed) {
             None
         } else {

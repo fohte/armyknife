@@ -1,20 +1,10 @@
-use crate::commands::gh::issue_agent::storage::IssueContent;
+use super::super::field_comparison::IssueFieldComparisons;
+use super::Conflict;
 
-use super::{Conflict, ConflictCheckInput};
-use crate::commands::gh::issue_agent::commands::push::field_comparison::compare_issue_fields;
-
-pub(super) fn check_base_conflicts(
-    input: &ConflictCheckInput<'_>,
-    base_issue: &IssueContent,
-) -> Vec<Conflict> {
-    compare_issue_fields(
-        input.local_metadata,
-        input.local_body,
-        input.remote_issue,
-        base_issue,
-    )
-    .conflicting_fields()
-    .into_iter()
-    .map(|name| Conflict::IssueField { name })
-    .collect()
+pub(super) fn check_base_conflicts(field_comparisons: IssueFieldComparisons) -> Vec<Conflict> {
+    field_comparisons
+        .conflicting_fields()
+        .into_iter()
+        .map(|name| Conflict::IssueField { name })
+        .collect()
 }
