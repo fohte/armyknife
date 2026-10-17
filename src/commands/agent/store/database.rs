@@ -5,7 +5,7 @@ use std::path::Path;
 use std::sync::LazyLock;
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rusqlite_migration::{M, Migrations};
 
@@ -52,6 +52,12 @@ pub(crate) struct WakeLock {
     _guard: wake::WakeLock,
 }
 
+pub(super) enum StoredSession {
+    Missing,
+    Decoded(Box<Session>),
+    Undecodable,
+}
+
 pub(crate) fn open_connection(sessions_dir: &Path) -> Result<Connection> {
     fs::create_dir_all(sessions_dir)
         .with_context(|| format!("creating sessions dir {}", sessions_dir.display()))?;
@@ -65,7 +71,13 @@ pub(crate) fn open_connection(sessions_dir: &Path) -> Result<Connection> {
         .to_latest(&mut connection)
         .context("migrating session database")?;
 
-    migration::import_legacy_json(&mut connection, sessions_dir)?;
+    if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
+        tracing::warn!(
+            target: "armyknife::commands::agent::store",
+            event = "agent.store.legacy_import_failed",
+            error = %error,
+        );
+    }
     migration::remove_legacy_lock_files(sessions_dir);
     migration::cleanup_expired_legacy_json(&connection, sessions_dir)?;
 
@@ -276,6 +288,19 @@ pub(crate) fn session_changes_since(
 }
 
 fn read_session(connection: &Connection, session_id: &str) -> Result<Option<Session>> {
+    match read_stored_session(connection, session_id)? {
+        StoredSession::Missing => Ok(None),
+        StoredSession::Decoded(session) => Ok(Some(*session)),
+        StoredSession::Undecodable => Err(anyhow!(
+            "session {session_id} is stored but its data cannot be decoded"
+        )),
+    }
+}
+
+pub(super) fn read_stored_session(
+    connection: &Connection,
+    session_id: &str,
+) -> Result<StoredSession> {
     let data = connection
         .query_row(
             "SELECT data FROM sessions WHERE session_id = ?1",
@@ -283,7 +308,13 @@ fn read_session(connection: &Connection, session_id: &str) -> Result<Option<Sess
             |row| row.get::<_, String>(0),
         )
         .optional()?;
-    Ok(data.and_then(|data| decode_session(session_id, &data)))
+    let Some(data) = data else {
+        return Ok(StoredSession::Missing);
+    };
+    Ok(match decode_session(session_id, &data) {
+        Some(session) => StoredSession::Decoded(Box::new(session)),
+        None => StoredSession::Undecodable,
+    })
 }
 
 fn decode_session(session_id: &str, data: &str) -> Option<Session> {
@@ -310,6 +341,14 @@ pub(crate) fn serialize_session(session: &Session) -> Result<String> {
 }
 
 pub(crate) fn write_session(connection: &Connection, session: &Session) -> Result<i64> {
+    ensure!(
+        !matches!(
+            read_stored_session(connection, &session.session_id)?,
+            StoredSession::Undecodable
+        ),
+        "refusing to overwrite undecodable session {}",
+        session.session_id
+    );
     let data = serialize_session(session)?;
     let revision = increment_revision(connection)?;
     connection.execute(

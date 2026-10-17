@@ -44,10 +44,11 @@ pub(super) fn import_legacy_json(connection: &mut Connection, sessions_dir: &Pat
     let mut valid_paths = Vec::new();
 
     for (path, session) in importable_sessions {
-        let current = super::read_session(&transaction, &session.session_id)?;
-        let should_import = current
-            .as_ref()
-            .is_none_or(|current| session.updated_at > current.updated_at);
+        let should_import = match super::read_stored_session(&transaction, &session.session_id)? {
+            super::StoredSession::Missing => true,
+            super::StoredSession::Decoded(current) => session.updated_at > current.updated_at,
+            super::StoredSession::Undecodable => continue,
+        };
         if should_import {
             super::write_session(&transaction, &session)?;
         }

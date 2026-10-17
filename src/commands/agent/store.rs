@@ -815,6 +815,129 @@ mod tests {
         assert_eq!((lock_exists_while_owned, lock_path.exists()), (true, false));
     }
 
+    const UNDECODABLE_SESSION_ID: &str = "undecodable-session";
+
+    struct UndecodableSession {
+        temp_session_dir: TempSessionDir,
+        data: String,
+    }
+
+    #[fixture]
+    fn undecodable_session(temp_session_dir: TempSessionDir) -> UndecodableSession {
+        let data = "{not-json".to_string();
+        let connection = database::open_connection(&temp_session_dir.sessions_path)
+            .expect("session database should open");
+        connection
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, 7)",
+                rusqlite::params![UNDECODABLE_SESSION_ID, data],
+            )
+            .expect("undecodable session row should insert");
+        connection
+            .execute(
+                "UPDATE session_store_meta SET value = '7' WHERE key = 'revision'",
+                [],
+            )
+            .expect("revision should match inserted row");
+        UndecodableSession {
+            temp_session_dir,
+            data,
+        }
+    }
+
+    #[rstest::rstest]
+    fn session_lock_load_reports_undecodable_records(undecodable_session: UndecodableSession) {
+        let lock = lock_session_for_update(
+            &undecodable_session.temp_session_dir.sessions_path,
+            UNDECODABLE_SESSION_ID,
+        )
+        .expect("session lock should open");
+        let actual = lock.load().err().map(|error| error.to_string());
+
+        assert_eq!(
+            actual,
+            Some(format!(
+                "session {UNDECODABLE_SESSION_ID} is stored but its data cannot be decoded"
+            )),
+        );
+    }
+
+    #[rstest::rstest]
+    fn save_does_not_overwrite_undecodable_records(undecodable_session: UndecodableSession) {
+        let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
+        let save_result =
+            save_session_to(sessions_dir, &create_test_session(UNDECODABLE_SESSION_ID));
+        let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        let stored_row = connection
+            .query_row(
+                "SELECT data, rev FROM sessions WHERE session_id = ?1",
+                [UNDECODABLE_SESSION_ID],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+            )
+            .expect("undecodable row should remain stored");
+        let revision = connection
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM session_store_meta WHERE key = 'revision'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("store revision should remain readable");
+
+        assert_eq!(
+            (save_result.is_ok(), stored_row, revision),
+            (false, (undecodable_session.data, 7), 7),
+        );
+    }
+
+    #[rstest::rstest]
+    fn legacy_import_skips_undecodable_database_rows(undecodable_session: UndecodableSession) {
+        let sessions_dir = &undecodable_session.temp_session_dir.sessions_path;
+        let legacy_json = sessions_dir.join(format!("{UNDECODABLE_SESSION_ID}.json"));
+        fs::write(
+            &legacy_json,
+            serde_json::to_vec(&create_test_session(UNDECODABLE_SESSION_ID))
+                .expect("legacy session should serialize"),
+        )
+        .expect("legacy session should write");
+
+        let connection = database::open_connection(sessions_dir)
+            .expect("database should open when legacy data conflicts with an undecodable row");
+        let stored_data = connection
+            .query_row(
+                "SELECT data FROM sessions WHERE session_id = ?1",
+                [UNDECODABLE_SESSION_ID],
+                |row| row.get::<_, String>(0),
+            )
+            .expect("undecodable row should remain stored");
+        let backup_path = sessions_dir
+            .join("legacy-json")
+            .join(format!("{UNDECODABLE_SESSION_ID}.json"));
+
+        assert_eq!(
+            (stored_data, legacy_json.exists(), backup_path.exists()),
+            (undecodable_session.data, true, false),
+        );
+    }
+
+    #[rstest::rstest]
+    fn database_open_succeeds_when_legacy_import_fails(temp_session_dir: TempSessionDir) {
+        let legacy_json = temp_session_dir.sessions_path.join("blocked-import.json");
+        fs::write(&legacy_json, "invalid legacy record").expect("legacy JSON should write");
+        fs::create_dir(legacy_json.with_extension("json.lock"))
+            .expect("legacy lock path should become unreadable");
+
+        let connection = database::open_connection(&temp_session_dir.sessions_path)
+            .expect("legacy import failure should not prevent opening the database");
+        let row_count = connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("database should remain usable");
+
+        assert_eq!(row_count, 0);
+    }
+
     #[test]
     fn test_save_and_load_session() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
