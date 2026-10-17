@@ -125,7 +125,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
-`agent.vibe_marker` controls the icon and color for vibe-related sessions in the TASKS tree. Its icon appears after the name, unlike work type icons, and it uses the same icon and color formats as `agent.work_types`. Sessions that enabled vibe themselves use the configured color; sessions with a vibe-enabled ancestor show the icon dimmed. The dimmed marker shows the ancestor's state; a session inherits vibe mode only when it was launched with `a agent new --vibe`. If unset, no vibe marker is shown.
+`agent.vibe_marker` controls the icon and color for vibe-related sessions in the TASKS tree. Its icon appears after the name, unlike work type icons, and it uses the same icon and color formats as `agent.work_types`. Sessions that enabled vibe themselves use the configured color; sessions with a vibe-enabled ancestor show the icon dimmed. The dimmed marker shows the ancestor's state; a session inherits vibe mode when it was launched with `a agent new --vibe` or granted inheritance by an enabled ancestor. If unset, no vibe marker is shown.
 
 ### Splitting public and private config
 
@@ -294,11 +294,14 @@ Create a new issue boilerplate file. Fetches issue templates from the repository
 | `--template <NAME>` | Use a specific issue template by name             |
 | `--no-template`     | Use default boilerplate (skip template selection) |
 
-The frontmatter accepts the same editable keys as pulled issues, so a new issue can declare `parentIssue` and `subIssues` and `push` will create the issue and link it via the Sub-issues API in one step:
+The boilerplate includes `submit: false` as the review approval marker. `init issue` prints the created `issue.md` path as `Created: <path>`. Edit that file, then run `a gh issue-agent review <path>` and set `submit: true` in the editor. After approval, run `a gh issue-agent push <new-dir>`, where `<new-dir>` is the directory containing `issue.md`. A normal `push` requires this approval; `--dry-run` skips the approval check and does not create an issue.
+
+The frontmatter accepts `parentIssue` and `subIssues`, so `push` can create an issue and link it via the Sub-issues API in one step. `submit` is approval metadata and is not sent to GitHub:
 
 ```yaml
 ---
 title: Child Issue
+submit: false
 parentIssue: owner/repo#1
 subIssues:
   - owner/repo#10
@@ -412,7 +415,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`   |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                          |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                          |         | Set the calling session's reason for stopping                                               |
-| `vibe on / off / status`                            |         | Enable, disable, or check this session's vibe mode                                          |
+| `vibe on / off / status / grant <session-id>`       |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                               | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
 | `resurrect save`                                    |         | Save pane session IDs for tmux-resurrect (run from post-save hook)                          |
 | `resurrect restore`                                 |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
@@ -436,7 +439,7 @@ Run `a agent status set` from a tracked Claude Code or Codex session. Claude Cod
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
 
-`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and records that launch choice in the new session. `a gh pr-merge` applies both checks inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which succeeds when the current session ran `vibe on`, or when it was launched with `--vibe` and an ancestor still has vibe enabled. It does not check repository access:
+`a ai pr-draft submit --no-review` requires the marker and an allowed target repository. `a agent new --vibe` requires the marker and an allowed target repository, and records that launch choice in the new session. `a gh pr-merge` applies both checks inside agent sessions. Hooks, skills, and prompt instructions can branch on `a agent vibe status`, which succeeds when the current session ran `vibe on`, or when it was launched with `--vibe` or granted inheritance and an ancestor still has vibe enabled. It does not check repository access:
 
 ```console
 if a agent vibe status >/dev/null 2>&1; then
@@ -446,7 +449,7 @@ fi
 
 A non-delegated session also enables the marker when its main-thread user prompt starts with `/enable-vibe-coding` in Claude Code or `$enable-vibe-coding` in Codex.
 
-Run `a agent vibe on` in a tracked session to enable the marker. A descendant inherits it only when it was launched with `a agent new --vibe`, and only while an ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's own marker; a session launched with `--vibe` continues to inherit an active ancestor marker. Run `off` in the enabling session to disable vibe mode for descendants.
+Run `a agent vibe on` in a tracked session to enable the marker. A descendant inherits it when it was launched with `a agent new --vibe`, or when an enabled ancestor runs `a agent vibe grant <session-id>` for it. In either case, inheritance remains active only while an ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's own marker; a session launched with `--vibe` or granted inheritance continues to inherit an active ancestor marker. Run `off` in the enabling session to disable vibe mode for descendants.
 
 When `agent.stop_hook_instruction` is configured and a `Stop` hook cannot infer why the agent stopped, the hook blocks the stop only if `agent.statuses` contains at least one name. If either the instruction is omitted or the status map is absent or empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger a block. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
@@ -545,7 +548,7 @@ The command sends Ctrl+D and waits up to five seconds for the agent to exit, the
 | `--worktree[=<branch>]`                              | Create a worktree for the branch and run the session there, opening a new tmux window. Branch is auto-generated from `--prompt` when the value is omitted; opens `$EDITOR` to write a prompt when both are omitted. When the flag itself is omitted, no worktree is created: the session runs in the current directory (or the root of the worktree containing `-R`) -- see below for whether that starts a pane split or a new tmux window |
 | `--from <ref>`                                       | Base branch for new branch creation (requires `--worktree`; default: origin/main or origin/master)                                                                                                                                                                                                                                                                                                                                          |
 | `--force`                                            | Force create new branch even if it already exists (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                                   |
-| `--skip-hooks`                                       | Skip the post-worktree-create hook (requires `--worktree`)                                                                                                                                                                                                                                                                                                                                                                                  |
+| `--skip-hooks`                                       | Skip the `post-worktree-create` and `pre-session-start` hooks (works with or without `--worktree`)                                                                                                                                                                                                                                                                                                                                          |
 | `--vibe`                                             | Require vibe mode in the current or an ancestor session and an allowed target repository; record the launch choice in the new session                                                                                                                                                                                                                                                                                                       |
 | `-R, --repo <path>`                                  | Target repository or linked worktree path. Without `--worktree`, the session runs from the root of the worktree containing this path; with `--worktree`, new worktrees are created from the main repository root                                                                                                                                                                                                                            |
 | `--prompt <text>`                                    | Initial prompt to send to the agent (Claude Code or Codex)                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -559,7 +562,7 @@ The command sends Ctrl+D and waits up to five seconds for the agent to exit, the
 
 When invoked from a tracked session marked as delegated, `a agent new` returns an error. This also applies to the `a ag new` and `a cc new` aliases. Calls without a tracked caller session ID, such as from a normal shell, continue to start sessions.
 
-Worktree creation in the same repository is serialized through the `post-worktree-create` hook. Concurrent calls wait for the hook or its rollback to finish.
+Worktree creation in the same repository is serialized through the `post-worktree-create` and `pre-session-start` hooks. Concurrent calls wait for the hooks or their rollback to finish.
 
 Without `--worktree`, `a agent new` compares the target repo (from `-R`, or the current directory) against the repo of the invoking session. When they match and the caller pane resolves from `$TMUX_PANE` or the invoking agent session's recorded tmux pane, it splits that pane into a new pane in the same window. Otherwise -- the repos differ, or no caller pane can be resolved -- it opens a new tmux window in the target repo's own tmux session.
 
@@ -713,6 +716,8 @@ myproject-7e
 ```
 
 `a agent peer notify <session_id> -m <text>` delivers a message to a Claude Code session's `SendMessage` socket directly (for a Codex target, see below), without any Claude Code session driving the call -- useful when the caller is a background process rather than another Claude Code session. Use `--parent` instead of `<session_id>` to send to the session that delegated to the caller; the current session and its recorded parent must both be tracked. When the caller's session ID is known, it refuses to notify that same session. It resumes a `Paused` target via the same flow as `peer wake` first, and refuses outright for an `Ended` session (the user terminated it intentionally). It fails loudly, rather than silently succeeding, when the target's registry entry has no `messagingSocketPath` -- this happens when the target session was started by a Claude Code build that predates peer messaging.
+
+When the requested session ID is not tracked, the error may include up to three close, non-ended session IDs. These are suggestions only: `notify` never changes the recipient or sends to a suggested session automatically. If no close candidate is found, it keeps the plain `Session not found` error.
 
 For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If the app-server is unavailable, the thread belongs to an embedded app-server, or the server rejects the request, `notify` falls back to `codex queue --thread <session_id>` and prints the direct-delivery failure. The fallback requires `codex` in `PATH` with the target's `$CODEX_HOME`. A queued message is not delivered yet: the running `codex` polls about every 10 seconds and can start it only after the current turn finishes and the thread is idle. If both direct delivery and queueing fail, the command returns both errors. A `Paused` Codex target is resumed before delivery is attempted; if its thread is not registered yet, the resumed `codex` picks up the queued message when it loads the thread.
 
@@ -886,7 +891,7 @@ entries. Pass `--force` to override.
 
 ### Hooks
 
-armyknife supports git-style hooks for command lifecycle events (worktree creation, PR draft review/submit/merge). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
+armyknife supports git-style hooks for command lifecycle events (session startup, worktree creation, PR draft review/submit/merge). See [docs/hooks.md](docs/hooks.md) for the available hook points, environment variables, and usage examples.
 
 ### Logging
 

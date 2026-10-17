@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.436](https://github.com/fohte/armyknife/compare/v0.1.435...v0.1.436) (2026-10-17)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** require new issue approval ([#1207](https://github.com/fohte/armyknife/issues/1207)) ([8538532](https://github.com/fohte/armyknife/commit/8538532d2faf6ef7e1cba08cbbca42044f8f9b56))
+
+## [0.1.435](https://github.com/fohte/armyknife/compare/v0.1.434...v0.1.435) (2026-10-17)
+
+
+### Bug Fixes
+
+* **tmux:** reject invalid pane list output ([#1205](https://github.com/fohte/armyknife/issues/1205)) ([49516cd](https://github.com/fohte/armyknife/commit/49516cd90dfe2d218dcd0f0bdcf6b4d66829d367))
+
+## [0.1.434](https://github.com/fohte/armyknife/compare/v0.1.433...v0.1.434) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** keep status on non-main events ([#1203](https://github.com/fohte/armyknife/issues/1203)) ([c32760f](https://github.com/fohte/armyknife/commit/c32760f68e9a44dabba83c02e0fd659cbb511b20))
+
+## [0.1.433](https://github.com/fohte/armyknife/compare/v0.1.432...v0.1.433) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** extend Codex startup wait to 10 min ([#1201](https://github.com/fohte/armyknife/issues/1201)) ([baf33e3](https://github.com/fohte/armyknife/commit/baf33e3f59ad3d42e3055e773689c8b94098931c))
+
+## [0.1.432](https://github.com/fohte/armyknife/compare/v0.1.431...v0.1.432) (2026-10-17)
+
+
+### Features
+
+* **agent:** grant vibe to descendant sessions ([#1199](https://github.com/fohte/armyknife/issues/1199)) ([413ee8a](https://github.com/fohte/armyknife/commit/413ee8afd820ea137dd56a1822ae2e7adb13b94f))
+
+## [0.1.431](https://github.com/fohte/armyknife/compare/v0.1.430...v0.1.431) (2026-10-17)
+
+
+### Features
+
+* **agent/peer:** suggest IDs for notify errors ([#1197](https://github.com/fohte/armyknife/issues/1197)) ([7b05a67](https://github.com/fohte/armyknife/commit/7b05a6738e9ad7a1e4de8ff0555f8c7b424a0bf7))
+
 ## [0.1.430](https://github.com/fohte/armyknife/compare/v0.1.429...v0.1.430) (2026-10-17)
 
 

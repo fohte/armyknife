@@ -35,7 +35,7 @@ pub struct ResumeArgs {
     #[arg(long, value_enum)]
     pub engine: Option<Engine>,
 
-    /// Restore the session's `a agent new --vibe` launch marker.
+    /// Restore the session's ancestor-based vibe inheritance marker.
     #[arg(long, hide = true)]
     pub launched_with_vibe: bool,
 }
