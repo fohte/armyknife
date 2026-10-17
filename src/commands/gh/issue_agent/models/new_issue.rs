@@ -12,6 +12,9 @@ use super::editable::EditableIssueFields;
 pub struct NewIssueFrontmatter {
     #[serde(flatten)]
     pub fields: EditableIssueFields,
+    /// Approval marker used by review, not sent to GitHub.
+    #[serde(default)]
+    pub submit: bool,
 }
 
 /// Parsed new issue from local file.
@@ -30,6 +33,7 @@ impl NewIssue {
     /// title: "Issue Title"
     /// labels: []
     /// assignees: []
+    /// submit: false
     /// parentIssue: owner/repo#5
     /// subIssues:
     ///   - owner/repo#10
@@ -167,6 +171,32 @@ mod tests {
 
     mod parse_tests {
         use super::*;
+
+        #[rstest]
+        fn test_parse_submit_true() {
+            let content = indoc! {"
+                ---
+                title: Approved Issue
+                submit: true
+                ---
+
+                Body.
+            "};
+
+            assert_eq!(
+                NewIssue::parse(content).unwrap(),
+                NewIssue {
+                    frontmatter: NewIssueFrontmatter {
+                        fields: EditableIssueFields {
+                            title: "Approved Issue".to_string(),
+                            ..Default::default()
+                        },
+                        submit: true,
+                    },
+                    body: "Body.".to_string(),
+                },
+            );
+        }
 
         #[rstest]
         fn test_parse_full_format() {
@@ -400,7 +430,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): parentIssues. \
-             Allowed keys: title, labels, assignees, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
         )]
         #[case::unknown_key_arbitrary(
             indoc! {"
@@ -412,7 +442,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): random_key. \
-             Allowed keys: title, labels, assignees, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
         )]
         #[case::unknown_non_string_key_bool(
             indoc! {"
@@ -424,7 +454,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): true. \
-             Allowed keys: title, labels, assignees, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
         )]
         #[case::unknown_non_string_key_number(
             indoc! {"
@@ -436,7 +466,7 @@ mod tests {
                 Body.
             "},
             "Unknown frontmatter key(s): 42. \
-             Allowed keys: title, labels, assignees, parentIssue, subIssues"
+             Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
         )]
         fn test_parse_errors(#[case] content: &str, #[case] expected_error: &str) {
             let err = NewIssue::parse(content).unwrap_err();
@@ -461,7 +491,7 @@ mod tests {
             assert_eq!(
                 err,
                 "Unknown frontmatter key(s): milestone. \
-                 Allowed keys: title, labels, assignees, parentIssue, subIssues"
+                 Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
             );
         }
 

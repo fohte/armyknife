@@ -286,11 +286,14 @@ Create a new issue boilerplate file. Fetches issue templates from the repository
 | `--template <NAME>` | Use a specific issue template by name             |
 | `--no-template`     | Use default boilerplate (skip template selection) |
 
-The frontmatter accepts the same editable keys as pulled issues, so a new issue can declare `parentIssue` and `subIssues` and `push` will create the issue and link it via the Sub-issues API in one step:
+The boilerplate includes `submit: false` as the review approval marker. `init issue` prints the created `issue.md` path as `Created: <path>`. Edit that file, then run `a gh issue-agent review <path>` and set `submit: true` in the editor. After approval, run `a gh issue-agent push <new-dir>`, where `<new-dir>` is the directory containing `issue.md`. A normal `push` requires this approval; `--dry-run` skips the approval check and does not create an issue.
+
+The frontmatter accepts `parentIssue` and `subIssues`, so `push` can create an issue and link it via the Sub-issues API in one step. `submit` is approval metadata and is not sent to GitHub:
 
 ```yaml
 ---
 title: Child Issue
+submit: false
 parentIssue: owner/repo#1
 subIssues:
   - owner/repo#10

@@ -268,7 +268,11 @@ fn run_init_issue_with_storage(
     eprintln!("Created: {}", path.display());
     eprintln!();
     eprintln!(
-        "Edit the file, then run: a gh issue-agent push {}",
+        "Edit the file, then run: a gh issue-agent review {}",
+        path.display()
+    );
+    eprintln!(
+        "After approval, run: a gh issue-agent push {}",
         storage.dir().display()
     );
 
@@ -356,6 +360,7 @@ mod tests {
                     title: ""
                     labels: []
                     assignees: []
+                    submit: false
                     # parentIssue: owner/repo#1
                     # subIssues:
                     #   - owner/repo#2
@@ -396,6 +401,7 @@ mod tests {
                     labels:
                     - bug
                     assignees: []
+                    submit: false
                     ---
 
                     Describe the bug

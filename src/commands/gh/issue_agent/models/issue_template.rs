@@ -43,12 +43,14 @@ impl IssueTemplate {
             title: &'a str,
             labels: &'a [String],
             assignees: &'a [String],
+            submit: bool,
         }
 
         let frontmatter = Frontmatter {
             title: self.title.as_deref().unwrap_or(""),
             labels: &self.labels,
             assignees: &self.assignees,
+            submit: false,
         };
 
         // serde_yaml::to_string is safe for the struct above and won't fail
@@ -119,6 +121,7 @@ mod tests {
                 assignees:
                 - alice
                 - bob
+                submit: false
                 ---
 
                 Describe the bug here
@@ -138,6 +141,7 @@ mod tests {
                 title: ''
                 labels: []
                 assignees: []
+                submit: false
                 ---
 
                 Body
@@ -164,6 +168,7 @@ mod tests {
                 labels:
                 - enhancement
                 assignees: []
+                submit: false
                 ---
 
                 Body
@@ -190,6 +195,7 @@ mod tests {
                 title: ''
                 labels: []
                 assignees: []
+                submit: false
                 ---
 
                 ## Steps to reproduce

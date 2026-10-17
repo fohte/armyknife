@@ -32,7 +32,14 @@ impl EditableIssueFields {
     /// `milestone` is intentionally absent: the create API path does not
     /// reconcile milestones today, so accepting it on new-issue frontmatter
     /// would silently drop the value. Edit-path frontmatter still carries
-    /// `milestone` round-tripped from the remote.
-    pub const KNOWN_KEYS_FOR_NEW_ISSUE: &'static [&'static str] =
-        &["title", "labels", "assignees", "parentIssue", "subIssues"];
+    /// `milestone` round-tripped from the remote. `submit` is accepted as
+    /// review metadata but is not included in the issue payload.
+    pub const KNOWN_KEYS_FOR_NEW_ISSUE: &'static [&'static str] = &[
+        "title",
+        "labels",
+        "assignees",
+        "parentIssue",
+        "subIssues",
+        "submit",
+    ];
 }
