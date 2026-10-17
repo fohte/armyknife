@@ -1426,6 +1426,8 @@ mod tests {
     #[case::pre_tool_use_while_running(HookEvent::PreToolUse, SessionStatus::Running)]
     #[case::post_tool_use_after_stop(HookEvent::PostToolUse, SessionStatus::Stopped)]
     #[case::post_tool_use_while_running(HookEvent::PostToolUse, SessionStatus::Running)]
+    #[case::stop_after_main_activity(HookEvent::Stop, SessionStatus::Running)]
+    #[case::stop_failure_after_main_stop(HookEvent::StopFailure, SessionStatus::Stopped)]
     fn agent_event_preserves_main_thread_status(
         #[case] event: HookEvent,
         #[case] initial_status: SessionStatus,
