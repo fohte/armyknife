@@ -269,22 +269,23 @@ a gh issue-agent <command> <issue-number> [options]
 | `init`   | Create boilerplate files for new issues or comments                                                                                                                                      |
 
 Each pulled issue directory contains `issue.md` for editable issue fields and
-body, `.issue.base.md` as a managed snapshot of the last pull or successful push,
-and `comments/` for issue comments. For existing issues, `push` compares title,
-body, labels, sub-issues, and parent issue against the snapshot. Remote-only edits
-are preserved, and edits to the same field on both sides with different values
-stop the push as conflicts. `diff` uses the snapshot to identify local issue field
-changes.
-Directories without `.issue.base.md` retain legacy behavior until the next pull
-or successful push creates the snapshot.
+body, `.issue.base.md` as a managed snapshot, and `comments/` for issue comments.
+When a snapshot exists, `push` compares title, body, labels, sub-issues, and parent
+issue against it. Remote-only issue field changes are preserved. Without
+`--force`, edits to the same field on both sides with different values stop the
+push. Use `pull --force` to keep remote values or `push --force` to overwrite
+them; an applied push still requires approval for each changed file. `diff` uses
+the snapshot when available to identify local issue field changes. Directories
+without a snapshot keep legacy two-way change detection and body/title timestamp
+conflict checks until a pull or a push that applies changes creates the snapshot.
 
-| Option           | Description                                        |
-| ---------------- | -------------------------------------------------- |
-| `-R <repo>`      | Target repository (default: current repo)          |
-| `--dry-run`      | Show what would be changed without applying        |
-| `--force`        | Overwrite local/remote changes (context-dependent) |
-| `--edit-others`  | Allow editing other users' comments                |
-| `--allow-delete` | Allow deleting comments removed locally            |
+| Option           | Description                                                          |
+| ---------------- | -------------------------------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)                            |
+| `--dry-run`      | Show what would be changed without applying                          |
+| `--force`        | Bypass conflict checks; applied local changes still require approval |
+| `--edit-others`  | Allow editing other users' comments                                  |
+| `--allow-delete` | Allow deleting comments removed locally                              |
 
 ##### `a gh issue-agent init issue`
 
