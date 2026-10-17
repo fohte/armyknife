@@ -21,9 +21,11 @@ pub(super) fn session_ids_in(sessions_dir: &Path) -> Result<Vec<String>> {
             if path.extension().is_none_or(|extension| extension != "json") {
                 return None;
             }
-            let content = fs::read_to_string(&path).ok()?;
-            let session = serde_json::from_str::<Session>(&content).ok()?;
-            if session.archived_at.is_some() {
+            let is_archived = fs::read_to_string(&path)
+                .ok()
+                .and_then(|content| serde_json::from_str::<Session>(&content).ok())
+                .is_some_and(|session| session.archived_at.is_some());
+            if is_archived {
                 return None;
             }
             path.file_stem()
@@ -62,13 +64,21 @@ mod tests {
     }
 
     #[test]
-    fn excludes_archived_sessions_from_sweep_scans() {
+    fn excludes_only_parsed_archived_sessions_from_sweep_scans() {
         let temp_dir = TempDir::new().expect("temp directory creation should succeed");
         write_session(temp_dir.path(), "active-session", false);
         write_session(temp_dir.path(), "archived-session", true);
+        fs::write(temp_dir.path().join("malformed-session.json"), "not json")
+            .expect("malformed session file should write");
 
         let mut actual = session_ids_in(temp_dir.path()).expect("session scan should succeed");
         actual.sort();
-        assert_eq!(actual, vec!["active-session".to_string()]);
+        assert_eq!(
+            actual,
+            vec![
+                "active-session".to_string(),
+                "malformed-session".to_string(),
+            ]
+        );
     }
 }

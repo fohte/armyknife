@@ -333,15 +333,8 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
 
 /// One-shot stale-session cleanup run from `EventHandler::new`.
 fn handle_stale_session_cleanup(tx: Sender<AppEvent>) {
-    match store::cleanup_stale_sessions() {
-        Ok(true) => {
-            let _ = tx.send(AppEvent::SessionsChanged(None));
-        }
-        Ok(false) => {}
-        Err(error) => tracing::warn!(
-            event = "agent.tui.stale_session_cleanup_failed",
-            error = %error,
-        ),
+    if let Ok(true) = store::cleanup_stale_sessions() {
+        let _ = tx.send(AppEvent::SessionsChanged(None));
     }
 }
 

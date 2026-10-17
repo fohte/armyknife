@@ -1048,13 +1048,9 @@ mod tests {
                 mock_cwd_always_exists,
                 archived_at + TimeDelta::days(8),
                 |thread_id| {
-                    let lock_available =
-                        lock_session_for_update(&temp_session_dir.sessions_path, thread_id).is_ok();
-                    archive_calls.borrow_mut().push((
-                        thread_id.to_string(),
-                        path.exists(),
-                        lock_available,
-                    ));
+                    archive_calls
+                        .borrow_mut()
+                        .push((thread_id.to_string(), path.exists()));
                     Err(anyhow::anyhow!("fixture archive failure"))
                 },
             )
@@ -1074,7 +1070,7 @@ mod tests {
                     Some(Some(archived_at)),
                     Vec::new(),
                     true,
-                    vec![("stale-codex-session".to_string(), false, true)],
+                    vec![("stale-codex-session".to_string(), true)],
                     false,
                 ),
             );
@@ -1318,22 +1314,29 @@ mod tests {
         }
 
         #[rstest]
-        #[case::ended(SessionStatus::Ended)]
-        #[case::paused(SessionStatus::Paused)]
-        fn removes_expired_ended_and_paused_sessions(
+        #[case::ended(SessionStatus::Ended, false)]
+        #[case::paused(SessionStatus::Paused, false)]
+        #[case::archived(SessionStatus::Stopped, true)]
+        fn removes_expired_sessions_and_lock_files(
             temp_session_dir: TempSessionDir,
             #[case] status: SessionStatus,
+            #[case] archived: bool,
         ) {
             let session_id = "expired-session";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
+            let lock_path = path.with_extension("json.lock");
             let now = Utc
                 .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
                 .single()
                 .expect("timestamp should be valid");
             let mut session = create_test_session(session_id);
             session.status = status;
-            session.updated_at = now - TimeDelta::days(8);
+            if archived {
+                session.archived_at = Some(now - TimeDelta::days(8));
+            } else {
+                session.updated_at = now - TimeDelta::days(8);
+            }
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
 
@@ -1346,7 +1349,10 @@ mod tests {
             )
             .expect("cleanup should succeed");
 
-            assert_eq!((removed, path.exists()), (true, false));
+            assert_eq!(
+                (removed, path.exists(), lock_path.exists()),
+                (true, false, false),
+            );
         }
 
         #[rstest]

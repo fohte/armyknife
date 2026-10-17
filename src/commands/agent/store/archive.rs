@@ -131,6 +131,11 @@ where
                 }
             };
             if is_collectable(&current, now, retention) {
+                archive_codex_thread_before_delete_with(
+                    &current,
+                    &mut archive_codex_thread,
+                    ArchiveLogContext::Store,
+                );
                 let removed = match fs::remove_file(&path) {
                     Ok(()) => true,
                     Err(error) if error.kind() == ErrorKind::NotFound => false,
@@ -139,15 +144,16 @@ where
                         false
                     }
                 };
-                drop(session_lock);
                 if removed {
-                    archive_codex_thread_before_delete_with(
-                        &current,
-                        &mut archive_codex_thread,
-                        ArchiveLogContext::Store,
-                    );
+                    let lock_path = path.with_extension("json.lock");
+                    if let Err(error) = fs::remove_file(&lock_path)
+                        && error.kind() != ErrorKind::NotFound
+                    {
+                        warn_cleanup_entry_failure(session_id, "delete_lock_file", &error);
+                    }
                     changed_any = true;
                 }
+                drop(session_lock);
             }
             continue;
         }
