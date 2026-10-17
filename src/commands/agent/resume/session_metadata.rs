@@ -25,10 +25,21 @@ pub(super) fn record_codex_resume_metadata_if_needed(
     }
 
     let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    if let Some(mut session) = session_lock.load()? {
+        if apply_resume_metadata(&mut session, &ancestor_session_ids, launched_with_vibe) {
+            session_lock.save(&session)?;
+        }
+        return Ok(());
+    }
+
+    drop(session_lock);
+    let pr_context = capture_pr_context.and_then(|capture| capture(cwd));
+
+    let session_lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let now = Utc::now();
     let mut session = session_lock.load()?.unwrap_or_else(|| Session {
         archived_at: None,
-        pr_context: capture_pr_context.and_then(|capture| capture(cwd)),
+        pr_context,
         session_id: session_id.to_string(),
         work_type: None,
         work_type_pinned: false,
@@ -60,20 +71,27 @@ pub(super) fn record_codex_resume_metadata_if_needed(
         engine: Engine::Codex,
     });
 
+    if apply_resume_metadata(&mut session, &ancestor_session_ids, launched_with_vibe) {
+        session_lock.save(&session)?;
+    }
+    Ok(())
+}
+
+fn apply_resume_metadata(
+    session: &mut Session,
+    ancestor_session_ids: &[String],
+    launched_with_vibe: bool,
+) -> bool {
     let mut changed = false;
     if session.ancestor_session_ids.is_empty() && !ancestor_session_ids.is_empty() {
-        session.ancestor_session_ids = ancestor_session_ids;
+        session.ancestor_session_ids = ancestor_session_ids.to_vec();
         changed = true;
     }
     if launched_with_vibe && !session.launched_with_vibe {
         session.launched_with_vibe = true;
         changed = true;
     }
-    if changed {
-        session_lock.save(&session)
-    } else {
-        Ok(())
-    }
+    changed
 }
 
 pub(super) fn mark_vibe_launch_if_session_exists(
@@ -100,7 +118,7 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::session_pr_context::fixed_context_capture;
-    use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
 
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -142,6 +160,29 @@ mod tests {
             agent_status_clear_pending: false,
             engine: Engine::Codex,
         }
+    }
+
+    fn competing_pr_context() -> SessionPrContext {
+        SessionPrContext {
+            owner: "concurrent-owner".to_string(),
+            repo: "concurrent-repo".to_string(),
+            branch: "concurrent-branch".to_string(),
+            checklist_item_id: None,
+        }
+    }
+
+    fn capture_pr_context_while_creating_session(sessions_dir: &Path) -> Option<SessionPrContext> {
+        let mut competing_session = session(Vec::new());
+        competing_session.label = Some("concurrent session".to_string());
+        competing_session.pr_context = Some(competing_pr_context());
+        store::save_session_to(sessions_dir, &competing_session).ok()?;
+
+        Some(SessionPrContext {
+            owner: "captured-owner".to_string(),
+            repo: "captured-repo".to_string(),
+            branch: "captured-branch".to_string(),
+            checklist_item_id: None,
+        })
     }
 
     #[rstest]
@@ -231,6 +272,36 @@ mod tests {
                 "engine": "codex"
             })
         );
+    }
+
+    #[rstest]
+    fn preserves_session_created_during_pr_context_capture(sessions_dir: TempDir) {
+        record_codex_resume_metadata_if_needed(
+            sessions_dir.path(),
+            "resume-target",
+            sessions_dir.path(),
+            Some("root, parent"),
+            true,
+            Some(capture_pr_context_while_creating_session),
+        )
+        .expect("record should succeed");
+
+        let actual_session = store::load_session_from(sessions_dir.path(), "resume-target")
+            .expect("load should succeed")
+            .expect("session should exist");
+        let mut expected_session = session(vec!["root".to_string(), "parent".to_string()]);
+        expected_session.label = Some("concurrent session".to_string());
+        expected_session.pr_context = Some(competing_pr_context());
+        expected_session.launched_with_vibe = true;
+        let mut actual = serde_json::to_value(actual_session).expect("session should serialize");
+        let mut expected =
+            serde_json::to_value(expected_session).expect("session should serialize");
+        actual["created_at"] = serde_json::json!("<timestamp>");
+        actual["updated_at"] = serde_json::json!("<timestamp>");
+        expected["created_at"] = serde_json::json!("<timestamp>");
+        expected["updated_at"] = serde_json::json!("<timestamp>");
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
