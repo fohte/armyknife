@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.432](https://github.com/fohte/armyknife/compare/v0.1.431...v0.1.432) (2026-10-17)
+
+
+### Features
+
+* **agent:** grant vibe to descendant sessions ([#1199](https://github.com/fohte/armyknife/issues/1199)) ([413ee8a](https://github.com/fohte/armyknife/commit/413ee8afd820ea137dd56a1822ae2e7adb13b94f))
+
 ## [0.1.431](https://github.com/fohte/armyknife/compare/v0.1.430...v0.1.431) (2026-10-17)
 
 
