@@ -4,16 +4,14 @@ use std::path::Path;
 use crate::shared::env_var::EnvVars;
 
 pub(super) fn run_pre_session_start_hook(
-    skip_hooks: bool,
     session_cwd: Option<&Path>,
     run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
 ) -> Result<()> {
-    if skip_hooks {
+    let Some(session_cwd) = session_cwd else {
         eprintln!("Skipping pre-session-start hook (--skip-hooks)");
         return Ok(());
-    }
+    };
 
-    let session_cwd = session_cwd.context("Session CWD is required when hooks are enabled")?;
     let session_cwd = session_cwd
         .to_str()
         .context("Session CWD is not valid UTF-8")?;

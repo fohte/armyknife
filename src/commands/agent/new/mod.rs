@@ -443,7 +443,7 @@ fn run_session_only_inner_with_launchers(
     } else {
         Some(std::fs::canonicalize(&cwd).context("Failed to resolve session CWD")?)
     };
-    run_pre_session_start_hook(args.skip_hooks, session_cwd.as_deref(), &mut run_hook)?;
+    run_pre_session_start_hook(session_cwd.as_deref(), &mut run_hook)?;
 
     // Window mode doesn't need a pane, so it remains the fallback when no
     // caller pane can be resolved.

@@ -20,32 +20,26 @@ use crate::shared::hooks;
 use crate::shared::worktree::branch_to_worktree_name;
 
 struct WorktreeHookContext<'a> {
-    skip_hooks: bool,
-    worktree_dir: &'a Path,
-    worktree_name: &'a str,
+    worktree_dir: Option<&'a Path>,
     actual_branch: &'a str,
-    branch_rollback: &'a BranchRollback,
     repo_root: &'a str,
 }
 
 fn run_worktree_hooks(
     context: WorktreeHookContext<'_>,
     mut run_hook: impl FnMut(&str, &[(&str, &str)]) -> Result<()>,
-    rollback: impl FnOnce(&str, &str, &str, &BranchRollback),
+    rollback: impl FnOnce(&str),
 ) -> Result<()> {
     let WorktreeHookContext {
-        skip_hooks,
         worktree_dir,
-        worktree_name,
         actual_branch,
-        branch_rollback,
         repo_root,
     } = context;
 
-    if skip_hooks {
+    let Some(worktree_dir) = worktree_dir else {
         eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
-        return run_pre_session_start_hook(true, None, run_hook);
-    }
+        return run_pre_session_start_hook(None, run_hook);
+    };
 
     // `worktree_dir` is built from the absolute repository root. Keep that
     // path as a fallback when canonicalization fails, matching the old hook behavior.
@@ -59,22 +53,12 @@ fn run_worktree_hooks(
     ];
 
     if let Err(error) = run_hook("post-worktree-create", &post_worktree_env) {
-        rollback(
-            "post-worktree-create",
-            worktree_name,
-            actual_branch,
-            branch_rollback,
-        );
+        rollback("post-worktree-create");
         return Err(error).context("Failed to run post-worktree-create hook");
     }
 
-    if let Err(error) = run_pre_session_start_hook(false, Some(&worktree_abs), &mut run_hook) {
-        rollback(
-            "pre-session-start",
-            worktree_name,
-            actual_branch,
-            branch_rollback,
-        );
+    if let Err(error) = run_pre_session_start_hook(Some(&worktree_abs), &mut run_hook) {
+        rollback("pre-session-start");
         return Err(error);
     }
 
@@ -225,20 +209,17 @@ pub(super) fn run_worktree_creation(
     // Hook failures roll back the worktree and any branch created for it.
     run_worktree_hooks(
         WorktreeHookContext {
-            skip_hooks: args.skip_hooks,
-            worktree_dir: &worktree_dir,
-            worktree_name: &worktree_name,
+            worktree_dir: (!args.skip_hooks).then_some(worktree_dir.as_path()),
             actual_branch: &actual_branch,
-            branch_rollback: &branch_rollback,
             repo_root,
         },
         hooks::run_hook,
-        |failed_hook, failed_worktree, failed_branch, branch_rollback| {
+        |failed_hook| {
             rollback_worktree(
                 &repo,
-                failed_worktree,
-                failed_branch,
-                branch_rollback,
+                &worktree_name,
+                &actual_branch,
+                &branch_rollback,
                 failed_hook,
             )
         },
@@ -288,7 +269,7 @@ pub(super) fn run_worktree_creation(
 mod tests {
     use super::*;
     use rstest::{fixture, rstest};
-    use std::cell::{Cell, RefCell};
+    use std::cell::RefCell;
 
     #[derive(Debug, PartialEq, Eq)]
     struct HookInvocation {
@@ -315,21 +296,17 @@ mod tests {
     fn runs_session_hook_after_worktree_hook_with_absolute_cwd(worktree_dir: tempfile::TempDir) {
         let worktree_path = worktree_dir.path().canonicalize().unwrap();
         let events = RefCell::new(Vec::new());
-        let branch_rollback = BranchRollback::Delete;
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                skip_hooks: false,
-                worktree_dir: &worktree_path,
-                worktree_name: "sample-worktree",
+                worktree_dir: Some(&worktree_path),
                 actual_branch: "sample-branch",
-                branch_rollback: &branch_rollback,
                 repo_root: "/repo",
             },
             |name, env_vars| {
                 events.borrow_mut().push(capture_hook(name, env_vars));
                 Ok(())
             },
-            |_, _, _, _| {},
+            |_| {},
         );
 
         assert_eq!(
@@ -364,36 +341,40 @@ mod tests {
     }
 
     #[rstest]
-    fn session_hook_failure_rolls_back_worktree_and_branch(worktree_dir: tempfile::TempDir) {
+    #[case::post_worktree_create(
+        "post-worktree-create",
+        &["post-worktree-create"],
+        "Failed to run post-worktree-create hook"
+    )]
+    #[case::pre_session_start(
+        "pre-session-start",
+        &["post-worktree-create", "pre-session-start"],
+        "Failed to run pre-session-start hook"
+    )]
+    fn hook_failure_invokes_rollback_before_the_next_hook(
+        #[case] failed_hook: &str,
+        #[case] expected_hook_calls: &[&str],
+        #[case] expected_error: &str,
+        worktree_dir: tempfile::TempDir,
+    ) {
         let worktree_path = worktree_dir.path().canonicalize().unwrap();
         let events = RefCell::new(Vec::new());
-        let rolled_back = Cell::new(false);
         let rollback_call = RefCell::new(None);
-        let branch_rollback = BranchRollback::Delete;
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                skip_hooks: false,
-                worktree_dir: &worktree_path,
-                worktree_name: "sample-worktree",
+                worktree_dir: Some(&worktree_path),
                 actual_branch: "sample-branch",
-                branch_rollback: &branch_rollback,
                 repo_root: "/repo",
             },
-            |name, env_vars| {
-                events.borrow_mut().push(capture_hook(name, env_vars));
-                if name == "pre-session-start" {
+            |name, _env_vars| {
+                events.borrow_mut().push(name.to_string());
+                if name == failed_hook {
                     anyhow::bail!("hook failed")
                 }
                 Ok(())
             },
-            |hook_name, worktree_name, branch, branch_rollback| {
-                rolled_back.set(true);
-                rollback_call.replace(Some((
-                    hook_name.to_string(),
-                    worktree_name.to_string(),
-                    branch.to_string(),
-                    branch_rollback.clone(),
-                )));
+            |hook_name| {
+                rollback_call.replace(Some(hook_name.to_string()));
             },
         );
 
@@ -402,69 +383,37 @@ mod tests {
                 result.err().map(|error| error.to_string()),
                 events.into_inner(),
                 rollback_call.into_inner(),
-                rolled_back.get(),
             ),
             (
-                Some("Failed to run pre-session-start hook".to_string()),
-                vec![
-                    HookInvocation {
-                        name: "post-worktree-create".to_string(),
-                        env_vars: vec![
-                            (
-                                EnvVars::worktree_path_name().to_string(),
-                                worktree_path.to_string_lossy().to_string(),
-                            ),
-                            (
-                                EnvVars::branch_name_name().to_string(),
-                                "sample-branch".to_string()
-                            ),
-                            (EnvVars::repo_root_name().to_string(), "/repo".to_string()),
-                        ],
-                    },
-                    HookInvocation {
-                        name: "pre-session-start".to_string(),
-                        env_vars: vec![(
-                            EnvVars::session_cwd_name().to_string(),
-                            worktree_path.to_string_lossy().to_string(),
-                        )],
-                    },
-                ],
-                Some((
-                    "pre-session-start".to_string(),
-                    "sample-worktree".to_string(),
-                    "sample-branch".to_string(),
-                    BranchRollback::Delete,
-                )),
-                true,
+                Some(expected_error.to_string()),
+                expected_hook_calls
+                    .iter()
+                    .map(|name| name.to_string())
+                    .collect(),
+                Some(failed_hook.to_string()),
             ),
         );
     }
 
-    #[rstest]
-    fn skip_hooks_does_not_resolve_worktree_path(worktree_dir: tempfile::TempDir) {
-        let missing_worktree = worktree_dir.path().join("missing");
+    #[test]
+    fn skip_hooks_skips_worktree_hook_chain() {
         let events = RefCell::new(Vec::new());
-        let rolled_back = Cell::new(false);
-        let branch_rollback = BranchRollback::Delete;
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                skip_hooks: true,
-                worktree_dir: &missing_worktree,
-                worktree_name: "sample-worktree",
+                worktree_dir: None,
                 actual_branch: "sample-branch",
-                branch_rollback: &branch_rollback,
                 repo_root: "/repo",
             },
             |name, _| {
                 events.borrow_mut().push(name.to_string());
                 Ok(())
             },
-            |_, _, _, _| rolled_back.set(true),
+            |_| events.borrow_mut().push("rollback".to_string()),
         );
 
         assert_eq!(
-            (result.is_ok(), events.into_inner(), rolled_back.get()),
-            (true, Vec::<String>::new(), false),
+            (result.is_ok(), events.into_inner()),
+            (true, Vec::<String>::new()),
         );
     }
 }

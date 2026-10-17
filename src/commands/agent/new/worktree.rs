@@ -90,7 +90,6 @@ pub(super) fn add_worktree_for_branch(
 
 /// How to roll back the branch associated with a worktree after a
 /// worktree creation hook failure.
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum BranchRollback {
     /// Branch was created in this invocation; delete it.
     Delete,
