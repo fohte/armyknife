@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.430](https://github.com/fohte/armyknife/compare/v0.1.429...v0.1.430) (2026-10-17)
+
+
+### Features
+
+* **agent:** allow prompt to enable vibe mode ([#1195](https://github.com/fohte/armyknife/issues/1195)) ([130ed4b](https://github.com/fohte/armyknife/commit/130ed4b2f93f50fcc143688ec6e776f5a80d9b96))
+
 ## [0.1.429](https://github.com/fohte/armyknife/compare/v0.1.428...v0.1.429) (2026-10-17)
 
 
