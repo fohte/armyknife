@@ -25,7 +25,7 @@ use crate::shared::sanitize::strip_angle_brackets;
 
 const MAX_SESSION_ID_SUGGESTIONS: usize = 3;
 const MAX_SESSION_ID_EDIT_DISTANCE: usize = 2;
-const MIN_SESSION_ID_PREFIX_LENGTH: usize = 3;
+const MIN_SESSION_ID_PREFIX_LENGTH: usize = 8;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NotifyArgs {
@@ -187,19 +187,44 @@ fn similar_session_ids(session_id: &str, sessions: &[Session]) -> Vec<String> {
         })
         .collect();
 
-    suggestions.sort_by(|left, right| {
-        let left_is_edit_match = left.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE;
-        let right_is_edit_match = right.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE;
+    let best_prefix_length = suggestions
+        .iter()
+        .filter(|suggestion| suggestion.edit_distance > MAX_SESSION_ID_EDIT_DISTANCE)
+        .map(|suggestion| suggestion.common_prefix_length)
+        .max();
+    let unique_best_prefix_id = best_prefix_length.and_then(|best_prefix_length| {
+        let mut best_matches = suggestions.iter().filter(|suggestion| {
+            suggestion.edit_distance > MAX_SESSION_ID_EDIT_DISTANCE
+                && suggestion.common_prefix_length == best_prefix_length
+        });
+        let best_match = best_matches.next()?;
+        best_matches
+            .next()
+            .is_none()
+            .then(|| best_match.session_id.clone())
+    });
+    suggestions.retain(|suggestion| {
+        suggestion.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE
+            || unique_best_prefix_id.as_ref() == Some(&suggestion.session_id)
+    });
 
-        right_is_edit_match
-            .cmp(&left_is_edit_match)
-            .then_with(|| match (left_is_edit_match, right_is_edit_match) {
-                (true, true) => left.edit_distance.cmp(&right.edit_distance),
-                (false, false) => right.common_prefix_length.cmp(&left.common_prefix_length),
-                _ => std::cmp::Ordering::Equal,
-            })
-            .then_with(|| right.common_prefix_length.cmp(&left.common_prefix_length))
-            .then_with(|| left.edit_distance.cmp(&right.edit_distance))
+    suggestions.sort_by(|left, right| {
+        let key = |suggestion: &SessionIdSuggestion| {
+            let is_edit_match = suggestion.edit_distance <= MAX_SESSION_ID_EDIT_DISTANCE;
+            (
+                !is_edit_match,
+                if is_edit_match {
+                    suggestion.edit_distance
+                } else {
+                    0
+                },
+                std::cmp::Reverse(suggestion.common_prefix_length),
+                suggestion.edit_distance,
+            )
+        };
+
+        key(left)
+            .cmp(&key(right))
             .then_with(|| left.session_id.cmp(&right.session_id))
     });
     suggestions.truncate(MAX_SESSION_ID_SUGGESTIONS);
@@ -391,7 +416,7 @@ mod tests {
         }
     }
 
-    fn session(session_id: &str, status: SessionStatus) -> Session {
+    fn session(session_id: &str, status: SessionStatus, engine: Engine) -> Session {
         Session {
             pr_context: None,
             session_id: session_id.to_string(),
@@ -422,17 +447,17 @@ mod tests {
             stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
-            engine: Engine::Claude,
+            engine,
         }
     }
 
     fn missing_session_error(
         session_store: &TestSessionStore,
         session_id: &str,
-        sessions: &[(&str, SessionStatus)],
+        sessions: &[(&str, SessionStatus, Engine)],
     ) -> String {
-        for (id, status) in sessions {
-            store::save_session_to(&session_store.sessions_dir, &session(id, *status))
+        for (id, status, engine) in sessions {
+            store::save_session_to(&session_store.sessions_dir, &session(id, *status, *engine))
                 .expect("test session should be stored");
         }
 
@@ -490,7 +515,7 @@ mod tests {
     #[rstest]
     #[case::single_character_substitution(
         "1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
-        &[("1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5e", SessionStatus::Running)],
+        &[("1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5e", SessionStatus::Running, Engine::Claude)],
         indoc::indoc! {"
             Session not found: 1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
             Did you mean:
@@ -499,52 +524,71 @@ mod tests {
     )]
     #[case::matching_first_uuid_block(
         "5a6b7c8d-1029-4c8d-a1b2-c3d4e5f60718",
-        &[("5a6b7c8d-e9f0-4a1b-8c2d-3e4f5a6b7c8d", SessionStatus::Stopped)],
+        &[("5a6b7c8d-e9f0-4a1b-8c2d-3e4f5a6b7c8d", SessionStatus::Stopped, Engine::Codex)],
         indoc::indoc! {"
             Session not found: 5a6b7c8d-1029-4c8d-a1b2-c3d4e5f60718
             Did you mean:
             - 5a6b7c8d-e9f0-4a1b-8c2d-3e4f5a6b7c8d
         "}.trim_end()
     )]
-    #[case::matching_only_initial_characters(
+    #[case::insufficient_prefix_is_ignored(
         "4f2a1111-1111-4111-8111-111111111111",
-        &[("4f2b2222-2222-4222-8222-222222222222", SessionStatus::Running)],
-        indoc::indoc! {"
-            Session not found: 4f2a1111-1111-4111-8111-111111111111
-            Did you mean:
-            - 4f2b2222-2222-4222-8222-222222222222
-        "}.trim_end()
+        &[("4f2b2222-2222-4222-8222-222222222222", SessionStatus::Running, Engine::Codex)],
+        "Session not found: 4f2a1111-1111-4111-8111-111111111111"
     )]
     #[case::no_close_candidate(
         "8f7e6d5c-4b3a-2910-a1b2-c3d4e5f60718",
-        &[("10293847-5647-4f3e-9d8c-7b6a5f4e3d2c", SessionStatus::Running)],
+        &[("10293847-5647-4f3e-9d8c-7b6a5f4e3d2c", SessionStatus::Running, Engine::Claude)],
         "Session not found: 8f7e6d5c-4b3a-2910-a1b2-c3d4e5f60718"
     )]
     #[case::ended_candidate_is_ignored(
         "73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f506",
-        &[("73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f507", SessionStatus::Ended)],
+        &[("73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f507", SessionStatus::Ended, Engine::Claude)],
         "Session not found: 73a1b2c3-d4e5-4f67-8a90-b1c2d3e4f506"
     )]
-    #[case::candidate_count_is_limited(
+    #[case::uuidv7_timestamp_prefix_is_ambiguous(
+        "018f5c2a-cccc-7ccc-8ccc-cccccccccccc",
+        &[
+            ("018f5c2a-aaaa-7aaa-8aaa-aaaaaaaaaaaa", SessionStatus::Running, Engine::Codex),
+            ("018f5c2a-bbbb-7bbb-8bbb-bbbbbbbbbbbb", SessionStatus::Running, Engine::Codex),
+        ],
+        "Session not found: 018f5c2a-cccc-7ccc-8ccc-cccccccccccc"
+    )]
+    #[case::edit_matches_rank_before_a_prefix_match(
         "aabb0000-0000-0000-0000-000000000000",
         &[
-            ("aabb1111-1111-1111-1111-111111111111", SessionStatus::Running),
-            ("aabb2222-2222-2222-2222-222222222222", SessionStatus::Running),
-            ("aabb3333-3333-3333-3333-333333333333", SessionStatus::Running),
-            ("aabb4444-4444-4444-4444-444444444444", SessionStatus::Running),
+            ("aabb0000-0000-0000-0000-000000000001", SessionStatus::Running, Engine::Claude),
+            ("aabb0000-0000-0000-0000-000000000011", SessionStatus::Running, Engine::Claude),
+            ("aabb0000-1111-1111-1111-111111111111", SessionStatus::Running, Engine::Claude),
         ],
         indoc::indoc! {"
             Session not found: aabb0000-0000-0000-0000-000000000000
             Did you mean:
-            - aabb1111-1111-1111-1111-111111111111
-            - aabb2222-2222-2222-2222-222222222222
-            - aabb3333-3333-3333-3333-333333333333
+            - aabb0000-0000-0000-0000-000000000001
+            - aabb0000-0000-0000-0000-000000000011
+            - aabb0000-1111-1111-1111-111111111111
+        "}.trim_end()
+    )]
+    #[case::candidate_count_is_limited(
+        "aabb0000-0000-0000-0000-000000000000",
+        &[
+            ("aabb0000-0000-0000-0000-000000000001", SessionStatus::Running, Engine::Claude),
+            ("aabb0000-0000-0000-0000-000000000002", SessionStatus::Running, Engine::Claude),
+            ("aabb0000-0000-0000-0000-000000000003", SessionStatus::Running, Engine::Claude),
+            ("aabb0000-0000-0000-0000-000000000004", SessionStatus::Running, Engine::Claude),
+        ],
+        indoc::indoc! {"
+            Session not found: aabb0000-0000-0000-0000-000000000000
+            Did you mean:
+            - aabb0000-0000-0000-0000-000000000001
+            - aabb0000-0000-0000-0000-000000000002
+            - aabb0000-0000-0000-0000-000000000003
         "}.trim_end()
     )]
     fn missing_session_error_suggests_only_close_tracked_sessions(
         session_store: TestSessionStore,
         #[case] session_id: &str,
-        #[case] sessions: &[(&str, SessionStatus)],
+        #[case] sessions: &[(&str, SessionStatus, Engine)],
         #[case] expected: &str,
     ) {
         assert_eq!(
