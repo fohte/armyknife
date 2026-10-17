@@ -22,7 +22,7 @@ mod worktree_creation;
 use delegation::{build_ancestor_chain, resolve_prompt};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_mode::{caller_repo_root, should_open_window};
-use session_start_hook::{run_pre_session_start_hook, run_pre_session_start_hook_with_rollback};
+use session_start_hook::run_pre_session_start_hook;
 use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
 use worktree_creation::run_worktree_creation;
 
@@ -713,46 +713,6 @@ mod tests {
         assert_eq!(
             (result.is_ok(), events.into_inner()),
             (true, vec!["launch".to_string()]),
-        );
-    }
-
-    #[rstest]
-    fn pre_start_hook_failure_runs_worktree_rollback(session_only_root: SessionOnlyRootFixture) {
-        let rolled_back = Cell::new(false);
-        let hook_call = RefCell::new(None);
-        let result = run_pre_session_start_hook_with_rollback(
-            false,
-            Path::new(&session_only_root.cwd),
-            || rolled_back.set(true),
-            |name, env_vars| {
-                hook_call.replace(Some((
-                    name.to_string(),
-                    env_vars
-                        .iter()
-                        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
-                        .collect::<Vec<_>>(),
-                )));
-                anyhow::bail!("hook failed")
-            },
-        );
-
-        assert_eq!(
-            (
-                result.err().map(|error| error.to_string()),
-                rolled_back.get(),
-                hook_call.into_inner()
-            ),
-            (
-                Some("hook failed".to_string()),
-                true,
-                Some((
-                    "pre-session-start".to_string(),
-                    vec![(
-                        EnvVars::session_cwd_name().to_string(),
-                        session_only_root.cwd,
-                    )],
-                )),
-            ),
         );
     }
 

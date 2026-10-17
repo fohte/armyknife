@@ -28,6 +28,8 @@ Worktree creation hooks run under a per-repository lock because they may update 
 
 Runs immediately before `a agent new` starts the selected engine, with or without `--worktree`. When a worktree is created, `post-worktree-create` runs first. A non-zero exit or a non-executable hook aborts startup; with `--worktree`, armyknife removes the newly created worktree and rolls back its branch as it does for a `post-worktree-create` failure.
 
+With `--worktree`, this hook runs under the per-repository worktree creation lock. Other `a agent new --worktree` calls for the same repository wait until the hooks or their rollback finish; invoking one from this hook would wait for the outer call to release the lock. Without `--worktree`, no worktree creation lock is held.
+
 Pass `--skip-hooks` to `a agent new` to skip both `post-worktree-create` and `pre-session-start`. The flag also works without `--worktree`.
 
 | Variable                | Description                                            |

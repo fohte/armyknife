@@ -3,7 +3,7 @@ use std::path::Path;
 
 use super::NewArgs;
 use super::delegation::resolve_prompt;
-use super::run_pre_session_start_hook_with_rollback;
+use super::run_pre_session_start_hook;
 use super::tmux::{TmuxWindowSpec, setup_tmux_window};
 use super::tmux_launch_inputs;
 use super::worktree::{
@@ -197,12 +197,12 @@ pub(super) fn run_worktree_creation(
     let engine = super::resolve_engine(args.common.engine, config);
     let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
 
-    run_pre_session_start_hook_with_rollback(
-        args.skip_hooks,
-        &worktree_abs,
-        || rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback),
-        hooks::run_hook,
-    )?;
+    if let Err(hook_err) =
+        run_pre_session_start_hook(args.skip_hooks, &worktree_abs, hooks::run_hook)
+    {
+        rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback);
+        return Err(hook_err);
+    }
 
     drop(creation_lock);
 

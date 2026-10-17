@@ -21,17 +21,3 @@ pub(super) fn run_pre_session_start_hook(
         &[(EnvVars::session_cwd_name(), session_cwd)],
     )
 }
-
-pub(super) fn run_pre_session_start_hook_with_rollback(
-    skip_hooks: bool,
-    session_cwd: &Path,
-    rollback: impl FnOnce(),
-    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
-) -> Result<()> {
-    if let Err(error) = run_pre_session_start_hook(skip_hooks, session_cwd, run_hook) {
-        rollback();
-        return Err(error);
-    }
-
-    Ok(())
-}
