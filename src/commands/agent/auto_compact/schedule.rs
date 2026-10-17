@@ -495,7 +495,7 @@ mod tests {
 
     #[test]
     fn mark_paused_is_noop_for_missing_session() {
-        // A schedule worker may wake up after the session file has been
+        // A schedule worker may wake up after the session record has been
         // garbage-collected (very long sleep, manual cleanup). The mark step
         // must not error in that case.
         let dir = TempDir::new().expect("temp dir");

@@ -1,5 +1,3 @@
-use std::fs;
-use std::io::ErrorKind;
 use std::path::Path;
 
 use anyhow::Result;
@@ -83,46 +81,11 @@ where
     let retention = TimeDelta::days(super::ENDED_SESSION_RETENTION_DAYS);
     let mut changed_any = false;
 
-    for entry in fs::read_dir(dir)? {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                tracing::warn!(
-                    target: "armyknife::commands::agent::store",
-                    event = "agent.store.cleanup_entry_failed",
-                    operation = "read_directory_entry",
-                    error = %error,
-                );
-                continue;
-            }
-        };
-        let path = entry.path();
-
-        if path.extension().is_none_or(|ext| ext != "json") {
-            continue;
-        }
-
-        let Some(session_id) = path.file_stem().and_then(|stem| stem.to_str()) else {
-            continue;
-        };
-        let session = match super::load_session_from(dir, session_id) {
-            Ok(Some(session)) => session,
-            Ok(None) => continue,
-            Err(error) => {
-                warn_cleanup_entry_failure(session_id, "load", &error);
-                continue;
-            }
-        };
-
+    for session in super::database::all_sessions(dir)? {
+        let session_id = session.session_id.as_str();
         if is_collectable(&session, now, retention) {
-            changed_any |= collect_expired_session(
-                dir,
-                &path,
-                session_id,
-                now,
-                retention,
-                &mut archive_codex_thread,
-            );
+            changed_any |=
+                collect_expired_session(dir, session_id, now, retention, &mut archive_codex_thread);
             continue;
         }
 
@@ -144,7 +107,6 @@ where
 
 fn collect_expired_session<A>(
     dir: &Path,
-    path: &Path,
     session_id: &str,
     now: DateTime<Utc>,
     retention: TimeDelta,
@@ -196,22 +158,13 @@ where
         session_lock
     };
 
-    let removed = match fs::remove_file(path) {
-        Ok(()) => true,
-        Err(error) if error.kind() == ErrorKind::NotFound => false,
+    let removed = match session_lock.delete() {
+        Ok(removed) => removed,
         Err(error) => {
             warn_cleanup_entry_failure(session_id, "delete", &error);
             false
         }
     };
-    if removed {
-        let lock_path = path.with_extension("json.lock");
-        if let Err(error) = fs::remove_file(&lock_path)
-            && error.kind() != ErrorKind::NotFound
-        {
-            warn_cleanup_entry_failure(session_id, "delete_lock_file", &error);
-        }
-    }
     drop(session_lock);
     removed
 }
@@ -388,7 +341,11 @@ mod tests {
         let session = make_session("session-to-delete", engine);
         super::super::save_session_to(&test_session_dir.sessions_dir, &session)
             .expect("session save should succeed");
-        let session_path = test_session_dir.sessions_dir.join("session-to-delete.json");
+        let is_stored = || {
+            super::super::load_session_from(&test_session_dir.sessions_dir, "session-to-delete")
+                .expect("session lookup should succeed")
+                .is_some()
+        };
         let archive_calls = RefCell::new(Vec::new());
 
         delete_session_with_archive_in(
@@ -397,14 +354,14 @@ mod tests {
             |session_id| {
                 archive_calls
                     .borrow_mut()
-                    .push((session_id.to_string(), session_path.exists()));
+                    .push((session_id.to_string(), is_stored()));
                 Ok(())
             },
         )
         .expect("session deletion should succeed");
 
         assert_eq!(
-            (archive_calls.into_inner(), session_path.exists()),
+            (archive_calls.into_inner(), is_stored()),
             (expected_archive_calls, false),
         );
     }
@@ -414,7 +371,11 @@ mod tests {
         let session = make_session("session-to-delete", Engine::Codex);
         super::super::save_session_to(&test_session_dir.sessions_dir, &session)
             .expect("session save should succeed");
-        let session_path = test_session_dir.sessions_dir.join("session-to-delete.json");
+        let is_stored = || {
+            super::super::load_session_from(&test_session_dir.sessions_dir, "session-to-delete")
+                .expect("session lookup should succeed")
+                .is_some()
+        };
         let archive_calls = RefCell::new(Vec::new());
 
         let result = delete_session_with_archive_in(
@@ -423,17 +384,13 @@ mod tests {
             |session_id| {
                 archive_calls
                     .borrow_mut()
-                    .push((session_id.to_string(), session_path.exists()));
+                    .push((session_id.to_string(), is_stored()));
                 Err(anyhow::anyhow!("fixture archive failure"))
             },
         );
 
         assert_eq!(
-            (
-                result.is_ok(),
-                archive_calls.into_inner(),
-                session_path.exists(),
-            ),
+            (result.is_ok(), archive_calls.into_inner(), is_stored(),),
             (true, vec![("session-to-delete".to_string(), true)], false,),
         );
     }

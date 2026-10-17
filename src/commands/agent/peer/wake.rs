@@ -238,7 +238,7 @@ fn respawn_unless_awake(
     session: &Session,
     tmux_info: &crate::commands::agent::types::TmuxInfo,
 ) -> Result<Option<String>> {
-    let _lock = store::lock_session_for_update(sessions_dir, &session.session_id)?;
+    let _lock = store::lock_session_for_wake(sessions_dir, &session.session_id)?;
     if let Some(name) = policy.already_awake(host, &session.session_id) {
         return Ok(Some(name));
     }

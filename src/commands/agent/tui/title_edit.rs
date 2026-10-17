@@ -176,7 +176,7 @@ mod tests {
     /// A temp cache root laid out so that, once `XDG_CACHE_HOME` is pointed
     /// at it via `temp_env`, `store::sessions_dir()` resolves inside it --
     /// letting `confirm_edit_title`'s real `store::update_session_label`
-    /// call round-trip through a real (but disposable) session file instead
+    /// call round-trip through a real (but disposable) session record instead
     /// of the developer's actual `~/.cache`.
     struct TempCacheRoot {
         #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]

@@ -52,7 +52,7 @@ pub(crate) async fn execute(plan: WorktreeDeletePlan, skip_hooks: bool) -> Resul
     let worktree_path_str = worktree_path.to_string_lossy();
 
     // Must complete before cleanup_worktree_by_name below: it deletes this
-    // worktree's session files and, when the command runs from the
+    // worktree's session records and, when the command runs from the
     // worktree's own pane, kills the very pane this process is running in.
     let merged = merge_status.as_ref().is_some_and(MergeStatus::is_merged);
     if let Some(branch) = branch_name.as_deref()

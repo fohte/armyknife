@@ -161,7 +161,7 @@ mod tests {
     /// A temp cache root laid out so that, once `XDG_CACHE_HOME` is pointed
     /// at it, `store::sessions_dir()` resolves inside it -- letting
     /// `generate_and_apply`'s real `store` calls round-trip through a real
-    /// (but disposable) session file. Mirrors `title_edit.rs`'s
+    /// (but disposable) session record. Mirrors `title_edit.rs`'s
     /// `TempCacheRoot` test helper.
     struct TempCacheRoot {
         #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]

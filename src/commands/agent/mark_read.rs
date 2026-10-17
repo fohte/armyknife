@@ -22,7 +22,7 @@ pub struct MarkReadArgs {
 /// tmux clears its `✱` unread glyph regardless of the path taken (TUI's
 /// `f` key, native tmux keybindings, mouse, etc.).
 ///
-/// No-op when the pane has no session id option, the session file is
+/// No-op when the pane has no session id option, the session record is
 /// missing, or the session is not unread `Stopped`.
 pub fn run(args: &MarkReadArgs) -> Result<()> {
     let Some(session_id) = lookup_session_id(args.pane_id.as_deref()) else {

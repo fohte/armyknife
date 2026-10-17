@@ -89,7 +89,7 @@ pub struct Session {
     /// `sweep`'s early clear once no `claude` process resolves. Consumed by
     /// `sweep` exactly like `pending_bg_task_ids`.
     ///
-    /// `alias` accepts the field's pre-rename name so a session file
+    /// `alias` accepts the field's pre-rename name so a stored session record
     /// written by an older `armyknife` build still deserializes instead of
     /// silently reverting to an empty set until the next `Stop`.
     #[serde(default, alias = "pending_agent_task_outputs")]

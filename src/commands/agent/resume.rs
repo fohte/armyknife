@@ -211,7 +211,7 @@ fn current_tmux_info() -> Result<Option<TmuxInfo>> {
 /// Marks an ended or paused Codex session as stopped before launching
 /// `codex resume`.
 /// The lock keeps this transition from racing with a hook that updates the
-/// same session file.
+/// same session record.
 fn mark_codex_session_resumed_in(
     sessions_dir: &Path,
     session_id: &str,

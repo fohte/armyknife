@@ -8,7 +8,6 @@ use crate::infra::tmux;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 
-use super::super::event::{SessionChange, SessionChangeType};
 use super::super::session_rows::build_session_rows_with_vibe;
 use super::App;
 
@@ -34,96 +33,111 @@ impl SelectionAnchor {
 }
 
 impl App {
-    /// Reloads sessions from disk.
-    /// If changes are provided, only those sessions are reloaded (incremental).
-    /// If None, performs a full reload.
-    /// Preserves the selected session row when it remains visible.
-    pub fn reload_sessions(&mut self, changes: Option<&[SessionChange]>) -> Result<()> {
-        match changes {
-            Some(changes) => self.apply_incremental_changes(changes)?,
-            None => self.full_reload()?,
+    /// Applies every session-store revision newer than the current watermark.
+    pub(crate) fn reload_session_store_changes(&mut self) -> Result<(bool, bool)> {
+        let sessions_dir = store::sessions_dir()?;
+        let mut changes = store::session_changes_since(&sessions_dir, self.session_store_revision)?;
+        for session in &mut changes.changed_sessions {
+            session_status::include_pending_status(session);
         }
-        Ok(())
+        self.apply_session_store_changes(changes)
     }
 
-    /// Performs a full reload of all sessions.
-    fn full_reload(&mut self) -> Result<()> {
+    fn apply_session_store_changes(
+        &mut self,
+        changes: store::SessionStoreChanges,
+    ) -> Result<(bool, bool)> {
         let selection = self.selection_anchor();
+        let revision_changed = changes.revision > self.session_store_revision;
+        let mut visible_state_changed = false;
+        let mut new_session_created = false;
+        let mut changed_ids = HashSet::new();
 
-        self.sessions = load_sessions()?;
-        self.vibe_enabled_session_ids = load_vibe_enabled_session_ids()?;
+        for session in changes.changed_sessions {
+            let session_id = session.session_id.clone();
+            let was_visible = self
+                .sessions
+                .iter()
+                .any(|existing| existing.session_id == session_id);
+            changed_ids.insert(session_id.clone());
 
-        // Rebuild title cache for new/changed sessions
-        self.rebuild_title_cache();
-
-        // Incrementally update searchable text cache if it exists
-        if self.searchable_text_cache.is_some() {
-            self.update_searchable_text_cache();
-        }
-
-        // Re-apply filter with current query
-        self.apply_filter();
-        self.restore_selection(selection);
-
-        Ok(())
-    }
-
-    /// Applies incremental changes to the session list.
-    fn apply_incremental_changes(&mut self, changes: &[SessionChange]) -> Result<()> {
-        let selection = self.selection_anchor();
-
-        for change in changes {
-            match change.change_type {
-                SessionChangeType::Created | SessionChangeType::Modified => {
-                    // Load the specific session
-                    if let Some(session) =
-                        session_status::load_session_with_bg_run_status(&change.session_id)?
-                    {
-                        if session.vibe_enabled {
-                            self.vibe_enabled_session_ids
-                                .insert(session.session_id.clone());
-                        } else {
-                            self.vibe_enabled_session_ids.remove(&session.session_id);
-                        }
-
-                        // Check if session is stale (TTY check)
-                        if is_session_stale(&session) {
-                            self.remove_session(&change.session_id);
-                            store::delete_session(&change.session_id)?;
-                            self.vibe_enabled_session_ids.remove(&change.session_id);
-                        } else if session.status == SessionStatus::Ended {
-                            // Ended sessions are not displayed; remove from list
-                            self.remove_session(&change.session_id);
-                        } else {
-                            self.upsert_session(session);
-                        }
-                    } else {
-                        // File was deleted or corrupted
-                        self.remove_session(&change.session_id);
-                        self.vibe_enabled_session_ids.remove(&change.session_id);
-                    }
+            if session.archived_at.is_some() {
+                self.remove_session(&session_id);
+                self.vibe_enabled_session_ids.remove(&session_id);
+                visible_state_changed |= was_visible;
+            } else {
+                if session.vibe_enabled {
+                    self.vibe_enabled_session_ids.insert(session_id.clone());
+                } else {
+                    self.vibe_enabled_session_ids.remove(&session_id);
                 }
-                SessionChangeType::Deleted => {
-                    self.remove_session(&change.session_id);
-                    self.vibe_enabled_session_ids.remove(&change.session_id);
+
+                if is_session_stale(&session) {
+                    self.remove_session(&session_id);
+                    store::delete_session(&session_id)?;
+                    self.vibe_enabled_session_ids.remove(&session_id);
+                    visible_state_changed |= was_visible;
+                } else if session.status == SessionStatus::Ended {
+                    self.remove_session(&session_id);
+                    visible_state_changed |= was_visible;
+                } else {
+                    self.upsert_session(session);
+                    visible_state_changed = true;
+                    new_session_created |= !was_visible;
                 }
             }
         }
 
-        // Re-sort with stability threshold to prevent rapid reordering
-        store::sort_sessions(&mut self.sessions);
-
-        // Rebuild caches for changed sessions only
-        self.rebuild_title_cache_incremental(changes);
-
-        if self.searchable_text_cache.is_some() {
-            self.update_searchable_text_cache();
+        let removed_ids = self
+            .sessions
+            .iter()
+            .filter(|session| !changes.existing_session_ids.contains(&session.session_id))
+            .map(|session| session.session_id.clone())
+            .collect::<Vec<_>>();
+        for session_id in removed_ids {
+            self.remove_session(&session_id);
+            self.vibe_enabled_session_ids.remove(&session_id);
+            changed_ids.insert(session_id);
+            visible_state_changed = true;
         }
 
-        self.apply_filter();
-        self.restore_selection(selection);
+        let removed_vibe_ids = self
+            .vibe_enabled_session_ids
+            .difference(&changes.existing_session_ids)
+            .cloned()
+            .collect::<Vec<_>>();
+        for session_id in removed_vibe_ids {
+            self.vibe_enabled_session_ids.remove(&session_id);
+            changed_ids.insert(session_id);
+            visible_state_changed = true;
+        }
 
-        Ok(())
+        for session_id in &changed_ids {
+            if let Some(session) = self
+                .sessions
+                .iter()
+                .find(|session| session.session_id == *session_id)
+            {
+                self.title_cache
+                    .insert(session_id.clone(), get_title_display_name(session));
+            } else {
+                self.title_cache.remove(session_id);
+            }
+        }
+
+        if visible_state_changed {
+            store::sort_sessions(&mut self.sessions);
+
+            if self.searchable_text_cache.is_some() {
+                self.update_searchable_text_cache();
+            }
+
+            self.apply_filter();
+            self.restore_selection(selection);
+        }
+
+        self.session_store_revision = changes.revision;
+        Ok((revision_changed, new_session_created))
     }
 
     /// Inserts or updates a session in the list.
@@ -296,27 +310,6 @@ impl App {
     pub(super) fn rebuild_title_cache(&mut self) {
         self.title_cache = build_title_cache(&self.sessions);
     }
-
-    /// Incrementally updates the title cache for changed sessions only.
-    fn rebuild_title_cache_incremental(&mut self, changes: &[SessionChange]) {
-        for change in changes {
-            match change.change_type {
-                SessionChangeType::Created | SessionChangeType::Modified => {
-                    if let Some(session) = self
-                        .sessions
-                        .iter()
-                        .find(|s| s.session_id == change.session_id)
-                    {
-                        let title = get_title_display_name(session);
-                        self.title_cache.insert(change.session_id.clone(), title);
-                    }
-                }
-                SessionChangeType::Deleted => {
-                    self.title_cache.remove(&change.session_id);
-                }
-            }
-        }
-    }
 }
 
 /// Checks if a session is stale (TTY no longer exists).
@@ -441,33 +434,129 @@ mod tests {
     }
 
     #[test]
+    fn test_session_store_changes_hide_archived_ended_and_deleted_sessions() {
+        let mut deleted = create_test_session("deleted-session");
+        deleted.vibe_enabled = true;
+        let archived = {
+            let mut session = create_test_session("archived-session");
+            session.archived_at = Some(Utc::now());
+            session.vibe_enabled = true;
+            session
+        };
+        let ended = {
+            let mut session = create_test_session("ended-session");
+            session.status = SessionStatus::Ended;
+            session.vibe_enabled = true;
+            session
+        };
+        let mut app = create_test_app(vec![deleted, create_test_session("archived-session"), {
+            let mut session = create_test_session("ended-session");
+            session.vibe_enabled = true;
+            session
+        }]);
+
+        app.apply_session_store_changes(store::SessionStoreChanges {
+            changed_sessions: vec![archived, ended],
+            existing_session_ids: HashSet::from([
+                "archived-session".to_string(),
+                "ended-session".to_string(),
+            ]),
+            revision: 4,
+        })
+        .expect("session-store changes should apply");
+
+        assert_eq!(
+            (
+                app.sessions
+                    .iter()
+                    .map(|session| session.session_id.as_str())
+                    .collect::<Vec<_>>(),
+                app.vibe_enabled_session_ids.clone(),
+                app.session_store_revision,
+            ),
+            (
+                Vec::<&str>::new(),
+                HashSet::from(["ended-session".to_string()]),
+                4,
+            ),
+        );
+    }
+
+    #[test]
+    fn test_session_store_revision_delta_updates_and_removes_sessions() {
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path().join("sessions");
+        let mut kept = create_test_session("retained-row");
+        kept.label = Some("Before update".to_string());
+        let mut deleted = create_test_session("removed-row");
+        deleted.vibe_enabled = true;
+        store::save_session_to(&sessions_dir, &kept).expect("session should save");
+        store::save_session_to(&sessions_dir, &deleted).expect("session should save");
+        let initial_revision = store::session_store_revision_from(&sessions_dir)
+            .expect("initial revision should load");
+        let mut app = create_test_app(vec![kept, deleted]);
+
+        store::update_session_label_in(
+            &sessions_dir,
+            "retained-row",
+            Some("After update".to_string()),
+        )
+        .expect("session should update");
+        store::delete_session_from(&sessions_dir, "removed-row").expect("session should delete");
+        let changes = store::session_changes_since(&sessions_dir, initial_revision)
+            .expect("session changes should load");
+        let revision = changes.revision;
+
+        app.apply_session_store_changes(changes)
+            .expect("session changes should apply");
+
+        assert_eq!(
+            (
+                app.sessions
+                    .iter()
+                    .map(|session| (session.session_id.clone(), session.label.clone()))
+                    .collect::<Vec<_>>(),
+                app.vibe_enabled_session_ids.clone(),
+                app.session_store_revision,
+            ),
+            (
+                vec![("retained-row".to_string(), Some("After update".to_string()))],
+                HashSet::new(),
+                revision,
+            ),
+        );
+    }
+
+    #[test]
     fn test_modified_ancestor_disabling_vibe_clears_inherited_task_marker() {
-        let cache_home = tempfile::tempdir().expect("temp cache home should be created");
-        let cache_home_path = cache_home.path().to_string_lossy().into_owned();
-        let sessions_dir = cache_home
-            .path()
-            .join("armyknife")
-            .join("cc")
-            .join("sessions");
+        let temp_dir = tempfile::tempdir().expect("temp directory should be created");
+        let sessions_dir = temp_dir.path().join("sessions");
         let mut ancestor = create_test_session("ancestor-session");
         ancestor.status = SessionStatus::Ended;
+        ancestor.vibe_enabled = true;
         store::save_session_to(&sessions_dir, &ancestor).expect("ancestor session should save");
+        let initial_revision = store::session_store_revision_from(&sessions_dir)
+            .expect("initial revision should load");
 
         let mut descendant = create_test_session("descendant-session");
         descendant
             .ancestor_session_ids
             .push(ancestor.session_id.clone());
+        store::save_session_to(&sessions_dir, &descendant).expect("descendant session should save");
         let mut app = create_test_app(vec![descendant]);
         app.vibe_enabled_session_ids
             .insert(ancestor.session_id.clone());
+        app.session_store_revision = initial_revision;
 
-        temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home_path.as_str()))], || {
-            app.reload_sessions(Some(&[SessionChange {
-                session_id: ancestor.session_id,
-                change_type: SessionChangeType::Modified,
-            }]))
-            .expect("incremental reload should succeed");
-        });
+        store::update_session_in(&sessions_dir, &ancestor.session_id, |ancestor| {
+            ancestor.vibe_enabled = false;
+            true
+        })
+        .expect("ancestor should update");
+        let changes = store::session_changes_since(&sessions_dir, initial_revision)
+            .expect("session changes should load");
+        app.apply_session_store_changes(changes)
+            .expect("session changes should apply");
 
         let sessions = app.sessions.iter().collect::<Vec<_>>();
         let rows = build_session_rows_with_vibe(
@@ -518,8 +607,7 @@ mod tests {
         );
 
         // Move the selected session to a different (still individually
-        // selectable) section, then re-resolve the row order/selection the
-        // same way `reload_sessions` does internally after a mutation.
+        // selectable) section, then re-resolve the row order and selection.
         let selection = app.selection_anchor();
         app.sessions
             .iter_mut()
@@ -544,11 +632,12 @@ mod tests {
             .position_of_session_row_occurrence("awaiting-1", 1)
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
-        app.apply_incremental_changes(&[SessionChange {
-            session_id: "active-1".to_string(),
-            change_type: SessionChangeType::Deleted,
-        }])
-        .expect("incremental reload succeeds");
+        app.apply_session_store_changes(store::SessionStoreChanges {
+            changed_sessions: Vec::new(),
+            existing_session_ids: HashSet::from(["awaiting-1".to_string()]),
+            revision: 1,
+        })
+        .expect("session-store changes should apply");
 
         assert_eq!(
             (

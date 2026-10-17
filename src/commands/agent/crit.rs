@@ -102,6 +102,7 @@ fn add(args: &AddArgs) -> Result<()> {
     };
     add_url(&mut session, &args.url);
     lock.save(&session)?;
+    drop(lock);
     tracing::info!(event = "agent.crit.add.registered");
 
     if let Some(pane_id) = caller_pane::pane_id_for_session(&session)
@@ -114,8 +115,6 @@ fn add(args: &AddArgs) -> Result<()> {
         );
         eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");
     }
-    drop(lock);
-
     if let Err(error) = monitor::ensure_started(port, Some(&session)) {
         tracing::warn!(
             event = "agent.crit.monitor.start_failed",

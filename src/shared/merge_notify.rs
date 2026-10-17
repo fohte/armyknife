@@ -109,7 +109,7 @@ fn warn_notify_failure(msg: &str) {
 
 /// Delegator session IDs for delegate sessions whose `cwd` is inside
 /// `worktree_path`, deduplicated so each delegator is notified once even
-/// when multiple session files (e.g. across resumes) share the worktree.
+/// when multiple session records (e.g. across resumes) share the worktree.
 /// Uses `list_all_sessions` rather than `list_sessions`: by the time a
 /// delegated PR merges, the delegate session has typically already ended,
 /// and `list_sessions` excludes `Ended` sessions.

@@ -112,7 +112,7 @@ fn run_save(_args: &SaveArgs) -> Result<()> {
 
 /// Reads `engine` for `session_id` from the store, defaulting to
 /// `Engine::Claude` (matching `Session::engine`'s own default) when the
-/// session file is missing or fails to load.
+/// session record is missing or fails to load.
 fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
     load_session_field(
         sessions_dir,
@@ -123,8 +123,8 @@ fn load_engine(sessions_dir: &Path, session_id: &str) -> Engine {
 }
 
 /// Reads `ancestor_session_ids` for `session_id` from the store, treating a
-/// missing session file the same as one with no ancestors. A read failure
-/// (e.g. a lock timeout against a session mid-write) is logged rather than
+/// missing session record the same as one with no ancestors. A read failure
+/// (e.g. writer contention during a session update) is logged rather than
 /// folded into the same empty result, since silently returning an empty list
 /// here would reproduce the exact ancestor-loss bug this module exists to
 /// prevent, just via a different trigger than the one save is guarding

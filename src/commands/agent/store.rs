@@ -1,40 +1,31 @@
-use std::fs::{self, File, OpenOptions, TryLockError};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 use std::{cell::RefCell, collections::HashSet};
 
 #[cfg(test)]
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use super::error::CcError;
 #[cfg(test)]
 use super::types::Engine;
-use super::types::{BG_RUN_PENDING_TASK_MARKER, Session, SessionStatus};
+use super::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use crate::shared::cache;
 
 mod archive;
+mod database;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+pub(crate) use database::{SessionLock, SessionStoreChanges, WakeLock, serialize_session};
 
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,
 /// preventing rapid reordering during concurrent agent execution.
 pub(crate) const SORT_STABILITY_THRESHOLD_SECS: i64 = 30;
-
-/// Lock timeout for file operations.
-/// Short timeout to minimize performance impact while preventing race conditions.
-const LOCK_TIMEOUT: Duration = Duration::from_millis(500);
-
-/// Number of retry attempts for acquiring a lock.
-const LOCK_RETRY_COUNT: u32 = 10;
-
-/// Delay between lock retry attempts.
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// Retention period for ended sessions before garbage collection.
 /// Ended sessions are kept so that `claude -c` resume can restore
@@ -103,178 +94,25 @@ pub(crate) fn load_last_selected_session_from(path: &Path) -> Result<Option<Stri
     Ok(Some(session_id))
 }
 
-/// Returns the file path for a specific session within a given directory.
-/// This is the internal implementation that accepts a custom sessions directory.
-fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<PathBuf> {
-    // Reject session IDs with path separators to prevent path traversal
-    if session_id.contains('/') || session_id.contains('\\') || session_id.contains("..") {
-        return Err(CcError::InvalidSessionId(session_id.to_string()).into());
-    }
-
-    Ok(sessions_dir.join(format!("{session_id}.json")))
-}
-
-/// Returns the file path for a specific session.
-/// Path: ~/.cache/armyknife/cc/sessions/<session_id>.json
+/// Loads a session by ID from the session database.
+/// Returns Ok(None) if the record doesn't exist.
 ///
-/// Validates that session_id does not contain path separators to prevent
-/// path traversal attacks.
-#[cfg(test)]
-pub fn session_file(session_id: &str) -> Result<PathBuf> {
-    session_file_in(&sessions_dir()?, session_id)
-}
-
-/// Acquires an exclusive lock on a file with timeout and retry.
-/// Uses try_lock() which acquires an exclusive (write) lock.
-fn acquire_lock(file: &File) -> Result<()> {
-    for attempt in 0..LOCK_RETRY_COUNT {
-        match file.try_lock() {
-            Ok(()) => return Ok(()),
-            Err(TryLockError::WouldBlock) => {
-                // Lock is held by another process, retry after delay
-                if attempt < LOCK_RETRY_COUNT - 1 {
-                    std::thread::sleep(LOCK_RETRY_DELAY);
-                }
-            }
-            Err(TryLockError::Error(e)) => return Err(e.into()),
-        }
-    }
-
-    // All retries exhausted
-    Err(CcError::LockTimeout(LOCK_TIMEOUT).into())
-}
-
-/// Loads a session from disk by session ID.
-/// Returns Ok(None) if the session file doesn't exist.
-///
-/// If the session file is corrupted (invalid JSON), Ok(None) will be returned.
-/// The corrupted file is not deleted here to avoid race conditions; instead,
-/// the next save_session call will atomically overwrite it.
+/// If the stored JSON is corrupted, Ok(None) is returned.
 pub fn load_session(session_id: &str) -> Result<Option<Session>> {
     let dir = sessions_dir()?;
     load_session_from(&dir, session_id)
 }
 
-/// Loads a session from a specific directory.
+/// Loads a session from a database in a specific directory.
 /// Allows testing with temporary directories.
 pub(crate) fn load_session_from(sessions_dir: &Path, session_id: &str) -> Result<Option<Session>> {
-    let path = session_file_in(sessions_dir, session_id)?;
-
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    // Use the same lock file as save_session to coordinate readers and writers
-    let lock_path = path.with_extension("json.lock");
-
-    // Open or create lock file for shared lock
-    let lock_file = match OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-    {
-        Ok(f) => f,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-
-    // Acquire shared lock (allows concurrent reads, blocks exclusive writes)
-    acquire_shared_lock(&lock_file)?;
-
-    // Read the actual session file while holding the lock
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e.into()),
-    };
-
-    // Parse JSON (lock is held until lock_file is dropped)
-    match serde_json::from_str::<Session>(&content) {
-        Ok(session) => Ok(Some(session)),
-        Err(_) => {
-            // File is corrupted; return None and let save_session overwrite it
-            eprintln!(
-                "[armyknife] warning: session file corrupted: {}",
-                path.display()
-            );
-            Ok(None)
-        }
-    }
-    // Lock is automatically released when lock_file is dropped
+    database::load_session(sessions_dir, session_id)
 }
 
-/// Acquires a shared lock on a file with timeout and retry.
-fn acquire_shared_lock(file: &File) -> Result<()> {
-    for attempt in 0..LOCK_RETRY_COUNT {
-        match file.try_lock_shared() {
-            Ok(()) => return Ok(()),
-            Err(TryLockError::WouldBlock) => {
-                if attempt < LOCK_RETRY_COUNT - 1 {
-                    std::thread::sleep(LOCK_RETRY_DELAY);
-                }
-            }
-            Err(TryLockError::Error(e)) => return Err(e.into()),
-        }
-    }
-    Err(CcError::LockTimeout(LOCK_TIMEOUT).into())
-}
-
-/// Saves a session to a specific directory.
+/// Saves a session to the database in a specific directory.
 /// Allows testing with temporary directories.
 pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<()> {
-    let path = session_file_in(sessions_dir, &session.session_id)?;
-
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Create lock file path (use .lock suffix to avoid conflicts)
-    let lock_path = path.with_extension("json.lock");
-
-    // Open or create lock file
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-
-    // Acquire exclusive lock
-    acquire_lock(&lock_file)?;
-
-    // Serialize content
-    let content = serialize_session(session)?;
-
-    // Write to temporary file first for atomic operation
-    let temp_path = path.with_extension("json.tmp");
-    let mut temp_file = File::create(&temp_path)?;
-    temp_file.write_all(content.as_bytes())?;
-    temp_file.sync_all()?;
-
-    // Rename temporary file to target (atomic on Unix)
-    fs::rename(&temp_path, &path)?;
-
-    // Lock is automatically released when lock_file is dropped
-    Ok(())
-}
-
-/// Holds the exclusive session lock across an entire load-mutate-save round
-/// trip, so a concurrent hook process for the same session cannot interleave
-/// and silently lose one side's update -- e.g. two subagents' hook events
-/// racing to add their own key to `Session::pending_permission_agent_ids`
-/// via separate `load_session_from` + `save_session_to` calls, where the
-/// later save would otherwise overwrite the earlier one's in-memory
-/// mutation. `load`/`save` reuse the single lock acquired here instead of
-/// `load_session_from`/`save_session_to`'s own (separate, and therefore
-/// individually race-prone) lock acquisitions -- do not call those two
-/// functions for the same `session_id` while holding a `SessionLock`;
-/// re-opening the lock file from the same process would try to acquire a
-/// second, independent flock on it and time out against the lock this
-/// struct already holds.
-pub(crate) struct SessionLock {
-    path: PathBuf,
-    _lock_file: File,
+    database::save_session(sessions_dir, session)
 }
 
 /// Acquires the exclusive session lock ahead of a load-mutate-save round
@@ -283,63 +121,16 @@ pub(crate) fn lock_session_for_update(
     sessions_dir: &Path,
     session_id: &str,
 ) -> Result<SessionLock> {
-    let path = session_file_in(sessions_dir, session_id)?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    let lock_path = path.with_extension("json.lock");
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    acquire_lock(&lock_file)?;
-
-    Ok(SessionLock {
-        path,
-        _lock_file: lock_file,
-    })
+    database::lock_session_for_update(sessions_dir, session_id)
 }
 
-impl SessionLock {
-    /// Reads the session under the lock already held by this guard. Returns
-    /// `Ok(None)` if the file is missing or corrupted, matching
-    /// `load_session_from`.
-    pub(crate) fn load(&self) -> Result<Option<Session>> {
-        let content = match fs::read_to_string(&self.path) {
-            Ok(c) => c,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e.into()),
-        };
-        match serde_json::from_str::<Session>(&content) {
-            Ok(session) => Ok(Some(session)),
-            Err(_) => {
-                eprintln!(
-                    "[armyknife] warning: session file corrupted: {}",
-                    self.path.display()
-                );
-                Ok(None)
-            }
-        }
-    }
-
-    /// Writes the session atomically under the lock already held by this
-    /// guard, matching `save_session_to`.
-    pub(crate) fn save(&self, session: &Session) -> Result<()> {
-        let content = serialize_session(session)?;
-        let temp_path = self.path.with_extension("json.tmp");
-        let mut temp_file = File::create(&temp_path)?;
-        temp_file.write_all(content.as_bytes())?;
-        temp_file.sync_all()?;
-        fs::rename(&temp_path, &self.path)?;
-        Ok(())
-    }
+pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Result<WakeLock> {
+    database::lock_session_for_wake(sessions_dir, session_id)
 }
 
-/// Loads a session under the exclusive lock, lets `mutate` decide whether
-/// and how to change it, and writes the result back atomically iff `mutate`
-/// returns `true`. A no-op when the session file is missing or corrupted.
+/// Loads a session under the write transaction, lets `mutate` decide whether
+/// and how to change it, and writes the result back iff `mutate` returns
+/// `true`. A no-op when the record is missing or corrupted.
 ///
 /// Holds the exclusive lock across the whole load-modify-save round-trip so
 /// a concurrent hook write of the full session (e.g. a new `last_message`)
@@ -350,43 +141,12 @@ pub(crate) fn update_session_in(
     session_id: &str,
     mutate: impl FnOnce(&mut Session) -> bool,
 ) -> Result<()> {
-    let path = session_file_in(sessions_dir, session_id)?;
-    if !path.exists() {
-        return Ok(());
-    }
-
-    let lock_path = path.with_extension("json.lock");
-    let lock_file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)?;
-    acquire_lock(&lock_file)?;
-
-    let content = match fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e.into()),
-    };
-    let Ok(mut session) = serde_json::from_str::<Session>(&content) else {
-        return Ok(());
-    };
-    if !mutate(&mut session) {
-        return Ok(());
-    }
-
-    let new_content = serialize_session(&session)?;
-    let temp_path = path.with_extension("json.tmp");
-    let mut temp_file = File::create(&temp_path)?;
-    temp_file.write_all(new_content.as_bytes())?;
-    temp_file.sync_all()?;
-    fs::rename(&temp_path, &path)?;
-    Ok(())
+    database::update_session(sessions_dir, session_id, mutate)
 }
 
 /// Rewrites an existing session so file watchers observe derived status changes.
 pub(crate) fn touch_session(session_id: &str) -> Result<()> {
-    update_session_in(&sessions_dir()?, session_id, |_| true)
+    database::touch_session(&sessions_dir()?, session_id)
 }
 
 /// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
@@ -408,7 +168,7 @@ pub(crate) fn mark_session_read_in(
 }
 
 /// Overwrites a session's `last_message` field under a freshly acquired
-/// lock, but only if its current on-disk value still equals
+/// transaction, but only if its current stored value still equals
 /// `expected_current` (the value read before `SessionLock` was released for
 /// the hook handler's possibly slow transcript read -- see that struct's
 /// doc comment for why the read cannot happen while the lock is held).
@@ -468,7 +228,7 @@ pub fn update_session_label_if_unchanged(
 /// snapshotted is never clobbered by a stale write (e.g. a detached title
 /// generation that finishes after the user renamed the session by hand).
 /// Returns whether the write happened -- `false` covers both a mismatched
-/// label and a missing session file.
+/// label and a missing session record.
 pub(crate) fn update_session_label_if_unchanged_in(
     sessions_dir: &Path,
     session_id: &str,
@@ -512,8 +272,8 @@ pub(crate) fn update_session_tmux_pane_id_in(
     })
 }
 
-/// Archives a Codex thread before deleting its session file.
-/// Returns Ok(()) even if the session file doesn't exist or archiving fails.
+/// Archives a Codex thread before deleting its session record.
+/// Returns Ok(()) even if the record doesn't exist or archiving fails.
 pub fn delete_session(session_id: &str) -> Result<()> {
     archive::delete_session_with_archive(session_id)
 }
@@ -527,12 +287,7 @@ pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<()> {
 /// Deletes a session from a specific directory.
 /// Allows testing with temporary directories.
 pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
-    let path = session_file_in(sessions_dir, session_id)?;
-
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-
+    database::delete_session(sessions_dir, session_id)?;
     Ok(())
 }
 
@@ -551,46 +306,10 @@ pub fn sort_sessions(sessions: &mut [Session]) {
     });
 }
 
-/// Reads every non-archived session file from a specific directory.
-fn read_all_sessions_from(dir: &Path) -> Result<Vec<Session>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut sessions = Vec::new();
-
-    let entries =
-        fs::read_dir(dir).with_context(|| format!("reading sessions dir {}", dir.display()))?;
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(error) => {
-                tracing::warn!(
-                    target: "armyknife::commands::agent::store",
-                    event = "agent.store.list_entry_failed",
-                    operation = "read_session_directory_entry",
-                    error = %error,
-                );
-                continue;
-            }
-        };
-        let path = entry.path();
-
-        if path.extension().is_some_and(|ext| ext == "json")
-            && let Ok(content) = fs::read_to_string(&path)
-            && let Ok(session) = serde_json::from_str::<Session>(&content)
-            && session.archived_at.is_none()
-        {
-            sessions.push(session);
-        }
-    }
-
-    Ok(sessions)
-}
-
 /// Lists all active sessions from disk, excluding ended sessions.
 pub fn list_sessions() -> Result<Vec<Session>> {
-    let mut sessions = read_all_sessions_from(&sessions_dir()?)?;
+    let mut sessions = database::all_sessions(&sessions_dir()?)?;
+    sessions.retain(|session| session.archived_at.is_none());
     sessions.retain(|s| s.status != SessionStatus::Ended);
     sort_sessions(&mut sessions);
     Ok(sessions)
@@ -606,17 +325,25 @@ pub fn list_all_sessions() -> Result<Vec<Session>> {
 
 /// Lists every non-archived session from a specific directory, including ended ones.
 pub(crate) fn list_all_sessions_from(sessions_dir: &Path) -> Result<Vec<Session>> {
-    let mut sessions = read_all_sessions_from(sessions_dir)?;
+    let mut sessions = database::all_sessions(sessions_dir)?;
+    sessions.retain(|session| session.archived_at.is_none());
     sort_sessions(&mut sessions);
     Ok(sessions)
 }
 
-fn serialize_session(session: &Session) -> Result<String> {
-    let mut persisted = session.clone();
-    persisted
-        .pending_bg_task_ids
-        .remove(BG_RUN_PENDING_TASK_MARKER);
-    Ok(serde_json::to_string_pretty(&persisted)?)
+pub(crate) fn session_store_revision() -> Result<i64> {
+    session_store_revision_from(&sessions_dir()?)
+}
+
+pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
+    database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn session_changes_since(
+    sessions_dir: &Path,
+    revision: i64,
+) -> Result<SessionStoreChanges> {
+    database::session_changes_since(sessions_dir, revision)
 }
 
 /// Archives stale sessions and removes records whose retention period expired.
@@ -660,7 +387,7 @@ where
     cleanup_stale_sessions_in(dir, is_pane_alive, cwd_exists)
 }
 
-/// Returns whether cleanup archived or removed at least one session file.
+/// Returns whether cleanup archived or removed at least one session record.
 fn cleanup_stale_sessions_in<F, G>(dir: &Path, is_pane_alive: F, cwd_exists: G) -> Result<bool>
 where
     F: Fn(&super::types::TmuxInfo) -> Option<bool>,
@@ -700,12 +427,48 @@ mod tests {
     use crate::commands::agent::types::SessionStatus;
     use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::fixture;
+    use std::fs::OpenOptions;
     use tempfile::TempDir;
 
     struct TempSessionDir {
         #[expect(dead_code, reason = "kept alive to prevent cleanup until dropped")]
         temp_dir: TempDir,
         sessions_path: PathBuf,
+    }
+
+    struct SessionRecordProbe {
+        sessions_dir: PathBuf,
+        session_id: String,
+        legacy_json_path: PathBuf,
+    }
+
+    impl SessionRecordProbe {
+        fn exists(&self) -> bool {
+            database::load_session(&self.sessions_dir, &self.session_id)
+                .ok()
+                .flatten()
+                .is_some()
+                || self.as_ref().exists()
+        }
+
+        fn with_extension(&self, extension: &str) -> PathBuf {
+            self.as_ref().with_extension(extension)
+        }
+    }
+
+    impl AsRef<Path> for SessionRecordProbe {
+        fn as_ref(&self) -> &Path {
+            &self.legacy_json_path
+        }
+    }
+
+    fn session_file_in(sessions_dir: &Path, session_id: &str) -> Result<SessionRecordProbe> {
+        database::validate_session_id(session_id)?;
+        Ok(SessionRecordProbe {
+            sessions_dir: sessions_dir.to_path_buf(),
+            session_id: session_id.to_string(),
+            legacy_json_path: sessions_dir.join(format!("{session_id}.json")),
+        })
     }
 
     #[fixture]
@@ -845,7 +608,7 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn list_all_sessions_from_adds_context_when_directory_cannot_be_read(
+    fn list_all_sessions_from_adds_context_when_database_directory_cannot_be_created(
         temp_session_dir: TempSessionDir,
     ) {
         let file_path = temp_session_dir.sessions_path.join("not-a-directory");
@@ -855,7 +618,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            format!("reading sessions dir {}", file_path.display())
+            format!("creating sessions dir {}", file_path.display())
         );
     }
 
@@ -869,6 +632,192 @@ mod tests {
         assert_eq!(parsed.status, SessionStatus::Running);
     }
 
+    #[rstest::rstest]
+    fn imports_legacy_json_and_removes_its_lock_file(temp_session_dir: TempSessionDir) {
+        let session = create_test_session("import-target");
+        let json_path = temp_session_dir.sessions_path.join("import-target.json");
+        let lock_path = temp_session_dir
+            .sessions_path
+            .join("import-target.json.lock");
+        let backup_path = temp_session_dir
+            .sessions_path
+            .join("legacy-json")
+            .join("import-target.json");
+        fs::write(
+            &json_path,
+            serde_json::to_vec_pretty(&session).expect("session should serialize"),
+        )
+        .expect("legacy session should write");
+        fs::write(&lock_path, "").expect("legacy lock file should write");
+
+        let imported = load_session_from(&temp_session_dir.sessions_path, "import-target")
+            .expect("legacy import should succeed")
+            .expect("imported session should load");
+        let actual = (
+            serde_json::to_value(imported).expect("imported session should serialize"),
+            json_path.exists(),
+            backup_path.exists(),
+            lock_path.exists(),
+        );
+        let expected = (
+            serde_json::to_value(session).expect("expected session should serialize"),
+            false,
+            true,
+            false,
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
+    fn legacy_import_prefers_newer_updated_at_values(temp_session_dir: TempSessionDir) {
+        let newer_at = Utc
+            .with_ymd_and_hms(2026, 4, 2, 12, 0, 0)
+            .single()
+            .expect("timestamp should be valid");
+        let older_at = newer_at - TimeDelta::hours(1);
+        let mut stored = create_test_session("updated-target");
+        stored.updated_at = newer_at;
+        stored.label = Some("stored value".to_string());
+        save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+
+        let mut legacy = stored.clone();
+        legacy.updated_at = older_at;
+        legacy.label = Some("older JSON value".to_string());
+        let json_path = temp_session_dir.sessions_path.join("updated-target.json");
+        fs::write(
+            &json_path,
+            serde_json::to_vec(&legacy).expect("legacy session should serialize"),
+        )
+        .expect("legacy session should write");
+        let after_older_import =
+            load_session_from(&temp_session_dir.sessions_path, "updated-target")
+                .expect("older legacy import should succeed")
+                .expect("stored row should remain");
+
+        legacy.updated_at = newer_at + TimeDelta::hours(1);
+        legacy.label = Some("newer JSON value".to_string());
+        fs::write(
+            &json_path,
+            serde_json::to_vec(&legacy).expect("newer legacy session should serialize"),
+        )
+        .expect("newer legacy session should write");
+        let after_newer_import =
+            load_session_from(&temp_session_dir.sessions_path, "updated-target")
+                .expect("newer legacy import should succeed")
+                .expect("newer row should load");
+
+        assert_eq!(
+            (
+                after_older_import.updated_at,
+                after_older_import.label,
+                after_newer_import.updated_at,
+                after_newer_import.label,
+            ),
+            (
+                newer_at,
+                Some("stored value".to_string()),
+                newer_at + TimeDelta::hours(1),
+                Some("newer JSON value".to_string()),
+            ),
+        );
+    }
+
+    #[rstest::rstest]
+    fn removes_legacy_backup_after_thirty_days(temp_session_dir: TempSessionDir) {
+        let session = create_test_session("retained-legacy");
+        let json_path = temp_session_dir.sessions_path.join("retained-legacy.json");
+        fs::write(
+            &json_path,
+            serde_json::to_vec(&session).expect("legacy session should serialize"),
+        )
+        .expect("legacy session should write");
+        load_session_from(&temp_session_dir.sessions_path, "retained-legacy")
+            .expect("legacy import should succeed");
+        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
+        let connection =
+            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("database should open");
+        connection
+            .execute(
+                "UPDATE session_store_meta SET value = ?1 WHERE key = 'legacy-imported-at'",
+                [(Utc::now() - TimeDelta::days(31)).to_rfc3339()],
+            )
+            .expect("legacy import time should update");
+        drop(connection);
+
+        list_all_sessions_from(&temp_session_dir.sessions_path)
+            .expect("opening the database should clean expired backups");
+
+        assert!(!backup_dir.exists());
+    }
+
+    #[rstest::rstest]
+    fn late_legacy_import_refreshes_backup_retention(temp_session_dir: TempSessionDir) {
+        let initial = create_test_session("existing-row");
+        save_session_to(&temp_session_dir.sessions_path, &initial).expect("row should save");
+        let backup_dir = temp_session_dir.sessions_path.join("legacy-json");
+        fs::create_dir_all(&backup_dir).expect("legacy backup directory should exist");
+        let earlier_backup = backup_dir.join("earlier-import.json");
+        fs::write(&earlier_backup, "retained backup").expect("earlier backup should write");
+        let connection =
+            rusqlite::Connection::open(temp_session_dir.sessions_path.join("sessions.db"))
+                .expect("database should open");
+        connection
+            .execute(
+                "INSERT INTO session_store_meta (key, value) VALUES ('legacy-imported-at', ?1)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [(Utc::now() - TimeDelta::days(31)).to_rfc3339()],
+            )
+            .expect("legacy import time should update");
+        drop(connection);
+
+        let late_session = create_test_session("late-import");
+        let late_json = temp_session_dir.sessions_path.join("late-import.json");
+        fs::write(
+            &late_json,
+            serde_json::to_vec(&late_session).expect("legacy session should serialize"),
+        )
+        .expect("late legacy session should write");
+        let loaded = load_session_from(&temp_session_dir.sessions_path, "late-import")
+            .expect("late legacy import should succeed")
+            .expect("late session should load");
+
+        assert_eq!(
+            (
+                loaded.session_id,
+                earlier_backup.exists(),
+                backup_dir.join("late-import.json").exists(),
+            ),
+            ("late-import".to_string(), true, true),
+        );
+    }
+
+    #[rstest::rstest]
+    fn preserves_active_orphaned_legacy_lock_files(temp_session_dir: TempSessionDir) {
+        let lock_path = temp_session_dir
+            .sessions_path
+            .join("creating-session.json.lock");
+        let lock = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("legacy lock should open");
+        lock.try_lock().expect("legacy lock should be acquired");
+
+        database::open_connection(&temp_session_dir.sessions_path)
+            .expect("database should open while the legacy writer holds its lock");
+        let lock_exists_while_owned = lock_path.exists();
+        drop(lock);
+
+        database::open_connection(&temp_session_dir.sessions_path)
+            .expect("database should open after the legacy writer releases its lock");
+
+        assert_eq!((lock_exists_while_owned, lock_path.exists()), (true, false));
+    }
+
     #[test]
     fn test_save_and_load_session() {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
@@ -876,86 +825,31 @@ mod tests {
         std::fs::create_dir_all(&sessions_path).expect("dir creation should succeed");
 
         let session = create_test_session("save-load-test");
-        let file_path = sessions_path.join("save-load-test.json");
+        save_session_to(&sessions_path, &session).expect("save should succeed");
+        let loaded = load_session_from(&sessions_path, "save-load-test")
+            .expect("load should succeed")
+            .expect("session should exist");
 
-        // Save session
-        let content = serde_json::to_string_pretty(&session).expect("serialization should succeed");
-        std::fs::write(&file_path, content).expect("write should succeed");
-
-        // Load session
-        let loaded_content = std::fs::read_to_string(&file_path).expect("read should succeed");
-        let loaded: Session =
-            serde_json::from_str(&loaded_content).expect("deserialization should succeed");
-
-        assert_eq!(loaded.session_id, "save-load-test");
+        assert_eq!(
+            (loaded.session_id, loaded.status),
+            ("save-load-test".to_string(), SessionStatus::Running),
+        );
     }
 
     #[test]
-    fn test_session_file_rejects_path_traversal() {
-        // Should reject session IDs with path separators
-        assert!(session_file("../etc/passwd").is_err());
-        assert!(session_file("foo/bar").is_err());
-        assert!(session_file("foo\\bar").is_err());
-        assert!(session_file("..").is_err());
-
-        // Should accept valid session IDs
-        assert!(session_file("valid-session-id").is_ok());
-        assert!(session_file("session_123").is_ok());
-    }
-
-    mod file_lock_tests {
-        use super::*;
-        use rstest::rstest;
-
-        #[rstest]
-        fn acquire_lock_succeeds_on_unlocked_file(temp_session_dir: TempSessionDir) {
-            let lock_path = temp_session_dir.sessions_path.join("test.lock");
-
-            let file = OpenOptions::new()
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(&lock_path)
-                .expect("file creation should succeed");
-
-            let result = acquire_lock(&file);
-            assert!(result.is_ok(), "should acquire lock on unlocked file");
-        }
-
-        #[rstest]
-        fn acquire_shared_lock_succeeds_on_unlocked_file(temp_session_dir: TempSessionDir) {
-            let test_file = temp_session_dir.sessions_path.join("test.json");
-
-            fs::write(&test_file, "{}").expect("write should succeed");
-
-            let file = File::open(&test_file).expect("open should succeed");
-            let result = acquire_shared_lock(&file);
-            assert!(
-                result.is_ok(),
-                "should acquire shared lock on unlocked file"
-            );
-        }
-
-        #[rstest]
-        fn multiple_shared_locks_allowed(temp_session_dir: TempSessionDir) {
-            let test_file = temp_session_dir.sessions_path.join("test.json");
-
-            fs::write(&test_file, "{}").expect("write should succeed");
-
-            let file1 = File::open(&test_file).expect("open should succeed");
-            let file2 = File::open(&test_file).expect("open should succeed");
-
-            let result1 = acquire_shared_lock(&file1);
-            let result2 = acquire_shared_lock(&file2);
-
-            assert!(result1.is_ok(), "first shared lock should succeed");
-            assert!(result2.is_ok(), "second shared lock should succeed");
-        }
+    fn test_session_id_rejects_path_traversal() {
+        assert!(database::validate_session_id("../etc/passwd").is_err());
+        assert!(database::validate_session_id("foo/bar").is_err());
+        assert!(database::validate_session_id("foo\\bar").is_err());
+        assert!(database::validate_session_id("..").is_err());
+        assert!(database::validate_session_id("valid-session-id").is_ok());
+        assert!(database::validate_session_id("session_123").is_ok());
     }
 
     mod session_lock_tests {
         use super::*;
         use rstest::rstest;
+        use std::sync::{Arc, Barrier};
 
         #[rstest]
         fn load_then_save_round_trips_a_mutation(temp_session_dir: TempSessionDir) {
@@ -977,6 +871,112 @@ mod tests {
             assert_eq!(
                 reloaded.pending_permission_agent_ids,
                 std::collections::BTreeSet::from(["agent-a".to_string()])
+            );
+        }
+
+        #[rstest]
+        fn concurrent_updates_do_not_overwrite_same_or_different_sessions(
+            temp_session_dir: TempSessionDir,
+        ) {
+            let sessions_dir = temp_session_dir.sessions_path.clone();
+            let worker_count = 8;
+            save_session_to(&sessions_dir, &create_test_session("shared-row"))
+                .expect("shared row should save");
+            let worker_ids = (0..worker_count)
+                .map(|index| format!("worker-{index}"))
+                .collect::<Vec<_>>();
+            for worker_id in &worker_ids {
+                save_session_to(&sessions_dir, &create_test_session(worker_id))
+                    .expect("worker row should save");
+            }
+
+            let barrier = Arc::new(Barrier::new(worker_count + 1));
+            let workers = worker_ids
+                .iter()
+                .map(|worker_id| {
+                    let sessions_dir = sessions_dir.clone();
+                    let worker_id = worker_id.clone();
+                    let barrier = Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        update_session_in(&sessions_dir, "shared-row", |session| {
+                            session
+                                .pending_permission_agent_ids
+                                .insert(worker_id.clone());
+                            true
+                        })
+                        .expect("shared row update should succeed");
+                        update_session_in(&sessions_dir, &worker_id, |session| {
+                            session
+                                .pending_permission_agent_ids
+                                .insert(worker_id.clone());
+                            true
+                        })
+                        .expect("independent row update should succeed");
+                    })
+                })
+                .collect::<Vec<_>>();
+            barrier.wait();
+            for worker in workers {
+                worker.join().expect("writer thread should complete");
+            }
+
+            let shared = load_session_from(&sessions_dir, "shared-row")
+                .expect("shared row should load")
+                .expect("shared row should exist")
+                .pending_permission_agent_ids;
+            let independent = worker_ids
+                .iter()
+                .map(|worker_id| {
+                    load_session_from(&sessions_dir, worker_id)
+                        .expect("worker row should load")
+                        .expect("worker row should exist")
+                        .pending_permission_agent_ids
+                })
+                .collect::<Vec<_>>();
+            let expected_shared = worker_ids
+                .iter()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>();
+            let expected_independent = worker_ids
+                .iter()
+                .map(|worker_id| std::collections::BTreeSet::from([worker_id.clone()]))
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                (shared, independent),
+                (expected_shared, expected_independent)
+            );
+        }
+
+        #[rstest]
+        fn touch_advances_revision_without_changing_session_data(temp_session_dir: TempSessionDir) {
+            let session = create_test_session("touch-row");
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("session should save");
+            let before_revision = database::session_store_revision(&temp_session_dir.sessions_path)
+                .expect("revision should load");
+            let before = serde_json::to_value(
+                load_session_from(&temp_session_dir.sessions_path, "touch-row")
+                    .expect("session should load")
+                    .expect("session should exist"),
+            )
+            .expect("session should serialize");
+
+            database::touch_session(&temp_session_dir.sessions_path, "touch-row")
+                .expect("touch should succeed");
+
+            let after = serde_json::to_value(
+                load_session_from(&temp_session_dir.sessions_path, "touch-row")
+                    .expect("session should load")
+                    .expect("session should exist"),
+            )
+            .expect("session should serialize");
+            let after_revision = database::session_store_revision(&temp_session_dir.sessions_path)
+                .expect("revision should load");
+            assert_eq!(
+                (before == after, after_revision),
+                (true, before_revision + 1),
             );
         }
     }
@@ -1034,7 +1034,7 @@ mod tests {
                 .insert("background-task".to_string());
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
+            assert!(path.exists(), "session record should exist before cleanup");
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1193,7 +1193,7 @@ mod tests {
         }
 
         #[rstest]
-        fn continues_cleanup_when_one_session_lock_times_out(temp_session_dir: TempSessionDir) {
+        fn cleanup_archives_sessions_from_the_database(temp_session_dir: TempSessionDir) {
             let now = Utc
                 .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
                 .single()
@@ -1211,9 +1211,6 @@ mod tests {
                     .expect("save should succeed");
             }
 
-            let held_lock =
-                lock_session_for_update(&temp_session_dir.sessions_path, "locked-session")
-                    .expect("test should hold the session lock");
             let changed = archive::cleanup_stale_sessions_in_with_archive_at(
                 &temp_session_dir.sessions_path,
                 mock_pane_always_dead,
@@ -1221,8 +1218,7 @@ mod tests {
                 now,
                 |_| Ok(()),
             )
-            .expect("one locked session should not abort cleanup");
-            drop(held_lock);
+            .expect("cleanup should succeed");
 
             let actual = (
                 changed,
@@ -1233,7 +1229,7 @@ mod tests {
                     .expect("load should succeed")
                     .map(|session| session.archived_at),
             );
-            assert_eq!(actual, (true, Some(None), Some(Some(now))));
+            assert_eq!(actual, (true, Some(Some(now)), Some(Some(now))));
         }
 
         #[rstest]
@@ -1287,7 +1283,7 @@ mod tests {
         }
 
         #[rstest]
-        fn keeps_session_and_lock_file_when_archiving(temp_session_dir: TempSessionDir) {
+        fn archives_session_without_creating_a_lock_file(temp_session_dir: TempSessionDir) {
             let session_id = "with-lock-test";
             let path = session_file_in(&temp_session_dir.sessions_path, session_id)
                 .expect("session_file_in should succeed");
@@ -1304,7 +1300,7 @@ mod tests {
                 .expect("save should succeed");
 
             let lock_path = path.with_extension("json.lock");
-            assert!(path.exists(), "session file should exist");
+            assert!(path.exists(), "session record should exist");
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1329,7 +1325,7 @@ mod tests {
                     lock_path.exists(),
                     stored_archived_at
                 ),
-                (true, true, true, Some(Some(archived_at))),
+                (true, true, false, Some(Some(archived_at))),
             );
         }
 
@@ -1353,7 +1349,7 @@ mod tests {
             // no pane info, so `stale_pane` alone would never catch it.
             save_session_to(&temp_session_dir.sessions_path, &session)
                 .expect("save should succeed");
-            assert!(path.exists(), "session file should exist before cleanup");
+            assert!(path.exists(), "session record should exist before cleanup");
 
             let archived_at = Utc
                 .with_ymd_and_hms(2026, 1, 1, 0, 0, 0)
@@ -1433,7 +1429,7 @@ mod tests {
         #[case::ended(SessionStatus::Ended, false)]
         #[case::paused(SessionStatus::Paused, false)]
         #[case::archived(SessionStatus::Stopped, true)]
-        fn removes_expired_sessions_and_lock_files(
+        fn removes_expired_sessions_without_lock_files(
             temp_session_dir: TempSessionDir,
             #[case] status: SessionStatus,
             #[case] archived: bool,
@@ -1636,7 +1632,7 @@ mod tests {
         }
 
         #[rstest]
-        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+        fn missing_session_record_is_noop(temp_session_dir: TempSessionDir) {
             let now = Utc.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
             mark_session_read_in(&temp_session_dir.sessions_path, "ghost", now)
                 .expect("missing session should be ok");
@@ -1680,7 +1676,7 @@ mod tests {
         }
 
         #[rstest]
-        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+        fn missing_session_record_is_noop(temp_session_dir: TempSessionDir) {
             update_session_label_in(
                 &temp_session_dir.sessions_path,
                 "ghost",
@@ -1759,7 +1755,7 @@ mod tests {
         }
 
         #[rstest]
-        fn missing_session_file_returns_false_without_error(temp_session_dir: TempSessionDir) {
+        fn missing_session_record_returns_false_without_error(temp_session_dir: TempSessionDir) {
             let applied = update_session_label_if_unchanged_in(
                 &temp_session_dir.sessions_path,
                 "ghost",
@@ -1854,7 +1850,7 @@ mod tests {
         }
 
         #[rstest]
-        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+        fn missing_session_record_is_noop(temp_session_dir: TempSessionDir) {
             update_session_tmux_pane_id_in(&temp_session_dir.sessions_path, "ghost", "%42")
                 .expect("missing session should be ok");
         }
@@ -1915,7 +1911,7 @@ mod tests {
         }
 
         #[rstest]
-        fn missing_session_file_is_noop(temp_session_dir: TempSessionDir) {
+        fn missing_session_record_is_noop(temp_session_dir: TempSessionDir) {
             update_session_last_message_if_unchanged_in(
                 &temp_session_dir.sessions_path,
                 "ghost",
@@ -1951,8 +1947,8 @@ mod tests {
             let result = load_session_from(&temp_session_dir.sessions_path, &session_id)
                 .expect("load should not error");
             assert!(result.is_none(), "{} session should return None", prefix);
-            // File is not deleted to avoid race conditions; save_session will overwrite it
-            assert!(path.exists(), "{} file should still exist", prefix);
+            // Invalid legacy JSON is preserved for inspection.
+            assert!(path.exists(), "{} JSON should still exist", prefix);
         }
 
         #[rstest]

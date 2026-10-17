@@ -1,10 +1,7 @@
 use crate::commands::agent::store;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use notify::{
-    EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{CreateKind, ModifyKind, RemoveKind},
-};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -26,28 +23,12 @@ pub struct KeyEvent {
     pub modifiers: KeyModifiers,
 }
 
-/// Represents a change to a specific session file.
-#[derive(Debug, Clone)]
-pub struct SessionChange {
-    pub session_id: String,
-    pub change_type: SessionChangeType,
-}
-
-/// Type of change that occurred to a session file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionChangeType {
-    Created,
-    Modified,
-    Deleted,
-}
-
 /// Events that can occur in the TUI.
 pub enum AppEvent {
     /// A key was pressed.
     Key(KeyEvent),
-    /// Session data changed on disk.
-    /// Contains session changes if specific files were identified, or None for full reload.
-    SessionsChanged(Option<Vec<SessionChange>>),
+    /// The session database or one of its WAL files changed.
+    SessionStoreChanged,
     /// Tick for periodic updates.
     Tick,
     /// Background worktree discovery finished.
@@ -334,7 +315,7 @@ fn handle_worktree_discovery(tx: Sender<AppEvent>) {
 /// One-shot stale-session cleanup run from `EventHandler::new`.
 fn handle_stale_session_cleanup(tx: Sender<AppEvent>) {
     if let Ok(true) = store::cleanup_stale_sessions() {
-        let _ = tx.send(AppEvent::SessionsChanged(None));
+        let _ = tx.send(AppEvent::SessionStoreChanged);
     }
 }
 
@@ -349,7 +330,7 @@ fn handle_tick_events(tx: Sender<AppEvent>) {
     }
 }
 
-/// Sets up a file system watcher for the sessions directory.
+/// Sets up a file system watcher for the session database and its WAL files.
 fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>> {
     let sessions_dir = match store::sessions_dir() {
         Ok(dir) => dir,
@@ -362,11 +343,10 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
     }
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(event) = res {
-            let changes = extract_session_changes(&event);
-            if !changes.is_empty() {
-                let _ = tx.send(AppEvent::SessionsChanged(Some(changes)));
-            }
+        if let Ok(event) = res
+            && extract_session_store_change(&event)
+        {
+            let _ = tx.send(AppEvent::SessionStoreChanged);
         }
     })?;
 
@@ -375,36 +355,19 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
     Ok(Some(watcher))
 }
 
-/// Extracts session IDs from file paths in the event.
-fn extract_session_changes(event: &notify::Event) -> Vec<SessionChange> {
-    let change_type = match event.kind {
-        EventKind::Create(CreateKind::File) => SessionChangeType::Created,
-        EventKind::Modify(ModifyKind::Data(_) | ModifyKind::Name(_)) => SessionChangeType::Modified,
-        EventKind::Remove(RemoveKind::File) => SessionChangeType::Deleted,
-        _ => return Vec::new(),
-    };
-
-    event
-        .paths
-        .iter()
-        .filter_map(|path| {
-            // Only process .json files (not .lock or .tmp)
-            if path.extension()?.to_str()? != "json" {
-                return None;
-            }
-            let session_id = path.file_stem()?.to_str()?.to_string();
-            Some(SessionChange {
-                session_id,
-                change_type,
-            })
-        })
-        .collect()
+/// Returns whether a filesystem event may reflect a session database update.
+fn extract_session_store_change(event: &notify::Event) -> bool {
+    event.paths.iter().any(|path| {
+        matches!(
+            path.file_name().and_then(|name| name.to_str()),
+            Some("sessions.db" | "sessions.db-wal")
+        )
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use notify::event::{DataChange, ModifyKind};
     use rstest::rstest;
     use std::path::PathBuf;
 
@@ -415,59 +378,24 @@ mod tests {
             code: KeyCode::Char('q'),
             modifiers: KeyModifiers::NONE,
         });
-        let _changed = AppEvent::SessionsChanged(None);
+        let _store_changed = AppEvent::SessionStoreChanged;
         let _tick = AppEvent::Tick;
     }
 
     #[rstest]
-    #[case::json_file(
-        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-        "/sessions/test-123.json",
-        Some(("test-123", SessionChangeType::Modified))
-    )]
-    #[case::lock_file_ignored(
-        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-        "/sessions/test-123.json.lock",
-        None
-    )]
-    #[case::tmp_file_ignored(
-        EventKind::Modify(ModifyKind::Data(DataChange::Content)),
-        "/sessions/test-123.json.tmp",
-        None
-    )]
-    #[case::create_event(
-        EventKind::Create(CreateKind::File),
-        "/sessions/new-session.json",
-        Some(("new-session", SessionChangeType::Created))
-    )]
-    #[case::delete_event(
-        EventKind::Remove(RemoveKind::File),
-        "/sessions/deleted-session.json",
-        Some(("deleted-session", SessionChangeType::Deleted))
-    )]
-    fn test_extract_session_changes(
-        #[case] kind: EventKind,
-        #[case] path: &str,
-        #[case] expected: Option<(&str, SessionChangeType)>,
-    ) {
+    #[case::database("/sessions/sessions.db", true)]
+    #[case::wal("/sessions/sessions.db-wal", true)]
+    #[case::shared_memory_ignored("/sessions/sessions.db-shm", false)]
+    #[case::legacy_json_ignored("/sessions/old-session.json", false)]
+    #[case::unrelated_file_ignored("/sessions/notes.txt", false)]
+    fn test_extract_session_store_change(#[case] path: &str, #[case] expected: bool) {
         let event = notify::Event {
-            kind,
+            kind: notify::EventKind::Any,
             paths: vec![PathBuf::from(path)],
             attrs: Default::default(),
         };
 
-        let changes = extract_session_changes(&event);
-
-        match expected {
-            Some((session_id, change_type)) => {
-                assert_eq!(changes.len(), 1);
-                assert_eq!(changes[0].session_id, session_id);
-                assert_eq!(changes[0].change_type, change_type);
-            }
-            None => {
-                assert!(changes.is_empty());
-            }
-        }
+        assert_eq!(extract_session_store_change(&event), expected);
     }
 
     #[test]
@@ -521,13 +449,9 @@ mod tests {
             _watcher: None,
         };
 
-        // Enqueue multiple SessionsChanged events
-        for i in 0..5 {
-            tx.send(AppEvent::SessionsChanged(Some(vec![SessionChange {
-                session_id: format!("session-{i}"),
-                change_type: SessionChangeType::Modified,
-            }])))
-            .unwrap();
+        // Enqueue multiple session-store changes.
+        for _ in 0..5 {
+            tx.send(AppEvent::SessionStoreChanged).unwrap();
         }
 
         let mut count = 0;
@@ -538,20 +462,16 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_changes_multiple_files() {
+    fn test_extract_session_store_change_accepts_database_paths_in_batch_events() {
         let event = notify::Event {
-            kind: EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+            kind: notify::EventKind::Any,
             paths: vec![
-                PathBuf::from("/sessions/session-1.json"),
-                PathBuf::from("/sessions/session-2.json"),
-                PathBuf::from("/sessions/session-3.json.lock"), // should be ignored
+                PathBuf::from("/sessions/old-session.json"),
+                PathBuf::from("/sessions/sessions.db-wal"),
             ],
             attrs: Default::default(),
         };
 
-        let changes = extract_session_changes(&event);
-        assert_eq!(changes.len(), 2);
-        assert_eq!(changes[0].session_id, "session-1");
-        assert_eq!(changes[1].session_id, "session-2");
+        assert!(extract_session_store_change(&event));
     }
 }

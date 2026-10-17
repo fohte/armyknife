@@ -38,7 +38,7 @@ pub struct WorktreeCleanupResult {
 }
 
 /// Cleans up all resources associated with a worktree at `cwd`:
-/// worktree itself, branch, tmux windows, agent session files, and notifications.
+/// worktree itself, branch, tmux windows, agent session records, and notifications.
 ///
 /// `cwd` can be any path inside the worktree (including subdirectories);
 /// the worktree root is resolved via `repo.workdir()`.
@@ -87,7 +87,7 @@ pub fn cleanup_worktree_resources_with_post_delete(
 /// before session and tmux cleanup runs.
 ///
 /// `worktree_path` is the filesystem path of the worktree root, used for
-/// tmux window and session file lookup.
+/// tmux window and session record lookup.
 pub fn cleanup_worktree_by_name(
     repo: &GitRepo,
     worktree_name: &str,
@@ -151,7 +151,7 @@ fn delete_worktree_and_branch(repo: &GitRepo, worktree_name: &str) -> WorktreeCl
 }
 
 /// Returns true if the pane hosting this session still runs a live agent
-/// process that needs SIGTERM before we drop the session file.
+/// process that needs SIGTERM before we delete the session record.
 ///
 /// Paused sessions were already SIGTERM'd by `agent sweep`, and Ended sessions
 /// exited on their own. In both cases the pane's foreground process is the
@@ -169,7 +169,7 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
     }
 }
 
-/// Cleans up active agent session files and notification groups for sessions
+/// Cleans up active agent session records and notification groups for sessions
 /// whose `cwd` is inside `worktree_path`.
 ///
 /// Every stored status is considered so `Ended` sessions with stale notifications
@@ -180,7 +180,7 @@ fn should_sigterm_session(status: SessionStatus) -> bool {
 ///    after this cleanup process exits.
 /// 2. If the session's Claude process is still expected to be alive and the
 ///    tmux pane is alive, sends SIGTERM to it
-/// 3. Deletes the session file unless the session has already ended
+/// 3. Deletes the session record unless the session has already ended
 /// 4. Removes the notification group on a best-effort basis
 ///
 /// Returns the number of sessions cleaned up.

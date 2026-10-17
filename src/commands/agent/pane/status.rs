@@ -103,7 +103,7 @@ fn current_user() -> String {
 
 /// Loads the pane's bound session (via its agent session-id pane option; see
 /// `types::TMUX_SESSION_OPTION`) and renders the has-paused flag. Returns
-/// `None` when the pane has no session option, the session file is gone, or
+/// `None` when the pane has no session option, the session record is gone, or
 /// the session is not Paused.
 fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<Option<&'static str>> {
     let Some(session_id) = resolve_session_option(|option| tmux::get_pane_option(pane_id, option))
@@ -114,7 +114,7 @@ fn render_for_pane(pane_id: &str, sessions_dir: &Path) -> Result<Option<&'static
 }
 
 /// Returns whether the session identified by `session_id` under `sessions_dir`
-/// is currently `Paused`. A missing or corrupted session file is treated as
+/// is currently `Paused`. A missing or corrupted session record is treated as
 /// not paused, since both mean there is no resumable conversation to guard.
 fn is_session_paused(sessions_dir: &Path, session_id: &str) -> Result<bool> {
     let session = store::load_session_from(sessions_dir, session_id)?;

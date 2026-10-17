@@ -32,7 +32,7 @@ pub(crate) fn include_pending_status(session: &mut Session) {
     apply_pending_status(session, pending);
 }
 
-/// Includes registry state on Stop without touching the session file while
+/// Includes registry state on Stop without touching the session record while
 /// the hook is preparing its own session update.
 pub(crate) fn include_pending_status_for_stop(session: &mut Session) {
     let pending = bg_tasks::tasks_dir().and_then(|root| {
