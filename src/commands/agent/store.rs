@@ -722,6 +722,58 @@ mod tests {
     }
 
     #[rstest::rstest]
+    fn legacy_import_skips_recreated_session_with_newer_created_at(
+        temp_session_dir: TempSessionDir,
+    ) {
+        let mut stored = create_test_session("recreated-target");
+        stored.created_at = Utc
+            .with_ymd_and_hms(2026, 4, 2, 12, 0, 0)
+            .single()
+            .expect("timestamp should be valid");
+        stored.updated_at = Utc
+            .with_ymd_and_hms(2026, 4, 2, 13, 0, 0)
+            .single()
+            .expect("timestamp should be valid");
+        stored.ancestor_session_ids = vec!["ancestor-session".to_string()];
+        save_session_to(&temp_session_dir.sessions_path, &stored).expect("stored row should save");
+
+        let mut recreated = stored.clone();
+        recreated.created_at += TimeDelta::minutes(1);
+        recreated.updated_at += TimeDelta::minutes(1);
+        recreated.ancestor_session_ids.clear();
+        let json_path = temp_session_dir.sessions_path.join("recreated-target.json");
+        fs::write(
+            &json_path,
+            serde_json::to_vec(&recreated).expect("recreated session should serialize"),
+        )
+        .expect("recreated legacy session should write");
+
+        let imported = load_session_from(&temp_session_dir.sessions_path, "recreated-target")
+            .expect("legacy import should succeed")
+            .expect("stored row should remain");
+        let backup_path = temp_session_dir
+            .sessions_path
+            .join("legacy-json")
+            .join("recreated-target.json");
+        let actual = (
+            imported.created_at,
+            imported.updated_at,
+            imported.ancestor_session_ids,
+            json_path.exists(),
+            backup_path.exists(),
+        );
+        let expected = (
+            stored.created_at,
+            stored.updated_at,
+            stored.ancestor_session_ids,
+            false,
+            true,
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest::rstest]
     fn removes_legacy_backup_after_thirty_days(temp_session_dir: TempSessionDir) {
         let session = create_test_session("retained-legacy");
         let json_path = temp_session_dir.sessions_path.join("retained-legacy.json");
