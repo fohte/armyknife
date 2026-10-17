@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.442](https://github.com/fohte/armyknife/compare/v0.1.441...v0.1.442) (2026-10-17)
+
+
+### Features
+
+* **agent/peer:** allow adopting existing sessions ([#1221](https://github.com/fohte/armyknife/issues/1221)) ([3465855](https://github.com/fohte/armyknife/commit/3465855ac62caff1f55419696d81b953dddae636))
+
+
+### Bug Fixes
+
+* **agent/store:** preserve session ancestry ([#1220](https://github.com/fohte/armyknife/issues/1220)) ([c1c2102](https://github.com/fohte/armyknife/commit/c1c2102d370b9b2c8722b33d35da3dda05d85380))
+
 ## [0.1.441](https://github.com/fohte/armyknife/compare/v0.1.440...v0.1.441) (2026-10-17)
 
 
