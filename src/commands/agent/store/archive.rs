@@ -115,46 +115,14 @@ where
         };
 
         if is_collectable(&session, now, retention) {
-            let session_lock = match super::lock_session_for_update(dir, session_id) {
-                Ok(lock) => lock,
-                Err(error) => {
-                    warn_cleanup_entry_failure(session_id, "lock_for_collection", &error);
-                    continue;
-                }
-            };
-            let current = match session_lock.load() {
-                Ok(Some(session)) => session,
-                Ok(None) => continue,
-                Err(error) => {
-                    warn_cleanup_entry_failure(session_id, "reload_for_collection", &error);
-                    continue;
-                }
-            };
-            if is_collectable(&current, now, retention) {
-                archive_codex_thread_before_delete_with(
-                    &current,
-                    &mut archive_codex_thread,
-                    ArchiveLogContext::Store,
-                );
-                let removed = match fs::remove_file(&path) {
-                    Ok(()) => true,
-                    Err(error) if error.kind() == ErrorKind::NotFound => false,
-                    Err(error) => {
-                        warn_cleanup_entry_failure(session_id, "delete", &error);
-                        false
-                    }
-                };
-                if removed {
-                    let lock_path = path.with_extension("json.lock");
-                    if let Err(error) = fs::remove_file(&lock_path)
-                        && error.kind() != ErrorKind::NotFound
-                    {
-                        warn_cleanup_entry_failure(session_id, "delete_lock_file", &error);
-                    }
-                    changed_any = true;
-                }
-                drop(session_lock);
-            }
+            changed_any |= collect_expired_session(
+                dir,
+                &path,
+                session_id,
+                now,
+                retention,
+                &mut archive_codex_thread,
+            );
             continue;
         }
 
@@ -166,45 +134,147 @@ where
         let orphaned = session.status != SessionStatus::Ended && !cwd_exists(&session.cwd);
 
         if stale_pane || orphaned {
-            let session_lock = match super::lock_session_for_update(dir, session_id) {
-                Ok(lock) => lock,
-                Err(error) => {
-                    warn_cleanup_entry_failure(session_id, "lock_for_archive", &error);
-                    continue;
-                }
-            };
-            let mut current = match session_lock.load() {
-                Ok(Some(session)) => session,
-                Ok(None) => continue,
-                Err(error) => {
-                    warn_cleanup_entry_failure(session_id, "reload_for_archive", &error);
-                    continue;
-                }
-            };
-            if current.archived_at.is_some()
-                || current.updated_at != session.updated_at
-                || (stale_pane
-                    && (current.status != session.status || current.tmux_info != session.tmux_info))
-            {
-                continue;
-            }
-
-            let still_orphaned =
-                current.status != SessionStatus::Ended && !cwd_exists(&current.cwd);
-            if !still_orphaned && !stale_pane {
-                continue;
-            }
-
-            current.archived_at = Some(now);
-            if let Err(error) = session_lock.save(&current) {
-                warn_cleanup_entry_failure(session_id, "save_archive_state", &error);
-                continue;
-            }
-            changed_any = true;
+            changed_any |=
+                archive_stale_session(dir, session_id, &session, stale_pane, now, &cwd_exists);
         }
     }
 
     Ok(changed_any)
+}
+
+fn collect_expired_session<A>(
+    dir: &Path,
+    path: &Path,
+    session_id: &str,
+    now: DateTime<Utc>,
+    retention: TimeDelta,
+    archive_codex_thread: &mut A,
+) -> bool
+where
+    A: FnMut(&str) -> anyhow::Result<()>,
+{
+    let Some((session_lock, current)) =
+        lock_and_load_session_for_cleanup(dir, session_id, "collection")
+    else {
+        return false;
+    };
+    if !is_collectable(&current, now, retention) {
+        return false;
+    }
+
+    let session_lock = if current.engine == Engine::Codex {
+        let snapshot = match super::serialize_session(&current) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                warn_cleanup_entry_failure(session_id, "snapshot_before_archive", &error);
+                return false;
+            }
+        };
+        drop(session_lock);
+        archive_codex_thread_before_delete_with(
+            &current,
+            archive_codex_thread,
+            ArchiveLogContext::Store,
+        );
+        let Some((session_lock, current)) =
+            lock_and_load_session_for_cleanup(dir, session_id, "collection_after_archive")
+        else {
+            return false;
+        };
+        let current_snapshot = match super::serialize_session(&current) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                warn_cleanup_entry_failure(session_id, "snapshot_after_archive", &error);
+                return false;
+            }
+        };
+        if current_snapshot != snapshot || !is_collectable(&current, now, retention) {
+            return false;
+        }
+        session_lock
+    } else {
+        session_lock
+    };
+
+    let removed = match fs::remove_file(path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == ErrorKind::NotFound => false,
+        Err(error) => {
+            warn_cleanup_entry_failure(session_id, "delete", &error);
+            false
+        }
+    };
+    if removed {
+        let lock_path = path.with_extension("json.lock");
+        if let Err(error) = fs::remove_file(&lock_path)
+            && error.kind() != ErrorKind::NotFound
+        {
+            warn_cleanup_entry_failure(session_id, "delete_lock_file", &error);
+        }
+    }
+    drop(session_lock);
+    removed
+}
+
+fn archive_stale_session<G>(
+    dir: &Path,
+    session_id: &str,
+    session: &Session,
+    stale_pane: bool,
+    now: DateTime<Utc>,
+    cwd_exists: &G,
+) -> bool
+where
+    G: Fn(&Path) -> bool,
+{
+    let Some((session_lock, mut current)) =
+        lock_and_load_session_for_cleanup(dir, session_id, "archive")
+    else {
+        return false;
+    };
+    if current.archived_at.is_some()
+        || current.updated_at != session.updated_at
+        || (stale_pane
+            && (current.status != session.status || current.tmux_info != session.tmux_info))
+    {
+        return false;
+    }
+
+    let still_orphaned = current.status != SessionStatus::Ended && !cwd_exists(&current.cwd);
+    if !still_orphaned && !stale_pane {
+        return false;
+    }
+
+    current.archived_at = Some(now);
+    if let Err(error) = session_lock.save(&current) {
+        warn_cleanup_entry_failure(session_id, "save_archive_state", &error);
+        return false;
+    }
+    true
+}
+
+fn lock_and_load_session_for_cleanup(
+    dir: &Path,
+    session_id: &str,
+    operation: &str,
+) -> Option<(super::SessionLock, Session)> {
+    let session_lock = match super::lock_session_for_update(dir, session_id) {
+        Ok(lock) => lock,
+        Err(error) => {
+            warn_cleanup_entry_failure(session_id, &format!("lock_for_{operation}"), &error);
+            return None;
+        }
+    };
+    let session = match session_lock.load() {
+        Ok(Some(session)) => session,
+        Ok(None) => return None,
+        Err(error) => {
+            warn_cleanup_entry_failure(session_id, &format!("reload_for_{operation}"), &error);
+            return None;
+        }
+    };
+
+    Some((session_lock, session))
 }
 
 fn warn_cleanup_entry_failure(session_id: &str, operation: &str, error: &impl std::fmt::Display) {

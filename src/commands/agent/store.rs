@@ -1048,9 +1048,13 @@ mod tests {
                 mock_cwd_always_exists,
                 archived_at + TimeDelta::days(8),
                 |thread_id| {
-                    archive_calls
-                        .borrow_mut()
-                        .push((thread_id.to_string(), path.exists()));
+                    let lock_available =
+                        lock_session_for_update(&temp_session_dir.sessions_path, thread_id).is_ok();
+                    archive_calls.borrow_mut().push((
+                        thread_id.to_string(),
+                        path.exists(),
+                        lock_available,
+                    ));
                     Err(anyhow::anyhow!("fixture archive failure"))
                 },
             )
@@ -1070,8 +1074,56 @@ mod tests {
                     Some(Some(archived_at)),
                     Vec::new(),
                     true,
-                    vec![("stale-codex-session".to_string(), true)],
+                    vec![("stale-codex-session".to_string(), true, true)],
                     false,
+                ),
+            );
+        }
+
+        #[rstest]
+        fn keeps_session_restored_during_codex_archiving(temp_session_dir: TempSessionDir) {
+            let session_id = "restored-during-gc";
+            let path = session_file_in(&temp_session_dir.sessions_path, session_id)
+                .expect("session_file_in should succeed");
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let mut session = create_test_session(session_id);
+            session.engine = Engine::Codex;
+            session.archived_at = Some(now - TimeDelta::days(8));
+            save_session_to(&temp_session_dir.sessions_path, &session)
+                .expect("save should succeed");
+            let archive_calls = std::cell::RefCell::new(Vec::new());
+
+            let changed = archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_alive,
+                mock_cwd_always_exists,
+                now,
+                |thread_id| {
+                    archive_calls.borrow_mut().push(thread_id.to_string());
+                    update_session_in(&temp_session_dir.sessions_path, thread_id, |session| {
+                        session.archived_at = None;
+                        session.status = SessionStatus::Running;
+                        session.updated_at = now;
+                        true
+                    })?;
+                    Ok(())
+                },
+            )
+            .expect("cleanup should preserve a session restored during archiving");
+
+            let restored = load_session_from(&temp_session_dir.sessions_path, session_id)
+                .expect("load should succeed")
+                .map(|session| (session.archived_at, session.status));
+            assert_eq!(
+                (changed, archive_calls.into_inner(), path.exists(), restored),
+                (
+                    false,
+                    vec!["restored-during-gc".to_string()],
+                    true,
+                    Some((None, SessionStatus::Running)),
                 ),
             );
         }
