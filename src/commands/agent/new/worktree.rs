@@ -89,7 +89,7 @@ pub(super) fn add_worktree_for_branch(
 }
 
 /// How to roll back the branch associated with a worktree after a
-/// post-worktree-create hook failure.
+/// worktree creation hook failure.
 pub(super) enum BranchRollback {
     /// Branch was created in this invocation; delete it.
     Delete,
@@ -105,7 +105,7 @@ pub(super) fn rollback_worktree(
     branch: &str,
     branch_rollback: &BranchRollback,
 ) {
-    eprintln!("post-worktree-create hook failed; rolling back worktree '{worktree_name}'");
+    eprintln!("hook failed; rolling back worktree '{worktree_name}'");
 
     let removed = match crate::shared::worktree::delete_worktree(repo, worktree_name) {
         Ok(true) => true,

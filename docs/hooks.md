@@ -4,7 +4,7 @@ armyknife supports git-style hooks for command lifecycle events. Place executabl
 
 A synchronous hook fails the calling command if it exits with a non-zero status, or if the file exists without execute permission. A hook that does not exist is silently skipped. `pre-worktree-delete` and `post-worktree-delete` are best-effort exceptions.
 
-> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. Synchronous hooks (including `post-worktree-create`) now abort the calling command on a non-zero exit or a non-executable file. Worktree deletion hooks are exceptions: `pre-worktree-delete` runs best-effort and `post-worktree-delete` runs detached, so neither blocks deletion.
+> **Behavior change (post 0.1.160).** Earlier versions only printed a warning on hook failure and continued the calling command. Synchronous hooks (including `post-worktree-create` and `pre-session-start`) now abort the calling command on a non-zero exit or a non-executable file. Worktree deletion hooks are exceptions: `pre-worktree-delete` runs best-effort and `post-worktree-delete` runs detached, so neither blocks deletion.
 
 ## `post-worktree-create`
 
@@ -16,7 +16,7 @@ Runs after `a agent new --worktree` finishes creating a worktree. If the hook ex
 
 If the worktree cannot be removed automatically, the branch is left intact and `a agent new --worktree` points the user at `a agent close <worktree>` for manual cleanup.
 
-The hook runs under a per-repository lock because it may update shared Git config. Other `a agent new --worktree` calls for that repository wait until the hook or its rollback finishes. A waiting call prints a message. Do not invoke `a agent new --worktree` for the same repository from this hook; the nested call would wait for the outer call to release the lock.
+Worktree creation hooks run under a per-repository lock because they may update shared Git config. Other `a agent new --worktree` calls for that repository wait until the hooks or their rollback finish. A waiting call prints a message. Do not invoke `a agent new --worktree` for the same repository from these hooks; the nested call would wait for the outer call to release the lock.
 
 | Variable                  | Description                           |
 | ------------------------- | ------------------------------------- |
@@ -24,12 +24,22 @@ The hook runs under a per-repository lock because it may update shared Git confi
 | `ARMYKNIFE_BRANCH_NAME`   | Branch name of the worktree           |
 | `ARMYKNIFE_REPO_ROOT`     | Root path of the parent repository    |
 
-Example: auto-trust worktrees for Claude Code.
+## `pre-session-start`
+
+Runs immediately before `a agent new` starts the selected engine, with or without `--worktree`. When a worktree is created, `post-worktree-create` runs first. A non-zero exit or a non-executable hook aborts startup; with `--worktree`, armyknife removes the newly created worktree and rolls back its branch as it does for a `post-worktree-create` failure.
+
+Pass `--skip-hooks` to `a agent new` to skip both `post-worktree-create` and `pre-session-start`. The flag also works without `--worktree`.
+
+| Variable                | Description                                            |
+| ----------------------- | ------------------------------------------------------ |
+| `ARMYKNIFE_SESSION_CWD` | Absolute path to the directory where the engine starts |
+
+Example: auto-trust a session directory for Claude Code.
 
 ```sh
 #!/bin/sh
-# ~/.config/armyknife/hooks/post-worktree-create
-jq --arg path "$ARMYKNIFE_WORKTREE_PATH" \
+# ~/.config/armyknife/hooks/pre-session-start
+jq --arg path "$ARMYKNIFE_SESSION_CWD" \
   '.projects[$path].hasTrustDialogAccepted = true' \
   ~/.claude.json | sponge ~/.claude.json
 ```

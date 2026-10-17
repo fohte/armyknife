@@ -3,6 +3,7 @@ use std::path::Path;
 
 use super::NewArgs;
 use super::delegation::resolve_prompt;
+use super::run_pre_session_start_hook_with_rollback;
 use super::tmux::{TmuxWindowSpec, setup_tmux_window};
 use super::tmux_launch_inputs;
 use super::worktree::{
@@ -161,11 +162,16 @@ pub(super) fn run_worktree_creation(
 
     // Run post-worktree-create hook. Hook failures roll back the worktree
     // (and the branch, if we created it) before propagating the error.
+    let worktree_abs = match std::fs::canonicalize(&worktree_dir) {
+        Ok(path) => path,
+        Err(error) => {
+            rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback);
+            return Err(error).context("Failed to resolve worktree path");
+        }
+    };
     if args.skip_hooks {
         eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
     } else {
-        let worktree_abs =
-            std::fs::canonicalize(&worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
         if let Err(hook_err) = hooks::run_hook(
             "post-worktree-create",
             &[
@@ -182,8 +188,6 @@ pub(super) fn run_worktree_creation(
         }
     }
 
-    drop(creation_lock);
-
     let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
         .iter()
@@ -192,6 +196,15 @@ pub(super) fn run_worktree_creation(
 
     let engine = super::resolve_engine(args.common.engine, config);
     let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
+
+    run_pre_session_start_hook_with_rollback(
+        args.skip_hooks,
+        &worktree_abs,
+        || rollback_worktree(&repo, &worktree_name, &actual_branch, &branch_rollback),
+        hooks::run_hook,
+    )?;
+
+    drop(creation_lock);
 
     // Setup tmux window using config layout
     let route = setup_tmux_window(

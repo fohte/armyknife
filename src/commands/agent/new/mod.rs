@@ -7,6 +7,7 @@ use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
+use crate::shared::hooks;
 
 mod delegation;
 mod delegation_guard;
@@ -113,9 +114,8 @@ pub struct NewArgs {
     #[command(flatten)]
     pub common: CommonNewArgs,
 
-    /// Skip the post-worktree-create hook (requires --worktree).
-    /// Useful when the hook itself is broken and needs to be fixed inside the new worktree.
-    #[arg(long, requires = "worktree")]
+    /// Skip post-worktree-create and pre-session-start hooks.
+    #[arg(long)]
     pub skip_hooks: bool,
 }
 
@@ -379,6 +379,7 @@ fn run_session_only_inner(
         crate::shared::caller_pane::resolve_caller_pane_id,
         |spec| setup_split_pane(spec).map(|route| route.display_suffix()),
         |spec, config| setup_tmux_window(spec, config).map(|route| route.display_suffix()),
+        hooks::run_hook,
     )
 }
 
@@ -396,6 +397,7 @@ fn run_session_only_inner_with_launchers(
     resolve_caller_pane: impl FnOnce() -> Option<String>,
     launch_split: impl FnOnce(TmuxSplitPaneSpec<'_>) -> Result<String>,
     launch_window: impl FnOnce(TmuxWindowSpec<'_>, &Config) -> Result<String>,
+    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
 ) -> Result<()> {
     let cwd = context
         .repo
@@ -433,9 +435,13 @@ fn run_session_only_inner_with_launchers(
         &context.config.agent.worktree.dir,
     );
 
+    let caller_pane = resolve_caller_pane();
+    let session_cwd = std::fs::canonicalize(&cwd).context("Failed to resolve session CWD")?;
+    run_pre_session_start_hook(args.skip_hooks, &session_cwd, run_hook)?;
+
     // Window mode doesn't need a pane, so it remains the fallback when no
     // caller pane can be resolved.
-    match resolve_caller_pane() {
+    match caller_pane {
         Some(target_pane) if !differs => {
             let route_suffix = launch_split(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
@@ -478,6 +484,39 @@ fn run_session_only_inner_with_launchers(
             )?;
             println!("Opened tmux window in '{cwd}'{background_suffix}{route_suffix}");
         }
+    }
+
+    Ok(())
+}
+
+pub(super) fn run_pre_session_start_hook(
+    skip_hooks: bool,
+    session_cwd: &Path,
+    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
+) -> Result<()> {
+    if skip_hooks {
+        eprintln!("Skipping pre-session-start hook (--skip-hooks)");
+        return Ok(());
+    }
+
+    let session_cwd = session_cwd
+        .to_str()
+        .context("Session CWD is not valid UTF-8")?;
+    run_hook(
+        "pre-session-start",
+        &[(EnvVars::session_cwd_name(), session_cwd)],
+    )
+}
+
+pub(super) fn run_pre_session_start_hook_with_rollback(
+    skip_hooks: bool,
+    session_cwd: &Path,
+    rollback: impl FnOnce(),
+    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
+) -> Result<()> {
+    if let Err(error) = run_pre_session_start_hook(skip_hooks, session_cwd, run_hook) {
+        rollback();
+        return Err(error);
     }
 
     Ok(())
@@ -536,6 +575,41 @@ mod tests {
         }
     }
 
+    struct SessionOnlyRootFixture {
+        _directory: tempfile::TempDir,
+        cwd: String,
+        config: Config,
+    }
+
+    impl SessionOnlyRootFixture {
+        fn context(&self) -> SessionOnlyRunContext<'_> {
+            SessionOnlyRunContext {
+                repo: None,
+                repo_root: &self.cwd,
+                caller_repo_root: &self.cwd,
+                current_dir: &self.cwd,
+                config: &self.config,
+            }
+        }
+    }
+
+    #[fixture]
+    fn session_only_root() -> SessionOnlyRootFixture {
+        let directory = tempfile::tempdir().unwrap();
+        let cwd = directory
+            .path()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+
+        SessionOnlyRootFixture {
+            _directory: directory,
+            cwd,
+            config: Config::default(),
+        }
+    }
+
     #[derive(Debug, PartialEq, Eq)]
     enum CapturedSessionOnlyLaunch {
         Split { cwd: String },
@@ -566,10 +640,151 @@ mod tests {
                 }));
                 Ok(String::new())
             },
+            |_, _| Ok(()),
         )
         .unwrap();
 
         actual.into_inner()
+    }
+
+    #[rstest]
+    fn session_only_runs_pre_start_hook_with_absolute_cwd_before_launch(
+        session_only_root: SessionOnlyRootFixture,
+    ) {
+        let args = TestCli::try_parse_from(["a"]).unwrap().args;
+        let events = RefCell::new(Vec::new());
+
+        let result = run_session_only_inner_with_launchers(
+            &args,
+            session_only_root.context(),
+            || Some("%caller-pane".to_string()),
+            |_| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |_, _| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |name, env_vars| {
+                let env_vars = env_vars
+                    .iter()
+                    .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                    .collect::<Vec<_>>();
+                events.borrow_mut().push(format!("{name}:{env_vars:?}"));
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (result.is_ok(), events.into_inner()),
+            (
+                true,
+                vec![
+                    format!(
+                        "pre-session-start:[(\"{}\", \"{}\")]",
+                        EnvVars::session_cwd_name(),
+                        session_only_root.cwd
+                    ),
+                    "launch".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn session_only_hook_failure_prevents_launch(session_only_root: SessionOnlyRootFixture) {
+        let args = TestCli::try_parse_from(["a"]).unwrap().args;
+        let launched = Cell::new(false);
+
+        let result = run_session_only_inner_with_launchers(
+            &args,
+            session_only_root.context(),
+            || Some("%caller-pane".to_string()),
+            |_| {
+                launched.set(true);
+                Ok(String::new())
+            },
+            |_, _| {
+                launched.set(true);
+                Ok(String::new())
+            },
+            |_, _| anyhow::bail!("hook failed"),
+        );
+
+        assert_eq!(
+            (result.err().map(|error| error.to_string()), launched.get()),
+            (Some("hook failed".to_string()), false),
+        );
+    }
+
+    #[rstest]
+    fn skip_hooks_skips_pre_start_hook_without_worktree(session_only_root: SessionOnlyRootFixture) {
+        let args = TestCli::try_parse_from(["a", "--skip-hooks"]).unwrap().args;
+        let events = RefCell::new(Vec::new());
+
+        let result = run_session_only_inner_with_launchers(
+            &args,
+            session_only_root.context(),
+            || Some("%caller-pane".to_string()),
+            |_| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |_, _| {
+                events.borrow_mut().push("launch".to_string());
+                Ok(String::new())
+            },
+            |name, _| {
+                events.borrow_mut().push(name.to_string());
+                Ok(())
+            },
+        );
+
+        assert_eq!(
+            (result.is_ok(), events.into_inner()),
+            (true, vec!["launch".to_string()]),
+        );
+    }
+
+    #[rstest]
+    fn pre_start_hook_failure_runs_worktree_rollback(session_only_root: SessionOnlyRootFixture) {
+        let rolled_back = Cell::new(false);
+        let hook_call = RefCell::new(None);
+        let result = run_pre_session_start_hook_with_rollback(
+            false,
+            Path::new(&session_only_root.cwd),
+            || rolled_back.set(true),
+            |name, env_vars| {
+                hook_call.replace(Some((
+                    name.to_string(),
+                    env_vars
+                        .iter()
+                        .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+                        .collect::<Vec<_>>(),
+                )));
+                anyhow::bail!("hook failed")
+            },
+        );
+
+        assert_eq!(
+            (
+                result.err().map(|error| error.to_string()),
+                rolled_back.get(),
+                hook_call.into_inner()
+            ),
+            (
+                Some("hook failed".to_string()),
+                true,
+                Some((
+                    "pre-session-start".to_string(),
+                    vec![(
+                        EnvVars::session_cwd_name().to_string(),
+                        session_only_root.cwd,
+                    )],
+                )),
+            ),
+        );
     }
 
     #[rstest]
@@ -885,10 +1100,16 @@ mod tests {
     #[rstest]
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
-    #[case::skip_hooks_without_worktree(&["a", "--skip-hooks"])]
     #[case::unknown_reasoning_effort(&["a", "--reasoning-effort", "maxx"])]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
+    }
+
+    #[test]
+    fn skip_hooks_is_valid_without_worktree() {
+        let cli = TestCli::try_parse_from(["a", "--skip-hooks"]).unwrap();
+
+        assert_eq!((cli.args.worktree, cli.args.skip_hooks), (None, true));
     }
 
     #[rstest]

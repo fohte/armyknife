@@ -15,6 +15,7 @@ const CODEX_MANAGED_LAUNCH: &str = "ARMYKNIFE_CODEX_MANAGED_LAUNCH";
 const CC_HOOK_LOG: &str = "ARMYKNIFE_CC_HOOK_LOG";
 const CC_NOTIFY: &str = "ARMYKNIFE_CC_NOTIFY";
 const WORKTREE_PATH: &str = "ARMYKNIFE_WORKTREE_PATH";
+const SESSION_CWD: &str = "ARMYKNIFE_SESSION_CWD";
 const BRANCH_NAME: &str = "ARMYKNIFE_BRANCH_NAME";
 const REPO_ROOT: &str = "ARMYKNIFE_REPO_ROOT";
 const MERGED: &str = "ARMYKNIFE_MERGED";
@@ -143,6 +144,11 @@ impl EnvVars {
     /// Returns the env var name for WORKTREE_PATH (used as key in env var pairs).
     pub fn worktree_path_name() -> &'static str {
         WORKTREE_PATH
+    }
+
+    /// Returns the env var name for the working directory of a new session.
+    pub fn session_cwd_name() -> &'static str {
+        SESSION_CWD
     }
 
     /// Returns the env var name for BRANCH_NAME (used as key in env var pairs).
