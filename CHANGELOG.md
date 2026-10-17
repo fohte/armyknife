@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.443](https://github.com/fohte/armyknife/compare/v0.1.442...v0.1.443) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent:** sync status kind to tmux pane borders ([#1223](https://github.com/fohte/armyknife/issues/1223)) ([94f2e07](https://github.com/fohte/armyknife/commit/94f2e07ff2dc02fb553b90fd07675ea1d837da5b))
+
 ## [0.1.442](https://github.com/fohte/armyknife/compare/v0.1.441...v0.1.442) (2026-10-17)
 
 
