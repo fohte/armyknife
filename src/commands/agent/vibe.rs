@@ -12,7 +12,7 @@ pub enum VibeCommands {
     On,
     /// Clear the calling session's explicit vibe setting; inherited settings still apply
     Off,
-    /// Check whether this session enabled vibe mode or inherited it via `--vibe`
+    /// Check whether this session enabled vibe mode or inherited it from an ancestor
     Status,
     /// Grant vibe inheritance to an existing descendant session
     Grant {
@@ -37,7 +37,7 @@ pub fn run(command: &VibeCommands) -> Result<()> {
     }
 }
 
-/// Returns whether the calling session enabled vibe mode or inherited it through `--vibe`.
+/// Returns whether the calling session enabled vibe mode or inherited it from an ancestor.
 ///
 /// An ancestor's flag is inherited only while its session record exists. Returns `false` outside a tracked
 /// session or when the caller's session record is missing.
@@ -288,9 +288,32 @@ mod tests {
     }
 
     #[rstest]
-    fn vibe_enabled_ancestor_can_grant_an_existing_descendant(test_store: TestStore) {
-        let caller = session("caller-session", &[], true);
-        let child = session("child-session", &["caller-session"], false);
+    #[case::caller_enabled_directly(false)]
+    #[case::caller_inherits_from_ancestor(true)]
+    fn vibe_enabled_ancestor_can_grant_an_existing_descendant(
+        test_store: TestStore,
+        #[case] caller_inherits_vibe: bool,
+    ) {
+        let mut caller = session(
+            "caller-session",
+            if caller_inherits_vibe {
+                &["root-session"]
+            } else {
+                &[]
+            },
+            !caller_inherits_vibe,
+        );
+        caller.launched_with_vibe = caller_inherits_vibe;
+        let child_ancestors = if caller_inherits_vibe {
+            &["root-session", "caller-session"][..]
+        } else {
+            &["caller-session"][..]
+        };
+        let child = session("child-session", child_ancestors, false);
+        if caller_inherits_vibe {
+            let root = session("root-session", &[], true);
+            store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
+        }
         store::save_session_to(&test_store.sessions_dir, &caller).expect("caller should save");
         store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
         let cache_home = test_store
