@@ -474,6 +474,7 @@ mod tests {
             stop_blocked_by_armyknife: false,
             agent_status: None,
             agent_status_clear_pending: false,
+            archived_at: None,
             engine,
         }
     }
