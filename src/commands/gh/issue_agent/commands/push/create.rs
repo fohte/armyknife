@@ -11,6 +11,7 @@ use crate::commands::gh::issue_agent::models::{
 use crate::commands::gh::issue_agent::storage::IssueStorage;
 use crate::infra::git::parse_repo;
 use crate::infra::github::GitHubClient;
+use crate::shared::human_in_the_loop::{ApprovalManager, HumanInTheLoopError};
 
 /// Run create for new issue.
 pub async fn run_create(args: &PushArgs, path: PathBuf) -> anyhow::Result<()> {
@@ -49,6 +50,19 @@ pub async fn run_create_with_client(
         println!();
         println!("[dry-run] Would create issue. Run without --dry-run to create.");
         return Ok(());
+    }
+
+    let approval = ApprovalManager::new(&issue_md_path);
+    if let Err(error) = approval.verify() {
+        match error {
+            HumanInTheLoopError::NotApproved | HumanInTheLoopError::ModifiedAfterApproval => {
+                anyhow::bail!(
+                    "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+                    issue_md_path.display()
+                );
+            }
+            other => return Err(other.into()),
+        }
     }
 
     // Create issue on GitHub
@@ -137,6 +151,8 @@ pub async fn run_create_with_client(
              Run 'pull --force {issue_number}' to refresh local state."
         );
     }
+
+    let _ = approval.remove();
 
     // Success message
     println!();
@@ -298,10 +314,14 @@ mod tests {
                     title: Test Issue
                     labels: [bug]
                     assignees: [testuser]
+                    submit: true
                     ---
 
                     This is the body.
                 "},
+            );
+            crate::commands::gh::issue_agent::commands::test_helpers::approve_file(
+                &new_dir.join("issue.md"),
             );
 
             let mock = GitHubMockServer::start().await;
@@ -323,6 +343,7 @@ mod tests {
             let renamed_dir = temp.path().join("owner").join("repo").join("42");
             assert!(renamed_dir.exists());
             assert!(!new_dir.exists());
+            assert!(!ApprovalManager::new(&new_dir.join("issue.md")).exists());
 
             // Verify issue.md with frontmatter was saved
             let issue_md = std::fs::read_to_string(renamed_dir.join("issue.md")).unwrap();
@@ -359,6 +380,7 @@ mod tests {
                 indoc! {"
                     ---
                     title: Dry Run Test
+                    submit: true
                     ---
 
                     Body content.
@@ -375,6 +397,58 @@ mod tests {
             assert!(result.is_ok());
 
             // Verify directory was NOT renamed
+            assert!(new_dir.exists());
+        }
+
+        #[rstest]
+        #[case::not_approved(false)]
+        #[case::modified_after_approval(true)]
+        #[tokio::test]
+        async fn test_create_issue_requires_approval(#[case] modified_after_approval: bool) {
+            let temp = TempDir::new().unwrap();
+            let new_dir = setup_new_issue_dir(temp.path());
+            write_issue_md(
+                &new_dir,
+                indoc! {"
+                    ---
+                    title: Approval Required
+                    submit: true
+                    ---
+
+                    Body.
+                "},
+            );
+
+            let issue_md_path = new_dir.join("issue.md");
+            if modified_after_approval {
+                crate::commands::gh::issue_agent::commands::test_helpers::approve_file(
+                    &issue_md_path,
+                );
+                write_issue_md(
+                    &new_dir,
+                    indoc! {"
+                        ---
+                        title: Changed After Approval
+                        submit: true
+                        ---
+
+                        Body.
+                    "},
+                );
+            }
+
+            let mock = GitHubMockServer::start().await;
+            let client = mock.client();
+            let args = make_args(None, false);
+            let result = run_create_with_client(&args, new_dir.clone(), &client).await;
+
+            assert_eq!(
+                result.unwrap_err().to_string(),
+                format!(
+                    "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+                    issue_md_path.display()
+                )
+            );
             assert!(new_dir.exists());
         }
 
@@ -437,6 +511,9 @@ mod tests {
                     Body.
                 "},
             );
+            crate::commands::gh::issue_agent::commands::test_helpers::approve_file(
+                &new_dir.join("issue.md"),
+            );
 
             let mock = GitHubMockServer::start().await;
             mock.repo("custom", "repo")
@@ -474,6 +551,9 @@ mod tests {
 
                     Body.
                 "},
+            );
+            crate::commands::gh::issue_agent::commands::test_helpers::approve_file(
+                &new_dir.join("issue.md"),
             );
 
             let mock = GitHubMockServer::start().await;
@@ -524,6 +604,9 @@ mod tests {
 
                     Body.
                 "},
+            );
+            crate::commands::gh::issue_agent::commands::test_helpers::approve_file(
+                &new_dir.join("issue.md"),
             );
 
             let mock = GitHubMockServer::start().await;
@@ -583,7 +666,7 @@ mod tests {
             assert_eq!(
                 err,
                 "Failed to parse issue.md: Unknown frontmatter key(s): parentIssues. \
-                 Allowed keys: title, labels, assignees, parentIssue, subIssues"
+                 Allowed keys: title, labels, assignees, parentIssue, subIssues, submit"
             );
             // Directory must remain unchanged on parse failure.
             assert!(new_dir.exists());
@@ -669,7 +752,10 @@ mod tests {
 
         fn make_issue(fields: EditableIssueFields, body: &str) -> NewIssue {
             NewIssue {
-                frontmatter: NewIssueFrontmatter { fields },
+                frontmatter: NewIssueFrontmatter {
+                    fields,
+                    ..Default::default()
+                },
                 body: body.to_string(),
             }
         }

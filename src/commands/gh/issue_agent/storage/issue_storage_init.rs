@@ -19,6 +19,7 @@ const NEW_ISSUE_TEMPLATE: &str = indoc! {r#"
     title: ""
     labels: []
     assignees: []
+    submit: false
     # parentIssue: owner/repo#1
     # subIssues:
     #   - owner/repo#2
@@ -110,6 +111,7 @@ mod tests {
                 title: ""
                 labels: []
                 assignees: []
+                submit: false
                 # parentIssue: owner/repo#1
                 # subIssues:
                 #   - owner/repo#2
@@ -152,6 +154,7 @@ mod tests {
                 - needs-triage
                 assignees:
                 - alice
+                submit: false
                 ---
 
                 Describe the bug here

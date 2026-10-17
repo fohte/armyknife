@@ -356,6 +356,7 @@ mod tests {
                     title: ""
                     labels: []
                     assignees: []
+                    submit: false
                     # parentIssue: owner/repo#1
                     # subIssues:
                     #   - owner/repo#2
@@ -396,6 +397,7 @@ mod tests {
                     labels:
                     - bug
                     assignees: []
+                    submit: false
                     ---
 
                     Describe the bug
