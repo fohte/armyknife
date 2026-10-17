@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.441](https://github.com/fohte/armyknife/compare/v0.1.440...v0.1.441) (2026-10-17)
+
+
+### Bug Fixes
+
+* **agent/store:** migrate session data to SQLite ([#1218](https://github.com/fohte/armyknife/issues/1218)) ([a9dbbb9](https://github.com/fohte/armyknife/commit/a9dbbb96c7f7933420b195842e5f6c9a2c53f9cb))
+
 ## [0.1.440](https://github.com/fohte/armyknife/compare/v0.1.439...v0.1.440) (2026-10-17)
 
 
