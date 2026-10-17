@@ -35,6 +35,20 @@ pub enum CcError {
     #[error("Cannot notify your own session '{0}'")]
     SelfNotify(String),
 
+    #[error("Cannot adopt your own session '{0}'")]
+    CannotAdoptSelf(String),
+
+    #[error("Cannot adopt ancestor session '{0}' because it would create a cycle")]
+    CannotAdoptAncestor(String),
+
+    #[error(
+        "Session '{session_id}' already has living parent '{parent_id}'; use --force to adopt it"
+    )]
+    AdoptRequiresForce {
+        session_id: String,
+        parent_id: String,
+    },
+
     #[error("Session '{0}' has no tmux information (was not started in tmux)")]
     NoTmuxInfo(String),
 

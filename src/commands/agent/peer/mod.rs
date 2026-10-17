@@ -26,8 +26,10 @@ use super::store;
 use super::types::{AgentStatus, Engine, Session};
 use crate::shared::env_var::EnvVars;
 
+mod adopt;
 pub(crate) mod notify;
 mod wake;
+use adopt::AdoptArgs;
 use notify::NotifyArgs;
 use wake::WakeArgs;
 
@@ -58,6 +60,9 @@ pub enum PeerCommands {
     /// own SendMessage tool call (SendMessage socket for Claude Code,
     /// app-server turn steering for Codex, with `codex queue` as a fallback)
     Notify(NotifyArgs),
+
+    /// Adopt an existing session as a direct child of the calling session
+    Adopt(AdoptArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -119,6 +124,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
         PeerCommands::Me => run_me(),
         PeerCommands::Wake(args) => wake::run(args),
         PeerCommands::Notify(args) => notify::run(args),
+        PeerCommands::Adopt(args) => adopt::run(args),
     }
 }
 

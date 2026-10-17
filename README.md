@@ -424,6 +424,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `resurrect restore`                                 |         | Restore pane session IDs and relaunch Claude Code (from post-restore)                       |
 | `peer parent`                                       |         | List the session that delegated to this one, if any (JSON)                                  |
 | `peer children`                                     |         | List the sessions this one delegated to (JSON)                                              |
+| `peer adopt <session_id> [--force]`                 |         | Adopt an existing session as a direct child                                                 |
 | `peer list [-R <repo>]`                             |         | List tracked sessions, with their SendMessage names (JSON)                                  |
 | `peer me`                                           |         | Print the session running in the caller's own tmux pane (JSON)                              |
 | `peer wake <session_id>`                            |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
@@ -691,6 +692,12 @@ Both engines delay permission notifications by about one second because another 
 Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a agent new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a agent peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a agent new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
 `a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, agent_status, pane_id, engine}`. `agent_status` is `{kind, note}` when set and omitted otherwise; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+
+Run `a agent peer adopt <session_id>` from a tracked Claude Code or Codex session to make an existing session its direct child. This updates the target's `ancestor_session_ids` to the caller's ancestors followed by the caller, so `peer children` lists it and `a agent close --child <session_id>` accepts it. If the target already is a direct child, the command succeeds without writing. It refuses a missing or Ended target. It also refuses to change a target whose current parent record exists and is not Ended; pass `--force` to take it from that parent. A missing or Ended current parent does not require `--force`.
+
+```console
+$ a agent peer adopt session-x --force
+```
 
 ```console
 $ a agent peer parent
