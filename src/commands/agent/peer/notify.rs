@@ -26,7 +26,12 @@ use crate::shared::sanitize::strip_angle_brackets;
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct NotifyArgs {
     /// Session ID to notify -- the `session_id` from `a agent peer`
-    pub session_id: String,
+    #[arg(required_unless_present = "parent", conflicts_with = "parent")]
+    pub session_id: Option<String>,
+
+    /// Notify the session that delegated to this one
+    #[arg(long)]
+    pub parent: bool,
 
     /// Message text to deliver as a user message to the target session
     #[arg(short = 'm', long = "message")]
@@ -51,20 +56,34 @@ pub enum Delivery {
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
+    let session_id = resolve_target_session_id(args, || {
+        super::resolve_parent_session().map(|session| session.session_id)
+    })?;
     let (from, from_engine_hint) = match resolve_sender() {
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
     let delivery = notify(
-        &args.session_id,
+        &session_id,
         &args.message,
         from.as_deref(),
         from_engine_hint,
     )?;
-    if let Some(output) = delivery_output(&args.session_id, &delivery) {
+    if let Some(output) = delivery_output(&session_id, &delivery) {
         println!("{output}");
     }
     Ok(())
+}
+
+fn resolve_target_session_id(
+    args: &NotifyArgs,
+    resolve_parent: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    match (&args.session_id, args.parent) {
+        (Some(session_id), false) => Ok(session_id.clone()),
+        (None, true) => resolve_parent(),
+        _ => anyhow::bail!("Exactly one of <session_id> or --parent must be specified"),
+    }
 }
 
 fn delivery_output(session_id: &str, delivery: &Delivery) -> Option<String> {
@@ -298,7 +317,8 @@ mod tests {
             ],
             || {
                 run(&NotifyArgs {
-                    session_id: "session-a".to_string(),
+                    session_id: Some("session-a".to_string()),
+                    parent: false,
                     message: "hello".to_string(),
                 })
             },
@@ -308,6 +328,65 @@ mod tests {
             result.map_err(|error| error.to_string()),
             Err("Cannot notify your own session 'session-a'".to_string()),
         );
+    }
+
+    #[rstest]
+    #[case::explicit_session_id(
+        vec!["a", "agent", "peer", "notify", "parent-session", "-m", "hello"],
+        true
+    )]
+    #[case::parent_flag(
+        vec!["a", "agent", "peer", "notify", "--parent", "-m", "hello"],
+        true
+    )]
+    #[case::missing_target(vec!["a", "agent", "peer", "notify", "-m", "hello"], false)]
+    #[case::both_targets(
+        vec![
+            "a",
+            "agent",
+            "peer",
+            "notify",
+            "parent-session",
+            "--parent",
+            "-m",
+            "hello"
+        ],
+        false
+    )]
+    fn notify_target_arguments_cases(#[case] argv: Vec<&str>, #[case] accepted: bool) {
+        use clap::Parser;
+
+        assert_eq!(crate::cli::Cli::try_parse_from(argv).is_ok(), accepted);
+    }
+
+    #[rstest]
+    #[case::explicit_session_id(Some("target-session"), false, Ok("target-session"))]
+    #[case::parent(None, true, Ok("parent-session"))]
+    #[case::missing_target(
+        None,
+        false,
+        Err("Exactly one of <session_id> or --parent must be specified")
+    )]
+    #[case::conflicting_targets(
+        Some("target-session"),
+        true,
+        Err("Exactly one of <session_id> or --parent must be specified")
+    )]
+    fn resolve_target_session_id_cases(
+        #[case] session_id: Option<&str>,
+        #[case] parent: bool,
+        #[case] expected: std::result::Result<&str, &str>,
+    ) {
+        let args = NotifyArgs {
+            session_id: session_id.map(str::to_string),
+            parent,
+            message: "hello".to_string(),
+        };
+
+        let actual = resolve_target_session_id(&args, || Ok("parent-session".to_string()))
+            .map_err(|error| error.to_string());
+
+        assert_eq!(actual, expected.map(str::to_string).map_err(str::to_string));
     }
 
     #[rstest]
