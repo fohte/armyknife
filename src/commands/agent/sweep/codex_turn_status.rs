@@ -67,8 +67,15 @@ where
 {
     let mut updates = CodexTurnUpdates::default();
 
-    for session in store::list_all_sessions_from(sessions_dir)? {
-        if session.engine != Engine::Codex || session.status != SessionStatus::Running {
+    for listed_session in store::list_all_sessions_from(sessions_dir)? {
+        let Some(session) = store::load_session_from(sessions_dir, &listed_session.session_id)?
+        else {
+            continue;
+        };
+        if session.archived_at.is_some()
+            || session.engine != Engine::Codex
+            || session.status != SessionStatus::Running
+        {
             continue;
         }
 

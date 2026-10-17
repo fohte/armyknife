@@ -327,7 +327,15 @@ where
 
     let now = Utc::now();
 
-    for mut session in store::list_all_sessions_from(sessions_dir)? {
+    for listed_session in store::list_all_sessions_from(sessions_dir)? {
+        let Some(mut session) = store::load_session_from(sessions_dir, &listed_session.session_id)?
+        else {
+            continue;
+        };
+        if session.archived_at.is_some() {
+            continue;
+        }
+
         // Skip ended sessions so the scanned count lines up with `a agent list`.
         // Ended sessions are retained on disk only so that `claude -c` can
         // restore their label / ancestor chain -- they never need pausing.
@@ -613,6 +621,10 @@ mod tests {
         failed_queries: RefCell<HashSet<String>>,
     }
 
+    struct ResumingProbe {
+        sessions_dir: PathBuf,
+    }
+
     impl FakeProbe {
         fn with_pids(pairs: &[(&str, u32)]) -> Self {
             let r = Self::default();
@@ -658,6 +670,31 @@ mod tests {
                 return Err(anyhow::anyhow!("fixture tmux query failure"));
             }
             Ok(self.pids.borrow().get(&session.session_id).copied())
+        }
+    }
+
+    impl DraftProbe for ResumingProbe {
+        fn draft_observed_at(
+            &self,
+            _session: &Session,
+            _now: DateTime<Utc>,
+        ) -> Option<DateTime<Utc>> {
+            None
+        }
+    }
+
+    impl SessionProbe for ResumingProbe {
+        fn resolve_pid(&self, session: &Session) -> Result<Option<u32>> {
+            if session.session_id == "session-first" {
+                store::update_session_in(&self.sessions_dir, "session-second", |current| {
+                    current.status = SessionStatus::Running;
+                    current.updated_at = Utc::now();
+                    true
+                })?;
+                return Ok(Some(4242));
+            }
+
+            Ok(None)
         }
     }
 
@@ -944,6 +981,51 @@ mod tests {
             reloaded.sweep_signaled,
             "signaling should mark sweep_signaled so hook.rs's SessionEnd \
              handler can recognize this shutdown as sweep's own"
+        );
+    }
+
+    #[rstest]
+    fn reloads_each_session_before_deciding_to_pause(test_dir: TestDir) {
+        let first_updated_at = Utc::now() - TimeDelta::minutes(50);
+        let second_updated_at = Utc::now() - TimeDelta::hours(2);
+        save_session_to(
+            &test_dir.path,
+            &make_session("session-first", SessionStatus::Stopped, first_updated_at),
+        )
+        .expect("save first session");
+        save_session_to(
+            &test_dir.path,
+            &make_session("session-second", SessionStatus::Stopped, second_updated_at),
+        )
+        .expect("save second session");
+
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &RecordingSender::default(),
+            &ResumingProbe {
+                sessions_dir: test_dir.path.clone(),
+            },
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+        let second = store::load_session_from(&test_dir.path, "session-second")
+            .expect("load second session")
+            .expect("second session exists");
+
+        assert_eq!(
+            (report, second.status),
+            (
+                SweepReport {
+                    scanned: 2,
+                    paused: 0,
+                    signaled: 1,
+                    waiting: 0,
+                    active: 1,
+                },
+                SessionStatus::Running,
+            )
         );
     }
 

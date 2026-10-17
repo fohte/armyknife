@@ -160,7 +160,17 @@ fn end_sessions_on_pane_takeover(
         return;
     };
     let now = Utc::now();
-    for mut session in sessions {
+    for listed_session in sessions {
+        let Some(mut session) = store::load_session_from(sessions_dir, &listed_session.session_id)
+            .ok()
+            .flatten()
+        else {
+            continue;
+        };
+        if session.archived_at.is_some() {
+            continue;
+        }
+
         let matches_pane = session
             .tmux_info
             .as_ref()
