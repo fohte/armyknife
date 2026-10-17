@@ -561,7 +561,19 @@ fn read_all_sessions_from(dir: &Path) -> Result<Vec<Session>> {
 
     let entries =
         fs::read_dir(dir).with_context(|| format!("reading sessions dir {}", dir.display()))?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(
+                    target: "armyknife::commands::agent::store",
+                    event = "agent.store.list_entry_failed",
+                    operation = "read_session_directory_entry",
+                    error = %error,
+                );
+                continue;
+            }
+        };
         let path = entry.path();
 
         if path.extension().is_some_and(|ext| ext == "json")
@@ -829,6 +841,21 @@ mod tests {
         assert_eq!(
             actual,
             vec!["ended-session".to_string(), "running-session".to_string()]
+        );
+    }
+
+    #[rstest::rstest]
+    fn list_all_sessions_from_adds_context_when_directory_cannot_be_read(
+        temp_session_dir: TempSessionDir,
+    ) {
+        let file_path = temp_session_dir.sessions_path.join("not-a-directory");
+        fs::write(&file_path, "").expect("write file");
+
+        let error = list_all_sessions_from(&file_path).expect_err("file is not a directory");
+
+        assert_eq!(
+            error.to_string(),
+            format!("reading sessions dir {}", file_path.display())
         );
     }
 
