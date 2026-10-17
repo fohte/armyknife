@@ -72,7 +72,12 @@ async fn run_with_context(ctx: &IssueContext, client: &GitHubClient) -> anyhow::
         edit_others: true,
         allow_delete: true,
     };
-    let changeset = ChangeSet::detect(&local_state, &remote_state, &options)?;
+    let changeset = ChangeSet::detect_with_base(
+        &local_state,
+        &remote_state,
+        &options,
+        local.base_issue.as_ref(),
+    )?;
 
     // Display changes
     if changeset.has_changes() {

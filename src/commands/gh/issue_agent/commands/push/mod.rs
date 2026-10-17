@@ -157,6 +157,7 @@ async fn run_with_context(
             local_comments: &local.comments,
             remote_issue: &remote.issue,
             remote_comments: &remote.comments,
+            base_issue: local.base_issue.as_ref(),
         };
         let conflicts = check_conflicts(&conflict_input);
 
@@ -190,7 +191,12 @@ async fn run_with_context(
         edit_others: args.edit_others,
         allow_delete: args.allow_delete,
     };
-    let changeset = ChangeSet::detect(&local_state, &remote_state, &options)?;
+    let changeset = ChangeSet::detect_with_base(
+        &local_state,
+        &remote_state,
+        &options,
+        local.base_issue.as_ref(),
+    )?;
 
     // Display and apply changes
     let has_changes = changeset.has_changes();

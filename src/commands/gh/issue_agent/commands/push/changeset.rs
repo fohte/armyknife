@@ -1,7 +1,8 @@
 //! ChangeSet: Represents all detected changes between local and remote state.
 
+use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::{IssueStorage, LocalComment};
+use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage, LocalComment};
 use crate::infra::github::GitHubClient;
 
 use crossterm::style::Color;
@@ -9,7 +10,7 @@ use crossterm::style::Color;
 use super::super::common::{print_colored_line, print_diff};
 use super::detect::{
     detect_body_change, detect_comment_changes, detect_label_change, detect_parent_issue_change,
-    detect_sub_issue_change, detect_title_change,
+    detect_sub_issue_change, detect_title_change, string_sets_equal,
 };
 use super::links::{
     add_sub_issue_by_ref, link_to_parent, remove_sub_issue_by_ref, unlink_from_parent,
@@ -36,6 +37,7 @@ pub(crate) struct DetectOptions<'a> {
 }
 
 /// Represents all changes detected between local and remote state.
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ChangeSet<'a> {
     pub(crate) body: Option<BodyChange<'a>>,
     pub(crate) title: Option<TitleChange<'a>>,
@@ -45,16 +47,19 @@ pub(crate) struct ChangeSet<'a> {
     pub(crate) comments: Vec<CommentChange<'a>>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BodyChange<'a> {
     pub(crate) local: &'a str,
     pub(crate) remote: &'a str,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct TitleChange<'a> {
     pub(crate) local: &'a str,
     pub(crate) remote: &'a str,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct LabelChange {
     pub(crate) to_add: Vec<String>,
     pub(crate) to_remove: Vec<String>,
@@ -62,6 +67,7 @@ pub(crate) struct LabelChange {
     pub(crate) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct SubIssueChange {
     /// Sub-issues to add (ref strings like "owner/repo#number")
     pub(crate) to_add: Vec<String>,
@@ -71,12 +77,13 @@ pub(crate) struct SubIssueChange {
     pub(crate) remote_sorted: Vec<String>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct ParentIssueChange {
     pub(crate) local: Option<String>,
     pub(crate) remote: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CommentChange<'a> {
     New {
         filename: &'a str,
@@ -103,11 +110,46 @@ impl<'a> ChangeSet<'a> {
         remote: &RemoteState<'a>,
         options: &DetectOptions<'a>,
     ) -> anyhow::Result<Self> {
-        let body = detect_body_change(local.body, remote.issue);
-        let title = detect_title_change(local.metadata, remote.issue);
-        let labels = detect_label_change(local.metadata, remote.issue);
-        let sub_issues = detect_sub_issue_change(local.metadata, remote.issue);
-        let parent_issue = detect_parent_issue_change(local.metadata, remote.issue);
+        Self::detect_with_base(local, remote, options, None)
+    }
+
+    pub(crate) fn detect_with_base(
+        local: &LocalState<'a>,
+        remote: &RemoteState<'a>,
+        options: &DetectOptions<'a>,
+        base_issue: Option<&IssueContent>,
+    ) -> anyhow::Result<Self> {
+        let base_fields = base_issue.map(|issue| &issue.frontmatter.fields);
+        let body = if base_issue.is_some_and(|base| bodies_equal(local.body, &base.body)) {
+            None
+        } else {
+            detect_body_change(local.body, remote.issue)
+        };
+        let title = if base_fields.is_some_and(|base| local.metadata.title == base.title) {
+            None
+        } else {
+            detect_title_change(local.metadata, remote.issue)
+        };
+        let labels = if base_fields
+            .is_some_and(|base| string_sets_equal(&local.metadata.labels, &base.labels))
+        {
+            None
+        } else {
+            detect_label_change(local.metadata, remote.issue)
+        };
+        let sub_issues = if base_fields
+            .is_some_and(|base| string_sets_equal(&local.metadata.sub_issues, &base.sub_issues))
+        {
+            None
+        } else {
+            detect_sub_issue_change(local.metadata, remote.issue)
+        };
+        let parent_issue =
+            if base_fields.is_some_and(|base| local.metadata.parent_issue == base.parent_issue) {
+                None
+            } else {
+                detect_parent_issue_change(local.metadata, remote.issue)
+            };
         let comments = detect_comment_changes(
             local.comments,
             remote.comments,
@@ -345,6 +387,127 @@ mod tests {
             sub_issues: None,
             parent_issue: None,
             comments: vec![],
+        }
+    }
+
+    mod detect_with_base_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::{
+            IssueFrontmatter, IssueMetadata, SubIssueRef,
+        };
+        use crate::commands::gh::issue_agent::storage::IssueContent;
+        use crate::commands::gh::issue_agent::testing::factories;
+        use rstest::rstest;
+
+        fn issue_ref(number: i64) -> SubIssueRef {
+            SubIssueRef {
+                id: number as u64,
+                number,
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            }
+        }
+
+        fn base_issue() -> IssueContent {
+            let issue = factories::issue_with(|issue| {
+                issue.title = "Base title".to_string();
+                issue.body = Some("Base body".to_string());
+                issue.labels = factories::labels(&["base-label"]);
+                issue.parent_issue = Some(issue_ref(10));
+                issue.sub_issues = vec![issue_ref(11)];
+            });
+            IssueContent {
+                frontmatter: IssueFrontmatter::from_issue(&issue),
+                body: "Base body".to_string(),
+            }
+        }
+
+        fn remote_issue(
+            title: &str,
+            body: &str,
+            label: &str,
+            parent_number: i64,
+            sub_issue_number: i64,
+        ) -> Issue {
+            factories::issue_with(|issue| {
+                issue.title = title.to_string();
+                issue.body = Some(body.to_string());
+                issue.labels = factories::labels(&[label]);
+                issue.parent_issue = Some(issue_ref(parent_number));
+                issue.sub_issues = vec![issue_ref(sub_issue_number)];
+            })
+        }
+
+        #[rstest]
+        fn test_remote_only_issue_field_changes_are_omitted() {
+            let base_issue = base_issue();
+            let metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            let local_comments = [];
+            let local = LocalState {
+                metadata: &metadata,
+                body: &base_issue.body,
+                comments: &local_comments,
+            };
+            let remote_issue = remote_issue("Remote title", "Remote body", "remote-label", 30, 31);
+            let remote_comments = [];
+            let remote = RemoteState {
+                issue: &remote_issue,
+                comments: &remote_comments,
+            };
+            let options = DetectOptions {
+                current_user: "testuser",
+                edit_others: false,
+                allow_delete: false,
+            };
+
+            let changeset =
+                ChangeSet::detect_with_base(&local, &remote, &options, Some(&base_issue)).unwrap();
+
+            assert_eq!(changeset, empty_changeset());
+        }
+
+        #[rstest]
+        fn test_local_label_change_is_retained_against_unchanged_base() {
+            let base_issue = base_issue();
+            let mut metadata = IssueMetadata::from(base_issue.frontmatter.clone());
+            metadata.labels = vec!["local-label".to_string()];
+            let local_comments = [];
+            let local = LocalState {
+                metadata: &metadata,
+                body: &base_issue.body,
+                comments: &local_comments,
+            };
+            let remote_issue = remote_issue("Base title", "Base body", "base-label", 10, 11);
+            let remote_comments = [];
+            let remote = RemoteState {
+                issue: &remote_issue,
+                comments: &remote_comments,
+            };
+            let options = DetectOptions {
+                current_user: "testuser",
+                edit_others: false,
+                allow_delete: false,
+            };
+
+            let changeset =
+                ChangeSet::detect_with_base(&local, &remote, &options, Some(&base_issue)).unwrap();
+
+            assert_eq!(
+                changeset,
+                ChangeSet {
+                    body: None,
+                    title: None,
+                    labels: Some(LabelChange {
+                        to_add: vec!["local-label".to_string()],
+                        to_remove: vec!["base-label".to_string()],
+                        local_sorted: vec!["local-label".to_string()],
+                        remote_sorted: vec!["base-label".to_string()],
+                    }),
+                    sub_issues: None,
+                    parent_issue: None,
+                    comments: vec![],
+                },
+            );
         }
     }
 

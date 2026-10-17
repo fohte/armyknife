@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::gh::issue_agent::body_compare::bodies_equal;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::LocalComment;
+use crate::commands::gh::issue_agent::storage::{IssueContent, LocalComment};
 
 use super::changeset::{
     BodyChange, CommentChange, LabelChange, ParentIssueChange, SubIssueChange, TitleChange,
@@ -280,6 +280,8 @@ pub(super) fn check_can_edit_comment(
 /// Represents a field-level conflict between local and remote state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Conflict {
+    /// An issue field changed locally and remotely from the saved snapshot.
+    IssueField { name: &'static str },
     /// Issue body was edited both locally and remotely.
     Body {
         local_timestamp: Option<String>,
@@ -301,6 +303,7 @@ pub enum Conflict {
 impl std::fmt::Display for Conflict {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Conflict::IssueField { name } => write!(f, "Issue {}", name),
             Conflict::Body {
                 local_timestamp,
                 remote_timestamp,
@@ -344,50 +347,106 @@ pub(crate) struct ConflictCheckInput<'a> {
     pub remote_issue: &'a Issue,
     /// Remote comments.
     pub remote_comments: &'a [Comment],
+    /// Last saved issue snapshot, when available.
+    pub base_issue: Option<&'a IssueContent>,
 }
 
 /// Check for field-level conflicts between local and remote state.
 ///
 /// Returns a list of conflicts found. Empty list means no conflicts.
 ///
-/// The logic is:
-/// - For body: conflict if local body differs from remote AND remote `lastEditedAt`
-///   has changed since pull
-/// - For title: conflict if local title differs from remote AND remote `updatedAt`
-///   has changed since pull (no field-level timestamp available for title)
-/// - For comments: conflict if local comment body differs from remote AND remote `updatedAt`
-///   has changed since pull
+/// Issue fields use three-way value comparison when a saved snapshot exists.
+/// Legacy directories keep the timestamp checks for body/title. Comment
+/// conflicts always use their existing per-comment timestamps.
 pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
     let mut conflicts = Vec::new();
 
-    // Check body conflict using lastEditedAt
-    let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
-    let local_body_changed = !bodies_equal(input.local_body, remote_body);
+    if let Some(base_issue) = input.base_issue {
+        let base_fields = &base_issue.frontmatter.fields;
+        let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
+        if !bodies_equal(input.local_body, &base_issue.body)
+            && !bodies_equal(remote_body, &base_issue.body)
+            && !bodies_equal(input.local_body, remote_body)
+        {
+            conflicts.push(Conflict::IssueField { name: "body" });
+        }
 
-    if local_body_changed {
-        let local_body_ts = input.local_metadata.last_edited_at.as_deref();
-        let remote_body_ts = input.remote_issue.last_edited_at.map(|dt| dt.to_rfc3339());
+        if input.local_metadata.title != base_fields.title
+            && input.remote_issue.title != base_fields.title
+            && input.local_metadata.title != input.remote_issue.title
+        {
+            conflicts.push(Conflict::IssueField { name: "title" });
+        }
 
-        if timestamps_differ(local_body_ts, remote_body_ts.as_deref()) {
-            conflicts.push(Conflict::Body {
-                local_timestamp: local_body_ts.map(|s| s.to_string()),
-                remote_timestamp: remote_body_ts,
+        let remote_labels: Vec<String> = input
+            .remote_issue
+            .labels
+            .iter()
+            .map(|label| label.name.clone())
+            .collect();
+        if !string_sets_equal(&input.local_metadata.labels, &base_fields.labels)
+            && !string_sets_equal(&remote_labels, &base_fields.labels)
+            && !string_sets_equal(&input.local_metadata.labels, &remote_labels)
+        {
+            conflicts.push(Conflict::IssueField { name: "labels" });
+        }
+
+        let remote_sub_issues: Vec<String> = input
+            .remote_issue
+            .sub_issues
+            .iter()
+            .map(|issue| issue.to_ref_string())
+            .collect();
+        if !string_sets_equal(&input.local_metadata.sub_issues, &base_fields.sub_issues)
+            && !string_sets_equal(&remote_sub_issues, &base_fields.sub_issues)
+            && !string_sets_equal(&input.local_metadata.sub_issues, &remote_sub_issues)
+        {
+            conflicts.push(Conflict::IssueField { name: "sub-issues" });
+        }
+
+        let remote_parent = input
+            .remote_issue
+            .parent_issue
+            .as_ref()
+            .map(|issue| issue.to_ref_string());
+        if input.local_metadata.parent_issue != base_fields.parent_issue
+            && remote_parent != base_fields.parent_issue
+            && input.local_metadata.parent_issue != remote_parent
+        {
+            conflicts.push(Conflict::IssueField {
+                name: "parent issue",
             });
         }
-    }
+    } else {
+        // Check body conflict using lastEditedAt
+        let remote_body = input.remote_issue.body.as_deref().unwrap_or("");
+        let local_body_changed = !bodies_equal(input.local_body, remote_body);
 
-    // Check title conflict using updatedAt (no field-level timestamp for title)
-    let local_title_changed = input.local_metadata.title != input.remote_issue.title;
+        if local_body_changed {
+            let local_body_ts = input.local_metadata.last_edited_at.as_deref();
+            let remote_body_ts = input.remote_issue.last_edited_at.map(|dt| dt.to_rfc3339());
 
-    if local_title_changed {
-        let local_title_ts = &input.local_metadata.updated_at;
-        let remote_title_ts = input.remote_issue.updated_at.to_rfc3339();
+            if timestamps_differ(local_body_ts, remote_body_ts.as_deref()) {
+                conflicts.push(Conflict::Body {
+                    local_timestamp: local_body_ts.map(|s| s.to_string()),
+                    remote_timestamp: remote_body_ts,
+                });
+            }
+        }
 
-        if local_title_ts != &remote_title_ts {
-            conflicts.push(Conflict::Title {
-                local_timestamp: Some(local_title_ts.clone()),
-                remote_timestamp: Some(remote_title_ts),
-            });
+        // Check title conflict using updatedAt (no field-level timestamp for title)
+        let local_title_changed = input.local_metadata.title != input.remote_issue.title;
+
+        if local_title_changed {
+            let local_title_ts = &input.local_metadata.updated_at;
+            let remote_title_ts = input.remote_issue.updated_at.to_rfc3339();
+
+            if local_title_ts != &remote_title_ts {
+                conflicts.push(Conflict::Title {
+                    local_timestamp: Some(local_title_ts.clone()),
+                    remote_timestamp: Some(remote_title_ts),
+                });
+            }
         }
     }
 
@@ -438,6 +497,11 @@ pub(crate) fn check_conflicts(input: &ConflictCheckInput<'_>) -> Vec<Conflict> {
 /// Returns true if they differ (including when one is Some and one is None).
 fn timestamps_differ(local: Option<&str>, remote: Option<&str>) -> bool {
     local != remote
+}
+
+pub(super) fn string_sets_equal(left: &[String], right: &[String]) -> bool {
+    left.iter().map(String::as_str).collect::<HashSet<_>>()
+        == right.iter().map(String::as_str).collect::<HashSet<_>>()
 }
 
 #[cfg(test)]
@@ -594,6 +658,7 @@ mod tests {
                 local_comments: &[],
                 remote_issue: &remote_issue,
                 remote_comments: &[],
+                base_issue: None,
             };
 
             let conflicts = check_conflicts(&input);
@@ -621,6 +686,7 @@ mod tests {
                 local_comments: &[],
                 remote_issue: &remote_issue,
                 remote_comments: &[],
+                base_issue: None,
             };
 
             let conflicts = check_conflicts(&input);
@@ -628,6 +694,112 @@ mod tests {
                 conflicts.iter().any(|c| matches!(c, Conflict::Body { .. })),
                 "Expected a body conflict, got: {:?}",
                 conflicts,
+            );
+        }
+    }
+
+    mod check_conflicts_base_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::models::{
+            IssueFrontmatter, IssueMetadata, SubIssueRef,
+        };
+        use crate::commands::gh::issue_agent::storage::IssueContent;
+        use crate::commands::gh::issue_agent::testing::factories;
+        use rstest::rstest;
+
+        fn issue_ref(number: i64) -> SubIssueRef {
+            SubIssueRef {
+                id: number as u64,
+                number,
+                owner: "owner".to_string(),
+                repo: "repo".to_string(),
+            }
+        }
+
+        fn base_issue() -> IssueContent {
+            let issue = factories::issue_with(|issue| {
+                issue.title = "Base title".to_string();
+                issue.body = Some("Base body".to_string());
+                issue.labels = factories::labels(&["base-label"]);
+                issue.parent_issue = Some(issue_ref(10));
+                issue.sub_issues = vec![issue_ref(11)];
+            });
+            IssueContent {
+                frontmatter: IssueFrontmatter::from_issue(&issue),
+                body: "Base body".to_string(),
+            }
+        }
+
+        fn local_metadata(base: &IssueContent) -> IssueMetadata {
+            let mut metadata = IssueMetadata::from(base.frontmatter.clone());
+            metadata.title = "Local title".to_string();
+            metadata.labels = vec!["local-label".to_string()];
+            metadata.parent_issue = Some("owner/repo#20".to_string());
+            metadata.sub_issues = vec!["owner/repo#21".to_string()];
+            metadata
+        }
+
+        fn remote_issue(
+            title: &str,
+            body: &str,
+            label: &str,
+            parent_number: i64,
+            sub_issue_number: i64,
+        ) -> Issue {
+            factories::issue_with(|issue| {
+                issue.title = title.to_string();
+                issue.body = Some(body.to_string());
+                issue.labels = factories::labels(&[label]);
+                issue.parent_issue = Some(issue_ref(parent_number));
+                issue.sub_issues = vec![issue_ref(sub_issue_number)];
+            })
+        }
+
+        fn conflicts_for(
+            base_issue: &IssueContent,
+            local_metadata: &IssueMetadata,
+            local_body: &str,
+            remote_issue: &Issue,
+        ) -> Vec<Conflict> {
+            check_conflicts(&ConflictCheckInput {
+                local_metadata,
+                local_body,
+                local_comments: &[],
+                remote_issue,
+                remote_comments: &[],
+                base_issue: Some(base_issue),
+            })
+        }
+
+        #[rstest]
+        fn test_divergent_local_and_remote_values_conflict_for_every_issue_field() {
+            let base_issue = base_issue();
+            let metadata = local_metadata(&base_issue);
+            let remote_issue = remote_issue("Remote title", "Remote body", "remote-label", 30, 31);
+
+            assert_eq!(
+                conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),
+                vec![
+                    Conflict::IssueField { name: "body" },
+                    Conflict::IssueField { name: "title" },
+                    Conflict::IssueField { name: "labels" },
+                    Conflict::IssueField { name: "sub-issues" },
+                    Conflict::IssueField {
+                        name: "parent issue",
+                    },
+                ],
+            );
+        }
+
+        #[rstest]
+        fn test_matching_local_and_remote_changes_do_not_conflict() {
+            let base_issue = base_issue();
+            let metadata = local_metadata(&base_issue);
+            let remote_issue = remote_issue("Local title", "Local body", "local-label", 20, 21);
+
+            assert_eq!(
+                conflicts_for(&base_issue, &metadata, "Local body", &remote_issue),
+                Vec::<Conflict>::new(),
             );
         }
     }

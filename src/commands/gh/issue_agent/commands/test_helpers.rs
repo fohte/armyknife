@@ -101,6 +101,7 @@ pub struct TestSetup<'a> {
     pub remote_body: &'a str,
     pub remote_ts: &'a str,
     pub remote_last_edited_at: Option<&'a str>,
+    pub remote_labels: Vec<&'a str>,
     pub remote_comments: Vec<RemoteComment<'a>>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
@@ -120,6 +121,7 @@ impl<'a> TestSetup<'a> {
             remote_body: "Body",
             remote_ts: DEFAULT_TS,
             remote_last_edited_at: None,
+            remote_labels: vec!["bug"],
             remote_comments: vec![],
             local_title: "Title",
             local_body: "Body",
@@ -135,6 +137,7 @@ impl<'a> TestSetup<'a> {
         remote_body: &'a str,
         remote_ts: &'a str,
         remote_last_edited_at: Option<&'a str>,
+        remote_labels: Vec<&'a str>,
         remote_comments: Vec<RemoteComment<'a>>,
         local_title: &'a str,
         local_body: &'a str,
@@ -153,7 +156,8 @@ impl<'a> TestSetup<'a> {
             .issue(123)
             .title(self.remote_title)
             .body(self.remote_body)
-            .updated_at(self.remote_ts);
+            .updated_at(self.remote_ts)
+            .labels(self.remote_labels);
 
         if let Some(ts) = self.remote_last_edited_at {
             issue_builder = issue_builder.last_edited_at(ts);

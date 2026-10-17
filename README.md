@@ -268,6 +268,13 @@ a gh issue-agent <command> <issue-number> [options]
 | `diff`   | Show colored diff between local changes and remote                                                                                                                                       |
 | `init`   | Create boilerplate files for new issues or comments                                                                                                                                      |
 
+Each pulled issue directory contains `issue.md` for editable issue fields and
+body, `.issue.base.md` as a managed snapshot of the last pull or successful push,
+and `comments/` for issue comments. Existing issue pushes compare title, body,
+labels, sub-issues, and parent issue against the snapshot so remote-only edits
+are preserved and divergent edits are reported as conflicts. Directories without
+`.issue.base.md` retain the legacy push behavior until the next pull.
+
 | Option           | Description                                        |
 | ---------------- | -------------------------------------------------- |
 | `-R <repo>`      | Target repository (default: current repo)          |

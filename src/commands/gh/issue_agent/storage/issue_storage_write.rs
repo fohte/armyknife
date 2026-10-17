@@ -10,12 +10,13 @@ use crate::commands::gh::issue_agent::models::IssueMetadata;
 use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter};
 
 impl IssueStorage {
-    /// Save issue with frontmatter to issue.md.
+    /// Save issue with frontmatter and update the push baseline snapshot.
     pub fn save_issue(&self, frontmatter: &IssueFrontmatter, body: &str) -> Result<()> {
         fs::create_dir_all(&self.dir)?;
         let path = self.dir.join("issue.md");
         let content = format_issue_md(frontmatter, body);
-        fs::write(&path, content)?;
+        fs::write(&path, &content)?;
+        fs::write(self.dir.join(".issue.base.md"), content)?;
         Ok(())
     }
 
@@ -187,10 +188,28 @@ mod tests {
             .save_issue(&frontmatter, "Test body content")
             .unwrap();
 
+        let expected_content = format_issue_md(&frontmatter, "Test body content");
+        assert_eq!(
+            (
+                fs::read_to_string(dir.path().join("issue.md")).unwrap(),
+                fs::read_to_string(dir.path().join(".issue.base.md")).unwrap(),
+            ),
+            (expected_content.clone(), expected_content),
+        );
+
         // Verify by loading back the issue content
         let issue_content = storage.read_issue().unwrap();
-        assert_eq!(issue_content.frontmatter, frontmatter);
-        assert_eq!(issue_content.body, "Test body content");
+        assert_eq!(
+            storage.read_base_issue().unwrap(),
+            Some(issue_content.clone())
+        );
+        assert_eq!(
+            issue_content,
+            super::super::issue_storage_read::IssueContent {
+                frontmatter,
+                body: "Test body content".to_string(),
+            }
+        );
     }
 
     #[rstest]

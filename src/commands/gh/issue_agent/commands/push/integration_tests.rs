@@ -4,6 +4,9 @@ use super::*;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
     TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
 };
+use crate::commands::gh::issue_agent::models::IssueFrontmatter;
+use crate::commands::gh::issue_agent::storage::IssueStorage;
+use crate::commands::gh::issue_agent::testing::factories;
 use crate::infra::github::RemoteComment;
 use rstest::rstest;
 use tempfile::TempDir;
@@ -35,6 +38,30 @@ fn make_remote_comment<'a>(
         author,
         body,
     }
+}
+
+fn issue_frontmatter(title: &str, labels: &[&str]) -> IssueFrontmatter {
+    let issue = factories::issue_with(|issue| {
+        issue.number = 123;
+        issue.title = title.to_string();
+        issue.labels = factories::labels(labels);
+    });
+    IssueFrontmatter::from_issue(&issue)
+}
+
+fn write_local_issue(storage: &IssueStorage, frontmatter: &IssueFrontmatter, body: &str) {
+    let yaml = serde_yaml::to_string(frontmatter).unwrap();
+    std::fs::write(
+        storage.dir().join("issue.md"),
+        ["---", yaml.trim_end(), "---", "", body].join("\n"),
+    )
+    .unwrap();
+}
+
+fn remove_issue_approval(storage: &IssueStorage) {
+    crate::shared::testing::init_approval_dir();
+    let _ = crate::shared::human_in_the_loop::ApprovalManager::new(&storage.dir().join("issue.md"))
+        .remove();
 }
 
 // Body update tests
@@ -160,6 +187,125 @@ async fn test_updates_labels(test_dir: TempDir) {
     )
     .await;
     assert!(result.is_ok());
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_remote_label_change_is_preserved_when_pushing_comment(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_labels(vec!["remote-label"])
+        .build()
+        .await;
+    storage
+        .save_issue(&issue_frontmatter("Title", &["bug"]), "Body")
+        .unwrap();
+    setup_local_comment(test_dir.path(), "new_agent_comment.md", "Added comment");
+    let comment_path = test_dir.path().join("comments/new_agent_comment.md");
+    approve_file(&comment_path);
+    mock.repo("owner", "repo").issue(123).create_comment().await;
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    assert_eq!(
+        (result, storage.read_metadata().unwrap().labels),
+        (Ok(()), vec!["remote-label".to_string()]),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_divergent_local_and_remote_labels_conflict(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_labels(vec!["remote-label"])
+        .build()
+        .await;
+    storage
+        .save_issue(&issue_frontmatter("Title", &["bug"]), "Body")
+        .unwrap();
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Title", &["local-label"]),
+        "Body",
+    );
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    assert_eq!(
+        result,
+        Err(
+            "Remote has changed. Use --force to overwrite, or 'pull --force' to update local copy."
+                .to_string()
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_local_label_change_requires_issue_approval(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    storage
+        .save_issue(&issue_frontmatter("Title", &["bug"]), "Body")
+        .unwrap();
+    write_local_issue(
+        &storage,
+        &issue_frontmatter("Title", &["local-label"]),
+        "Body",
+    );
+    remove_issue_approval(&storage);
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let expected_error = format!(
+        "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+        storage.dir().join("issue.md").display()
+    );
+
+    assert_eq!(result, Err(expected_error));
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_missing_base_snapshot_keeps_legacy_label_approval(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_labels(vec!["remote-label"])
+        .build()
+        .await;
+    remove_issue_approval(&storage);
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let expected_error = format!(
+        "The following files have not been approved. Run 'a gh issue-agent review <file>' for each:\n  {}",
+        storage.dir().join("issue.md").display()
+    );
+
+    assert_eq!(result, Err(expected_error));
 }
 
 // Remote changed detection
