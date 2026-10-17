@@ -15,7 +15,7 @@ pub use session::{Session, SessionPrContext};
 /// Which coding agent CLI hosts a session. Determines the process name to
 /// look for in a tmux pane, and which binary/subcommand `a agent new` /
 /// `a agent resume` launch. Defaults to `Claude` (`#[serde(default)]` on
-/// `Session::engine`) so on-disk session files predating this field, and
+/// `Session::engine`) so stored session records predating this field, and
 /// hook invocations that don't pass `--engine`, keep behaving exactly as
 /// before Codex support existed.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
@@ -132,12 +132,12 @@ pub enum SessionStatus {
     Stopped,
     Failed,
     /// Stopped session that was automatically terminated after the
-    /// `auto_pause` timeout elapsed. The session file is preserved so that
+    /// `auto_pause` timeout elapsed. The session record is preserved so that
     /// `agent resume` can restore the conversation.
     Paused,
     /// Session has ended. Claude Code confirms this through SessionEnd;
     /// Codex requires a confirmed CLI exit, close, or thread takeover. Kept
-    /// on disk for resume metadata and garbage-collected after a retention
+    /// in the store for resume metadata and garbage-collected after a retention
     /// period.
     Ended,
 }

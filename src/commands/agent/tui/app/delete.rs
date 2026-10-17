@@ -41,9 +41,16 @@ impl App {
     /// If the session is alive, sends SIGTERM to the pane process first.
     ///
     /// When `worktree_cleanup` is `Some`, also removes the worktree, its
-    /// branch, associated tmux windows, and any remaining session files
+    /// branch, associated tmux windows, and any remaining session records
     /// inside the worktree.
     pub fn confirm_delete(&mut self) -> anyhow::Result<()> {
+        self.confirm_delete_with(store::delete_session)
+    }
+
+    pub(crate) fn confirm_delete_with(
+        &mut self,
+        delete_session: impl FnOnce(&str) -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
         let current_selection = self.selection_anchor();
         let (session_id, is_alive, worktree_cleanup) = match &self.mode {
             AppMode::Confirm {
@@ -64,7 +71,7 @@ impl App {
             );
         }
 
-        store::delete_session(&session_id)?;
+        delete_session(&session_id)?;
         self.remove_session(&session_id);
         self.mode = AppMode::Normal;
 

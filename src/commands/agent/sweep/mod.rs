@@ -1,6 +1,6 @@
 //! `a agent sweep` subcommand.
 //!
-//! Scans session files to mark terminal Codex turns and pause sessions that
+//! Scans session records to mark terminal Codex turns and pause sessions that
 //! have been `Stopped` for longer than the configured timeout. Designed to be
 //! invoked periodically (e.g., by a launchd agent on a 1-minute interval)
 //! rather than spawned on demand from the Stop hook.
@@ -60,7 +60,7 @@ pub struct SweepArgs {
     pub timeout: Option<String>,
 
     /// Dry-run: log what would be paused, marked failed or stopped, or closed
-    /// without sending signals or updating session files.
+    /// without sending signals or updating session records.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -285,7 +285,7 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
 /// store. Codex failure detections are counted separately.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct SweepReport {
-    /// Number of non-ended session files scanned.
+    /// Number of non-ended session records scanned.
     pub scanned: usize,
     /// Sessions confirmed as `Paused` (or that would have been, in
     /// --dry-run) this run. This means a prior sweep's SIGTERM (or the

@@ -100,6 +100,8 @@ pub enum AppMode {
 pub struct App {
     /// All sessions loaded from disk.
     pub sessions: Vec<Session>,
+    /// Last session-store revision applied to `sessions`.
+    session_store_revision: i64,
     /// Makes work type display settings available without reloading config during rendering.
     pub(super) agent_config: AgentConfig,
     /// Session IDs whose stored records explicitly enabled vibe mode.
@@ -199,6 +201,7 @@ impl App {
     /// `ARMYKNIFE_FOCUS_SESSION` takes precedence over user turns and the
     /// persisted selection.
     pub fn new() -> Result<Self> {
+        let session_store_revision = store::session_store_revision()?;
         let sessions = load_sessions()?;
         let vibe_enabled_session_ids = load_vibe_enabled_session_ids()?;
         let agent_config = crate::shared::config::load_config_or_default().agent;
@@ -216,6 +219,7 @@ impl App {
             last_selected_session_id.as_deref(),
         );
         app.vibe_enabled_session_ids = vibe_enabled_session_ids;
+        app.session_store_revision = session_store_revision;
         Ok(app)
     }
 
@@ -246,6 +250,7 @@ impl App {
 
         let mut app = Self {
             sessions,
+            session_store_revision: 0,
             agent_config,
             vibe_enabled_session_ids,
             list_state,

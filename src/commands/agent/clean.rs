@@ -568,7 +568,7 @@ async fn delete_one_worktree(
     repo: &GitRepo,
     info: &CleanWorktreeInfo,
 ) -> Result<crate::shared::cleanup::WorktreeCleanupResult> {
-    // Delegate metadata is stored in session files that cleanup removes.
+    // Delegate metadata is stored in session records that cleanup removes.
     if info.status.is_merged() {
         notify_delegator_of_merge(repo, &info.wt.branch, &info.wt.path).await;
     }

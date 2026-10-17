@@ -1,13 +1,15 @@
 use std::path::Path;
+use std::sync::Arc;
 
-use super::super::session_pr_context::Capture;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
-use super::super::types::{Session, SessionStatus};
+use super::super::types::{Session, SessionPrContext, SessionStatus};
 #[cfg(not(test))]
 use super::super::{archive_tq_session_detached, bg};
 use crate::shared::config::AgentConfig;
+
+pub(super) type PrContextCapture = Arc<dyn Fn(&Path) -> Option<SessionPrContext> + Send + Sync>;
 
 /// Controls which side effects `process_hook_event_impl` executes.
 /// Production code uses `SideEffects::all()`; tests use `SideEffects::none()`
@@ -20,7 +22,7 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
-    pub(super) capture_pr_context: Option<Capture>,
+    pub(super) capture_pr_context: Option<PrContextCapture>,
     /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
     pub(super) tq_archive: bool,
@@ -69,7 +71,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
-            capture_pr_context: Some(super::super::session_pr_context::capture),
+            capture_pr_context: Some(Arc::new(super::super::session_pr_context::capture)),
             tq_archive: true,
             track_bg_run_tasks: true,
             redeliver_bg_notifications: true,

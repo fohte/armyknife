@@ -15,6 +15,7 @@ use lazy_regex::regex_replace_all;
 use self::side_effects::SideEffects;
 use super::claude_sessions;
 use super::error::CcError;
+use super::session_init;
 use super::session_status;
 use super::store;
 use super::types::{
@@ -251,7 +252,7 @@ fn process_hook_event_impl_with_instruction(
     // sees the pid disappear (see `sweep/mod.rs`), so this SessionEnd IS
     // that confirmation, arriving before sweep's next pass gets to it.
     if event == HookEvent::SessionEnd {
-        // When the session file is gone the pane_id is unrecoverable
+        // When the session record is gone the pane_id is unrecoverable
         // (hook input only carries session_id), so we silently drop the
         // SessionEnd. The pane option is keyed off the pane's bound
         // session_id and will be reconciled the next time that pane fires
@@ -381,9 +382,28 @@ fn process_hook_event_impl_with_instruction(
     // `pending_permission_agent_ids` entry. `last_message` is deliberately
     // saved separately, after this lock is released -- see the comment at
     // its update below.
-    let session_lock = store::lock_session_for_update(sessions_dir, &input.session_id)?;
     let now = Utc::now();
-    let mut session = session_lock.load()?.unwrap_or_else(|| {
+    let initialized =
+        session_init::load_or_capture(sessions_dir, &input.session_id, &input.cwd, |cwd| {
+            let pr_context = side_effects
+                .capture_pr_context
+                .as_ref()
+                .and_then(|capture| capture(cwd));
+            let work_type_pinned = env.session_work_type.is_some()
+                && input.source.as_deref() != Some("clear")
+                && tmux_info.as_ref().is_none_or(|info| {
+                    !pane_binding::has_other_session_on_pane(
+                        sessions_dir,
+                        &input.session_id,
+                        &info.pane_id,
+                    )
+                });
+            (pr_context, work_type_pinned)
+        })?;
+    let session_lock = initialized.lock;
+    let existing_session = initialized.existing_session;
+    let (pr_context, work_type_pinned) = initialized.captured.unwrap_or_default();
+    let mut session = existing_session.unwrap_or_else(|| {
         let ancestor_session_ids = env
             .ancestor_session_ids
             .as_ref()
@@ -392,22 +412,12 @@ fn process_hook_event_impl_with_instruction(
 
         Session {
             archived_at: None,
-            pr_context: side_effects
-                .capture_pr_context
-                .and_then(|capture| capture(&input.cwd)),
+            pr_context,
             session_id: input.session_id.clone(),
             work_type: env.session_work_type.clone(),
             // A new ID in a pane that already tracked a session is a restart or
             // `/clear`; it must not inherit that launch's kind pin.
-            work_type_pinned: env.session_work_type.is_some()
-                && input.source.as_deref() != Some("clear")
-                && tmux_info.as_ref().is_none_or(|info| {
-                    !pane_binding::has_other_session_on_pane(
-                        sessions_dir,
-                        &input.session_id,
-                        &info.pane_id,
-                    )
-                }),
+            work_type_pinned,
             vibe_enabled: false,
             launched_with_vibe: env.session_vibe_launch,
             crit_urls: Vec::new(),
@@ -628,12 +638,8 @@ fn process_hook_event_impl_with_instruction(
     }
     vibe::enable_on_prompt_submit(event, &input, &mut session);
 
-    // Save the session, then release the lock before the two slow steps
-    // below (transcript read, tmux sync). Both can block for up to 500ms,
-    // and `sync_tmux` (via `window_status::sync_window_option`) re-reads
-    // this same session file -- holding the lock across either would starve
-    // a concurrent `a agent watch` reader, or self-deadlock against the read,
-    // for as long as `LOCK_TIMEOUT` (see `SessionLock`'s doc comment).
+    // Commit before transcript and tmux work so they do not hold SQLite's
+    // database-wide writer lock. `sync_tmux` also reloads this session.
     session_lock.save(&session)?;
     drop(session_lock);
 
@@ -3976,7 +3982,7 @@ mod tests {
         fn user_prompt_submit_persists_captured_pr_context() {
             let temp_dir = create_temp_sessions_dir();
             let mut side_effects = SideEffects::none();
-            side_effects.capture_pr_context = Some(fixed_context_capture);
+            side_effects.capture_pr_context = Some(std::sync::Arc::new(fixed_context_capture));
 
             let actual = temp_env::with_vars(
                 [
@@ -4035,6 +4041,77 @@ mod tests {
                     "sweep_signaled": false,
                     "engine": "claude"
                 }),
+            );
+        }
+
+        #[test]
+        fn concurrent_permission_hooks_preserve_both_agent_mutations() {
+            let temp_dir = create_temp_sessions_dir();
+            let (capture_started_tx, capture_started_rx) = std::sync::mpsc::channel();
+            let (resume_capture_tx, resume_capture_rx) = std::sync::mpsc::channel();
+            let resume_capture_rx = std::sync::Arc::new(std::sync::Mutex::new(resume_capture_rx));
+            let mut waiting_side_effects = SideEffects::none();
+            waiting_side_effects.capture_pr_context = Some(std::sync::Arc::new(move |_| {
+                capture_started_tx
+                    .send(())
+                    .expect("capture should signal the unlocked interval");
+                resume_capture_rx
+                    .lock()
+                    .expect("capture gate should not be poisoned")
+                    .recv()
+                    .expect("capture gate should be released");
+                None
+            }));
+
+            let worker_dir = temp_dir.path().to_path_buf();
+            let worker = std::thread::spawn(move || {
+                let mut input =
+                    create_test_input_with_session_and_source("race-session", None, None);
+                input.agent_id = Some("waiting-hook".to_string());
+                process_hook_event_impl(
+                    HookEvent::PermissionRequest,
+                    input,
+                    &worker_dir,
+                    &waiting_side_effects,
+                )
+                .expect("waiting hook should save its mutation")
+            });
+
+            capture_started_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .expect("first hook should reach context capture after releasing its lock");
+
+            let mut competing_input =
+                create_test_input_with_session_and_source("race-session", None, None);
+            competing_input.agent_id = Some("competing-hook".to_string());
+            let competing_result = process_hook_event_impl(
+                HookEvent::PermissionRequest,
+                competing_input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("competing hook should create the session");
+            resume_capture_tx
+                .send(())
+                .expect("first hook should resume after the competing write");
+            let waiting_result = worker.join().expect("first hook should finish");
+
+            let session = store::load_session_from(temp_dir.path(), "race-session")
+                .expect("session should load")
+                .expect("competing hook should have created the session");
+            assert_eq!(
+                (
+                    competing_result,
+                    waiting_result,
+                    session.status,
+                    session.pending_permission_agent_ids,
+                ),
+                (
+                    ProcessResult::SessionSaved,
+                    ProcessResult::SessionSaved,
+                    SessionStatus::WaitingInput,
+                    BTreeSet::from(["competing-hook".to_string(), "waiting-hook".to_string(),]),
+                ),
             );
         }
 
@@ -4492,7 +4569,7 @@ mod tests {
             .expect("startup should succeed");
             assert_eq!(startup_result, ProcessResult::Skipped);
 
-            // No session file should exist after startup skip
+            // No session record should exist after startup skip
             let session =
                 store::load_session_from(temp_dir.path(), "test-123").expect("load should succeed");
             assert!(
