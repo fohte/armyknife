@@ -413,7 +413,7 @@ fn process_hook_event_impl_with_instruction(
             transcript_path: input.transcript_path.clone(),
             tty: None,
             tmux_info: tmux_info.clone(),
-            status,
+            status: status.unwrap_or(SessionStatus::Running),
             created_at: now,
             updated_at: now,
             last_message: None,
@@ -434,6 +434,7 @@ fn process_hook_event_impl_with_instruction(
         }
     });
     let was_waiting_for_input = session.status == SessionStatus::WaitingInput;
+    let had_pending_permission_requests = session.has_pending_permission_requests();
     let was_asking_user = session.current_tool.as_deref() == Some("AskUserQuestion");
 
     let work_type_config =
@@ -549,8 +550,11 @@ fn process_hook_event_impl_with_instruction(
     // permission prompt: keep the session `WaitingInput` regardless of what
     // this event's own status resolved to, so a sibling agent's unrelated
     // event (e.g. another subagent's `PreToolUse`) can't paper over it.
-    if event != HookEvent::StopFailure && session.has_pending_permission_requests() {
-        status = SessionStatus::WaitingInput;
+    if status.is_some()
+        && event != HookEvent::StopFailure
+        && session.has_pending_permission_requests()
+    {
+        status = Some(SessionStatus::WaitingInput);
     }
 
     let stop_block_reason = (event == HookEvent::Stop)
@@ -566,8 +570,8 @@ fn process_hook_event_impl_with_instruction(
         .flatten();
     let preserve_last_message =
         stop::preserve_last_message_after_block(&mut session, event, stop_block_reason.is_some());
-    if stop_block_reason.is_some() {
-        status = SessionStatus::Running;
+    if stop_block_reason.is_some() && status.is_some() {
+        status = Some(SessionStatus::Running);
     }
 
     // Preserve Paused during SIGTERM shutdown: when sweep SIGTERMs a stopped
@@ -580,14 +584,21 @@ fn process_hook_event_impl_with_instruction(
     // distinguishes "sweep's own shutdown Stop" from "the user resumed".
     let keep_paused = session.status == SessionStatus::Paused
         && event != HookEvent::SessionStart
-        && matches!(status, SessionStatus::Stopped | SessionStatus::Ended);
+        && matches!(status, Some(SessionStatus::Stopped | SessionStatus::Ended));
     // Claude's idle_prompt notification can follow a failed API turn without
     // indicating that the user has resumed the session.
     let keep_failed_after_idle_prompt = session.status == SessionStatus::Failed
         && event == HookEvent::Notification
         && input.notification_type.as_deref() == Some("idle_prompt");
     if !keep_paused && !keep_failed_after_idle_prompt {
-        session.status = status;
+        if let Some(status) = status {
+            session.status = status;
+        } else if was_waiting_for_input
+            && had_pending_permission_requests
+            && !session.has_pending_permission_requests()
+        {
+            session.status = SessionStatus::Running;
+        }
     }
 
     if session.status == SessionStatus::Stopped {
@@ -1041,7 +1052,7 @@ fn export_session_id_to_env_file(session_id: &str) {
     }
 }
 
-/// Determines the event's session status.
+/// Determines whether an event updates the session status.
 /// Note: SessionEnd is handled separately in run() before this function is called.
 ///
 /// A `Stop` (or `Notification(idle_prompt)`) while a Bash bg shell or
@@ -1049,15 +1060,15 @@ fn export_session_id_to_env_file(session_id: &str) {
 /// still resolves to `Stopped` here: the main loop really did go idle.
 /// `Session::display_status` surfaces it as `Background`, or `WaitingInput`
 /// when a crit URL is linked, for `agent list` / `agent watch` / tmux.
-fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
-    match event {
-        HookEvent::Stop => SessionStatus::Stopped,
-        HookEvent::StopFailure => SessionStatus::Failed,
-        HookEvent::PermissionRequest => SessionStatus::WaitingInput,
+fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus> {
+    let status = match event {
+        HookEvent::Stop => Some(SessionStatus::Stopped),
+        HookEvent::StopFailure => Some(SessionStatus::Failed),
+        HookEvent::PermissionRequest => Some(SessionStatus::WaitingInput),
         HookEvent::Notification => match input.notification_type.as_deref() {
-            Some("permission_prompt") => SessionStatus::WaitingInput,
-            Some("idle_prompt") => SessionStatus::Stopped,
-            _ => SessionStatus::Running,
+            Some("permission_prompt") => Some(SessionStatus::WaitingInput),
+            Some("idle_prompt") => Some(SessionStatus::Stopped),
+            _ => None,
         },
         // A resumed session (`claude -r` / `claude -c` / `/resume`) is waiting
         // for input just like a session that already hit Stop: if the user
@@ -1065,13 +1076,21 @@ fn determine_status(event: HookEvent, input: &HookInput) -> SessionStatus {
         // status. Reporting Running here would leave the session stuck
         // forever, invisible to `a agent sweep`'s idle-timeout check.
         HookEvent::SessionStart if input.source.as_deref() == Some("resume") => {
-            SessionStatus::Stopped
+            Some(SessionStatus::Stopped)
         }
         HookEvent::SessionStart
         | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
-        | HookEvent::SessionEnd => SessionStatus::Running,
+        | HookEvent::SessionEnd => Some(SessionStatus::Running),
+    };
+
+    // A subagent's hook reports its own activity, not whether the main thread
+    // resumed. Keep a waiting session's normal resolution path below.
+    if input.agent_id.is_some() && event != HookEvent::PermissionRequest {
+        None
+    } else {
+        status
     }
 }
 
@@ -1331,69 +1350,135 @@ mod tests {
     }
 
     #[rstest]
-    #[case::session_start(HookEvent::SessionStart, None, None, SessionStatus::Running)]
+    #[case::session_start(HookEvent::SessionStart, None, None, Some(SessionStatus::Running))]
     #[case::session_start_startup(
         HookEvent::SessionStart,
         None,
         Some("startup"),
-        SessionStatus::Running
+        Some(SessionStatus::Running)
     )]
     #[case::session_start_resume(
         HookEvent::SessionStart,
         None,
         Some("resume"),
-        SessionStatus::Stopped
+        Some(SessionStatus::Stopped)
     )]
     #[case::session_start_clear(
         HookEvent::SessionStart,
         None,
         Some("clear"),
-        SessionStatus::Running
+        Some(SessionStatus::Running)
     )]
     #[case::session_start_compact(
         HookEvent::SessionStart,
         None,
         Some("compact"),
-        SessionStatus::Running
+        Some(SessionStatus::Running)
     )]
-    #[case::user_prompt_submit(HookEvent::UserPromptSubmit, None, None, SessionStatus::Running)]
-    #[case::pre_tool_use(HookEvent::PreToolUse, None, None, SessionStatus::Running)]
-    #[case::post_tool_use(HookEvent::PostToolUse, None, None, SessionStatus::Running)]
+    #[case::user_prompt_submit(
+        HookEvent::UserPromptSubmit,
+        None,
+        None,
+        Some(SessionStatus::Running)
+    )]
+    #[case::pre_tool_use(HookEvent::PreToolUse, None, None, Some(SessionStatus::Running))]
+    #[case::post_tool_use(HookEvent::PostToolUse, None, None, Some(SessionStatus::Running))]
     #[case::permission_request(
         HookEvent::PermissionRequest,
         None,
         None,
-        SessionStatus::WaitingInput
+        Some(SessionStatus::WaitingInput)
     )]
-    #[case::stop(HookEvent::Stop, None, None, SessionStatus::Stopped)]
-    #[case::stop_failure(HookEvent::StopFailure, None, None, SessionStatus::Failed)]
-    #[case::notification_generic(
-        HookEvent::Notification,
-        Some("info"),
-        None,
-        SessionStatus::Running
-    )]
+    #[case::stop(HookEvent::Stop, None, None, Some(SessionStatus::Stopped))]
+    #[case::stop_failure(HookEvent::StopFailure, None, None, Some(SessionStatus::Failed))]
+    #[case::notification_unknown(HookEvent::Notification, Some("info"), None, None)]
+    #[case::notification_missing_type(HookEvent::Notification, None, None, None)]
     #[case::notification_permission(
         HookEvent::Notification,
         Some("permission_prompt"),
         None,
-        SessionStatus::WaitingInput
+        Some(SessionStatus::WaitingInput)
     )]
     #[case::notification_idle(
         HookEvent::Notification,
         Some("idle_prompt"),
         None,
-        SessionStatus::Stopped
+        Some(SessionStatus::Stopped)
     )]
     fn test_determine_status(
         #[case] event: HookEvent,
         #[case] notification_type: Option<&str>,
         #[case] source: Option<&str>,
-        #[case] expected: SessionStatus,
+        #[case] expected: Option<SessionStatus>,
     ) {
         let input = create_test_input_with_source(notification_type, source);
         let result = determine_status(event, &input);
         assert_eq!(result, expected);
+    }
+
+    #[fixture]
+    fn hook_status_sessions_dir() -> tempfile::TempDir {
+        tempfile::TempDir::new().expect("temp dir")
+    }
+
+    #[rstest]
+    #[case::pre_tool_use_after_stop(HookEvent::PreToolUse, SessionStatus::Stopped)]
+    #[case::pre_tool_use_while_running(HookEvent::PreToolUse, SessionStatus::Running)]
+    #[case::post_tool_use_after_stop(HookEvent::PostToolUse, SessionStatus::Stopped)]
+    #[case::post_tool_use_while_running(HookEvent::PostToolUse, SessionStatus::Running)]
+    fn agent_event_preserves_main_thread_status(
+        #[case] event: HookEvent,
+        #[case] initial_status: SessionStatus,
+        hook_status_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = hook_status_sessions_dir.path();
+
+        save_test_session(sessions_dir, "agent-event-sess", |session| {
+            session.status = initial_status;
+        });
+
+        let mut input = create_test_input_with_session_and_source("agent-event-sess", None, None);
+        input.agent_id = Some("agent-a".to_string());
+        process_hook_event_impl(event, input, sessions_dir, &SideEffects::none())
+            .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "agent-event-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, initial_status);
+    }
+
+    #[rstest]
+    #[case::unknown_notification_after_stop(Some("future_prompt"), SessionStatus::Stopped)]
+    #[case::missing_type_while_running(None, SessionStatus::Running)]
+    fn unknown_notification_preserves_session_status(
+        #[case] notification_type: Option<&str>,
+        #[case] initial_status: SessionStatus,
+        hook_status_sessions_dir: tempfile::TempDir,
+    ) {
+        let sessions_dir = hook_status_sessions_dir.path();
+
+        save_test_session(sessions_dir, "unknown-notif-sess", |session| {
+            session.status = initial_status;
+        });
+
+        let input = create_test_input_with_session_and_source(
+            "unknown-notif-sess",
+            notification_type,
+            None,
+        );
+        process_hook_event_impl(
+            HookEvent::Notification,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("hook should succeed");
+
+        let reloaded = store::load_session_from(sessions_dir, "unknown-notif-sess")
+            .expect("load")
+            .expect("session exists");
+        assert_eq!(reloaded.status, initial_status);
     }
 
     #[test]
@@ -4101,7 +4186,7 @@ mod tests {
             assert_eq!(
                 [after_subagent_activity, after_main_thread_activity],
                 [
-                    (Some(expected_status), true, SessionStatus::Running,),
+                    (Some(expected_status), true, SessionStatus::Stopped,),
                     (None, false, SessionStatus::Running),
                 ]
             );
