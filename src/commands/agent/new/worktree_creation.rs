@@ -231,8 +231,7 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let engine = super::resolve_engine(args.common.engine, config);
-    let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
+    let launch_options = super::resolve_launch_options(&args.common, config);
 
     drop(creation_lock);
 
@@ -243,10 +242,10 @@ pub(super) fn run_worktree_creation(
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
             window_name: &worktree_name,
             layout: &config.agent.worktree.layout,
-            model: model.as_deref(),
-            reasoning_effort,
+            model: launch_options.model.as_deref(),
+            reasoning_effort: launch_options.reasoning_effort,
             prompt: final_prompt.as_deref(),
-            engine,
+            engine: launch_options.engine,
             env_vars: &env_refs,
             background,
             restore_automatic_rename: false,
