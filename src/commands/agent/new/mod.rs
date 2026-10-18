@@ -262,7 +262,11 @@ fn tq_parent_session_env_var() -> Option<(String, String)> {
 /// Build tmux session-level env vars for the child session's launch metadata,
 /// ancestor-session-id chain, and tq parent session ID. Shared between the
 /// worktree and no-worktree flows.
-fn build_env_vars(common: &CommonNewArgs, vibe: bool) -> Result<Vec<(String, String)>> {
+fn build_env_vars(
+    common: &CommonNewArgs,
+    vibe: bool,
+    own_session_id: Option<String>,
+) -> Result<Vec<(String, String)>> {
     let mut env_vars: Vec<(String, String)> = Vec::new();
     if let Some(ref label) = common.label {
         env_vars.push((EnvVars::session_label_name().to_string(), label.clone()));
@@ -287,10 +291,7 @@ fn build_env_vars(common: &CommonNewArgs, vibe: bool) -> Result<Vec<(String, Str
     // so `a agent new` called from a Claude Code Bash tool automatically inherits
     // the parent session ID without requiring --parent-session-id. Codex has no
     // env file, so it falls back to CODEX_SESSION_ID (see `own_session_id`).
-    let parent_id = common
-        .parent_session_id
-        .clone()
-        .or(EnvVars::load().own_session_id());
+    let parent_id = common.parent_session_id.clone().or(own_session_id);
     if let Some(ref parent_id) = parent_id {
         let ancestor_chain = build_ancestor_chain(parent_id)?;
         env_vars.push((
@@ -307,9 +308,10 @@ fn build_env_vars(common: &CommonNewArgs, vibe: bool) -> Result<Vec<(String, Str
 /// Build the env vars and background flag shared by both the worktree and
 /// no-worktree tmux launch paths.
 fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String, String)>, bool)> {
-    let env_vars = build_env_vars(common, vibe)?;
-    // Avoid stealing the user's tmux focus when auto-invoked from Claude Code.
-    let background = std::env::var("CLAUDECODE").is_ok();
+    let own_session_id = EnvVars::load().own_session_id();
+    // Agent tools can invoke this command without a tmux context, so preserve the user's focus.
+    let background = std::env::var("CLAUDECODE").is_ok() || own_session_id.is_some();
+    let env_vars = build_env_vars(common, vibe, own_session_id)?;
     Ok((env_vars, background))
 }
 
@@ -1105,8 +1107,78 @@ mod tests {
                     engine: None,
                     reasoning_effort: None,
                 };
-                assert_eq!(build_env_vars(&common, vibe).unwrap(), expected);
+                assert_eq!(
+                    build_env_vars(&common, vibe, EnvVars::load().own_session_id()).unwrap(),
+                    expected
+                );
             },
         );
+    }
+
+    #[rstest]
+    #[case::claude_code(&["a"], Some("1"), None, None, None, vec![], true)]
+    #[case::armyknife_session(
+        &["a"],
+        None,
+        Some("caller"),
+        None,
+        None,
+        vec![(
+            EnvVars::ancestor_session_ids_name().to_string(),
+            "caller".to_string()
+        )],
+        true
+    )]
+    #[case::codex_session(
+        &["a"],
+        None,
+        None,
+        Some("caller"),
+        None,
+        vec![(
+            EnvVars::ancestor_session_ids_name().to_string(),
+            "caller".to_string()
+        )],
+        true
+    )]
+    #[case::empty_session_id(&["a"], None, Some(""), Some(""), None, vec![], false)]
+    #[case::human_tmux_shell(&["a"], None, None, None, Some("fake-tmux"), vec![], false)]
+    #[case::agent_flag_alone(
+        &["a", "--agent"],
+        None,
+        None,
+        None,
+        None,
+        vec![(
+            EnvVars::session_delegated_name().to_string(),
+            "1".to_string()
+        )],
+        false
+    )]
+    #[case::codex_child_from_tmux_shell(&["a", "--engine", "codex"], None, None, None, Some("fake-tmux"), vec![], false)]
+    fn tmux_launch_inputs_only_background_agent_invocations(
+        #[case] argv: &[&str],
+        #[case] claudecode: Option<&str>,
+        #[case] armyknife_session_id: Option<&str>,
+        #[case] codex_session_id: Option<&str>,
+        #[case] tmux: Option<&str>,
+        #[case] expected_env_vars: Vec<(String, String)>,
+        #[case] expected_background: bool,
+    ) {
+        let args = TestCli::try_parse_from(argv).unwrap().args;
+        let actual = temp_env::with_vars(
+            [
+                ("CLAUDECODE", claudecode),
+                ("ARMYKNIFE_SESSION_ID", armyknife_session_id),
+                ("CODEX_SESSION_ID", codex_session_id),
+                ("TMUX", tmux),
+                ("TMUX_PANE", tmux.map(|_| "%1")),
+                ("TQ_SESSION_ID", None::<&str>),
+            ],
+            || tmux_launch_inputs(&args.common, args.vibe),
+        )
+        .unwrap();
+
+        assert_eq!(actual, (expected_env_vars, expected_background));
     }
 }
