@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.447](https://github.com/fohte/armyknife/compare/v0.1.446...v0.1.447) (2026-10-18)
+
+
+### Bug Fixes
+
+* **agent/new:** preserve tmux focus for Codex ([#1231](https://github.com/fohte/armyknife/issues/1231)) ([b211f71](https://github.com/fohte/armyknife/commit/b211f71ac3bc662f6a1ad56e5d083703349388a5))
+
 ## [0.1.446](https://github.com/fohte/armyknife/compare/v0.1.445...v0.1.446) (2026-10-18)
 
 
