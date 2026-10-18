@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.444](https://github.com/fohte/armyknife/compare/v0.1.443...v0.1.444) (2026-10-18)
+
+
+### Features
+
+* **agent/peer:** expose work type in peer JSON ([#1225](https://github.com/fohte/armyknife/issues/1225)) ([7060f9a](https://github.com/fohte/armyknife/commit/7060f9aa7eeb99f1c7aa59e4fdb5477263dbb162))
+
 ## [0.1.443](https://github.com/fohte/armyknife/compare/v0.1.442...v0.1.443) (2026-10-17)
 
 
