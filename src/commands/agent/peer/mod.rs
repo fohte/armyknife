@@ -85,6 +85,7 @@ struct Peer {
     cwd: String,
     label: Option<String>,
     status: &'static str,
+    work_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent_status: Option<AgentStatus>,
     /// The tmux pane hosting this session, `None` when it wasn't started
@@ -109,6 +110,7 @@ impl Peer {
             cwd: session.cwd.to_string_lossy().into_owned(),
             label: session.label.clone(),
             status: session.status.display_name(),
+            work_type: session.work_type.clone(),
             agent_status: session.agent_status.clone(),
             pane_id: session.tmux_info.as_ref().map(|t| t.pane_id.clone()),
             engine: session.engine,
@@ -330,6 +332,7 @@ mod tests {
                 cwd: "/repo/.worktrees/child".to_string(),
                 label: Some("my-label".to_string()),
                 status: "running",
+                work_type: None,
                 agent_status: None,
                 pane_id: expected_pane_id,
                 engine,
@@ -354,6 +357,7 @@ mod tests {
                 "cwd": "/repo",
                 "label": "my-label",
                 "status": "running",
+                "work_type": null,
                 "agent_status": {"kind": "external_wait", "note": "waiting for CI"},
                 "pane_id": null,
                 "engine": "claude",
@@ -374,8 +378,79 @@ mod tests {
                 "cwd": "/repo",
                 "label": "my-label",
                 "status": "running",
+                "work_type": null,
                 "pane_id": null,
                 "engine": "claude",
+            }),
+        );
+    }
+
+    #[test]
+    fn peer_list_json_identifies_work_type_within_a_repo() {
+        let mut project_manager = session(
+            "session-a",
+            "/work/sample-repo/.worktrees/coordinator",
+            vec![],
+        );
+        project_manager.work_type = Some("project-manager".to_string());
+        let worker = session("session-b", "/work/sample-repo/.worktrees/feature", vec![]);
+        let sessions = [project_manager, worker];
+        let name_map = HashMap::new();
+        let peers = serde_json::to_value(
+            filter_by_repo(&sessions, Some("sample-repo"))
+                .iter()
+                .map(|session| Peer::from_session(session, &name_map))
+                .collect::<Vec<_>>(),
+        )
+        .expect("peers should serialize");
+        let project_managers = peers
+            .as_array()
+            .expect("peer list should be an array")
+            .iter()
+            .filter(|peer| peer["work_type"] == "project-manager")
+            .cloned()
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            serde_json::json!({
+                "peers": peers,
+                "project_managers": project_managers,
+            }),
+            serde_json::json!({
+                "peers": [
+                    {
+                        "name": null,
+                        "session_id": "session-a",
+                        "cwd": "/work/sample-repo/.worktrees/coordinator",
+                        "label": "my-label",
+                        "status": "running",
+                        "work_type": "project-manager",
+                        "pane_id": null,
+                        "engine": "claude",
+                    },
+                    {
+                        "name": null,
+                        "session_id": "session-b",
+                        "cwd": "/work/sample-repo/.worktrees/feature",
+                        "label": "my-label",
+                        "status": "running",
+                        "work_type": null,
+                        "pane_id": null,
+                        "engine": "claude",
+                    },
+                ],
+                "project_managers": [
+                    {
+                        "name": null,
+                        "session_id": "session-a",
+                        "cwd": "/work/sample-repo/.worktrees/coordinator",
+                        "label": "my-label",
+                        "status": "running",
+                        "work_type": "project-manager",
+                        "pane_id": null,
+                        "engine": "claude",
+                    },
+                ],
             }),
         );
     }
