@@ -231,8 +231,15 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let engine = super::resolve_engine(args.common.engine, config);
-    let (model, reasoning_effort) = super::resolve_launch_options(engine, &args.common, config);
+    let launch_options = config.agent.resolve_launch_options(
+        args.common.kind.as_deref(),
+        args.common.engine,
+        args.common.model.as_deref(),
+        args.common.reasoning_effort,
+    );
+    let engine = launch_options.engine;
+    let model = launch_options.model;
+    let reasoning_effort = launch_options.reasoning_effort;
 
     drop(creation_lock);
 

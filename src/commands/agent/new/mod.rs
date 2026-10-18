@@ -46,13 +46,14 @@ pub struct CommonNewArgs {
     pub label: Option<String>,
 
     /// Initial work type for the new session, using the workflow skill name.
+    /// A matching `agent.launch_profiles` entry can select launch defaults.
     #[arg(long)]
     pub kind: Option<String>,
 
     /// Model for the new session. Passed through to `<engine> --model`.
-    /// Accepts an alias (e.g. "opus", "sonnet") or a full model name
-    /// (e.g. "claude-fable-5"). For `--engine codex`, falls back to
-    /// `agent.codex.model` when omitted.
+    /// Accepts an alias or a full model name. Falls back to the selected
+    /// engine's `agent.launch_profiles.<kind>` model, then Codex's global
+    /// `agent.codex.model` when the selected engine is Codex.
     #[arg(long)]
     pub model: Option<String>,
 
@@ -68,7 +69,8 @@ pub struct CommonNewArgs {
     pub repo: Option<PathBuf>,
 
     /// Coding agent CLI to launch for the new session. Falls back to
-    /// `config.agent.default_engine` (default: `claude`) when omitted.
+    /// `agent.launch_profiles.<kind>.engine`, then `agent.default_engine`
+    /// (default: `claude`) when omitted.
     ///
     /// With `--worktree`, `config.agent.worktree.layout` panes running `claude` are
     /// replaced by this engine's CLI (without their arguments) unless the
@@ -78,8 +80,9 @@ pub struct CommonNewArgs {
 
     /// Reasoning effort for the new session. Passed as `claude --effort`.
     /// For Codex, sent in the first `turn/start` on the daemon route and as
-    /// `-c model_reasoning_effort=...` otherwise. Falls back to
-    /// `agent.codex.reasoning_effort` when omitted.
+    /// `-c model_reasoning_effort=...` otherwise. Falls back to the selected
+    /// engine's `agent.launch_profiles.<kind>` value, then Codex's global
+    /// `agent.codex.reasoning_effort` when the selected engine is Codex.
     #[arg(long, value_enum)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -310,37 +313,6 @@ fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String
     Ok((env_vars, background))
 }
 
-/// Resolves the engine to launch: an explicit
-/// `--engine` always wins over `config.agent.default_engine`, which itself
-/// already reflects any `ARMYKNIFE_AGENT__DEFAULT_ENGINE` override applied
-/// while loading `config` (see `env_overlay`) and defaults to `Engine::Claude`
-/// when neither is set.
-fn resolve_engine(explicit: Option<Engine>, config: &Config) -> Engine {
-    explicit.unwrap_or(config.agent.default_engine)
-}
-
-/// Resolves the model and reasoning effort to launch `engine` with. Explicit
-/// flags win over the `agent.codex` config defaults, which only apply to
-/// codex so a Claude session never receives codex-specific values.
-fn resolve_launch_options(
-    engine: Engine,
-    common: &CommonNewArgs,
-    config: &Config,
-) -> (Option<String>, Option<ReasoningEffort>) {
-    match engine {
-        Engine::Claude => (common.model.clone(), common.reasoning_effort),
-        Engine::Codex => (
-            common
-                .model
-                .clone()
-                .or_else(|| config.agent.codex.model.clone()),
-            common
-                .reasoning_effort
-                .or(config.agent.codex.reasoning_effort),
-        ),
-    }
-}
-
 /// Run `a agent new` without creating a worktree, either by splitting the
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
@@ -428,8 +400,15 @@ fn run_session_only_inner_with_launchers(
         .collect();
 
     let background_suffix = if background { " (background)" } else { "" };
-    let engine = resolve_engine(args.common.engine, context.config);
-    let (model, reasoning_effort) = resolve_launch_options(engine, &args.common, context.config);
+    let launch_options = context.config.agent.resolve_launch_options(
+        args.common.kind.as_deref(),
+        args.common.engine,
+        args.common.model.as_deref(),
+        args.common.reasoning_effort,
+    );
+    let engine = launch_options.engine;
+    let model = launch_options.model;
+    let reasoning_effort = launch_options.reasoning_effort;
 
     let differs = should_open_window(
         context.repo_root,
@@ -986,25 +965,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::explicit_wins_over_config_default(Some(Engine::Codex), Engine::Claude, Engine::Codex)]
-    #[case::falls_back_to_config_default(None, Engine::Codex, Engine::Codex)]
-    #[case::falls_back_to_claude_when_neither_set(None, Engine::Claude, Engine::Claude)]
-    fn resolve_engine_cases(
-        #[case] explicit: Option<Engine>,
-        #[case] config_default: Engine,
-        #[case] expected: Engine,
-    ) {
-        let config = Config {
-            agent: crate::shared::config::AgentConfig {
-                default_engine: config_default,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        assert_eq!(resolve_engine(explicit, &config), expected);
-    }
-
-    #[rstest]
     #[case::omitted(&["a"], None)]
     #[case::xhigh(&["a", "--reasoning-effort", "xhigh"], Some(ReasoningEffort::XHigh))]
     #[case::with_worktree(&["a", "--worktree", "--reasoning-effort", "max"], Some(ReasoningEffort::Max))]
@@ -1023,54 +983,6 @@ mod tests {
     fn kind_value_parses(#[case] argv: &[&str], #[case] expected: Option<&str>) {
         let cli = TestCli::try_parse_from(argv).unwrap();
         assert_eq!(cli.args.common.kind.as_deref(), expected);
-    }
-
-    fn codex_defaults() -> Config {
-        Config {
-            agent: crate::shared::config::AgentConfig {
-                codex: crate::shared::config::CodexConfig {
-                    model: Some("gpt-5.6-luna".to_string()),
-                    reasoning_effort: Some(ReasoningEffort::Max),
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    #[rstest]
-    #[case::codex_uses_config_defaults(
-        Engine::Codex,
-        &["a"],
-        (Some("gpt-5.6-luna"), Some(ReasoningEffort::Max))
-    )]
-    #[case::codex_flags_win_over_config(
-        Engine::Codex,
-        &["a", "--model", "gpt-5", "--reasoning-effort", "low"],
-        (Some("gpt-5"), Some(ReasoningEffort::Low))
-    )]
-    #[case::claude_ignores_codex_config(Engine::Claude, &["a"], (None, None))]
-    #[case::claude_keeps_explicit_model(
-        Engine::Claude,
-        &["a", "--model", "opus"],
-        (Some("opus"), None)
-    )]
-    #[case::claude_passes_explicit_reasoning_effort(
-        Engine::Claude,
-        &["a", "--reasoning-effort", "max"],
-        (None, Some(ReasoningEffort::Max))
-    )]
-    fn resolve_launch_options_cases(
-        #[case] engine: Engine,
-        #[case] argv: &[&str],
-        #[case] expected: (Option<&str>, Option<ReasoningEffort>),
-    ) {
-        let cli = TestCli::try_parse_from(argv).unwrap();
-        let expected = (expected.0.map(str::to_string), expected.1);
-        assert_eq!(
-            resolve_launch_options(engine, &cli.args.common, &codex_defaults()),
-            expected
-        );
     }
 
     #[rstest]

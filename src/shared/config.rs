@@ -12,6 +12,7 @@ mod agent_status;
 mod codex;
 mod editor_focus;
 mod env_overlay;
+mod launch_profile;
 #[cfg(test)]
 pub(crate) mod test_support {
     use std::collections::HashMap;
@@ -55,6 +56,9 @@ pub use agent::{AgentConfig, BgTaskReminderConfig};
 pub use agent_status::{AgentStatusConfig, AgentStatusState};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
+pub use launch_profile::{
+    AgentLaunchEngineConfig, AgentLaunchProfileConfig, ResolvedLaunchOptions,
+};
 #[cfg(feature = "schema-gen")]
 pub use schema::generate_schema;
 pub use work_type::{AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeNamedColor};
@@ -795,6 +799,7 @@ mod tests {
                         model: None,
                         reasoning_effort: None,
                     },
+                    launch_profiles: HashMap::new(),
                     work_types: HashMap::new(),
                     work_type_fallback: None,
                     vibe_marker: None,

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::commands::agent::types::Engine;
 
 use super::{
-    AgentStatusConfig, AgentWorkTypeConfig, AutoCompactConfig, AutoPauseConfig, CodexConfig,
-    WorktreeConfig,
+    AgentLaunchProfileConfig, AgentStatusConfig, AgentWorkTypeConfig, AutoCompactConfig,
+    AutoPauseConfig, CodexConfig, WorktreeConfig,
 };
 
 /// Configuration for reminders sent when a background task exceeds its timeout.
@@ -82,6 +82,10 @@ pub struct AgentConfig {
     /// Defaults applied to `a agent new --engine codex` sessions only.
     #[serde(default)]
     pub codex: CodexConfig,
+
+    /// Launch defaults keyed by the `--kind` value passed to `a agent new`.
+    #[serde(default)]
+    pub launch_profiles: HashMap<String, AgentLaunchProfileConfig>,
 
     /// Display configuration for agent work types, keyed by skill name.
     #[serde(default)]
