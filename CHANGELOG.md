@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.445](https://github.com/fohte/armyknife/compare/v0.1.444...v0.1.445) (2026-10-18)
+
+
+### Features
+
+* **agent:** support kind-specific launch profiles ([#1227](https://github.com/fohte/armyknife/issues/1227)) ([b833ee8](https://github.com/fohte/armyknife/commit/b833ee85c025fa43c2dd86b806ab13eac69d15e7))
+
 ## [0.1.444](https://github.com/fohte/armyknife/compare/v0.1.443...v0.1.444) (2026-10-18)
 
 
