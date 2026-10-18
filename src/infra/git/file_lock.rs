@@ -7,7 +7,7 @@ use anyhow::Context;
 
 use super::error::Result;
 
-pub(super) fn open_lock_file(path: &Path, label: &str) -> Result<File> {
+pub(crate) fn open_lock_file(path: &Path, label: &str) -> Result<File> {
     OpenOptions::new()
         .read(true)
         .write(true)
@@ -32,7 +32,7 @@ pub(super) fn try_lock_exclusive(file: &File) -> io::Result<bool> {
     }
 }
 
-pub(super) fn lock_exclusive(file: &File, label: &str) -> Result<()> {
+pub(crate) fn lock_exclusive(file: &File, label: &str) -> Result<()> {
     // SAFETY: `file` remains open for the duration of the flock call.
     let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
     if result != 0 {
