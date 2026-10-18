@@ -59,9 +59,9 @@ fn default_bg_task_reminder_excluded_commands() -> Vec<String> {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    /// Coding agent CLI `a agent new` launches when `--engine` is omitted
-    /// (default: "claude"). Overridable for a single invocation via
-    /// `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
+    /// Coding agent CLI used when `--engine` and the matching launch profile's
+    /// engine are omitted (default: "claude"). Overridable for a single
+    /// invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
     #[serde(default)]
     pub default_engine: Engine,
 

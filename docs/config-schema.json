@@ -127,7 +127,7 @@
           }
         },
         "default_engine": {
-          "description": "Coding agent CLI `a agent new` launches when `--engine` is omitted\n(default: \"claude\"). Overridable for a single invocation via\n`ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
+          "description": "Coding agent CLI used when `--engine` and the matching launch profile's\nengine are omitted (default: \"claude\"). Overridable for a single\ninvocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
           "default": "claude"
         },

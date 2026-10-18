@@ -45,7 +45,7 @@ impl AgentLaunchProfileConfig {
     }
 }
 
-/// Effective launch settings shared by `a agent new` and profile inspection commands.
+/// Effective engine, model, and effort after applying profile and global defaults.
 #[derive(Debug, PartialEq)]
 pub struct ResolvedLaunchOptions {
     pub engine: Engine,
@@ -116,6 +116,14 @@ mod tests {
         }
     }
 
+    #[derive(Clone, Copy)]
+    enum ProfileAdjustment {
+        Unchanged,
+        RemoveCodexDefaults,
+        OmitEngineAndCodexEffort,
+        UseClaudeDefault,
+    }
+
     #[test]
     fn parse_launch_profiles_yaml() {
         let yaml = indoc! {
@@ -158,6 +166,7 @@ mod tests {
         None,
         None,
         None,
+        ProfileAdjustment::Unchanged,
         ResolvedLaunchOptions {
             engine: Engine::Claude,
             model: Some("profile-claude-model".to_string()),
@@ -169,6 +178,7 @@ mod tests {
         Some(Engine::Codex),
         None,
         None,
+        ProfileAdjustment::Unchanged,
         ResolvedLaunchOptions {
             engine: Engine::Codex,
             model: Some("profile-codex-model".to_string()),
@@ -180,6 +190,7 @@ mod tests {
         Some(Engine::Codex),
         Some("cli-model"),
         Some(ReasoningEffort::Medium),
+        ProfileAdjustment::Unchanged,
         ResolvedLaunchOptions {
             engine: Engine::Codex,
             model: Some("cli-model".to_string()),
@@ -191,10 +202,47 @@ mod tests {
         None,
         None,
         None,
+        ProfileAdjustment::Unchanged,
         ResolvedLaunchOptions {
             engine: Engine::Codex,
             model: Some("global-codex-model".to_string()),
             reasoning_effort: Some(ReasoningEffort::High),
+        }
+    )]
+    #[case::explicit_engine_does_not_use_other_profile_defaults(
+        Some("sample-flow"),
+        Some(Engine::Codex),
+        None,
+        None,
+        ProfileAdjustment::RemoveCodexDefaults,
+        ResolvedLaunchOptions {
+            engine: Engine::Codex,
+            model: Some("global-codex-model".to_string()),
+            reasoning_effort: Some(ReasoningEffort::High),
+        }
+    )]
+    #[case::profile_values_fall_back_independently(
+        Some("sample-flow"),
+        None,
+        None,
+        None,
+        ProfileAdjustment::OmitEngineAndCodexEffort,
+        ResolvedLaunchOptions {
+            engine: Engine::Codex,
+            model: Some("profile-codex-model".to_string()),
+            reasoning_effort: Some(ReasoningEffort::High),
+        }
+    )]
+    #[case::claude_ignores_codex_globals_without_profile(
+        None,
+        None,
+        None,
+        None,
+        ProfileAdjustment::UseClaudeDefault,
+        ResolvedLaunchOptions {
+            engine: Engine::Claude,
+            model: None,
+            reasoning_effort: None,
         }
     )]
     fn resolves_launch_options(
@@ -203,8 +251,30 @@ mod tests {
         #[case] explicit_engine: Option<Engine>,
         #[case] explicit_model: Option<&str>,
         #[case] explicit_effort: Option<ReasoningEffort>,
+        #[case] adjustment: ProfileAdjustment,
         #[case] expected: ResolvedLaunchOptions,
     ) {
+        let mut agent_config = agent_config;
+        match adjustment {
+            ProfileAdjustment::Unchanged => {}
+            ProfileAdjustment::RemoveCodexDefaults => {
+                agent_config
+                    .launch_profiles
+                    .get_mut("sample-flow")
+                    .unwrap()
+                    .codex = None;
+            }
+            ProfileAdjustment::OmitEngineAndCodexEffort => {
+                let profile = agent_config.launch_profiles.get_mut("sample-flow").unwrap();
+                profile.engine = None;
+                profile.codex = Some(AgentLaunchEngineConfig {
+                    model: Some("profile-codex-model".to_string()),
+                    reasoning_effort: None,
+                });
+            }
+            ProfileAdjustment::UseClaudeDefault => agent_config.default_engine = Engine::Claude,
+        }
+
         assert_eq!(
             agent_config.resolve_launch_options(
                 kind,
@@ -213,75 +283,6 @@ mod tests {
                 explicit_effort,
             ),
             expected,
-        );
-    }
-
-    #[test]
-    fn explicit_engine_does_not_use_another_engines_profile_defaults() {
-        let agent_config = AgentConfig {
-            default_engine: Engine::Claude,
-            codex: CodexConfig {
-                model: Some("global-codex-model".to_string()),
-                reasoning_effort: Some(ReasoningEffort::High),
-            },
-            launch_profiles: HashMap::from([(
-                "sample-flow".to_string(),
-                AgentLaunchProfileConfig {
-                    engine: Some(Engine::Claude),
-                    claude: Some(AgentLaunchEngineConfig {
-                        model: Some("claude-profile-model".to_string()),
-                        reasoning_effort: Some(ReasoningEffort::Low),
-                    }),
-                    codex: None,
-                },
-            )]),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            agent_config.resolve_launch_options(
-                Some("sample-flow"),
-                Some(Engine::Codex),
-                None,
-                None,
-            ),
-            ResolvedLaunchOptions {
-                engine: Engine::Codex,
-                model: Some("global-codex-model".to_string()),
-                reasoning_effort: Some(ReasoningEffort::High),
-            },
-        );
-    }
-
-    #[test]
-    fn profile_defaults_fall_back_to_global_values_independently() {
-        let agent_config = AgentConfig {
-            default_engine: Engine::Codex,
-            codex: CodexConfig {
-                model: Some("global-codex-model".to_string()),
-                reasoning_effort: Some(ReasoningEffort::High),
-            },
-            launch_profiles: HashMap::from([(
-                "sample-flow".to_string(),
-                AgentLaunchProfileConfig {
-                    engine: None,
-                    claude: None,
-                    codex: Some(AgentLaunchEngineConfig {
-                        model: Some("profile-codex-model".to_string()),
-                        reasoning_effort: None,
-                    }),
-                },
-            )]),
-            ..Default::default()
-        };
-
-        assert_eq!(
-            agent_config.resolve_launch_options(Some("sample-flow"), None, None, None),
-            ResolvedLaunchOptions {
-                engine: Engine::Codex,
-                model: Some("profile-codex-model".to_string()),
-                reasoning_effort: Some(ReasoningEffort::High),
-            },
         );
     }
 }

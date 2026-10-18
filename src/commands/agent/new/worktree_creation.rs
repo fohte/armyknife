@@ -231,15 +231,7 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let launch_options = config.agent.resolve_launch_options(
-        args.common.kind.as_deref(),
-        args.common.engine,
-        args.common.model.as_deref(),
-        args.common.reasoning_effort,
-    );
-    let engine = launch_options.engine;
-    let model = launch_options.model;
-    let reasoning_effort = launch_options.reasoning_effort;
+    let launch_options = super::resolve_launch_options(&args.common, config);
 
     drop(creation_lock);
 
@@ -250,10 +242,10 @@ pub(super) fn run_worktree_creation(
             cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
             window_name: &worktree_name,
             layout: &config.agent.worktree.layout,
-            model: model.as_deref(),
-            reasoning_effort,
+            model: launch_options.model.as_deref(),
+            reasoning_effort: launch_options.reasoning_effort,
             prompt: final_prompt.as_deref(),
-            engine,
+            engine: launch_options.engine,
             env_vars: &env_refs,
             background,
             restore_automatic_rename: false,

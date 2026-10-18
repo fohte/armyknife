@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
-use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
+use crate::shared::config::{Config, LayoutNode, PaneConfig, ResolvedLaunchOptions, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
@@ -313,6 +313,15 @@ fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String
     Ok((env_vars, background))
 }
 
+fn resolve_launch_options(common: &CommonNewArgs, config: &Config) -> ResolvedLaunchOptions {
+    config.agent.resolve_launch_options(
+        common.kind.as_deref(),
+        common.engine,
+        common.model.as_deref(),
+        common.reasoning_effort,
+    )
+}
+
 /// Run `a agent new` without creating a worktree, either by splitting the
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
@@ -400,15 +409,7 @@ fn run_session_only_inner_with_launchers(
         .collect();
 
     let background_suffix = if background { " (background)" } else { "" };
-    let launch_options = context.config.agent.resolve_launch_options(
-        args.common.kind.as_deref(),
-        args.common.engine,
-        args.common.model.as_deref(),
-        args.common.reasoning_effort,
-    );
-    let engine = launch_options.engine;
-    let model = launch_options.model;
-    let reasoning_effort = launch_options.reasoning_effort;
+    let launch_options = resolve_launch_options(&args.common, context.config);
 
     let differs = should_open_window(
         context.repo_root,
@@ -431,10 +432,10 @@ fn run_session_only_inner_with_launchers(
             let route_suffix = launch_split(TmuxSplitPaneSpec {
                 target_pane: &target_pane,
                 cwd: &cwd,
-                model: model.as_deref(),
-                reasoning_effort,
+                model: launch_options.model.as_deref(),
+                reasoning_effort: launch_options.reasoning_effort,
                 prompt: prompt.as_deref(),
-                engine,
+                engine: launch_options.engine,
                 env_vars: &env_refs,
                 background,
             })?;
@@ -445,9 +446,13 @@ fn run_session_only_inner_with_launchers(
             // here, and `restore_automatic_rename` below lets tmux relabel
             // the window once the engine's process starts instead of keeping
             // this name displayed.
-            let window_name = format!("{}-{}", engine.process_name(), std::process::id());
+            let window_name = format!(
+                "{}-{}",
+                launch_options.engine.process_name(),
+                std::process::id()
+            );
             let layout = LayoutNode::Pane(PaneConfig {
-                command: engine.process_name().to_string(),
+                command: launch_options.engine.process_name().to_string(),
                 focus: true,
             });
 
@@ -457,10 +462,10 @@ fn run_session_only_inner_with_launchers(
                     cwd: &cwd,
                     window_name: &window_name,
                     layout: &layout,
-                    model: model.as_deref(),
-                    reasoning_effort,
+                    model: launch_options.model.as_deref(),
+                    reasoning_effort: launch_options.reasoning_effort,
                     prompt: prompt.as_deref(),
-                    engine,
+                    engine: launch_options.engine,
                     env_vars: &env_refs,
                     background,
                     restore_automatic_rename: true,
