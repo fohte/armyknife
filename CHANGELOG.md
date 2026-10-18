@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.446](https://github.com/fohte/armyknife/compare/v0.1.445...v0.1.446) (2026-10-18)
+
+
+### Features
+
+* **agent:** support per-kind engine selection ([#1229](https://github.com/fohte/armyknife/issues/1229)) ([e84f542](https://github.com/fohte/armyknife/commit/e84f54233eb88d7d1f7a21779c4ecdf522bbe4db))
+
 ## [0.1.445](https://github.com/fohte/armyknife/compare/v0.1.444...v0.1.445) (2026-10-18)
 
 
