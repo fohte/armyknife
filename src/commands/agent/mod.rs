@@ -27,6 +27,7 @@ pub(crate) mod new;
 pub(crate) mod pane;
 mod pane_options;
 pub(crate) mod peer;
+mod profile;
 mod resume;
 mod resurrect;
 mod session_init;
@@ -68,6 +69,7 @@ pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
+pub use profile::{ProfileCommands, ShowProfileArgs, UseProfileArgs};
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
@@ -121,6 +123,10 @@ pub enum AgentCommands {
     /// Set the calling session's reason for stopping
     #[command(subcommand)]
     Status(StatusCommands),
+
+    /// Select and inspect the engine used by the next launch for a kind
+    #[command(subcommand)]
+    Profile(ProfileCommands),
 
     /// Enable, disable, or check vibe mode for the calling session tree
     #[command(subcommand)]
@@ -192,6 +198,7 @@ impl AgentCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
+            Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,
             Self::Resume(args) => resume::run(args)?,
             Self::Resurrect(cmd) => resurrect::run(cmd)?,
