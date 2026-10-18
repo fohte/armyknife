@@ -582,9 +582,18 @@ pub enum ConfigError {
 /// Returns Config::default() if there is no config directory, no YAML files,
 /// and no relevant environment variables.
 pub fn load_config() -> anyhow::Result<Config> {
+    load_config_excluding_file(None)
+}
+
+/// Prevent a local overlay from making an otherwise unknown launch kind appear configured.
+pub(crate) fn load_config_without_file(file_name: &str) -> anyhow::Result<Config> {
+    load_config_excluding_file(Some(file_name))
+}
+
+fn load_config_excluding_file(excluded_file: Option<&str>) -> anyhow::Result<Config> {
     let dir = super::dirs::config_dir().map(|d| d.join("armyknife"));
     let yaml_merged = match &dir {
-        Some(dir) => merged_yaml_from_dir(dir)?,
+        Some(dir) => merged_yaml_from_dir_excluding(dir, excluded_file)?,
         None => None,
     };
     // Unreachable when `dir` is None: `yaml_merged` is also None in that case,
@@ -660,6 +669,13 @@ pub fn load_config_from_dir(dir: &Path) -> anyhow::Result<Config> {
 /// file name order. Returns `None` if `dir` does not exist or contains no
 /// matching (non-null) files.
 fn merged_yaml_from_dir(dir: &Path) -> anyhow::Result<Option<serde_yaml::Value>> {
+    merged_yaml_from_dir_excluding(dir, None)
+}
+
+fn merged_yaml_from_dir_excluding(
+    dir: &Path,
+    excluded_file: Option<&str>,
+) -> anyhow::Result<Option<serde_yaml::Value>> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -679,6 +695,11 @@ fn merged_yaml_from_dir(dir: &Path) -> anyhow::Result<Option<serde_yaml::Value>>
             source: e,
         })?;
         let path = entry.path();
+        if excluded_file.is_some_and(|name| {
+            path.file_name().and_then(|filename| filename.to_str()) == Some(name)
+        }) {
+            continue;
+        }
         // Filter by extension first to skip syscalls and permission errors on
         // unrelated files (README.md, .DS_Store, hooks/ subdirectory, etc.).
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");

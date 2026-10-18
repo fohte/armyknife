@@ -7,13 +7,15 @@ use clap::{Args, Subcommand};
 use serde_yaml::{Mapping, Value};
 
 use crate::commands::agent::types::Engine;
+use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
 use crate::shared::config::{self, Config, ResolvedLaunchOptions};
 
 const SELECTION_FILE: &str = "zz-agent-profiles.local.yaml";
+const SELECTION_LOCK_FILE: &str = "zz-agent-profiles.lock";
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ProfileCommands {
-    /// Select the engine for the next launch of a configured kind
+    /// Set the default engine for future launches of a configured kind
     Use(UseProfileArgs),
 
     /// Show the effective settings for the next launch of a configured kind
@@ -25,7 +27,7 @@ pub struct UseProfileArgs {
     /// Configured `--kind` value
     pub kind: String,
 
-    /// Coding agent CLI to use for the next launch
+    /// Default coding agent CLI for future launches
     #[arg(value_enum)]
     pub engine: Engine,
 }
@@ -44,24 +46,19 @@ pub fn run(command: &ProfileCommands) -> Result<()> {
 fn execute(command: &ProfileCommands) -> Result<String> {
     let config_dir = config_dir()?;
     let selection_path = config_dir.join(SELECTION_FILE);
-
-    match command {
-        ProfileCommands::Use(args) => {
-            reject_symlink(&selection_path)?;
-            let config = config::load_config()?;
-            ensure_profile_exists(&config, &args.kind)?;
-            save_engine_selection(&config_dir, &args.kind, args.engine)?;
-        }
-        ProfileCommands::Show(args) => {
-            let config = config::load_config()?;
-            ensure_profile_exists(&config, &args.kind)?;
-        }
-    }
-
-    let kind = match command {
-        ProfileCommands::Use(args) => &args.kind,
-        ProfileCommands::Show(args) => &args.kind,
+    let (kind, engine) = match command {
+        ProfileCommands::Use(args) => (&args.kind, Some(args.engine)),
+        ProfileCommands::Show(args) => (&args.kind, None),
     };
+
+    if engine.is_some() {
+        reject_symlink(&selection_path)?;
+    }
+    let configured_profiles = config::load_config_without_file(SELECTION_FILE)?;
+    ensure_profile_exists(&configured_profiles, kind)?;
+    if let Some(engine) = engine {
+        save_engine_selection(&config_dir, kind, engine)?;
+    }
     let config = config::load_config()?;
     format_profile(&config, &selection_path, kind)
 }
@@ -121,16 +118,7 @@ fn format_profile_options(
 }
 
 fn read_saved_engine(path: &Path, kind: &str) -> Result<Option<Engine>> {
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read profile selection: {}", path.display()));
-        }
-    };
-    let document: Value = serde_yaml::from_str(&content)
-        .with_context(|| format!("failed to parse profile selection: {}", path.display()))?;
+    let document = read_selection_document(path)?;
     let Some(value) = yaml_child(&document, "agent")
         .and_then(|value| yaml_child(value, "launch_profiles"))
         .and_then(|value| yaml_child(value, kind))
@@ -174,17 +162,13 @@ fn save_engine_selection(config_dir: &Path, kind: &str, engine: Engine) -> Resul
         )
     })?;
     let path = config_dir.join(SELECTION_FILE);
+    let lock_path = config_dir.join(SELECTION_LOCK_FILE);
+    let lock_file = open_lock_file(&lock_path, "agent profile selection")?;
+    lock_exclusive(&lock_file, "agent profile selection")?;
     reject_symlink(&path)?;
 
-    let mut document = match fs::read_to_string(&path) {
-        Ok(content) => serde_yaml::from_str(&content)
-            .with_context(|| format!("failed to parse profile selection: {}", path.display()))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Value::Null,
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("failed to read profile selection: {}", path.display()));
-        }
-    };
+    // Keep the read-modify-write cycle exclusive across concurrent CLI processes.
+    let mut document = read_selection_document(&path)?;
     set_engine(&mut document, kind, engine)?;
 
     // Persist on the same filesystem so the rename cannot expose a partial YAML file.
@@ -202,6 +186,19 @@ fn save_engine_selection(config_dir: &Path, kind: &str, engine: Engine) -> Resul
         .persist(&path)
         .with_context(|| format!("failed to replace profile selection: {}", path.display()))?;
     Ok(())
+}
+
+fn read_selection_document(path: &Path) -> Result<Value> {
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to read profile selection: {}", path.display()));
+        }
+    };
+    serde_yaml::from_str(&content)
+        .with_context(|| format!("failed to parse profile selection: {}", path.display()))
 }
 
 fn set_engine(document: &mut Value, kind: &str, engine: Engine) -> Result<()> {
@@ -350,6 +347,48 @@ mod tests {
     }
 
     #[rstest]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn profile_use_dispatch_persists_selection(configured_home: TempDir) {
+        let cli = TestCli::try_parse_from(["a", "profile", "use", "sample_flow", "codex"])
+            .expect("profile command should parse");
+        let config_home = configured_home
+            .path()
+            .to_str()
+            .expect("config home path should be valid UTF-8");
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(config_home)),
+                (
+                    "ARMYKNIFE_AGENT__LAUNCH_PROFILES__SAMPLE_FLOW__ENGINE",
+                    None::<&str>,
+                ),
+            ],
+            || {
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(cli.command.run())
+                })
+            },
+        )
+        .expect("profile command should succeed");
+
+        let saved: Value = serde_yaml::from_str(
+            &fs::read_to_string(selection_path(&configured_home))
+                .expect("local selection file should be created"),
+        )
+        .expect("saved selection should be valid YAML");
+        let expected: Value = serde_yaml::from_str(indoc! {"
+            agent:
+              launch_profiles:
+                sample_flow:
+                  engine: codex
+        "})
+        .expect("expected selection should be valid YAML");
+
+        assert_eq!((result, saved), (None, expected));
+    }
+
+    #[rstest]
     fn use_saves_engine_and_preserves_other_local_selections(configured_home: TempDir) {
         let path = selection_path(&configured_home);
         fs::write(
@@ -428,6 +467,27 @@ mod tests {
         assert_eq!(output, expected);
     }
 
+    #[rstest]
+    fn show_reports_unset_local_selection(configured_home: TempDir) {
+        let command = ProfileCommands::Show(ShowProfileArgs {
+            kind: "sample_flow".to_string(),
+        });
+
+        let output = execute_with_home(&configured_home, &command, None)
+            .expect("profile settings should be shown");
+
+        assert_eq!(
+            output,
+            indoc! {"
+                Next launch settings for `a agent new --kind sample_flow`:
+                  local engine selection: unset
+                  effective engine: claude
+                  effective model: model-alpha
+                  effective reasoning effort: low
+            "},
+        );
+    }
+
     #[test]
     fn use_rejects_symlink_selection_file() {
         let home = TempDir::new().expect("config home should be created");
@@ -483,6 +543,33 @@ mod tests {
                         .to_string(),
                 ),
                 false,
+            ),
+        );
+    }
+
+    #[rstest]
+    fn show_rejects_kind_defined_only_by_local_selection(configured_home: TempDir) {
+        fs::write(
+            selection_path(&configured_home),
+            indoc! {"
+                agent:
+                  launch_profiles:
+                    retired_flow:
+                      engine: codex
+            "},
+        )
+        .expect("stale local selection should be written");
+        let command = ProfileCommands::Show(ShowProfileArgs {
+            kind: "retired_flow".to_string(),
+        });
+
+        let result = execute_with_home(&configured_home, &command, None);
+
+        assert_eq!(
+            result.err().map(|error| error.to_string()),
+            Some(
+                "unknown agent profile kind `retired_flow`; configured launch profile kinds: sample_flow, second_flow"
+                    .to_string(),
             ),
         );
     }
