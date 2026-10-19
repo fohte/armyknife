@@ -26,7 +26,7 @@ fn timestamp() -> DateTime<Utc> {
 #[fixture]
 fn delegated_session(timestamp: DateTime<Utc>) -> Session {
     let mut session = create_test_session_at("delegate", timestamp);
-    session.is_delegated = true;
+    session.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     session.ancestor_session_ids = vec!["selected".to_string()];
     session
 }
@@ -38,7 +38,7 @@ fn selected_task_session(timestamp: DateTime<Utc>) -> Session {
 
 fn progress_delegate(id: &str, timestamp: DateTime<Utc>) -> Session {
     let mut session = create_test_session_at(id, timestamp);
-    session.is_delegated = true;
+    session.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     session.ancestor_session_ids = vec!["selected".to_string()];
     session
 }
@@ -254,17 +254,17 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
     let mut other_task_child = create_test_session_at("other-task-child", timestamp);
     other_task_child.ancestor_session_ids = vec!["selected".to_string()];
     let mut delegate = create_test_session_at("delegate", timestamp);
-    delegate.is_delegated = true;
+    delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     delegate.ancestor_session_ids = vec!["selected".to_string(), "same-task-child".to_string()];
     let mut nested_delegate = create_test_session_at("nested-delegate", timestamp);
-    nested_delegate.is_delegated = true;
+    nested_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     nested_delegate.ancestor_session_ids = vec![
         "selected".to_string(),
         "same-task-child".to_string(),
         "delegate".to_string(),
     ];
     let mut other_task_delegate = create_test_session_at("other-task-delegate", timestamp);
-    other_task_delegate.is_delegated = true;
+    other_task_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     other_task_delegate.ancestor_session_ids =
         vec!["selected".to_string(), "other-task-child".to_string()];
     let unrelated_same_task = create_test_session_at("unrelated-same-task", timestamp);
@@ -337,6 +337,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
             vec![
                 expected_work_row("same-task-child", "session"),
                 expected_work_row("selected", "design"),
+                expected_work_row("delegate", "session"),
                 expected_work_row("unrelated-same-task", "session"),
                 expected_unlinked_delegate_row("delegate"),
                 expected_unlinked_delegate_row("nested-delegate"),
@@ -352,7 +353,7 @@ fn task_progress_shows_all_linked_sessions_and_their_delegate_descendants(
 fn task_linked_delegate_stays_visible_when_its_parent_is_absent(timestamp: DateTime<Utc>) {
     let selected = create_test_session_at("selected", timestamp);
     let mut delegate = create_test_session_at("orphan-delegate", timestamp);
-    delegate.is_delegated = true;
+    delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     delegate.ancestor_session_ids = vec!["closed-parent".to_string()];
     let mut app = create_test_app(vec![selected, delegate]);
     app.update_row_order(&[None, Some("selected"), Some("orphan-delegate")]);
@@ -368,7 +369,7 @@ fn task_linked_delegate_stays_visible_when_its_parent_is_absent(timestamp: DateT
         app.progress_rows,
         vec![
             expected_work_row("selected", "session"),
-            expected_unlinked_delegate_row("orphan-delegate"),
+            expected_work_row("orphan-delegate", "session"),
         ],
     );
 }
@@ -376,7 +377,7 @@ fn task_linked_delegate_stays_visible_when_its_parent_is_absent(timestamp: DateT
 #[rstest]
 fn task_linked_delegate_without_work_rows_stays_in_the_checklist(timestamp: DateTime<Utc>) {
     let mut delegate = create_test_session_at("orphan-delegate", timestamp);
-    delegate.is_delegated = true;
+    delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     delegate.ancestor_session_ids = vec!["closed-parent".to_string()];
     let mut app = create_test_app(vec![delegate.clone()]);
     app.update_row_order(&[None, Some("orphan-delegate")]);
@@ -417,6 +418,7 @@ fn task_linked_delegate_without_work_rows_stays_in_the_checklist(timestamp: Date
     assert_eq!(
         app.progress_rows,
         vec![
+            expected_work_row("orphan-delegate", "session"),
             ProgressRow::ImplementationHeader {
                 merged_pr_count: 0,
                 total_pr_count: 0,
@@ -432,10 +434,10 @@ fn task_linked_delegate_without_work_rows_stays_in_the_checklist(timestamp: Date
 fn task_progress_applies_fetched_delegates_missing_from_the_live_scope(timestamp: DateTime<Utc>) {
     let selected = create_test_session_at("selected", timestamp);
     let mut live_delegate = create_test_session_at("live-delegate", timestamp);
-    live_delegate.is_delegated = true;
+    live_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     live_delegate.ancestor_session_ids = vec!["selected".to_string()];
     let mut fetched_delegate = create_test_session_at("fetched-delegate", timestamp);
-    fetched_delegate.is_delegated = true;
+    fetched_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     fetched_delegate.ancestor_session_ids = vec!["selected".to_string()];
     let mut app = create_test_app(vec![selected, live_delegate.clone()]);
     app.update_row_order(&[None, Some("selected"), Some("live-delegate")]);
@@ -477,6 +479,7 @@ fn task_progress_applies_fetched_delegates_missing_from_the_live_scope(timestamp
             request_scope: Some(ProgressFetchScope {
                 task_id: Some("task-a".to_string()),
                 session_ids: Some(vec!["selected".to_string()]),
+                other_task_session_ids: vec![],
             }),
             delegated: fetched_delegates,
             implementation: Some(plan),
@@ -564,7 +567,7 @@ fn project_manager_progress_shows_only_its_work_row_regardless_of_task_link(
     let mut child_task = create_test_session_at("child-task", timestamp);
     child_task.ancestor_session_ids = vec!["project-manager".to_string()];
     let mut child_delegate = create_test_session_at("child-delegate", timestamp);
-    child_delegate.is_delegated = true;
+    child_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     child_delegate.ancestor_session_ids =
         vec!["project-manager".to_string(), "child-task".to_string()];
     let mut app = create_test_app(vec![project_manager, child_task, child_delegate.clone()]);
@@ -754,11 +757,11 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
     let mut task = create_test_session_at("task", timestamp);
     task.ancestor_session_ids = vec![root.session_id.clone()];
     let mut intermediate_delegate = create_test_session_at("intermediate-delegate", timestamp);
-    intermediate_delegate.is_delegated = true;
+    intermediate_delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     intermediate_delegate.ancestor_session_ids =
         vec![root.session_id.clone(), task.session_id.clone()];
     let mut delegate = create_test_session_at("delegate", timestamp);
-    delegate.is_delegated = true;
+    delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     delegate.ancestor_session_ids = vec![
         root.session_id.clone(),
         task.session_id.clone(),
@@ -771,7 +774,7 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
         None,
     );
 
-    app.begin_progress_refresh("task");
+    app.begin_progress_refresh("intermediate-delegate");
 
     assert_eq!(
         (
@@ -783,11 +786,9 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
                 .and_then(ProgressRow::selection_key),
         ),
         (
-            Some("task"),
+            Some("intermediate-delegate"),
             true,
-            Some(ProgressSelectionKey::Session(
-                "intermediate-delegate".to_string(),
-            )),
+            Some(ProgressSelectionKey::Session("delegate".to_string(),)),
         ),
     );
 }
@@ -1357,6 +1358,7 @@ fn ignores_progress_results_from_an_outdated_task_scope(
                         .map(|session_id| session_id.to_string())
                         .collect(),
                 ),
+                other_task_session_ids: vec![],
             }),
             delegated: Vec::new(),
             implementation: None,

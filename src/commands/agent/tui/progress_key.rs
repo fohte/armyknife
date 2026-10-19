@@ -110,7 +110,7 @@ mod tests {
             vibe_enabled: false,
             launched_with_vibe: false,
             work_type_pinned: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
@@ -253,7 +253,7 @@ mod tests {
         let mut selected = session("selected");
         selected.work_type = Some("design".to_string());
         let mut delegate = session("delegate");
-        delegate.is_delegated = true;
+        delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         delegate.ancestor_session_ids = vec!["selected".to_string()];
         let checklist = TqChecklist {
             id: "checklist-1".to_string(),
@@ -318,7 +318,7 @@ mod tests {
         let mut selected = session("selected");
         selected.work_type = Some("design".to_string());
         let mut delegate = session("unmapped-delegate");
-        delegate.is_delegated = true;
+        delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         delegate.ancestor_session_ids = vec!["selected".to_string()];
         delegate.label = Some("Unmapped delegated work".to_string());
         let fetched_delegate = FetchedDelegate {

@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use std::path::Path;
 
 use super::NewArgs;
-use super::delegation::resolve_prompt;
 use super::run_pre_session_start_hook;
+use super::session_context::resolve_prompt;
 use super::tmux::{TmuxWindowSpec, setup_tmux_window};
 use super::tmux_launch_inputs;
 use super::worktree::{
@@ -93,9 +93,8 @@ pub(super) fn run_worktree_creation(
     let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
 
     // Determine action based on branch existence and flags.
-    // Track the resolved branch/base for --agent context injection.
-    // actual_base is only populated when --agent is set (except when a new
-    // branch is created, where it is always known).
+    // Keep the actual branch base separate from `--from`, which only selects
+    // the base used when creating or resetting a branch.
     let actual_branch;
     let actual_base: Option<String>;
     let branch_rollback;
@@ -139,7 +138,7 @@ pub(super) fn run_worktree_creation(
 
         actual_branch = name.to_string();
         branch_rollback = BranchRollback::Keep;
-        actual_base = if args.common.agent {
+        actual_base = if prompt.is_some() {
             let main_branch = get_main_branch_for_repo(&repo)?;
             Some(format!("origin/{main_branch}"))
         } else {
@@ -153,7 +152,7 @@ pub(super) fn run_worktree_creation(
 
             actual_branch = branch_with_prefix;
             branch_rollback = BranchRollback::Keep;
-            actual_base = if args.common.agent {
+            actual_base = if prompt.is_some() {
                 let main_branch = get_main_branch_for_repo(&repo)?;
                 Some(format!("origin/{main_branch}"))
             } else {
@@ -183,8 +182,7 @@ pub(super) fn run_worktree_creation(
         }
     }
 
-    // Wrap prompt with delegation context when --agent is used
-    let final_prompt = if args.common.agent {
+    let final_prompt = if prompt.is_some() {
         let delegator_cwd = std::env::current_dir()
             .context("Failed to get current directory")?
             .to_string_lossy()
@@ -195,7 +193,6 @@ pub(super) fn run_worktree_creation(
             .to_string();
 
         resolve_prompt(
-            true,
             prompt,
             Some(&actual_branch),
             actual_base.as_deref(),
@@ -336,6 +333,7 @@ mod tests {
         let common = super::super::CommonNewArgs {
             prompt: None,
             agent: false,
+            child_launch: None,
             label: None,
             kind: Some("other-kind".to_string()),
             type_name: Some("review-type".to_string()),

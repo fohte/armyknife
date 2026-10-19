@@ -357,10 +357,10 @@ impl App {
     }
 
     fn focused_task_ancestor(&self, focus_session_id: &str) -> Option<FocusedTaskAncestor> {
-        let delegate = self
+        let child_session = self
             .sessions
             .iter()
-            .find(|session| session.session_id == focus_session_id && session.is_delegated)?;
+            .find(|session| session.session_id == focus_session_id)?;
         let filtered_sessions = self
             .filtered_indices
             .iter()
@@ -373,7 +373,7 @@ impl App {
             &self.vibe_enabled_session_ids,
         );
 
-        delegate
+        child_session
             .ancestor_session_ids
             .iter()
             .enumerate()
@@ -382,12 +382,12 @@ impl App {
                 let ancestor = self
                     .sessions
                     .iter()
-                    .find(|session| session.session_id == *ancestor_id && !session.is_delegated)?;
+                    .find(|session| session.session_id == *ancestor_id)?;
                 let task_row_occurrence = tasks_row_occurrence(&rows, ancestor_id)?;
-                let progress_delegate_id = delegate
+                let progress_delegate_id = child_session
                     .ancestor_session_ids
                     .get(index + 1)
-                    .unwrap_or(&delegate.session_id)
+                    .unwrap_or(&child_session.session_id)
                     .clone();
                 Some(FocusedTaskAncestor {
                     task_session_id: ancestor.session_id.clone(),
@@ -493,7 +493,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -610,7 +610,7 @@ mod tests {
     }
 
     #[test]
-    fn delegated_focus_selects_the_nearest_task_ancestor_and_progress_pane() {
+    fn child_focus_selects_the_nearest_parent_and_progress_pane() {
         let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let root = create_test_session_at("root", timestamp);
         let mut task = create_test_session_at("task", timestamp);
@@ -619,11 +619,12 @@ mod tests {
             .push("https://example.test/review".to_string());
         task.ancestor_session_ids = vec![root.session_id.clone()];
         let mut intermediate_delegate = create_test_session_at("intermediate-delegate", timestamp);
-        intermediate_delegate.is_delegated = true;
+        intermediate_delegate.child_launch =
+            crate::commands::agent::types::ChildLaunchPermission::Deny;
         intermediate_delegate.ancestor_session_ids =
             vec![root.session_id.clone(), task.session_id.clone()];
         let mut delegate = create_test_session_at("delegate", timestamp);
-        delegate.is_delegated = true;
+        delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         delegate.ancestor_session_ids = vec![
             root.session_id.clone(),
             task.session_id.clone(),
@@ -644,23 +645,23 @@ mod tests {
                 app.initial_progress_selection.clone(),
             ),
             (
-                Some("task"),
-                Some(1),
+                Some("intermediate-delegate"),
+                Some(0),
                 true,
                 Some(InitialProgressSelection::new(
-                    "task".to_string(),
                     "intermediate-delegate".to_string(),
+                    "delegate".to_string(),
                 )),
             ),
         );
     }
 
     #[test]
-    fn delegated_focus_without_a_task_ancestor_keeps_existing_fallback() {
+    fn child_focus_without_a_parent_keeps_the_child_selected() {
         let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let first = create_test_session_at("first", timestamp);
         let mut delegate = create_test_session_at("delegate", timestamp);
-        delegate.is_delegated = true;
+        delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let app = App::with_initial_selection(
             vec![first, delegate],
             AgentConfig::default(),
@@ -674,7 +675,7 @@ mod tests {
                 app.progress_focused,
                 app.initial_progress_selection.clone(),
             ),
-            (Some("first"), false, None),
+            (Some("delegate"), false, None),
         );
     }
 

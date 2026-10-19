@@ -316,7 +316,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/home/user/project"),
@@ -491,7 +491,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_preserves_full_depth_and_hides_delegated_sessions(
+    fn test_build_session_rows_preserves_full_depth_for_all_child_sessions(
         agent_config: AgentConfig,
     ) {
         let pm = running_session("pm", &[], 0);
@@ -503,7 +503,7 @@ mod tests {
             running_session("great_grandchild", &["pm", "design", "grandchild"], 6);
         let qa = running_session("qa", &["pm", "design"], 0);
         let mut delegated = running_session("delegated", &["pm", "design"], 4);
-        delegated.is_delegated = true;
+        delegated.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let delegated_child = with_agent_status(
             running_session("delegated_child", &["pm", "design", "delegated"], 5),
             "needs_attention",
@@ -530,9 +530,10 @@ mod tests {
                     kind: UserTurnKind::AgentStatus,
                 },
                 header("TASKS"),
-                root_row("pm", TaskMark::Working, 6, 1),
+                root_row("pm", TaskMark::Working, 7, 1),
                 child_row("design", TaskMark::Working, false),
-                nested_row("delegated_child", TaskMark::UserTurn, false, &[false]),
+                nested_row("delegated", TaskMark::Working, false, &[false]),
+                nested_row("delegated_child", TaskMark::UserTurn, true, &[false, false]),
                 nested_row("grandchild", TaskMark::Working, false, &[false]),
                 nested_row("great_grandchild", TaskMark::Working, true, &[false, false],),
                 nested_row("qa", TaskMark::Working, true, &[false]),

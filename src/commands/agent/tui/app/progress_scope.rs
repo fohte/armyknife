@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use super::super::progress::ProgressFetchScope;
-use super::super::progress_fetch::{direct_delegates, task_descendant_delegates};
+use super::super::progress_fetch::{direct_children, task_descendant_children};
 use super::App;
 use crate::commands::agent::types::Session;
 
@@ -16,6 +16,7 @@ pub(in crate::commands::agent::tui) enum ProgressScopeKind {
     Task {
         task_id: String,
         session_ids: Vec<String>,
+        other_task_session_ids: Vec<String>,
     },
 }
 
@@ -30,13 +31,16 @@ impl ProgressScopeKind {
             Self::Direct => Some(ProgressFetchScope {
                 task_id: None,
                 session_ids: None,
+                other_task_session_ids: Vec::new(),
             }),
             Self::Task {
                 task_id,
                 session_ids,
+                other_task_session_ids,
             } => Some(ProgressFetchScope {
                 task_id: Some(task_id.clone()),
                 session_ids: Some(session_ids.clone()),
+                other_task_session_ids: other_task_session_ids.clone(),
             }),
         }
     }
@@ -101,7 +105,7 @@ impl App {
             return ProgressScope {
                 kind: ProgressScopeKind::Direct,
                 work_sessions: vec![selected.clone()],
-                delegated: direct_delegates(self.sessions.clone(), &selected.session_id),
+                delegated: direct_children(self.sessions.clone(), &selected.session_id),
             };
         };
 
@@ -109,12 +113,29 @@ impl App {
         task_session_ids.sort_unstable();
         let mut task_session_ids_set = task_session_ids.iter().cloned().collect::<HashSet<_>>();
         task_session_ids_set.insert(selected.session_id.clone());
+        let other_task_session_ids = self
+            .sessions
+            .iter()
+            .filter(|session| !task_session_ids_set.contains(&session.session_id))
+            .filter(|session| {
+                self.task_by_session
+                    .get(&session.session_id)
+                    .is_some_and(|task| task.task_id != task_id)
+                    || self
+                        .tq_snapshot
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.session_tasks.get(&session.session_id))
+                        .is_some_and(|tasks| tasks.iter().any(|task| task.task_id != task_id))
+            })
+            .map(|session| session.session_id.clone())
+            .collect::<HashSet<_>>();
+        let mut other_task_session_id_list =
+            other_task_session_ids.iter().cloned().collect::<Vec<_>>();
+        other_task_session_id_list.sort_unstable();
         let work_sessions = self
             .sessions
             .iter()
-            .filter(|session| {
-                !session.is_delegated && task_session_ids_set.contains(&session.session_id)
-            })
+            .filter(|session| task_session_ids_set.contains(&session.session_id))
             .cloned()
             .collect::<Vec<_>>();
 
@@ -122,9 +143,14 @@ impl App {
             kind: ProgressScopeKind::Task {
                 task_id,
                 session_ids: task_session_ids,
+                other_task_session_ids: other_task_session_id_list,
             },
             work_sessions,
-            delegated: task_descendant_delegates(&self.sessions, &task_session_ids_set),
+            delegated: task_descendant_children(
+                &self.sessions,
+                &task_session_ids_set,
+                &other_task_session_ids,
+            ),
         }
     }
 }

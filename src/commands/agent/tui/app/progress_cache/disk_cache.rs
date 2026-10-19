@@ -47,6 +47,7 @@ fn load_from(path: &Path) -> Result<Option<HashMap<String, CachedProgress>>> {
                     request_scope: Some(ProgressFetchScope {
                         task_id: Some(task_id.clone()),
                         session_ids: None,
+                        other_task_session_ids: vec![],
                     }),
                     delegated_sessions: Vec::new(),
                     fetched_at: Some(progress.fetched_at),
@@ -332,6 +333,7 @@ mod tests {
                 Some(ProgressFetchScope {
                     task_id: Some("task-placeholder".to_string()),
                     session_ids: None,
+                    other_task_session_ids: vec![],
                 }),
                 Some(fetched_at),
                 Some(last_attempt_at),
@@ -646,6 +648,7 @@ mod tests {
             request_scope: Some(ProgressFetchScope {
                 task_id: Some("task-placeholder".to_string()),
                 session_ids: Some(vec!["session-placeholder".to_string()]),
+                other_task_session_ids: vec![],
             }),
             delegated_sessions: Vec::new(),
             fetched_at: Some(fetched_at),

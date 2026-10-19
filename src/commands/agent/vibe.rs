@@ -197,7 +197,7 @@ mod tests {
             vibe_enabled,
             launched_with_vibe: false,
             work_type_pinned: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             ancestor_session_ids: ancestors.iter().map(|id| (*id).to_string()).collect(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),

@@ -6,7 +6,6 @@ const ENABLE_VIBE_CODING_SKILL: &str = "enable-vibe-coding";
 pub(super) fn enable_on_prompt_submit(event: HookEvent, input: &HookInput, session: &mut Session) {
     if event == HookEvent::UserPromptSubmit
         && input.agent_id.is_none()
-        && !session.is_delegated
         && input.prompt.as_deref().is_some_and(|prompt| {
             prompt_skill::leading_prompt_skill(input.engine, prompt)
                 == Some(ENABLE_VIBE_CODING_SKILL)
@@ -29,7 +28,7 @@ mod tests {
         engine: Engine,
         event: HookEvent,
         agent_id: Option<&'static str>,
-        is_delegated: bool,
+        child_launch_denied: bool,
         initially_vibe_enabled: bool,
         prompt: Option<&'static str>,
         tool_name: Option<&'static str>,
@@ -38,7 +37,7 @@ mod tests {
 
     #[fixture]
     fn session_factory() -> fn(bool, bool) -> Session {
-        |is_delegated, vibe_enabled| {
+        |child_launch_denied, vibe_enabled| {
             serde_json::from_value(json!({
                 "session_id": "session-test",
                 "cwd": "/tmp/session-test",
@@ -48,7 +47,7 @@ mod tests {
                 "created_at": "2026-01-01T00:00:00Z",
                 "updated_at": "2026-01-01T00:00:00Z",
                 "last_message": null,
-                "is_delegated": is_delegated,
+                "child_launch": if child_launch_denied { "deny" } else { "allow" },
                 "vibe_enabled": vibe_enabled,
             }))
             .expect("valid test session")
@@ -78,7 +77,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding"),
         tool_name: None,
@@ -88,7 +87,7 @@ mod tests {
         engine: Engine::Codex,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("  $enable-vibe-coding"),
         tool_name: None,
@@ -98,7 +97,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding work"),
         tool_name: None,
@@ -108,7 +107,7 @@ mod tests {
         engine: Engine::Codex,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("$enable-vibe-coding work"),
         tool_name: None,
@@ -118,27 +117,27 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: Some("agent-test"),
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding"),
         tool_name: None,
         expected: false,
     })]
-    #[case::delegated_prompt(PromptCase {
+    #[case::denied_child_launch_does_not_disable_vibe_prompt(PromptCase {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: true,
+        child_launch_denied: true,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding"),
         tool_name: None,
-        expected: false,
+        expected: true,
     })]
     #[case::post_tool_use_skill(PromptCase {
         engine: Engine::Claude,
         event: HookEvent::PostToolUse,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: None,
         tool_name: Some("Skill"),
@@ -148,7 +147,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("Please use /enable-vibe-coding"),
         tool_name: None,
@@ -158,7 +157,7 @@ mod tests {
         engine: Engine::Codex,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("Please use $enable-vibe-coding"),
         tool_name: None,
@@ -168,7 +167,7 @@ mod tests {
         engine: Engine::Codex,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("$other-skill then $enable-vibe-coding"),
         tool_name: None,
@@ -178,7 +177,7 @@ mod tests {
         engine: Engine::Codex,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding"),
         tool_name: None,
@@ -188,7 +187,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: Some("/enable-vibe-coding-extra"),
         tool_name: None,
@@ -198,7 +197,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: false,
         prompt: None,
         tool_name: None,
@@ -208,7 +207,7 @@ mod tests {
         engine: Engine::Claude,
         event: HookEvent::UserPromptSubmit,
         agent_id: None,
-        is_delegated: false,
+        child_launch_denied: false,
         initially_vibe_enabled: true,
         prompt: Some("ordinary request"),
         tool_name: None,
@@ -219,7 +218,7 @@ mod tests {
         #[case] case: PromptCase,
     ) {
         let input = hook_input(case.engine, case.agent_id, case.prompt, case.tool_name);
-        let mut session = session_factory(case.is_delegated, case.initially_vibe_enabled);
+        let mut session = session_factory(case.child_launch_denied, case.initially_vibe_enabled);
 
         enable_on_prompt_submit(case.event, &input, &mut session);
 

@@ -209,7 +209,7 @@ mod tests {
             vibe_enabled: false,
             launched_with_vibe: false,
             work_type_pinned: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
