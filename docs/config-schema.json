@@ -8,6 +8,7 @@
       "description": "`a agent` settings.",
       "$ref": "#/$defs/AgentConfig",
       "default": {
+        "active_profile": null,
         "auto_compact": {
           "enabled": true,
           "idle_timeout": "4m30s",
@@ -29,6 +30,7 @@
         "default_engine": "claude",
         "launch_profiles": {},
         "merge_notification": null,
+        "profiles": {},
         "statuses": {},
         "stop_hook_instruction": null,
         "vibe_marker": null,
@@ -92,6 +94,14 @@
       "description": "`a agent` settings.",
       "type": "object",
       "properties": {
+        "active_profile": {
+          "description": "Profile selected by `a agent profile use` for launches with `--type`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "auto_compact": {
           "description": "Automatic `/compact` settings for idle sessions.",
           "$ref": "#/$defs/AutoCompactConfig",
@@ -127,7 +137,7 @@
           }
         },
         "default_engine": {
-          "description": "Coding agent CLI used when `--engine` and the matching launch profile's\nengine are omitted (default: \"claude\"). Overridable for a single\ninvocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
+          "description": "Fallback CLI when `--type` and `--engine` are omitted and the matching\nlaunch profile's engine is unset (default: \"claude\"). Overridable for a\nsingle invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.",
           "$ref": "#/$defs/Engine",
           "default": "claude"
         },
@@ -146,6 +156,17 @@
             "null"
           ],
           "default": null
+        },
+        "profiles": {
+          "description": "Named profiles containing exact settings for each arbitrary launch type.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/AgentProfileTypeConfig"
+            }
+          },
+          "default": {}
         },
         "statuses": {
           "description": "User-defined status names and the state each name represents.",
@@ -287,6 +308,31 @@
         }
       },
       "additionalProperties": false
+    },
+    "AgentProfileTypeConfig": {
+      "description": "Model settings for one type in an agent profile.",
+      "type": "object",
+      "properties": {
+        "engine": {
+          "description": "Coding agent CLI used for this type.",
+          "$ref": "#/$defs/Engine"
+        },
+        "model": {
+          "description": "Model passed to the selected engine.",
+          "type": "string",
+          "minLength": 1
+        },
+        "reasoning_effort": {
+          "description": "Reasoning effort used for this type.",
+          "$ref": "#/$defs/ReasoningEffort"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "engine",
+        "model",
+        "reasoning_effort"
+      ]
     },
     "AgentStatusConfig": {
       "description": "Configuration for one user-defined agent status name.",

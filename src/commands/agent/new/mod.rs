@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
-use crate::shared::config::{Config, LayoutNode, PaneConfig, ResolvedLaunchOptions, load_config};
+use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
 mod delegation;
 mod delegation_guard;
+mod launch_options;
+mod profile_type;
 mod prompt;
 mod session_metadata;
 mod session_mode;
@@ -20,6 +22,7 @@ mod worktree;
 mod worktree_creation;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
+use launch_options::{resolve_launch_options, validate_type_selection};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
@@ -46,9 +49,14 @@ pub struct CommonNewArgs {
     pub label: Option<String>,
 
     /// Initial work type for the new session, using the workflow skill name.
-    /// A matching `agent.launch_profiles` entry can select launch defaults.
+    /// A matching `agent.work_types` entry controls its display metadata.
     #[arg(long)]
     pub kind: Option<String>,
+
+    /// Launch settings type from the active `agent.profiles` profile.
+    /// Cannot be combined with explicit engine, model, or reasoning effort flags.
+    #[arg(long = "type", conflicts_with_all = ["engine", "model", "reasoning_effort"])]
+    pub type_name: Option<String>,
 
     /// Model for the new session. Passed through to `<engine> --model`.
     /// Accepts an alias or a full model name. Falls back to the selected
@@ -122,9 +130,17 @@ pub struct NewArgs {
     /// Skip post-worktree-create and pre-session-start hooks.
     #[arg(long)]
     pub skip_hooks: bool,
+
+    /// Print the selected profile and type settings without launching a session.
+    #[arg(long, requires = "type_name")]
+    pub dry_run: bool,
 }
 
 pub fn run(args: &NewArgs) -> Result<()> {
+    profile_type::dispatch(args, profile_type::run_dry_run, run_regular)
+}
+
+fn run_regular(args: &NewArgs) -> Result<()> {
     delegation_guard::ensure_caller_not_delegated()?;
     run_with_vibe_access(
         args,
@@ -175,6 +191,8 @@ fn ensure_vibe_access(vibe_enabled: bool) -> Result<()> {
 
 fn run_inner(args: &NewArgs) -> Result<()> {
     let config = load_config()?;
+
+    validate_type_selection(&args.common, &config)?;
 
     let repo = match &args.common.repo {
         Some(path) => Some(open_repo_at(path)?),
@@ -315,15 +333,6 @@ fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String
     Ok((env_vars, background))
 }
 
-fn resolve_launch_options(common: &CommonNewArgs, config: &Config) -> ResolvedLaunchOptions {
-    config.agent.resolve_launch_options(
-        common.kind.as_deref(),
-        common.engine,
-        common.model.as_deref(),
-        common.reasoning_effort,
-    )
-}
-
 /// Run `a agent new` without creating a worktree, either by splitting the
 /// caller's pane or opening a window in the target repo's session (see
 /// `should_open_window`).
@@ -411,7 +420,7 @@ fn run_session_only_inner_with_launchers(
         .collect();
 
     let background_suffix = if background { " (background)" } else { "" };
-    let launch_options = resolve_launch_options(&args.common, context.config);
+    let launch_options = resolve_launch_options(&args.common, context.config)?;
 
     let differs = should_open_window(
         context.repo_root,
@@ -571,8 +580,19 @@ mod tests {
 
     #[derive(Debug, PartialEq, Eq)]
     enum CapturedSessionOnlyLaunch {
-        Split { cwd: String },
-        Window { repo_root: String, cwd: String },
+        Split {
+            cwd: String,
+            engine: Engine,
+            model: Option<String>,
+            reasoning_effort: Option<ReasoningEffort>,
+        },
+        Window {
+            repo_root: String,
+            cwd: String,
+            engine: Engine,
+            model: Option<String>,
+            reasoning_effort: Option<ReasoningEffort>,
+        },
     }
 
     fn capture_session_only_launch(
@@ -589,6 +609,9 @@ mod tests {
             |spec| {
                 actual.replace(Some(CapturedSessionOnlyLaunch::Split {
                     cwd: spec.cwd.to_string(),
+                    engine: spec.engine,
+                    model: spec.model.map(str::to_string),
+                    reasoning_effort: spec.reasoning_effort,
                 }));
                 Ok(String::new())
             },
@@ -596,6 +619,9 @@ mod tests {
                 actual.replace(Some(CapturedSessionOnlyLaunch::Window {
                     repo_root: spec.repo_root.to_string(),
                     cwd: spec.cwd.to_string(),
+                    engine: spec.engine,
+                    model: spec.model.map(str::to_string),
+                    reasoning_effort: spec.reasoning_effort,
                 }));
                 Ok(String::new())
             },
@@ -800,15 +826,123 @@ mod tests {
         );
 
         let expected = if split {
-            CapturedSessionOnlyLaunch::Split { cwd: expected_cwd }
+            CapturedSessionOnlyLaunch::Split {
+                cwd: expected_cwd,
+                engine: Engine::Claude,
+                model: None,
+                reasoning_effort: None,
+            }
         } else {
             CapturedSessionOnlyLaunch::Window {
                 repo_root: session_only_repo.main_root.to_string_lossy().to_string(),
                 cwd: expected_cwd,
+                engine: Engine::Claude,
+                model: None,
+                reasoning_effort: None,
             }
         };
 
         assert_eq!(actual, Some(expected),);
+    }
+
+    #[test]
+    fn profile_type_settings_reach_launcher_and_dry_run_with_kind_ignored() {
+        let session_only_root = session_only_root();
+        let config: Config = serde_yaml::from_str(indoc::indoc! {
+            "
+            agent:
+              active_profile: \"profile one\"
+              codex:
+                model: model-global
+                reasoning_effort: max
+              profiles:
+                \"profile one\":
+                  \"review type\":
+                    engine: codex
+                    model: model-ember
+                    reasoning_effort: high
+            "
+        })
+        .unwrap();
+        let args = TestCli::try_parse_from(["a", "--kind", "other-kind", "--type", "review type"])
+            .unwrap()
+            .args;
+        let context = SessionOnlyRunContext {
+            repo: None,
+            repo_root: &session_only_root.cwd,
+            caller_repo_root: &session_only_root.cwd,
+            current_dir: &session_only_root.cwd,
+            config: &config,
+        };
+
+        let launch = capture_session_only_launch(&args, context, Some("%caller-pane"));
+        let resolved = config.agent.resolve_profile_type("review type").unwrap();
+        let dry_run = profile_type::format_dry_run(&resolved);
+
+        assert_eq!(
+            (launch, dry_run),
+            (
+                Some(CapturedSessionOnlyLaunch::Split {
+                    cwd: session_only_root.cwd,
+                    engine: Engine::Codex,
+                    model: Some("model-ember".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::High),
+                }),
+                indoc::indoc! {
+                    "
+                    Resolved agent launch settings:
+                      profile: profile one
+                      type: review type
+                      engine: codex
+                        source: agent.profiles[\"profile one\"][\"review type\"].engine
+                      model: model-ember
+                        source: agent.profiles[\"profile one\"][\"review type\"].model
+                      reasoning effort: high
+                        source: agent.profiles[\"profile one\"][\"review type\"].reasoning_effort
+                    "
+                }
+                .to_string(),
+            ),
+        );
+    }
+
+    #[test]
+    fn omitting_type_keeps_kind_launch_profile_behavior() {
+        let session_only_root = session_only_root();
+        let config: Config = serde_yaml::from_str(indoc::indoc! {
+            "
+            agent:
+              launch_profiles:
+                build:
+                  engine: codex
+                  codex:
+                    model: model-legacy
+                    reasoning_effort: medium
+            "
+        })
+        .unwrap();
+        let args = TestCli::try_parse_from(["a", "--kind", "build"])
+            .unwrap()
+            .args;
+        let context = SessionOnlyRunContext {
+            repo: None,
+            repo_root: &session_only_root.cwd,
+            caller_repo_root: &session_only_root.cwd,
+            current_dir: &session_only_root.cwd,
+            config: &config,
+        };
+
+        let launch = capture_session_only_launch(&args, context, Some("%caller-pane"));
+
+        assert_eq!(
+            launch,
+            Some(CapturedSessionOnlyLaunch::Split {
+                cwd: session_only_root.cwd,
+                engine: Engine::Codex,
+                model: Some("model-legacy".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Medium),
+            }),
+        );
     }
 
     #[test]
@@ -993,9 +1127,56 @@ mod tests {
     }
 
     #[rstest]
+    #[case::omitted(&["a"], None)]
+    #[case::arbitrary_type(&["a", "--type", "review type"], Some("review type"))]
+    fn type_value_parses(#[case] argv: &[&str], #[case] expected: Option<&str>) {
+        let cli = TestCli::try_parse_from(argv).unwrap();
+        assert_eq!(cli.args.common.type_name.as_deref(), expected);
+    }
+
+    #[test]
+    fn dry_run_dispatch_skips_regular_launch_path() {
+        let args = TestCli::try_parse_from([
+            "a",
+            "--type",
+            "review type",
+            "--dry-run",
+            "--worktree=preview-branch",
+        ])
+        .unwrap()
+        .args;
+        let dry_run_called = Cell::new(false);
+        let regular_called = Cell::new(false);
+
+        let result = profile_type::dispatch(
+            &args,
+            |_| {
+                dry_run_called.set(true);
+                Ok(())
+            },
+            |_| {
+                regular_called.set(true);
+                Ok(())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, dry_run_called.get(), regular_called.get()),
+            (Ok(()), true, false),
+        );
+    }
+
+    #[rstest]
     #[case::from_without_worktree(&["a", "--from", "origin/master"])]
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::unknown_reasoning_effort(&["a", "--reasoning-effort", "maxx"])]
+    #[case::dry_run_requires_type(&["a", "--dry-run"])]
+    #[case::type_conflicts_with_engine(&["a", "--type", "review", "--engine", "codex"])]
+    #[case::type_conflicts_with_model(&["a", "--type", "review", "--model", "model-ember"])]
+    #[case::type_conflicts_with_reasoning_effort(
+        &["a", "--type", "review", "--reasoning-effort", "high"]
+    )]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
     }
@@ -1101,6 +1282,7 @@ mod tests {
                     agent,
                     label: None,
                     kind: kind.map(str::to_string),
+                    type_name: None,
                     model: None,
                     parent_session_id: None,
                     repo: None,

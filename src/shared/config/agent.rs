@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::commands::agent::types::Engine;
 
 use super::{
-    AgentLaunchProfileConfig, AgentStatusConfig, AgentWorkTypeConfig, AutoCompactConfig,
-    AutoPauseConfig, CodexConfig, WorktreeConfig,
+    AgentLaunchProfileConfig, AgentProfileTypeConfig, AgentStatusConfig, AgentWorkTypeConfig,
+    AutoCompactConfig, AutoPauseConfig, CodexConfig, WorktreeConfig,
 };
 
 /// Configuration for reminders sent when a background task exceeds its timeout.
@@ -59,11 +59,19 @@ fn default_bg_task_reminder_excluded_commands() -> Vec<String> {
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentConfig {
-    /// Coding agent CLI used when `--engine` and the matching launch profile's
-    /// engine are omitted (default: "claude"). Overridable for a single
-    /// invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
+    /// Fallback CLI when `--type` and `--engine` are omitted and the matching
+    /// launch profile's engine is unset (default: "claude"). Overridable for a
+    /// single invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
     #[serde(default)]
     pub default_engine: Engine,
+
+    /// Profile selected by `a agent profile use` for launches with `--type`.
+    #[serde(default)]
+    pub active_profile: Option<String>,
+
+    /// Named profiles containing exact settings for each arbitrary launch type.
+    #[serde(default)]
+    pub profiles: HashMap<String, HashMap<String, AgentProfileTypeConfig>>,
 
     /// Message template sent to the delegator when a delegated branch's PR merges.
     /// Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent.

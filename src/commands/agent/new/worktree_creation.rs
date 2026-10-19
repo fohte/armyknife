@@ -14,7 +14,7 @@ use crate::commands::agent::error::CcError;
 use crate::infra::git::cmd::run_git;
 use crate::infra::git::fetch_with_prune;
 use crate::infra::git::{WorktreeCreationLock, get_main_branch_for_repo, open_repo_at};
-use crate::shared::config::Config;
+use crate::shared::config::{Config, ResolvedLaunchOptions};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::worktree::branch_to_worktree_name;
@@ -231,25 +231,22 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let launch_options = super::resolve_launch_options(&args.common, config);
+    let launch_options = super::launch_options::resolve_launch_options(&args.common, config)?;
 
     drop(creation_lock);
 
     // Setup tmux window using config layout
     let route = setup_tmux_window(
-        TmuxWindowSpec {
+        worktree_window_spec(WorktreeWindowContext {
             repo_root,
-            cwd: worktree_dir.to_str().unwrap_or(&worktree_name),
-            window_name: &worktree_name,
-            layout: &config.agent.worktree.layout,
-            model: launch_options.model.as_deref(),
-            reasoning_effort: launch_options.reasoning_effort,
+            worktree_name: &worktree_name,
+            worktree_dir: &worktree_dir,
+            config,
+            launch_options: &launch_options,
             prompt: final_prompt.as_deref(),
-            engine: launch_options.engine,
             env_vars: &env_refs,
             background,
-            restore_automatic_rename: false,
-        },
+        }),
         config,
     )?;
 
@@ -264,9 +261,41 @@ pub(super) fn run_worktree_creation(
     Ok(())
 }
 
+struct WorktreeWindowContext<'a> {
+    repo_root: &'a str,
+    worktree_name: &'a str,
+    worktree_dir: &'a Path,
+    config: &'a Config,
+    launch_options: &'a ResolvedLaunchOptions,
+    prompt: Option<&'a str>,
+    env_vars: &'a [(&'a str, &'a str)],
+    background: bool,
+}
+
+fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_> {
+    TmuxWindowSpec {
+        repo_root: context.repo_root,
+        cwd: context
+            .worktree_dir
+            .to_str()
+            .unwrap_or(context.worktree_name),
+        window_name: context.worktree_name,
+        layout: &context.config.agent.worktree.layout,
+        model: context.launch_options.model.as_deref(),
+        reasoning_effort: context.launch_options.reasoning_effort,
+        prompt: context.prompt,
+        engine: context.launch_options.engine,
+        env_vars: context.env_vars,
+        background: context.background,
+        restore_automatic_rename: false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{Engine, ReasoningEffort};
+    use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::cell::RefCell;
 
@@ -289,6 +318,56 @@ mod tests {
     #[fixture]
     fn worktree_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[test]
+    fn worktree_window_receives_selected_profile_type_settings() {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            agent:
+              active_profile: selected-profile
+              profiles:
+                selected-profile:
+                  review-type:
+                    engine: codex
+                    model: model-ember
+                    reasoning_effort: high
+        "})
+        .unwrap();
+        let common = super::super::CommonNewArgs {
+            prompt: None,
+            agent: false,
+            label: None,
+            kind: Some("other-kind".to_string()),
+            type_name: Some("review-type".to_string()),
+            model: None,
+            parent_session_id: None,
+            repo: None,
+            engine: None,
+            reasoning_effort: None,
+        };
+        let launch_options =
+            super::super::launch_options::resolve_launch_options(&common, &config).unwrap();
+        let worktree_dir = Path::new("/example/worktrees/review");
+        let env_vars: &[(&str, &str)] = &[];
+        let spec = worktree_window_spec(WorktreeWindowContext {
+            repo_root: "/example/repo",
+            worktree_name: "review",
+            worktree_dir,
+            config: &config,
+            launch_options: &launch_options,
+            prompt: None,
+            env_vars,
+            background: false,
+        });
+
+        assert_eq!(
+            (spec.engine, spec.model, spec.reasoning_effort),
+            (
+                Engine::Codex,
+                Some("model-ember"),
+                Some(ReasoningEffort::High)
+            ),
+        );
     }
 
     #[rstest]

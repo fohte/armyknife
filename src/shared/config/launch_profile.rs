@@ -1,8 +1,75 @@
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 
-use super::AgentConfig;
+use super::{AgentConfig, format_sorted_names};
+
+/// Model settings for one type in an agent profile.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProfileTypeConfig {
+    /// Coding agent CLI used for this type.
+    pub engine: Engine,
+
+    /// Model passed to the selected engine.
+    #[serde(deserialize_with = "deserialize_non_empty_model")]
+    #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
+    pub model: String,
+
+    /// Reasoning effort used for this type.
+    pub reasoning_effort: ReasoningEffort,
+}
+
+fn deserialize_non_empty_model<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let model = String::deserialize(deserializer)?;
+    if model.is_empty() {
+        return Err(<D::Error as serde::de::Error>::custom(
+            "model must be a non-empty string",
+        ));
+    }
+    Ok(model)
+}
+
+/// A profile and type resolved from `agent.active_profile`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedAgentProfileType {
+    pub profile_name: String,
+    pub type_name: String,
+    pub settings: AgentProfileTypeConfig,
+}
+
+impl AgentConfig {
+    /// Resolve a type from the active profile without applying any fallback.
+    pub fn resolve_profile_type(
+        &self,
+        type_name: &str,
+    ) -> anyhow::Result<ResolvedAgentProfileType> {
+        let profile_name = self
+            .active_profile
+            .as_deref()
+            .context("agent.active_profile is not set")?;
+        let profile = self.profiles.get(profile_name).with_context(|| {
+            format!("agent.active_profile references undefined profile `{profile_name}`")
+        })?;
+        let settings = profile.get(type_name).with_context(|| {
+            let configured = format_sorted_names(profile.keys());
+            format!(
+                "unknown agent type `{type_name}` in profile `{profile_name}`; configured types: {configured}"
+            )
+        })?;
+
+        Ok(ResolvedAgentProfileType {
+            profile_name: profile_name.to_string(),
+            type_name: type_name.to_string(),
+            settings: settings.clone(),
+        })
+    }
+}
 
 /// Per-engine defaults selected by an `agent.launch_profiles` entry.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
@@ -284,5 +351,102 @@ mod tests {
             ),
             expected,
         );
+    }
+
+    #[test]
+    fn resolves_arbitrary_profile_and_type_names_to_exact_settings() {
+        let config: Config = serde_yaml::from_str(indoc! {"
+            agent:
+              active_profile: \"profile one\"
+              profiles:
+                \"profile one\":
+                  \"review type\":
+                    engine: codex
+                    model: model-ember
+                    reasoning_effort: high
+        "})
+        .unwrap();
+
+        assert_eq!(
+            config.agent.resolve_profile_type("review type").unwrap(),
+            ResolvedAgentProfileType {
+                profile_name: "profile one".to_string(),
+                type_name: "review type".to_string(),
+                settings: AgentProfileTypeConfig {
+                    engine: Engine::Codex,
+                    model: "model-ember".to_string(),
+                    reasoning_effort: ReasoningEffort::High,
+                },
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::missing_engine(indoc! {"
+        model: model-ember
+        reasoning_effort: high
+    "})]
+    #[case::missing_model(indoc! {"
+        engine: codex
+        reasoning_effort: high
+    "})]
+    #[case::empty_model(indoc! {"
+        engine: codex
+        model: \"\"
+        reasoning_effort: high
+    "})]
+    #[case::missing_reasoning_effort(indoc! {"
+        engine: codex
+        model: model-ember
+    "})]
+    #[case::unknown_field(indoc! {"
+        engine: codex
+        model: model-ember
+        reasoning_effort: high
+        extra: true
+    "})]
+    fn rejects_invalid_profile_type_settings(#[case] yaml: &str) {
+        assert!(serde_yaml::from_str::<AgentProfileTypeConfig>(yaml).is_err());
+    }
+
+    #[rstest]
+    #[case::profile_unset(None, "review type", "agent.active_profile is not set")]
+    #[case::profile_undefined(
+        Some("missing profile"),
+        "review type",
+        "agent.active_profile references undefined profile `missing profile`"
+    )]
+    #[case::type_undefined(
+        Some("profile one"),
+        "missing type",
+        "unknown agent type `missing type` in profile `profile one`; configured types: review type"
+    )]
+    fn rejects_missing_profile_or_type_references(
+        #[case] active_profile: Option<&str>,
+        #[case] type_name: &str,
+        #[case] expected_error: &str,
+    ) {
+        let agent = AgentConfig {
+            active_profile: active_profile.map(str::to_string),
+            profiles: HashMap::from([(
+                "profile one".to_string(),
+                HashMap::from([(
+                    "review type".to_string(),
+                    AgentProfileTypeConfig {
+                        engine: Engine::Claude,
+                        model: "model-raven".to_string(),
+                        reasoning_effort: ReasoningEffort::Low,
+                    },
+                )]),
+            )]),
+            ..Default::default()
+        };
+
+        let actual = agent
+            .resolve_profile_type(type_name)
+            .err()
+            .map(|error| error.to_string());
+
+        assert_eq!(actual, Some(expected_error.to_string()));
     }
 }
