@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.448](https://github.com/fohte/armyknife/compare/v0.1.447...v0.1.448) (2026-10-19)
+
+
+### Features
+
+* **agent:** add named launch profiles ([#1233](https://github.com/fohte/armyknife/issues/1233)) ([f239919](https://github.com/fohte/armyknife/commit/f239919d15328f7c2c5d9706569b5205e487e0be))
+
 ## [0.1.447](https://github.com/fohte/armyknife/compare/v0.1.446...v0.1.447) (2026-10-18)
 
 
