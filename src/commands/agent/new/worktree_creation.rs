@@ -231,7 +231,7 @@ pub(super) fn run_worktree_creation(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let launch_options = super::launch_options::resolve_launch_options(&args.common, config);
+    let launch_options = super::launch_options::resolve_launch_options(&args.common, config)?;
 
     drop(creation_lock);
 

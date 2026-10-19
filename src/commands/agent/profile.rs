@@ -6,36 +6,25 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Subcommand};
 use serde_yaml::{Mapping, Value};
 
-use crate::commands::agent::types::Engine;
 use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
-use crate::shared::config::{self, Config, ResolvedLaunchOptions};
+use crate::shared::config::{self, Config};
 
 const SELECTION_FILE: &str = "zz-agent-profiles.local.yaml";
 const SELECTION_LOCK_FILE: &str = "zz-agent-profiles.lock";
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum ProfileCommands {
-    /// Set the default engine for future launches of a configured kind
+    /// Select the profile used by `a agent new --type`
     Use(UseProfileArgs),
 
-    /// Show the effective settings for the next launch of a configured kind
-    Show(ShowProfileArgs),
+    /// Show the selected profile and its type settings
+    Show,
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct UseProfileArgs {
-    /// Configured `--kind` value
-    pub kind: String,
-
-    /// Default coding agent CLI for future launches
-    #[arg(value_enum)]
-    pub engine: Engine,
-}
-
-#[derive(Args, Clone, PartialEq, Eq)]
-pub struct ShowProfileArgs {
-    /// Configured `--kind` value
-    pub kind: String,
+    /// Configured profile name
+    pub profile: String,
 }
 
 pub fn run(command: &ProfileCommands) -> Result<()> {
@@ -46,21 +35,14 @@ pub fn run(command: &ProfileCommands) -> Result<()> {
 fn execute(command: &ProfileCommands) -> Result<String> {
     let config_dir = config_dir()?;
     let selection_path = config_dir.join(SELECTION_FILE);
-    let (kind, engine) = match command {
-        ProfileCommands::Use(args) => (&args.kind, Some(args.engine)),
-        ProfileCommands::Show(args) => (&args.kind, None),
-    };
-
-    if engine.is_some() {
+    if let ProfileCommands::Use(args) = command {
         reject_symlink(&selection_path)?;
-    }
-    let configured_profiles = config::load_config_without_file(SELECTION_FILE)?;
-    ensure_profile_exists(&configured_profiles, kind)?;
-    if let Some(engine) = engine {
-        save_engine_selection(&config_dir, kind, engine)?;
+        let configured_profiles = config::load_config_without_file(SELECTION_FILE)?;
+        ensure_profile_exists(&configured_profiles, &args.profile)?;
+        save_profile_selection(&config_dir, &args.profile)?;
     }
     let config = config::load_config()?;
-    format_profile(&config, &selection_path, kind)
+    format_profile(&config)
 }
 
 fn config_dir() -> Result<PathBuf> {
@@ -69,71 +51,53 @@ fn config_dir() -> Result<PathBuf> {
         .context("configuration directory is unavailable")
 }
 
-fn ensure_profile_exists(config: &Config, kind: &str) -> Result<()> {
+fn ensure_profile_exists(config: &Config, profile_name: &str) -> Result<()> {
     ensure!(
-        config.agent.launch_profiles.contains_key(kind),
-        "unknown agent profile kind `{kind}`; configured launch profile kinds: {}",
-        configured_kinds(config),
+        config.agent.profiles.contains_key(profile_name),
+        "unknown agent profile `{profile_name}`; configured profiles: {}",
+        configured_profiles(config),
     );
     Ok(())
 }
 
-fn configured_kinds(config: &Config) -> String {
-    let mut kinds = config
+fn configured_profiles(config: &Config) -> String {
+    let mut profiles = config
         .agent
-        .launch_profiles
+        .profiles
         .keys()
         .map(String::as_str)
         .collect::<Vec<_>>();
-    kinds.sort_unstable();
-    if kinds.is_empty() {
+    profiles.sort_unstable();
+    if profiles.is_empty() {
         "(none)".to_string()
     } else {
-        kinds.join(", ")
+        profiles.join(", ")
     }
 }
 
-fn format_profile(config: &Config, selection_path: &Path, kind: &str) -> Result<String> {
-    let saved_engine = read_saved_engine(selection_path, kind)?;
-    let options = config
-        .agent
-        .resolve_launch_options(Some(kind), None, None, None);
-    Ok(format_profile_options(kind, saved_engine, &options))
-}
-
-fn format_profile_options(
-    kind: &str,
-    saved_engine: Option<Engine>,
-    options: &ResolvedLaunchOptions,
-) -> String {
-    format!(
-        "Next launch settings for `a agent new --kind {kind}`:\n  local engine selection: {}\n  effective engine: {}\n  effective model: {}\n  effective reasoning effort: {}\n",
-        saved_engine.map_or("unset", |engine| engine.process_name()),
-        options.engine.process_name(),
-        options.model.as_deref().unwrap_or("engine default"),
-        options
-            .reasoning_effort
-            .map_or("engine default", |effort| effort.as_str()),
-    )
-}
-
-fn read_saved_engine(path: &Path, kind: &str) -> Result<Option<Engine>> {
-    let document = read_selection_document(path)?;
-    let Some(value) = yaml_child(&document, "agent")
-        .and_then(|value| yaml_child(value, "launch_profiles"))
-        .and_then(|value| yaml_child(value, kind))
-        .and_then(|value| yaml_child(value, "engine"))
-    else {
-        return Ok(None);
+fn format_profile(config: &Config) -> Result<String> {
+    let Some(profile_name) = config.agent.active_profile.as_deref() else {
+        return Ok("No agent profile is selected.\n".to_string());
     };
+    let profile = config.agent.profiles.get(profile_name).with_context(|| {
+        format!("agent.active_profile references undefined profile `{profile_name}`")
+    })?;
+    let mut types = profile.iter().collect::<Vec<_>>();
+    types.sort_unstable_by(|left, right| left.0.cmp(right.0));
 
-    serde_yaml::from_value(value.clone())
-        .with_context(|| format!("invalid saved engine for profile kind `{kind}`"))
-        .map(Some)
-}
-
-fn yaml_child<'a>(value: &'a Value, key: &str) -> Option<&'a Value> {
-    value.as_mapping()?.get(Value::String(key.to_string()))
+    let mut output = format!("Active profile: {profile_name}\n");
+    if types.is_empty() {
+        output.push_str("  types: (none)\n");
+    }
+    for (type_name, settings) in types {
+        output.push_str(&format!(
+            "  type: {type_name}\n    engine: {}\n    model: {}\n    reasoning effort: {}\n",
+            settings.engine.process_name(),
+            settings.model,
+            settings.reasoning_effort.as_str(),
+        ));
+    }
+    Ok(output)
 }
 
 fn reject_symlink(path: &Path) -> Result<()> {
@@ -154,7 +118,7 @@ fn reject_symlink(path: &Path) -> Result<()> {
     }
 }
 
-fn save_engine_selection(config_dir: &Path, kind: &str, engine: Engine) -> Result<()> {
+fn save_profile_selection(config_dir: &Path, profile_name: &str) -> Result<()> {
     fs::create_dir_all(config_dir).with_context(|| {
         format!(
             "failed to create config directory: {}",
@@ -169,7 +133,7 @@ fn save_engine_selection(config_dir: &Path, kind: &str, engine: Engine) -> Resul
 
     // Keep the read-modify-write cycle exclusive across concurrent CLI processes.
     let mut document = read_selection_document(&path)?;
-    set_engine(&mut document, kind, engine)?;
+    set_active_profile(&mut document, profile_name)?;
 
     // Persist on the same filesystem so the rename cannot expose a partial YAML file.
     let mut temp_file = tempfile::NamedTempFile::new_in(config_dir).with_context(|| {
@@ -201,17 +165,10 @@ fn read_selection_document(path: &Path) -> Result<Value> {
         .with_context(|| format!("failed to parse profile selection: {}", path.display()))
 }
 
-fn set_engine(document: &mut Value, kind: &str, engine: Engine) -> Result<()> {
+fn set_active_profile(document: &mut Value, profile_name: &str) -> Result<()> {
     let agent = mapping_child(document, "agent")?;
-    let profiles = mapping_child(agent, "launch_profiles")?;
-    let profile = mapping_child(profiles, kind)?;
-    let profile = profile
-        .as_mapping_mut()
-        .context("profile selection must contain a mapping for each kind")?;
-    profile.insert(
-        Value::String("engine".to_string()),
-        Value::String(engine.process_name().to_string()),
-    );
+    let selection = mapping_child(agent, "active_profile")?;
+    *selection = Value::String(profile_name.to_string());
     Ok(())
 }
 
@@ -252,21 +209,21 @@ mod tests {
             config_dir.join("profiles.yaml"),
             indoc! {"
                 agent:
-                  default_engine: claude
-                  launch_profiles:
-                    sample_flow:
-                      engine: claude
-                      claude:
-                        model: model-alpha
+                  profiles:
+                    \"profile one\":
+                      build:
+                        engine: claude
+                        model: model-raven
                         reasoning_effort: low
-                      codex:
-                        model: model-beta
+                      \"review type\":
+                        engine: codex
+                        model: model-ember
                         reasoning_effort: high
-                    second_flow:
-                      engine: codex
-                      codex:
-                        model: model-gamma
-                        reasoning_effort: max
+                    profile-two:
+                      inspect:
+                        engine: claude
+                        model: model-slate
+                        reasoning_effort: medium
             "},
         )
         .expect("profile config should be written");
@@ -277,11 +234,7 @@ mod tests {
         home.path().join("armyknife").join(SELECTION_FILE)
     }
 
-    fn execute_with_home(
-        home: &TempDir,
-        command: &ProfileCommands,
-        env_engine: Option<&str>,
-    ) -> Result<String> {
+    fn execute_with_home(home: &TempDir, command: &ProfileCommands) -> Result<String> {
         let config_home = home
             .path()
             .to_str()
@@ -289,57 +242,61 @@ mod tests {
         temp_env::with_vars(
             [
                 ("XDG_CONFIG_HOME", Some(config_home)),
-                (
-                    "ARMYKNIFE_AGENT__LAUNCH_PROFILES__SAMPLE_FLOW__ENGINE",
-                    env_engine,
-                ),
+                ("ARMYKNIFE_AGENT__ACTIVE_PROFILE", None::<&str>),
             ],
             || execute(command),
         )
     }
 
     #[test]
-    fn profile_commands_parse_kind_and_engine() {
+    fn profile_commands_parse_arbitrary_names_and_show_without_arguments() {
         let parsed = vec![
-            TestCli::try_parse_from(["a", "profile", "use", "sample_flow", "codex"])
+            TestCli::try_parse_from(["a", "profile", "use", "profile one"])
                 .expect("profile use should parse")
                 .command,
-            TestCli::try_parse_from(["a", "profile", "show", "sample_flow"])
+            TestCli::try_parse_from(["a", "profile", "show"])
                 .expect("profile show should parse")
                 .command,
         ];
         let expected = vec![
             AgentCommands::Profile(ProfileCommands::Use(UseProfileArgs {
-                kind: "sample_flow".to_string(),
-                engine: Engine::Codex,
+                profile: "profile one".to_string(),
             })),
-            AgentCommands::Profile(ProfileCommands::Show(ShowProfileArgs {
-                kind: "sample_flow".to_string(),
-            })),
+            AgentCommands::Profile(ProfileCommands::Show),
         ];
 
         assert!(parsed == expected);
     }
 
     #[rstest]
-    fn use_creates_local_selection_file(configured_home: TempDir) {
+    fn use_saves_only_active_profile_and_preserves_other_local_settings(configured_home: TempDir) {
+        let path = selection_path(&configured_home);
+        fs::write(
+            &path,
+            indoc! {"
+                agent:
+                  active_profile: profile-two
+                  default_engine: codex
+                  codex:
+                    model: model-local
+            "},
+        )
+        .expect("existing local settings should be written");
         let command = ProfileCommands::Use(UseProfileArgs {
-            kind: "sample_flow".to_string(),
-            engine: Engine::Codex,
+            profile: "profile one".to_string(),
         });
 
-        execute_with_home(&configured_home, &command, None)
-            .expect("profile selection should be saved");
+        execute_with_home(&configured_home, &command).expect("profile selection should be saved");
         let saved: Value = serde_yaml::from_str(
-            &fs::read_to_string(selection_path(&configured_home))
-                .expect("local selection file should be created"),
+            &fs::read_to_string(path).expect("local selection file should be readable"),
         )
         .expect("saved selection should be valid YAML");
         let expected: Value = serde_yaml::from_str(indoc! {"
             agent:
-              launch_profiles:
-                sample_flow:
-                  engine: codex
+              active_profile: profile one
+              default_engine: codex
+              codex:
+                model: model-local
         "})
         .expect("expected selection should be valid YAML");
 
@@ -348,8 +305,8 @@ mod tests {
 
     #[rstest]
     #[tokio::test(flavor = "multi_thread")]
-    async fn profile_use_dispatch_persists_selection(configured_home: TempDir) {
-        let cli = TestCli::try_parse_from(["a", "profile", "use", "sample_flow", "codex"])
+    async fn profile_use_dispatch_persists_active_profile(configured_home: TempDir) {
+        let cli = TestCli::try_parse_from(["a", "profile", "use", "profile one"])
             .expect("profile command should parse");
         let config_home = configured_home
             .path()
@@ -359,10 +316,7 @@ mod tests {
         let result = temp_env::with_vars(
             [
                 ("XDG_CONFIG_HOME", Some(config_home)),
-                (
-                    "ARMYKNIFE_AGENT__LAUNCH_PROFILES__SAMPLE_FLOW__ENGINE",
-                    None::<&str>,
-                ),
+                ("ARMYKNIFE_AGENT__ACTIVE_PROFILE", None::<&str>),
             ],
             || {
                 tokio::task::block_in_place(|| {
@@ -379,9 +333,7 @@ mod tests {
         .expect("saved selection should be valid YAML");
         let expected: Value = serde_yaml::from_str(indoc! {"
             agent:
-              launch_profiles:
-                sample_flow:
-                  engine: codex
+              active_profile: profile one
         "})
         .expect("expected selection should be valid YAML");
 
@@ -389,103 +341,41 @@ mod tests {
     }
 
     #[rstest]
-    fn use_saves_engine_and_preserves_other_local_selections(configured_home: TempDir) {
-        let path = selection_path(&configured_home);
-        fs::write(
-            &path,
-            indoc! {"
-                agent:
-                  launch_profiles:
-                    sample_flow:
-                      engine: claude
-                    second_flow:
-                      engine: claude
-            "},
-        )
-        .expect("existing selections should be written");
-        let command = ProfileCommands::Use(UseProfileArgs {
-            kind: "sample_flow".to_string(),
-            engine: Engine::Codex,
-        });
-
-        execute_with_home(&configured_home, &command, None)
-            .expect("profile selection should be saved");
-        let saved: Value = serde_yaml::from_str(
-            &fs::read_to_string(path).expect("profile selections should be readable"),
-        )
-        .expect("saved selections should be valid YAML");
-        let expected: Value = serde_yaml::from_str(indoc! {"
-            agent:
-              launch_profiles:
-                sample_flow:
-                  engine: codex
-                second_flow:
-                  engine: claude
-        "})
-        .expect("expected selections should be valid YAML");
-
-        assert_eq!(saved, expected);
-    }
-
-    #[rstest]
-    #[case::local_selection_is_effective(None, indoc! {"
-        Next launch settings for `a agent new --kind sample_flow`:
-          local engine selection: codex
-          effective engine: codex
-          effective model: model-beta
-          effective reasoning effort: high
-    "})]
-    #[case::environment_override_is_reported(Some("claude"), indoc! {"
-        Next launch settings for `a agent new --kind sample_flow`:
-          local engine selection: codex
-          effective engine: claude
-          effective model: model-alpha
-          effective reasoning effort: low
-    "})]
-    fn show_reports_next_launch_settings(
-        configured_home: TempDir,
-        #[case] env_engine: Option<&str>,
-        #[case] expected: &str,
-    ) {
+    fn show_reports_selected_profile_and_all_types(configured_home: TempDir) {
         fs::write(
             selection_path(&configured_home),
             indoc! {"
                 agent:
-                  launch_profiles:
-                    sample_flow:
-                      engine: codex
+                  active_profile: profile one
             "},
         )
         .expect("profile selection should be written");
-        let command = ProfileCommands::Show(ShowProfileArgs {
-            kind: "sample_flow".to_string(),
-        });
 
-        let output = execute_with_home(&configured_home, &command, env_engine)
-            .expect("profile settings should be shown");
-
-        assert_eq!(output, expected);
-    }
-
-    #[rstest]
-    fn show_reports_unset_local_selection(configured_home: TempDir) {
-        let command = ProfileCommands::Show(ShowProfileArgs {
-            kind: "sample_flow".to_string(),
-        });
-
-        let output = execute_with_home(&configured_home, &command, None)
+        let output = execute_with_home(&configured_home, &ProfileCommands::Show)
             .expect("profile settings should be shown");
 
         assert_eq!(
             output,
             indoc! {"
-                Next launch settings for `a agent new --kind sample_flow`:
-                  local engine selection: unset
-                  effective engine: claude
-                  effective model: model-alpha
-                  effective reasoning effort: low
+                Active profile: profile one
+                  type: build
+                    engine: claude
+                    model: model-raven
+                    reasoning effort: low
+                  type: review type
+                    engine: codex
+                    model: model-ember
+                    reasoning effort: high
             "},
         );
+    }
+
+    #[rstest]
+    fn show_reports_when_no_profile_is_selected(configured_home: TempDir) {
+        let output = execute_with_home(&configured_home, &ProfileCommands::Show)
+            .expect("profile status should be shown");
+
+        assert_eq!(output, "No agent profile is selected.\n");
     }
 
     #[test]
@@ -498,16 +388,19 @@ mod tests {
         let path = selection_path(&home);
         symlink(&target, &path).expect("selection symlink should be created");
         let command = ProfileCommands::Use(UseProfileArgs {
-            kind: "sample_flow".to_string(),
-            engine: Engine::Codex,
+            profile: "profile one".to_string(),
         });
         let config_home = home
             .path()
             .to_str()
             .expect("config home path should be valid UTF-8");
-        let result = temp_env::with_vars([("XDG_CONFIG_HOME", Some(config_home))], || {
-            execute(&command)
-        });
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(config_home)),
+                ("ARMYKNIFE_AGENT__ACTIVE_PROFILE", None::<&str>),
+            ],
+            || execute(&command),
+        );
 
         assert_eq!(
             (
@@ -524,13 +417,12 @@ mod tests {
     }
 
     #[rstest]
-    fn use_rejects_unconfigured_kind(configured_home: TempDir) {
+    fn use_rejects_unconfigured_profile(configured_home: TempDir) {
         let command = ProfileCommands::Use(UseProfileArgs {
-            kind: "missing_flow".to_string(),
-            engine: Engine::Codex,
+            profile: "missing profile".to_string(),
         });
 
-        let result = execute_with_home(&configured_home, &command, None);
+        let result = execute_with_home(&configured_home, &command);
 
         assert_eq!(
             (
@@ -539,7 +431,7 @@ mod tests {
             ),
             (
                 Some(
-                    "unknown agent profile kind `missing_flow`; configured launch profile kinds: sample_flow, second_flow"
+                    "unknown agent profile `missing profile`; configured profiles: profile one, profile-two"
                         .to_string(),
                 ),
                 false,
@@ -548,29 +440,24 @@ mod tests {
     }
 
     #[rstest]
-    fn show_rejects_kind_defined_only_by_local_selection(configured_home: TempDir) {
+    fn show_rejects_undefined_active_profile(configured_home: TempDir) {
         fs::write(
             selection_path(&configured_home),
             indoc! {"
                 agent:
-                  launch_profiles:
-                    retired_flow:
-                      engine: codex
+                  active_profile: removed-profile
             "},
         )
-        .expect("stale local selection should be written");
-        let command = ProfileCommands::Show(ShowProfileArgs {
-            kind: "retired_flow".to_string(),
-        });
+        .expect("invalid profile selection should be written");
 
-        let result = execute_with_home(&configured_home, &command, None);
+        let result = execute_with_home(&configured_home, &ProfileCommands::Show);
 
         assert_eq!(
             result.err().map(|error| error.to_string()),
-            Some(
-                "unknown agent profile kind `retired_flow`; configured launch profile kinds: sample_flow, second_flow"
-                    .to_string(),
-            ),
+            Some(format!(
+                "Invalid config file {}: agent.active_profile references undefined profile `removed-profile`",
+                configured_home.path().join("armyknife").display(),
+            )),
         );
     }
 }

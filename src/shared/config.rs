@@ -57,7 +57,8 @@ pub use agent_status::{AgentStatusConfig, AgentStatusState};
 pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 pub use launch_profile::{
-    AgentLaunchEngineConfig, AgentLaunchProfileConfig, ResolvedLaunchOptions,
+    AgentLaunchEngineConfig, AgentLaunchProfileConfig, AgentProfileTypeConfig,
+    ResolvedAgentProfileType, ResolvedLaunchOptions,
 };
 #[cfg(feature = "schema-gen")]
 pub use schema::generate_schema;
@@ -623,22 +624,27 @@ fn deserialize_config_with_overlay(
         Some(base) => merge_yaml(base, overlay),
         None => overlay,
     };
-    match serde_yaml::from_value::<Config>(combined) {
+    match serde_yaml::from_value::<Config>(combined)
+        .map_err(|e| e.to_string())
+        .and_then(|config| {
+            config
+                .agent
+                .validate_profiles()
+                .map_err(|error| error.to_string())?;
+            Ok(config)
+        }) {
         Ok(config) => Ok(config),
         // The env overlay merges cleanly into the YAML document, so a single
         // deserialize error can't tell which side caused it. Re-deserialize
         // the YAML-only value to find out: if that succeeds, the environment
         // is at fault.
-        Err(e) => {
+        Err(message) => {
             if deserialize_config(yaml_merged, blame_path).is_ok() {
-                Err(ConfigError::EnvParseError {
-                    message: e.to_string(),
-                }
-                .into())
+                Err(ConfigError::EnvParseError { message }.into())
             } else {
                 Err(ConfigError::ParseError {
                     path: blame_path.to_path_buf(),
-                    message: e.to_string(),
+                    message,
                 }
                 .into())
             }
@@ -755,12 +761,18 @@ fn deserialize_config(
         return Ok(Config::default());
     };
 
-    serde_yaml::from_value(value)
-        .map_err(|e| ConfigError::ParseError {
+    let config = serde_yaml::from_value::<Config>(value).map_err(|e| ConfigError::ParseError {
+        path: blame_path.to_path_buf(),
+        message: e.to_string(),
+    })?;
+    config
+        .agent
+        .validate_profiles()
+        .map_err(|error| ConfigError::ParseError {
             path: blame_path.to_path_buf(),
-            message: e.to_string(),
-        })
-        .map_err(Into::into)
+            message: error.to_string(),
+        })?;
+    Ok(config)
 }
 
 /// Recursively merge two YAML values. Mappings merge key-by-key; any other type
@@ -813,6 +825,8 @@ mod tests {
             Config {
                 agent: AgentConfig {
                     default_engine: Engine::Claude,
+                    active_profile: None,
+                    profiles: HashMap::new(),
                     merge_notification: None,
                     stop_hook_instruction: None,
                     bg_task_reminder: BgTaskReminderConfig::default(),
@@ -1521,6 +1535,11 @@ mod tests {
     "}, true)]
     #[case::legacy_wm(indoc! {"wm: {}"}, false)]
     #[case::legacy_cc(indoc! {"cc: {}"}, false)]
+    #[case::undefined_active_profile(indoc! {"
+        agent:
+          active_profile: missing-profile
+          profiles: {}
+    "}, false)]
     // Merged-document level errors (e.g., unknown fields) blame the directory
     // because they only surface after combining every file.
     #[case::unknown_field("unknown_top_level_key: true\n", false)]

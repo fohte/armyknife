@@ -69,7 +69,7 @@ pub use mark_read::MarkReadArgs;
 pub use new::NewArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
-pub use profile::{ProfileCommands, ShowProfileArgs, UseProfileArgs};
+pub use profile::{ProfileCommands, UseProfileArgs};
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;

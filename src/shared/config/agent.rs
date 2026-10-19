@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::commands::agent::types::Engine;
 
 use super::{
-    AgentLaunchProfileConfig, AgentStatusConfig, AgentWorkTypeConfig, AutoCompactConfig,
-    AutoPauseConfig, CodexConfig, WorktreeConfig,
+    AgentLaunchProfileConfig, AgentProfileTypeConfig, AgentStatusConfig, AgentWorkTypeConfig,
+    AutoCompactConfig, AutoPauseConfig, CodexConfig, WorktreeConfig,
 };
 
 /// Configuration for reminders sent when a background task exceeds its timeout.
@@ -64,6 +64,14 @@ pub struct AgentConfig {
     /// invocation via `ARMYKNIFE_AGENT__DEFAULT_ENGINE`.
     #[serde(default)]
     pub default_engine: Engine,
+
+    /// Profile selected by `a agent profile use` for launches with `--type`.
+    #[serde(default)]
+    pub active_profile: Option<String>,
+
+    /// Named profiles containing exact settings for each arbitrary launch type.
+    #[serde(default)]
+    pub profiles: HashMap<String, HashMap<String, AgentProfileTypeConfig>>,
 
     /// Message template sent to the delegator when a delegated branch's PR merges.
     /// Supports `{branch}` and `{pr_url}` placeholders. When unset, no notification is sent.
