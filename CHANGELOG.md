@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.449](https://github.com/fohte/armyknife/compare/v0.1.448...v0.1.449) (2026-10-19)
+
+
+### Features
+
+* **agent:** allow child launches and track work ([#1235](https://github.com/fohte/armyknife/issues/1235)) ([22c3ef1](https://github.com/fohte/armyknife/commit/22c3ef16826eeadf5d35d8d9772ff3eaa7468c55))
+
 ## [0.1.448](https://github.com/fohte/armyknife/compare/v0.1.447...v0.1.448) (2026-10-19)
 
 
