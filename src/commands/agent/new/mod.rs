@@ -5,12 +5,13 @@ use std::path::{Path, PathBuf};
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
-use crate::shared::config::{Config, LayoutNode, PaneConfig, ResolvedLaunchOptions, load_config};
+use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
 mod delegation;
 mod delegation_guard;
+mod launch_options;
 mod prompt;
 mod session_metadata;
 mod session_mode;
@@ -20,6 +21,7 @@ mod worktree;
 mod worktree_creation;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
+use launch_options::resolve_launch_options;
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
@@ -313,15 +315,6 @@ fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String
     let background = std::env::var("CLAUDECODE").is_ok() || own_session_id.is_some();
     let env_vars = build_env_vars(common, vibe, own_session_id)?;
     Ok((env_vars, background))
-}
-
-fn resolve_launch_options(common: &CommonNewArgs, config: &Config) -> ResolvedLaunchOptions {
-    config.agent.resolve_launch_options(
-        common.kind.as_deref(),
-        common.engine,
-        common.model.as_deref(),
-        common.reasoning_effort,
-    )
 }
 
 /// Run `a agent new` without creating a worktree, either by splitting the
