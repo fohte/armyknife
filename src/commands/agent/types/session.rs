@@ -5,6 +5,62 @@ use std::path::PathBuf;
 
 use super::{AgentStatus, Engine, SessionStatus, TmuxInfo};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum ChildLaunchPermission {
+    #[default]
+    Allow,
+    Deny,
+}
+
+impl ChildLaunchPermission {
+    pub(crate) fn as_env_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub(crate) fn from_env(value: Option<&str>, legacy_is_delegated: bool) -> Self {
+        match value {
+            Some("allow") => Self::Allow,
+            Some("deny") | Some(_) => Self::Deny,
+            None if legacy_is_delegated => Self::Deny,
+            None => Self::Allow,
+        }
+    }
+
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Allow)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ChildLaunchPermission {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "kebab-case")]
+        enum Permission {
+            Allow,
+            Deny,
+        }
+
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Value {
+            Legacy(bool),
+            Permission(Permission),
+        }
+
+        match Value::deserialize(deserializer)? {
+            Value::Legacy(true) | Value::Permission(Permission::Deny) => Ok(Self::Deny),
+            Value::Legacy(false) | Value::Permission(Permission::Allow) => Ok(Self::Allow),
+        }
+    }
+}
+
 fn is_false(value: &bool) -> bool {
     !*value
 }
@@ -15,7 +71,7 @@ pub struct Session {
     /// When set, the session is hidden from active listings until restored or collected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<DateTime<Utc>>,
-    /// GitHub lookup data retained after a delegated worktree is removed.
+    /// GitHub lookup data retained after a worktree is removed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr_context: Option<SessionPrContext>,
     /// Crit review URLs opened by this session, ordered by most recently requested.
@@ -62,9 +118,13 @@ pub struct Session {
     /// When true, hook-detected skills cannot replace the `a agent new --kind` value.
     #[serde(default, skip_serializing_if = "is_false")]
     pub work_type_pinned: bool,
-    /// Whether this session was launched as a delegated task with `--agent`.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_delegated: bool,
+    /// Whether this session may launch child sessions.
+    #[serde(
+        default,
+        alias = "is_delegated",
+        skip_serializing_if = "ChildLaunchPermission::is_default"
+    )]
+    pub child_launch: ChildLaunchPermission,
     /// Ancestor session IDs from root to immediate parent.
     /// Used to build tree view: if intermediate sessions are deleted,
     /// child sessions can still find their nearest living ancestor.
@@ -178,7 +238,7 @@ mod tests {
                 session.work_type,
                 session.vibe_enabled,
                 session.launched_with_vibe,
-                session.is_delegated,
+                session.child_launch,
                 session.work_type_pinned,
                 session.pending_human_review_ids,
                 session.agent_status,
@@ -192,7 +252,7 @@ mod tests {
                 None,
                 false,
                 false,
-                false,
+                ChildLaunchPermission::Allow,
                 false,
                 BTreeSet::new(),
                 None,
@@ -225,6 +285,61 @@ mod tests {
         assert_eq!(
             session.pending_agent_task_ids,
             BTreeSet::from(["/tmp/claude-1/proj/legacy/tasks/agent-1.output".to_string()])
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::legacy_true(
+        "is_delegated",
+        serde_json::Value::Bool(true),
+        ChildLaunchPermission::Deny
+    )]
+    #[case::legacy_false(
+        "is_delegated",
+        serde_json::Value::Bool(false),
+        ChildLaunchPermission::Allow
+    )]
+    #[case::current_deny("child_launch", serde_json::Value::String("deny".to_string()), ChildLaunchPermission::Deny)]
+    #[case::current_allow("child_launch", serde_json::Value::String("allow".to_string()), ChildLaunchPermission::Allow)]
+    fn child_launch_permission_reads_legacy_and_current_values(
+        #[case] field: &str,
+        #[case] field_value: serde_json::Value,
+        #[case] expected: ChildLaunchPermission,
+    ) {
+        let mut value = serde_json::json!({
+            "session_id": "legacy",
+            "cwd": "/tmp/example",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        });
+        value[field] = field_value;
+        let session: Session =
+            serde_json::from_value(value).expect("session permission should deserialize");
+
+        assert_eq!(session.child_launch, expected);
+    }
+
+    #[rstest::rstest]
+    #[case::unspecified_defaults_to_allow("", false, ChildLaunchPermission::Allow)]
+    #[case::legacy_delegated_denies("", true, ChildLaunchPermission::Deny)]
+    #[case::explicit_allow_overrides_legacy("allow", true, ChildLaunchPermission::Allow)]
+    #[case::explicit_deny("deny", false, ChildLaunchPermission::Deny)]
+    #[case::invalid_value_fails_closed("unknown", false, ChildLaunchPermission::Deny)]
+    fn child_launch_permission_reads_environment(
+        #[case] value: &str,
+        #[case] legacy_is_delegated: bool,
+        #[case] expected: ChildLaunchPermission,
+    ) {
+        assert_eq!(
+            ChildLaunchPermission::from_env(
+                (!value.is_empty()).then_some(value),
+                legacy_is_delegated
+            ),
+            expected
         );
     }
 }

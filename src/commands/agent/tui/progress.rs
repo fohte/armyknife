@@ -26,6 +26,8 @@ pub(super) struct FetchedProgress {
 pub(super) struct ProgressFetchScope {
     pub task_id: Option<String>,
     pub session_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub other_task_session_ids: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -507,7 +509,7 @@ mod tests {
     #[fixture]
     fn delegated_session() -> Session {
         let mut session = session("delegate");
-        session.is_delegated = true;
+        session.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         session.ancestor_session_ids = vec!["selected".to_string()];
         session.label = Some("Example delegated work".to_string());
         session
@@ -537,7 +539,7 @@ mod tests {
             vibe_enabled: false,
             launched_with_vibe: false,
             work_type_pinned: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             ancestor_session_ids: Vec::new(),
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),

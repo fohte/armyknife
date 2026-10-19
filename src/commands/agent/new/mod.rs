@@ -2,18 +2,18 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use std::path::{Path, PathBuf};
 
-use crate::commands::agent::types::{Engine, ReasoningEffort};
+use crate::commands::agent::types::{ChildLaunchPermission, Engine, ReasoningEffort};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::infra::git::{GitRepo, get_repo_root, github_owner_and_repo, open_repo, open_repo_at};
 use crate::shared::config::{Config, LayoutNode, PaneConfig, load_config};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 
-mod delegation;
-mod delegation_guard;
+mod child_launch_guard;
 mod launch_options;
 mod profile_type;
 mod prompt;
+mod session_context;
 mod session_metadata;
 mod session_mode;
 mod session_start_hook;
@@ -21,9 +21,10 @@ mod tmux;
 mod worktree;
 mod worktree_creation;
 
-use delegation::{build_ancestor_chain, resolve_prompt};
+use child_launch_guard::ensure_caller_may_launch_children;
 use launch_options::{resolve_launch_options, validate_type_selection};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
+use session_context::{build_ancestor_chain, resolve_prompt};
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
 use tmux::{TmuxSplitPaneSpec, TmuxWindowSpec, setup_split_pane, setup_tmux_window};
@@ -37,10 +38,13 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub prompt: Option<String>,
 
-    /// Mark this invocation as coming from another Claude Code session.
-    /// Wraps the prompt with delegation context (branch, base, directories).
-    #[arg(long)]
+    /// Legacy compatibility flag. Denies child launches from the new session.
+    #[arg(long, hide = true)]
     pub agent: bool,
+
+    /// Whether the new session may launch child sessions (default: allow).
+    #[arg(long, value_enum)]
+    pub child_launch: Option<ChildLaunchPermission>,
 
     /// Label for the new session (displayed in agent watch).
     /// When not specified, the session will get its label via the
@@ -141,7 +145,7 @@ pub fn run(args: &NewArgs) -> Result<()> {
 }
 
 fn run_regular(args: &NewArgs) -> Result<()> {
-    delegation_guard::ensure_caller_not_delegated()?;
+    ensure_caller_may_launch_children()?;
     run_with_vibe_access(
         args,
         is_vibe_enabled,
@@ -292,6 +296,15 @@ fn build_env_vars(
     if let Some(ref kind) = common.kind {
         env_vars.push((EnvVars::session_work_type_name().to_string(), kind.clone()));
     }
+    let child_launch = if common.agent {
+        ChildLaunchPermission::Deny
+    } else {
+        common.child_launch.unwrap_or_default()
+    };
+    env_vars.push((
+        EnvVars::session_child_launch_name().to_string(),
+        child_launch.as_env_str().to_string(),
+    ));
     if common.agent {
         env_vars.push((
             EnvVars::session_delegated_name().to_string(),
@@ -398,20 +411,13 @@ fn run_session_only_inner_with_launchers(
         .map(GitRepo::workdir_string)
         .unwrap_or_else(|| context.current_dir.to_string());
 
-    // No worktree exists for this session, so there is no branch/base to
-    // report in the delegation context.
-    let prompt = if args.common.agent {
-        resolve_prompt(
-            true,
-            args.common.prompt.as_deref(),
-            None,
-            None,
-            context.current_dir,
-            &cwd,
-        )
-    } else {
-        args.common.prompt.clone()
-    };
+    let prompt = resolve_prompt(
+        args.common.prompt.as_deref(),
+        None,
+        None,
+        context.current_dir,
+        &cwd,
+    );
 
     let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
@@ -1239,30 +1245,38 @@ mod tests {
     }
 
     #[rstest]
-    #[case::omitted(None, false, false, vec![])]
+    #[case::omitted(
+        None,
+        false,
+        false,
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())]
+    )]
     #[case::explicit_kind(
         Some("sample-skill"),
         false,
         false,
-        vec![(
-            EnvVars::session_work_type_name().to_string(),
-            "sample-skill".to_string(),
-        )]
+        vec![
+            (EnvVars::session_work_type_name().to_string(), "sample-skill".to_string()),
+            (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
+        ]
     )]
     #[case::agent_launch(
         None,
         true,
         false,
-        vec![(EnvVars::session_delegated_name().to_string(), "1".to_string())]
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
+            (EnvVars::session_delegated_name().to_string(), "1".to_string()),
+        ]
     )]
     #[case::vibe_launch(
         None,
         false,
         true,
-        vec![(
-            EnvVars::session_vibe_launch_name().to_string(),
-            "1".to_string(),
-        )]
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
+            (EnvVars::session_vibe_launch_name().to_string(), "1".to_string()),
+        ]
     )]
     fn build_env_vars_passes_launch_metadata(
         #[case] kind: Option<&str>,
@@ -1280,6 +1294,7 @@ mod tests {
                 let common = CommonNewArgs {
                     prompt: None,
                     agent,
+                    child_launch: None,
                     label: None,
                     kind: kind.map(str::to_string),
                     type_name: None,
@@ -1298,17 +1313,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude_code(&["a"], Some("1"), None, None, None, vec![], true)]
+    #[case::claude_code(
+        &["a"],
+        Some("1"),
+        None,
+        None,
+        None,
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())],
+        true
+    )]
     #[case::armyknife_session(
         &["a"],
         None,
         Some("caller"),
         None,
         None,
-        vec![(
-            EnvVars::ancestor_session_ids_name().to_string(),
-            "caller".to_string()
-        )],
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
+            (EnvVars::ancestor_session_ids_name().to_string(), "caller".to_string()),
+        ],
         true
     )]
     #[case::codex_session(
@@ -1317,27 +1340,56 @@ mod tests {
         None,
         Some("caller"),
         None,
-        vec![(
-            EnvVars::ancestor_session_ids_name().to_string(),
-            "caller".to_string()
-        )],
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
+            (EnvVars::ancestor_session_ids_name().to_string(), "caller".to_string()),
+        ],
         true
     )]
-    #[case::empty_session_id(&["a"], None, Some(""), Some(""), None, vec![], false)]
-    #[case::human_tmux_shell(&["a"], None, None, None, Some("fake-tmux"), vec![], false)]
+    #[case::empty_session_id(
+        &["a"], None, Some(""), Some(""), None,
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())], false
+    )]
+    #[case::human_tmux_shell(
+        &["a"], None, None, None, Some("fake-tmux"),
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())], false
+    )]
     #[case::agent_flag_alone(
         &["a", "--agent"],
         None,
         None,
         None,
         None,
-        vec![(
-            EnvVars::session_delegated_name().to_string(),
-            "1".to_string()
-        )],
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
+            (EnvVars::session_delegated_name().to_string(), "1".to_string())
+        ],
         false
     )]
-    #[case::codex_child_from_tmux_shell(&["a", "--engine", "codex"], None, None, None, Some("fake-tmux"), vec![], false)]
+    #[case::legacy_agent_overrides_child_launch_allow(
+        &["a", "--agent", "--child-launch", "allow"],
+        None,
+        None,
+        None,
+        None,
+        vec![
+            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
+            (EnvVars::session_delegated_name().to_string(), "1".to_string())
+        ],
+        false
+    )]
+    #[case::explicit_child_launch_deny(
+        &["a", "--child-launch", "deny"], None, None, None, None,
+        vec![(EnvVars::session_child_launch_name().to_string(), "deny".to_string())], false
+    )]
+    #[case::explicit_child_launch_allow(
+        &["a", "--child-launch", "allow"], None, None, None, None,
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())], false
+    )]
+    #[case::codex_child_from_tmux_shell(
+        &["a", "--engine", "codex"], None, None, None, Some("fake-tmux"),
+        vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())], false
+    )]
     fn tmux_launch_inputs_only_background_agent_invocations(
         #[case] argv: &[&str],
         #[case] claudecode: Option<&str>,

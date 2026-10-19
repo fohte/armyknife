@@ -6,7 +6,7 @@
 //! by its `session_id` directly. This joins armyknife's own session store
 //! (which tracks parent/child relationships via `ancestor_session_ids`,
 //! populated whenever `a agent new` resolves a parent session -- see
-//! `agent::new::delegation::build_ancestor_chain`) against that name so a
+//! `agent::new::session_context::build_ancestor_chain`) against that name so a
 //! session can find the right `SendMessage` target for itself.
 //!
 //! `me` covers the case with no tracked parent/child relationship to join
@@ -261,7 +261,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from(cwd),

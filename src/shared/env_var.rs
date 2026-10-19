@@ -8,6 +8,7 @@ const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const SESSION_WORK_TYPE: &str = "ARMYKNIFE_SESSION_WORK_TYPE";
+const SESSION_CHILD_LAUNCH: &str = "ARMYKNIFE_SESSION_CHILD_LAUNCH";
 const SESSION_DELEGATED: &str = "ARMYKNIFE_SESSION_DELEGATED";
 const SESSION_VIBE_LAUNCH: &str = "ARMYKNIFE_SESSION_VIBE_LAUNCH";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
@@ -49,7 +50,10 @@ pub struct EnvVars {
     /// Initial session work type set by `a agent new --kind`.
     pub session_work_type: Option<String>,
 
-    /// Whether this session was launched by `a agent new --agent`.
+    /// Child launch permission for the current session.
+    pub session_child_launch: Option<String>,
+
+    /// Whether this session was launched by the legacy `--agent` option.
     pub session_delegated: bool,
 
     /// Whether this session was launched with `a agent new --vibe`.
@@ -87,6 +91,7 @@ impl EnvVars {
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
             session_label: non_empty_var(SESSION_LABEL),
             session_work_type: non_empty_var(SESSION_WORK_TYPE),
+            session_child_launch: non_empty_var(SESSION_CHILD_LAUNCH),
             session_delegated: non_empty_var(SESSION_DELEGATED).is_some(),
             session_vibe_launch: non_empty_var(SESSION_VIBE_LAUNCH).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
@@ -118,6 +123,11 @@ impl EnvVars {
     /// Returns the env var name for SESSION_WORK_TYPE (used as a key in env var pairs).
     pub fn session_work_type_name() -> &'static str {
         SESSION_WORK_TYPE
+    }
+
+    /// Returns the env var name for the child launch permission.
+    pub fn session_child_launch_name() -> &'static str {
+        SESSION_CHILD_LAUNCH
     }
 
     /// Returns the env var name that marks an `--agent` launch.

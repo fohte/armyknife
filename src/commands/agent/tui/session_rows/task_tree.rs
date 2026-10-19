@@ -4,8 +4,7 @@ use super::{SessionRowEntry, SessionTask, TaskMark, VibeMode};
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 
-/// Builds TASKS rows in their displayed parent-child hierarchy. Delegated
-/// sessions are left out because they belong to a single PR rather than a task.
+/// Builds TASKS rows in their displayed parent-child hierarchy.
 pub(super) fn build_task_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
@@ -13,11 +12,7 @@ pub(super) fn build_task_rows<'a>(
     agent_config: &AgentConfig,
     vibe_enabled_session_ids: &HashSet<String>,
 ) -> Vec<SessionRowEntry<'a>> {
-    let members: Vec<&'a Session> = sessions
-        .iter()
-        .copied()
-        .filter(|session| !session.is_delegated)
-        .collect();
+    let members: Vec<&'a Session> = sessions.to_vec();
     let member_ids: HashSet<&'a str> = members
         .iter()
         .map(|session| session.session_id.as_str())

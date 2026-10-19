@@ -156,7 +156,7 @@ fn reapplying_the_same_progress_result_keeps_the_rendered_rows_and_selection(
 ) {
     let selected = create_test_session_at("session-root", timestamp);
     let mut delegate = create_test_session_at("session-delegate", timestamp);
-    delegate.is_delegated = true;
+    delegate.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
     delegate.ancestor_session_ids = vec!["session-root".to_string()];
     let mut app = create_test_app(vec![selected.clone(), delegate.clone()]);
     select_session(&mut app, "session-root");
@@ -193,6 +193,7 @@ fn cached_progress(timestamp: DateTime<Utc>, rows: Vec<ProgressRow>) -> CachedPr
         request_scope: Some(ProgressFetchScope {
             task_id: Some("task-placeholder".to_string()),
             session_ids: Some(vec!["session-a".to_string(), "session-b".to_string()]),
+            other_task_session_ids: vec![],
         }),
         delegated_sessions: Vec::new(),
         fetched_at: Some(timestamp),
@@ -252,6 +253,7 @@ fn fetched_progress(selected_session_id: &str, delegate: Session) -> FetchedProg
         request_scope: Some(ProgressFetchScope {
             task_id: None,
             session_ids: None,
+            other_task_session_ids: vec![],
         }),
         delegated: vec![fetched_delegate(delegate)],
         implementation: None,

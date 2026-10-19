@@ -6,7 +6,9 @@ use chrono::Utc;
 
 use crate::commands::agent::session_pr_context::Capture;
 use crate::commands::agent::store;
-use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
+use crate::commands::agent::types::{
+    ChildLaunchPermission, Engine, Session, SessionPrContext, SessionStatus,
+};
 use crate::infra::tmux::layout::AgentLaunchRoute;
 use crate::shared::env_var::{EnvVars, parse_ancestor_session_ids};
 
@@ -47,7 +49,7 @@ fn record_from_env_in(
     let metadata = metadata_from_env(env_vars);
     if metadata.label.is_none()
         && metadata.work_type.is_none()
-        && !metadata.is_delegated
+        && metadata.child_launch.is_none()
         && !metadata.launched_with_vibe
         && metadata.ancestor_session_ids.is_empty()
     {
@@ -62,7 +64,7 @@ fn record_from_env_in(
 struct SessionMetadata<'a> {
     label: Option<&'a str>,
     work_type: Option<&'a str>,
-    is_delegated: bool,
+    child_launch: Option<ChildLaunchPermission>,
     launched_with_vibe: bool,
     ancestor_session_ids: Vec<String>,
 }
@@ -76,10 +78,15 @@ fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str
 }
 
 fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
+    let child_launch_env = non_empty_env(env_vars, EnvVars::session_child_launch_name());
+    let legacy_is_delegated = non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some();
+    let child_launch = (child_launch_env.is_some() || legacy_is_delegated)
+        .then(|| ChildLaunchPermission::from_env(child_launch_env, legacy_is_delegated));
+
     SessionMetadata {
         label: non_empty_env(env_vars, EnvVars::session_label_name()),
         work_type: non_empty_env(env_vars, EnvVars::session_work_type_name()),
-        is_delegated: non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some(),
+        child_launch,
         launched_with_vibe: non_empty_env(env_vars, EnvVars::session_vibe_launch_name()).is_some(),
         ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
             .map(parse_ancestor_session_ids)
@@ -101,7 +108,7 @@ fn record_in(
         pr_context,
         session_id: session_id.to_string(),
         work_type: None,
-        is_delegated: false,
+        child_launch: ChildLaunchPermission::Allow,
         work_type_pinned: false,
         vibe_enabled: false,
         launched_with_vibe: false,
@@ -138,7 +145,9 @@ fn record_in(
         session.work_type = Some(work_type.to_string());
         session.work_type_pinned = true;
     }
-    session.is_delegated |= metadata.is_delegated;
+    if let Some(child_launch) = metadata.child_launch {
+        session.child_launch = child_launch;
+    }
     session.launched_with_vibe |= metadata.launched_with_vibe;
     if !metadata.ancestor_session_ids.is_empty() {
         session.ancestor_session_ids = metadata.ancestor_session_ids;
@@ -175,7 +184,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: ChildLaunchPermission::Allow,
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/workspace/original"),
@@ -231,7 +240,7 @@ mod tests {
             SessionMetadata {
                 label: Some("explicit label"),
                 work_type,
-                is_delegated: false,
+                child_launch: None,
                 launched_with_vibe: false,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             },
@@ -276,7 +285,9 @@ mod tests {
 
     #[rstest]
     #[case::kind_only(EnvVars::session_work_type_name(), "sample-skill")]
-    #[case::delegated_only(EnvVars::session_delegated_name(), "1")]
+    #[case::child_launch_allowed(EnvVars::session_child_launch_name(), "allow")]
+    #[case::child_launch_denied(EnvVars::session_child_launch_name(), "deny")]
+    #[case::legacy_agent_only(EnvVars::session_delegated_name(), "1")]
     #[case::vibe_launch_only(EnvVars::session_vibe_launch_name(), "1")]
     fn records_single_launch_metadata(
         sessions_dir: TempDir,
@@ -326,8 +337,12 @@ mod tests {
         if key == EnvVars::session_work_type_name() {
             expected["work_type"] = json!(value);
             expected["work_type_pinned"] = json!(true);
+        } else if key == EnvVars::session_child_launch_name() {
+            if value == "deny" {
+                expected["child_launch"] = json!("deny");
+            }
         } else if key == EnvVars::session_delegated_name() {
-            expected["is_delegated"] = json!(true);
+            expected["child_launch"] = json!("deny");
         } else {
             expected["launched_with_vibe"] = json!(true);
         }
@@ -383,7 +398,7 @@ mod tests {
             SessionMetadata {
                 label,
                 work_type,
-                is_delegated: false,
+                child_launch: None,
                 launched_with_vibe: false,
                 ancestor_session_ids: ancestors,
             },
@@ -410,7 +425,7 @@ mod tests {
             SessionMetadata {
                 label: None,
                 work_type: None,
-                is_delegated: false,
+                child_launch: None,
                 launched_with_vibe: true,
                 ancestor_session_ids: vec!["parent".to_string()],
             },
@@ -441,7 +456,7 @@ mod tests {
     }
 
     #[rstest]
-    fn extracts_delegation_metadata_from_env() {
+    fn extracts_child_launch_metadata_from_env() {
         let env_vars = [
             ("UNRELATED", "value"),
             (EnvVars::session_label_name(), "delegate label"),
@@ -456,7 +471,7 @@ mod tests {
             SessionMetadata {
                 label: Some("delegate label"),
                 work_type: Some("sample-skill"),
-                is_delegated: true,
+                child_launch: Some(ChildLaunchPermission::Deny),
                 launched_with_vibe: true,
                 ancestor_session_ids: vec!["root".to_string(), "parent".to_string()],
             }

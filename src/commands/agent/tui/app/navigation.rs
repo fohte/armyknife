@@ -77,10 +77,8 @@ impl App {
         }
 
         let filtered = self.filtered_sessions();
-        // Delegated sessions have no TASKS row, so they are never a parent there.
         let by_id: HashMap<&str, &Session> = filtered
             .iter()
-            .filter(|s| !s.is_delegated)
             .map(|s| (s.session_id.as_str(), *s))
             .collect();
         let ancestor_id =
@@ -130,12 +128,11 @@ impl App {
         let session_id = session.session_id.clone();
         // Check against the currently displayed sessions, not all of
         // `self.sessions`, or a session hidden by search/status filtering
-        // could enter a scope with nothing visible under it. Delegated
-        // sessions have no TASKS row, so they do not count either.
+        // could enter a scope with nothing visible under it.
         let has_descendants = self
             .filtered_sessions()
             .iter()
-            .any(|s| !s.is_delegated && is_descendant_of(s, &session_id));
+            .any(|s| is_descendant_of(s, &session_id));
         if !has_descendants {
             return;
         }
@@ -187,7 +184,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: PathBuf::from("/tmp/test"),
@@ -359,23 +356,23 @@ mod tests {
     }
 
     #[test]
-    fn test_select_parent_skips_delegated_ancestor() {
+    fn test_select_parent_selects_each_child_session() {
         let root = create_test_session("root");
         let mut delegated = create_test_session("delegated");
         delegated.ancestor_session_ids = vec!["root".to_string()];
-        delegated.is_delegated = true;
+        delegated.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let mut child = create_test_session("child");
         child.ancestor_session_ids = vec!["root".to_string(), "delegated".to_string()];
 
-        // Row 0 is the "TASKS" header; "root"/"child" are rows 1/2.
+        // Row 0 is the "TASKS" header; the sessions occupy rows 1-3.
         let mut app = create_test_app(vec![root, delegated, child]);
-        app.select_by_number(2);
+        app.select_by_number(3);
 
         app.select_parent();
 
         assert_eq!(
             parent_selection_state(&app),
-            (Some("root".to_string()), None)
+            (Some("delegated".to_string()), None)
         );
     }
 

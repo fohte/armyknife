@@ -21,9 +21,14 @@ pub(super) async fn fetch_progress(
     let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
             let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
-            task_descendant_delegates(&sessions, &session_ids)
+            let other_task_session_ids = request_scope
+                .other_task_session_ids
+                .iter()
+                .cloned()
+                .collect::<HashSet<_>>();
+            task_descendant_children(&sessions, &session_ids, &other_task_session_ids)
         }
-        None => direct_delegates(sessions, &selected_session_id),
+        None => direct_children(sessions, &selected_session_id),
     };
 
     let query_data = tokio::task::spawn_blocking({
@@ -137,47 +142,52 @@ async fn fetch_implementation_checklist(
     Some((checklist, github_links))
 }
 
-pub(super) fn direct_delegates(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Session> {
-    let mut delegated = sessions
+pub(super) fn direct_children(sessions: Vec<Session>, parent_session_id: &str) -> Vec<Session> {
+    let mut children = sessions
         .into_iter()
         .filter(|session| {
-            session.is_delegated
-                && session.ancestor_session_ids.last().map(String::as_str)
-                    == Some(parent_session_id)
+            session.ancestor_session_ids.last().map(String::as_str) == Some(parent_session_id)
         })
         .collect::<Vec<_>>();
-    delegated.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
-    delegated
+    children.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    children
 }
 
-pub(super) fn task_descendant_delegates(
+pub(super) fn task_descendant_children(
     sessions: &[Session],
     task_session_ids: &HashSet<String>,
+    other_task_session_ids: &HashSet<String>,
 ) -> Vec<Session> {
     let sessions_by_id = sessions
         .iter()
         .map(|session| (session.session_id.as_str(), session))
         .collect::<HashMap<_, _>>();
-    let mut delegated = sessions
-        .iter()
-        .filter(|session| {
-            session.is_delegated
-                && (task_session_ids.contains(&session.session_id)
-                    || session
-                        .ancestor_session_ids
-                        .iter()
-                        .rev()
-                        .find(|ancestor_id| {
-                            sessions_by_id
-                                .get(ancestor_id.as_str())
-                                .is_none_or(|ancestor| !ancestor.is_delegated)
-                        })
-                        .is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id)))
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    delegated.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
-    delegated
+    let mut children = Vec::new();
+    for session in sessions {
+        if task_session_ids.contains(&session.session_id)
+            || other_task_session_ids.contains(&session.session_id)
+        {
+            continue;
+        }
+
+        let mut task_ancestor = None;
+        for ancestor_id in session.ancestor_session_ids.iter().rev() {
+            if task_session_ids.contains(ancestor_id)
+                || other_task_session_ids.contains(ancestor_id)
+            {
+                task_ancestor = Some(ancestor_id);
+                break;
+            }
+            if !sessions_by_id.contains_key(ancestor_id.as_str()) {
+                break;
+            }
+        }
+        if task_ancestor.is_some_and(|ancestor_id| task_session_ids.contains(ancestor_id)) {
+            children.push(session.clone());
+        }
+    }
+    children.sort_by_key(|session| std::cmp::Reverse(session.updated_at));
+    children
 }
 
 struct BranchQueries {
@@ -292,67 +302,64 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::{
-        BranchLookup, Resolution, branch_query_for_with, direct_delegates,
-        task_descendant_delegates,
+        BranchLookup, Resolution, branch_query_for_with, direct_children, task_descendant_children,
     };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
 
     #[test]
-    fn lists_only_immediate_delegates_by_recent_activity() {
+    fn lists_all_immediate_children_by_recent_activity() {
+        let mut denied_child = session("denied-child", vec!["parent"], 40);
+        denied_child.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let sessions = vec![
-            session("direct-older", true, vec!["parent"], 10),
-            session("nested", true, vec!["parent", "direct-newer"], 30),
-            session("unrelated", true, vec!["other"], 40),
-            session("direct-newer", true, vec!["parent"], 20),
-            session("not-delegated", false, vec!["parent"], 50),
+            session("direct-older", vec!["parent"], 10),
+            session("nested", vec!["parent", "direct-newer"], 30),
+            session("unrelated", vec!["other"], 60),
+            session("direct-newer", vec!["parent"], 20),
+            denied_child,
         ];
 
         assert_eq!(
-            direct_delegates(sessions, "parent")
+            direct_children(sessions, "parent")
                 .into_iter()
                 .map(|session| session.session_id)
                 .collect::<Vec<_>>(),
-            vec!["direct-newer", "direct-older"],
+            vec!["denied-child", "direct-newer", "direct-older"],
         );
     }
 
     #[test]
-    fn lists_task_descendant_delegates_without_crossing_into_another_task() {
+    fn lists_task_descendant_children_without_crossing_into_another_task() {
+        let mut direct_child = session("direct-child", vec!["task-root"], 4);
+        direct_child.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let sessions = vec![
-            session("task-root", false, vec![], 1),
-            session("same-task-child", false, vec!["task-root"], 2),
-            session("other-task-child", false, vec!["task-root"], 3),
-            session("direct-delegate", true, vec!["task-root"], 4),
+            session("task-root", vec![], 1),
+            session("same-task-child", vec!["task-root"], 2),
+            session("other-task-child", vec!["task-root"], 3),
+            direct_child,
             session(
-                "nested-delegate",
-                true,
-                vec!["task-root", "same-task-child", "direct-delegate"],
+                "nested-child",
+                vec!["task-root", "same-task-child", "direct-child"],
                 5,
             ),
             session(
-                "other-task-delegate",
-                true,
+                "other-task-child-session",
                 vec!["task-root", "other-task-child"],
                 6,
             ),
-            session(
-                "orphan-task-delegate",
-                true,
-                vec!["task-root", "removed-task-child"],
-                7,
-            ),
+            session("orphan-child", vec!["task-root", "removed-task-child"], 7),
         ];
 
         assert_eq!(
-            task_descendant_delegates(
+            task_descendant_children(
                 &sessions,
                 &HashSet::from(["task-root".to_string(), "same-task-child".to_string()]),
+                &HashSet::from(["other-task-child".to_string()]),
             )
             .into_iter()
             .map(|session| session.session_id)
             .collect::<Vec<_>>(),
-            vec!["nested-delegate", "direct-delegate"],
+            vec!["nested-child", "direct-child"],
         );
     }
 
@@ -394,7 +401,7 @@ mod tests {
         #[case] live_resolution: Option<Resolution>,
         #[case] expected: BranchLookup,
     ) {
-        let session = session("delegate", true, vec!["parent"], 10);
+        let session = session("child", vec!["parent"], 10);
         assert_eq!(
             branch_query_for_with(&session, || live_resolution),
             expected
@@ -403,7 +410,7 @@ mod tests {
 
     #[rstest]
     fn prefers_saved_context_over_live_context(saved_context: SessionPrContext) {
-        let mut session = session("delegate", true, vec!["parent"], 10);
+        let mut session = session("child", vec!["parent"], 10);
         session.pr_context = Some(saved_context);
         let resolver_called = Cell::new(false);
 
@@ -434,12 +441,7 @@ mod tests {
         );
     }
 
-    fn session(
-        session_id: &str,
-        is_delegated: bool,
-        ancestor_session_ids: Vec<&str>,
-        updated_second: i64,
-    ) -> Session {
+    fn session(session_id: &str, ancestor_session_ids: Vec<&str>, updated_second: i64) -> Session {
         let updated_at = Utc.timestamp_opt(updated_second, 0).single().unwrap();
         Session {
             archived_at: None,
@@ -463,7 +465,7 @@ mod tests {
             vibe_enabled: false,
             launched_with_vibe: false,
             work_type_pinned: false,
-            is_delegated,
+            child_launch: Default::default(),
             ancestor_session_ids: ancestor_session_ids
                 .into_iter()
                 .map(str::to_owned)

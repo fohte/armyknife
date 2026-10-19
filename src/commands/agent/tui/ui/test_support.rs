@@ -19,7 +19,7 @@ pub(in crate::commands::agent::tui) fn create_test_session(id: &str) -> Session 
         work_type_pinned: false,
         vibe_enabled: false,
         launched_with_vibe: false,
-        is_delegated: false,
+        child_launch: Default::default(),
         crit_urls: Vec::new(),
         pending_human_review_ids: Default::default(),
         cwd: PathBuf::from("/home/user/project"),

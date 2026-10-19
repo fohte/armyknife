@@ -19,8 +19,8 @@ use super::session_init;
 use super::session_status;
 use super::store;
 use super::types::{
-    Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session, SessionStatus,
-    TMUX_SESSION_OPTION, TmuxInfo,
+    ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
+    SessionStatus, TMUX_SESSION_OPTION, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -432,7 +432,10 @@ fn process_hook_event_impl_with_instruction(
             last_message: None,
             current_tool: None,
             label: env.session_label.clone(),
-            is_delegated: env.session_delegated,
+            child_launch: ChildLaunchPermission::from_env(
+                env.session_child_launch.as_deref(),
+                env.session_delegated,
+            ),
             ancestor_session_ids,
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
@@ -1956,7 +1959,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -2427,7 +2430,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -3081,7 +3084,7 @@ mod tests {
             work_type_pinned: false,
             vibe_enabled: false,
             launched_with_vibe: false,
-            is_delegated: false,
+            child_launch: Default::default(),
             crit_urls: Vec::new(),
             pending_human_review_ids: Default::default(),
             cwd: "/tmp/test".into(),
@@ -4159,6 +4162,50 @@ mod tests {
             assert_eq!(actual, expected);
         }
 
+        #[test]
+        fn session_creation_persists_child_launch_permission_from_env() {
+            let temp_dir = create_temp_sessions_dir();
+
+            let actual = temp_env::with_vars(
+                [
+                    (EnvVars::session_label_name(), None::<&str>),
+                    (EnvVars::session_work_type_name(), None::<&str>),
+                    (EnvVars::session_delegated_name(), None::<&str>),
+                    (EnvVars::session_child_launch_name(), Some("deny")),
+                    (EnvVars::session_vibe_launch_name(), None::<&str>),
+                    (EnvVars::ancestor_session_ids_name(), None::<&str>),
+                ],
+                || {
+                    process_hook_event_impl(
+                        HookEvent::SessionStart,
+                        create_test_input_with_source(None, Some("resume")),
+                        temp_dir.path(),
+                        &SideEffects::none(),
+                    )
+                    .expect("session-start should succeed");
+
+                    let session = store::load_session_from(temp_dir.path(), "test-123")
+                        .expect("session should load")
+                        .expect("session should exist");
+                    let mut actual =
+                        serde_json::to_value(session).expect("session should serialize");
+                    actual["created_at"] = serde_json::json!("<timestamp>");
+                    actual["updated_at"] = serde_json::json!("<timestamp>");
+                    actual
+                },
+            );
+
+            let mut expected = create_test_session(None);
+            expected.child_launch = ChildLaunchPermission::Deny;
+            expected.status = SessionStatus::Stopped;
+            let mut expected =
+                serde_json::to_value(expected).expect("expected session should serialize");
+            expected["created_at"] = serde_json::json!("<timestamp>");
+            expected["updated_at"] = serde_json::json!("<timestamp>");
+
+            assert_eq!(actual, expected);
+        }
+
         #[rstest]
         #[case::claude(Engine::Claude)]
         #[case::codex(Engine::Codex)]
@@ -4618,7 +4665,7 @@ mod tests {
                 work_type_pinned: false,
                 vibe_enabled: false,
                 launched_with_vibe: false,
-                is_delegated: false,
+                child_launch: Default::default(),
                 crit_urls: Vec::new(),
                 pending_human_review_ids: Default::default(),
                 cwd: std::path::PathBuf::from("/tmp/test"),
