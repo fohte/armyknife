@@ -49,7 +49,7 @@ impl ProgressScopeKind {
 pub(super) struct ProgressScope {
     pub(super) kind: ProgressScopeKind,
     pub(super) work_sessions: Vec<Session>,
-    pub(super) delegated: Vec<Session>,
+    pub(super) children: Vec<Session>,
 }
 
 impl App {
@@ -93,7 +93,7 @@ impl App {
             return ProgressScope {
                 kind: ProgressScopeKind::OwnOnly,
                 work_sessions: vec![selected.clone()],
-                delegated: Vec::new(),
+                children: Vec::new(),
             };
         }
 
@@ -105,7 +105,7 @@ impl App {
             return ProgressScope {
                 kind: ProgressScopeKind::Direct,
                 work_sessions: vec![selected.clone()],
-                delegated: direct_children(self.sessions.clone(), &selected.session_id),
+                children: direct_children(self.sessions.clone(), &selected.session_id),
             };
         };
 
@@ -146,7 +146,7 @@ impl App {
                 other_task_session_ids: other_task_session_id_list,
             },
             work_sessions,
-            delegated: task_descendant_children(
+            children: task_descendant_children(
                 &self.sessions,
                 &task_session_ids_set,
                 &other_task_session_ids,

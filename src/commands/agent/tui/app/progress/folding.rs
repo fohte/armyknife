@@ -73,7 +73,7 @@ impl App {
             .map(|cached| cached.delegated_sessions.as_slice())
             .unwrap_or_default();
         let delegated =
-            self.delegates_with_missing_cached_sessions(&scope.delegated, cached_delegates);
+            self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
         let rows = self.checklist_rows(&scope.work_sessions, &delegated, &plan);
         self.replace_progress_rows(rows, Some(target.selection_key()), current_index);
         true

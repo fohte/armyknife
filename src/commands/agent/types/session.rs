@@ -14,6 +14,13 @@ pub enum ChildLaunchPermission {
 }
 
 impl ChildLaunchPermission {
+    pub(crate) fn as_env_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+        }
+    }
+
     pub(crate) fn from_env(value: Option<&str>, legacy_is_delegated: bool) -> Self {
         match value {
             Some("allow") => Self::Allow,

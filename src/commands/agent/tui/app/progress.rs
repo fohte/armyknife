@@ -87,7 +87,7 @@ impl App {
                 } else {
                     Vec::new()
                 };
-                for session in &scope.delegated {
+                for session in &scope.children {
                     if let Some(fetched) = delegated
                         .iter_mut()
                         .find(|fetched| fetched.session.session_id == session.session_id)
@@ -192,14 +192,14 @@ impl App {
             .map(|snapshot| snapshot.delegated_sessions.as_slice())
             .unwrap_or_default();
         let delegated =
-            self.delegates_with_missing_cached_sessions(&scope.delegated, cached_delegates);
+            self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
         let rows = if let Some(plan) = implementation.as_ref() {
             self.checklist_rows(&scope.work_sessions, &delegated, plan)
         } else {
             refresh_task_rows_from_sessions(
                 &scope.work_sessions,
                 &selected.session_id,
-                &scope.delegated,
+                &scope.children,
                 existing_rows,
                 &self.agent_config,
             )
@@ -372,7 +372,7 @@ impl App {
         let refreshed_rows = refresh_task_rows_from_sessions(
             &scope.work_sessions,
             session_id,
-            &scope.delegated,
+            &scope.children,
             cached_rows,
             &self.agent_config,
         );

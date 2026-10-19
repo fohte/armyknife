@@ -303,11 +303,7 @@ fn build_env_vars(
     };
     env_vars.push((
         EnvVars::session_child_launch_name().to_string(),
-        match child_launch {
-            ChildLaunchPermission::Allow => "allow",
-            ChildLaunchPermission::Deny => "deny",
-        }
-        .to_string(),
+        child_launch.as_env_str().to_string(),
     ));
     if common.agent {
         env_vars.push((

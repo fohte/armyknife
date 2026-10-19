@@ -40,7 +40,7 @@ impl InitialProgressSelection {
 
 struct FocusedTaskAncestor {
     task_session_id: String,
-    progress_delegate_id: String,
+    progress_child_id: String,
     task_row_occurrence: usize,
 }
 
@@ -334,7 +334,7 @@ impl App {
             self.progress_focused = true;
             self.initial_progress_selection = Some(InitialProgressSelection::new(
                 ancestor.task_session_id.clone(),
-                ancestor.progress_delegate_id,
+                ancestor.progress_child_id,
             ));
             self.restore_selection(SelectionAnchor::for_session_occurrence(
                 ancestor.task_session_id,
@@ -384,14 +384,14 @@ impl App {
                     .iter()
                     .find(|session| session.session_id == *ancestor_id)?;
                 let task_row_occurrence = tasks_row_occurrence(&rows, ancestor_id)?;
-                let progress_delegate_id = child_session
+                let progress_child_id = child_session
                     .ancestor_session_ids
                     .get(index + 1)
                     .unwrap_or(&child_session.session_id)
                     .clone();
                 Some(FocusedTaskAncestor {
                     task_session_id: ancestor.session_id.clone(),
-                    progress_delegate_id,
+                    progress_child_id,
                     task_row_occurrence,
                 })
             })

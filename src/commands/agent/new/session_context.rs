@@ -44,14 +44,11 @@ fn build_session_context_prompt(prompt: &str, context: &SessionContext<'_>) -> S
     let context = context_lines.join("\n");
 
     indoc::formatdoc! {"
+        {prompt}
+
         <session-context>
         {context}
-        </session-context>
-        <instructions>
-        {prompt}
-        </instructions>"}
-    .trim_start()
-    .to_string()
+        </session-context>"}
 }
 
 /// Build comma-separated ancestor chain for a child session.
@@ -87,15 +84,14 @@ mod tests {
         "/workspace/sample-repo/.worktrees/fix-widget",
         "Fix the widget",
         indoc! {"
-            <session-context>
-            - Working directory: /workspace/sample-repo/.worktrees/fix-widget
-            - Branch: sample/fix-widget
-            - Base: origin/main
-            - Parent working directory: /workspace/sample-repo
-            </session-context>
-            <instructions>
-            Fix the widget
-            </instructions>"},
+                Fix the widget
+
+                <session-context>
+                - Working directory: /workspace/sample-repo/.worktrees/fix-widget
+                - Branch: sample/fix-widget
+                - Base: origin/main
+                - Parent working directory: /workspace/sample-repo
+                </session-context>"},
     )]
     #[case::cwd_without_branch_or_base(
         "",
@@ -107,15 +103,42 @@ mod tests {
 
             Report findings"},
         indoc! {"
-            <session-context>
-            - Working directory: /workspace/sample-repo
-            - Parent working directory: /workspace/sample-repo
-            </session-context>
-            <instructions>
             Inspect the repository
 
             Report findings
-            </instructions>"},
+
+            <session-context>
+            - Working directory: /workspace/sample-repo
+            - Parent working directory: /workspace/sample-repo
+            </session-context>"},
+    )]
+    #[case::leading_slash_skill(
+        "",
+        "",
+        "/workspace/sample-repo",
+        "/workspace/sample-repo",
+        "/sample-skill inspect",
+        indoc! {"
+            /sample-skill inspect
+
+            <session-context>
+            - Working directory: /workspace/sample-repo
+            - Parent working directory: /workspace/sample-repo
+            </session-context>"},
+    )]
+    #[case::leading_dollar_skill(
+        "",
+        "",
+        "/workspace/sample-repo",
+        "/workspace/sample-repo",
+        "$sample-skill inspect",
+        indoc! {"
+            $sample-skill inspect
+
+            <session-context>
+            - Working directory: /workspace/sample-repo
+            - Parent working directory: /workspace/sample-repo
+            </session-context>"},
     )]
     fn resolve_prompt_always_attaches_generic_context(
         #[case] branch: &str,

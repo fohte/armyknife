@@ -78,15 +78,15 @@ fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str
 }
 
 fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
+    let child_launch_env = non_empty_env(env_vars, EnvVars::session_child_launch_name());
+    let legacy_is_delegated = non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some();
+    let child_launch = (child_launch_env.is_some() || legacy_is_delegated)
+        .then(|| ChildLaunchPermission::from_env(child_launch_env, legacy_is_delegated));
+
     SessionMetadata {
         label: non_empty_env(env_vars, EnvVars::session_label_name()),
         work_type: non_empty_env(env_vars, EnvVars::session_work_type_name()),
-        child_launch: non_empty_env(env_vars, EnvVars::session_child_launch_name())
-            .map(|value| ChildLaunchPermission::from_env(Some(value), false))
-            .or_else(|| {
-                non_empty_env(env_vars, EnvVars::session_delegated_name())
-                    .map(|_| ChildLaunchPermission::Deny)
-            }),
+        child_launch,
         launched_with_vibe: non_empty_env(env_vars, EnvVars::session_vibe_launch_name()).is_some(),
         ancestor_session_ids: non_empty_env(env_vars, EnvVars::ancestor_session_ids_name())
             .map(parse_ancestor_session_ids)
