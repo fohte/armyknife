@@ -7,7 +7,7 @@ use clap::{Args, Subcommand};
 use serde_yaml::{Mapping, Value};
 
 use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
-use crate::shared::config::{self, Config};
+use crate::shared::config::{self, Config, format_sorted_names};
 
 const SELECTION_FILE: &str = "zz-agent-profiles.local.yaml";
 const SELECTION_LOCK_FILE: &str = "zz-agent-profiles.lock";
@@ -55,24 +55,9 @@ fn ensure_profile_exists(config: &Config, profile_name: &str) -> Result<()> {
     ensure!(
         config.agent.profiles.contains_key(profile_name),
         "unknown agent profile `{profile_name}`; configured profiles: {}",
-        configured_profiles(config),
+        format_sorted_names(config.agent.profiles.keys()),
     );
     Ok(())
-}
-
-fn configured_profiles(config: &Config) -> String {
-    let mut profiles = config
-        .agent
-        .profiles
-        .keys()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    profiles.sort_unstable();
-    if profiles.is_empty() {
-        "(none)".to_string()
-    } else {
-        profiles.join(", ")
-    }
 }
 
 fn format_profile(config: &Config) -> Result<String> {
@@ -454,10 +439,7 @@ mod tests {
 
         assert_eq!(
             result.err().map(|error| error.to_string()),
-            Some(format!(
-                "Invalid config file {}: agent.active_profile references undefined profile `removed-profile`",
-                configured_home.path().join("armyknife").display(),
-            )),
+            Some("agent.active_profile references undefined profile `removed-profile`".to_string()),
         );
     }
 }

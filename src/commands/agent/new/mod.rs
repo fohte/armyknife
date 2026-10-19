@@ -22,7 +22,7 @@ mod worktree;
 mod worktree_creation;
 
 use delegation::{build_ancestor_chain, resolve_prompt};
-use launch_options::resolve_launch_options;
+use launch_options::{resolve_launch_options, validate_type_selection};
 use prompt::{delete_prompt_cache, resolve_args, save_prompt_cache};
 use session_mode::{caller_repo_root, should_open_window};
 use session_start_hook::run_pre_session_start_hook;
@@ -192,9 +192,7 @@ fn ensure_vibe_access(vibe_enabled: bool) -> Result<()> {
 fn run_inner(args: &NewArgs) -> Result<()> {
     let config = load_config()?;
 
-    if args.common.type_name.is_some() {
-        resolve_launch_options(&args.common, &config)?;
-    }
+    validate_type_selection(&args.common, &config)?;
 
     let repo = match &args.common.repo {
         Some(path) => Some(open_repo_at(path)?),

@@ -24,3 +24,10 @@ pub(super) fn resolve_launch_options(
         common.reasoning_effort,
     ))
 }
+
+pub(super) fn validate_type_selection(common: &CommonNewArgs, config: &Config) -> Result<()> {
+    if common.type_name.is_some() {
+        resolve_launch_options(common, config)?;
+    }
+    Ok(())
+}

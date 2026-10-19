@@ -124,7 +124,7 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Status(StatusCommands),
 
-    /// Select and inspect the engine used by the next launch for a kind
+    /// Select a launch profile and inspect its type settings
     #[command(subcommand)]
     Profile(ProfileCommands),
 

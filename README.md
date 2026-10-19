@@ -79,7 +79,7 @@ agent:
     example-workflow:
       icon: '◇'
       color: cyan
-  default_engine: claude # coding agent CLI for `a agent new` when `--engine` is omitted (default: "claude")
+  default_engine: claude # coding agent CLI for `a agent new` when `--type` and `--engine` are omitted (default: "claude")
   codex: # defaults for `a agent new --engine codex` only; the `codex` you run yourself is unaffected
     model: example-codex-model # used when `--model` is omitted
     reasoning_effort: max # low | medium | high | xhigh | max; applied when `--reasoning-effort` is omitted
@@ -146,7 +146,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
 
 `agent.vibe_marker` controls the icon and color for vibe-related sessions in the TASKS tree. Its icon appears after the name, unlike work type icons, and it uses the same icon and color formats as `agent.work_types`. Sessions that enabled vibe themselves use the configured color; sessions with a vibe-enabled ancestor show the icon dimmed. The dimmed marker shows the ancestor's state; a session inherits vibe mode when it was launched with `a agent new --vibe` or granted inheritance by an enabled ancestor. If unset, no vibe marker is shown.
 
-`agent.launch_profiles` maps exact `--kind` values to launch defaults. Each entry can select an `engine` and set `model` and `reasoning_effort` under `claude` and `codex`. An omitted engine falls back to `agent.default_engine`. An explicit `--engine` overrides the profile's engine and selects only that engine's settings. Explicit `--model` and `--reasoning-effort` values override the selected engine's profile values; Codex then falls back to `agent.codex` for any unset value. When no matching profile exists, launches keep the existing global defaults.
+Without `--type`, `agent.launch_profiles` maps exact `--kind` values to launch defaults. Each entry can select an `engine` and set `model` and `reasoning_effort` under `claude` and `codex`. An omitted engine falls back to `agent.default_engine`. An explicit `--engine` overrides the profile's engine and selects only that engine's settings. Explicit `--model` and `--reasoning-effort` values override the selected engine's profile values; Codex then falls back to `agent.codex` for any unset value. When no matching profile exists, launches keep the existing global defaults.
 
 `agent.profiles` maps arbitrary profile names to arbitrary type names. Every type requires an `engine`, a non-empty `model`, and a `reasoning_effort`. `agent.active_profile` selects the profile used by `a agent new --type <type>`; `a agent profile use <profile>` updates that selection in `zz-agent-profiles.local.yaml`. The `--type` path applies all three configured values directly, independent of `--kind`, and rejects `--engine`, `--model`, or `--reasoning-effort` on the same invocation. Calls without `--type` keep the existing launch resolution. `a agent profile show` lists the active profile and every type's settings. Add `--dry-run` with `--type` to print its resolved values and configuration sources without starting a session or creating a worktree.
 
@@ -616,9 +616,9 @@ With `--worktree`, the session runs in `config.agent.worktree.layout`, whose pan
 
 A session's engine is recorded on first hook event (see `--engine` on `a agent hook` below) and later read back by `a agent resume` to decide which binary to relaunch. An explicit `a agent resume --engine` value takes precedence when tmux-resurrect restores a snapshot whose store record is missing. `resume` never uses `agent.default_engine`, so changing the default doesn't affect resuming existing sessions.
 
-`agent.default_engine` supplies the engine when `--engine` and the matching kind profile's `engine` are omitted. Set `agent.default_engine: codex` in config, or prefix a single invocation with `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` (see [Environment variable overrides](#environment-variable-overrides)), to change this fallback (with `--worktree` too, so a `codex` fallback replaces the layout's `claude` pane). An explicit `--engine` always wins.
+When `--type` is omitted, `agent.default_engine` supplies the engine if `--engine` and the matching kind profile's `engine` are omitted. Set `agent.default_engine: codex` in config, or prefix a single invocation with `ARMYKNIFE_AGENT__DEFAULT_ENGINE=codex` (see [Environment variable overrides](#environment-variable-overrides)), to change this fallback (with `--worktree` too, so a `codex` fallback replaces the layout's `claude` pane). An explicit `--engine` always wins.
 
-`agent.codex.model` and `agent.codex.reasoning_effort` are the global defaults for `codex` when a selected kind profile leaves a value unset. Explicit flags and the selected engine's kind settings take precedence. The model is passed on the `codex` command line. The effort follows the launch routes above, so it is sent through `turn/start` or a launch-only `-c` override without modifying `~/.codex/config.toml`. These defaults never apply to `claude` sessions; an explicit `--reasoning-effort` does, as `claude --effort`.
+Without `--type`, `agent.codex.model` and `agent.codex.reasoning_effort` are the global defaults for `codex` when a selected kind profile leaves a value unset. Explicit flags and the selected engine's kind settings take precedence. The model is passed on the `codex` command line. The effort follows the launch routes above, so it is sent through `turn/start` or a launch-only `-c` override without modifying `~/.codex/config.toml`. These defaults never apply to `claude` sessions; an explicit `--reasoning-effort` does, as `claude --effort`.
 
 #### Setup
 

@@ -1,9 +1,9 @@
-use anyhow::{Context, ensure};
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
 
-use super::AgentConfig;
+use super::{AgentConfig, format_sorted_names};
 
 /// Model settings for one type in an agent profile.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
@@ -44,17 +44,6 @@ pub struct ResolvedAgentProfileType {
 }
 
 impl AgentConfig {
-    /// Validate the selected profile reference, if one is configured.
-    pub fn validate_profiles(&self) -> anyhow::Result<()> {
-        if let Some(profile_name) = self.active_profile.as_deref() {
-            ensure!(
-                self.profiles.contains_key(profile_name),
-                "agent.active_profile references undefined profile `{profile_name}`",
-            );
-        }
-        Ok(())
-    }
-
     /// Resolve a type from the active profile without applying any fallback.
     pub fn resolve_profile_type(
         &self,
@@ -68,13 +57,7 @@ impl AgentConfig {
             format!("agent.active_profile references undefined profile `{profile_name}`")
         })?;
         let settings = profile.get(type_name).with_context(|| {
-            let mut types = profile.keys().map(String::as_str).collect::<Vec<_>>();
-            types.sort_unstable();
-            let configured = if types.is_empty() {
-                "(none)".to_string()
-            } else {
-                types.join(", ")
-            };
+            let configured = format_sorted_names(profile.keys());
             format!(
                 "unknown agent type `{type_name}` in profile `{profile_name}`; configured types: {configured}"
             )
@@ -426,28 +409,13 @@ mod tests {
         assert!(serde_yaml::from_str::<AgentProfileTypeConfig>(yaml).is_err());
     }
 
-    #[test]
-    fn rejects_undefined_active_profile_reference() {
-        let config: Config = serde_yaml::from_str(indoc! {"
-            agent:
-              active_profile: missing-profile
-              profiles:
-                configured-profile: {}
-        "})
-        .unwrap();
-
-        assert_eq!(
-            config
-                .agent
-                .validate_profiles()
-                .err()
-                .map(|error| error.to_string()),
-            Some("agent.active_profile references undefined profile `missing-profile`".to_string(),),
-        );
-    }
-
     #[rstest]
     #[case::profile_unset(None, "review type", "agent.active_profile is not set")]
+    #[case::profile_undefined(
+        Some("missing profile"),
+        "review type",
+        "agent.active_profile references undefined profile `missing profile`"
+    )]
     #[case::type_undefined(
         Some("profile one"),
         "missing type",

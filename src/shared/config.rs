@@ -64,6 +64,16 @@ pub use launch_profile::{
 pub use schema::generate_schema;
 pub use work_type::{AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeNamedColor};
 
+pub(crate) fn format_sorted_names<'a>(names: impl Iterator<Item = &'a String>) -> String {
+    let mut names = names.map(String::as_str).collect::<Vec<_>>();
+    names.sort_unstable();
+    if names.is_empty() {
+        "(none)".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
 /// Top-level configuration for armyknife.
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -624,27 +634,22 @@ fn deserialize_config_with_overlay(
         Some(base) => merge_yaml(base, overlay),
         None => overlay,
     };
-    match serde_yaml::from_value::<Config>(combined)
-        .map_err(|e| e.to_string())
-        .and_then(|config| {
-            config
-                .agent
-                .validate_profiles()
-                .map_err(|error| error.to_string())?;
-            Ok(config)
-        }) {
+    match serde_yaml::from_value::<Config>(combined) {
         Ok(config) => Ok(config),
         // The env overlay merges cleanly into the YAML document, so a single
         // deserialize error can't tell which side caused it. Re-deserialize
         // the YAML-only value to find out: if that succeeds, the environment
         // is at fault.
-        Err(message) => {
+        Err(error) => {
             if deserialize_config(yaml_merged, blame_path).is_ok() {
-                Err(ConfigError::EnvParseError { message }.into())
+                Err(ConfigError::EnvParseError {
+                    message: error.to_string(),
+                }
+                .into())
             } else {
                 Err(ConfigError::ParseError {
                     path: blame_path.to_path_buf(),
-                    message,
+                    message: error.to_string(),
                 }
                 .into())
             }
@@ -761,18 +766,12 @@ fn deserialize_config(
         return Ok(Config::default());
     };
 
-    let config = serde_yaml::from_value::<Config>(value).map_err(|e| ConfigError::ParseError {
-        path: blame_path.to_path_buf(),
-        message: e.to_string(),
-    })?;
-    config
-        .agent
-        .validate_profiles()
-        .map_err(|error| ConfigError::ParseError {
+    serde_yaml::from_value::<Config>(value)
+        .map_err(|e| ConfigError::ParseError {
             path: blame_path.to_path_buf(),
-            message: error.to_string(),
-        })?;
-    Ok(config)
+            message: e.to_string(),
+        })
+        .map_err(Into::into)
 }
 
 /// Recursively merge two YAML values. Mappings merge key-by-key; any other type
@@ -801,9 +800,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::types::ReasoningEffort;
     use indoc::{formatdoc, indoc};
-    #[cfg(feature = "schema-gen")]
-    use rstest::fixture;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
 
@@ -814,6 +811,25 @@ mod tests {
                 .map(|(name, value)| (name.to_string(), value.to_string())),
         );
         deserialize_config_with_overlay(yaml_merged, dir, overlay)
+    }
+
+    #[fixture]
+    fn profile_config_dir() -> TempDir {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            indoc! {"
+                agent:
+                  profiles:
+                    selected-profile:
+                      review-type:
+                        engine: codex
+                        model: model-ember
+                        reasoning_effort: high
+            "},
+        )
+        .unwrap();
+        dir
     }
 
     #[test]
@@ -1535,11 +1551,6 @@ mod tests {
     "}, true)]
     #[case::legacy_wm(indoc! {"wm: {}"}, false)]
     #[case::legacy_cc(indoc! {"cc: {}"}, false)]
-    #[case::undefined_active_profile(indoc! {"
-        agent:
-          active_profile: missing-profile
-          profiles: {}
-    "}, false)]
     // Merged-document level errors (e.g., unknown fields) blame the directory
     // because they only surface after combining every file.
     #[case::unknown_field("unknown_top_level_key: true\n", false)]
@@ -1561,6 +1572,39 @@ mod tests {
             }
             other => panic!("expected ParseError, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn stale_active_profile_does_not_block_legacy_launch_resolution() {
+        let dir = TempDir::new().unwrap();
+        fs::write(
+            dir.path().join("config.yaml"),
+            indoc! {"
+                agent:
+                  active_profile: removed-profile
+                  default_engine: codex
+                  profiles:
+                    configured-profile: {}
+            "},
+        )
+        .unwrap();
+
+        let config = load_config_from_dir(dir.path()).unwrap();
+
+        assert_eq!(
+            (
+                config.agent.active_profile.as_deref(),
+                config.agent.resolve_launch_options(None, None, None, None),
+            ),
+            (
+                Some("removed-profile"),
+                ResolvedLaunchOptions {
+                    engine: Engine::Codex,
+                    model: None,
+                    reasoning_effort: None,
+                },
+            ),
+        );
     }
 
     #[test]
@@ -1780,6 +1824,49 @@ mod tests {
                 },
                 ..Default::default()
             }
+        );
+    }
+
+    #[rstest]
+    fn load_config_env_overlay_selects_profile_for_typed_launch(profile_config_dir: TempDir) {
+        let config = config_with_env_vars(
+            profile_config_dir.path(),
+            &[("ARMYKNIFE_AGENT__ACTIVE_PROFILE", "selected-profile")],
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.agent.resolve_profile_type("review-type").unwrap(),
+            ResolvedAgentProfileType {
+                profile_name: "selected-profile".to_string(),
+                type_name: "review-type".to_string(),
+                settings: AgentProfileTypeConfig {
+                    engine: Engine::Codex,
+                    model: "model-ember".to_string(),
+                    reasoning_effort: ReasoningEffort::High,
+                },
+            },
+        );
+    }
+
+    #[rstest]
+    fn load_config_env_overlay_reports_undefined_profile_when_resolving_type(
+        profile_config_dir: TempDir,
+    ) {
+        let config = config_with_env_vars(
+            profile_config_dir.path(),
+            &[("ARMYKNIFE_AGENT__ACTIVE_PROFILE", "missing-profile")],
+        )
+        .unwrap();
+        let error = config
+            .agent
+            .resolve_profile_type("review-type")
+            .err()
+            .map(|error| error.to_string());
+
+        assert_eq!(
+            error,
+            Some("agent.active_profile references undefined profile `missing-profile`".to_string()),
         );
     }
 
