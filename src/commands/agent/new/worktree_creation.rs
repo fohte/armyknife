@@ -332,7 +332,6 @@ mod tests {
         .unwrap();
         let common = super::super::CommonNewArgs {
             prompt: None,
-            agent: false,
             child_launch: None,
             label: None,
             kind: Some("other-kind".to_string()),
