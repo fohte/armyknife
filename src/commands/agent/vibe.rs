@@ -146,8 +146,10 @@ fn set_in(sessions_dir: &std::path::Path, session_id: &str, enabled: bool) -> Re
 mod tests {
     use super::*;
     use crate::cli::{Cli, Commands};
+    use crate::commands::agent::new::CommonNewArgs;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use crate::shared::config::Config;
+    use crate::shared::env_var::EnvVars;
     use chrono::Utc;
     use clap::Parser;
     use indoc::indoc;
@@ -484,6 +486,143 @@ mod tests {
         });
 
         assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    fn new_child_and_grandchild_inherit_vibe_until_the_enabling_ancestor_turns_off(
+        test_store: TestStore,
+    ) {
+        let root = session("root", &[], true);
+        let mut caller = session("caller", &["root"], false);
+        caller.launched_with_vibe = true;
+        store::save_session_to(&test_store.sessions_dir, &root).expect("root should save");
+        store::save_session_to(&test_store.sessions_dir, &caller).expect("caller should save");
+        let cache_home = test_store
+            .cache_home
+            .to_str()
+            .expect("cache path should be valid UTF-8");
+        let common = CommonNewArgs {
+            prompt: None,
+            child_launch: None,
+            label: None,
+            kind: None,
+            type_name: None,
+            model: None,
+            parent_session_id: None,
+            repo: None,
+            engine: None,
+            reasoning_effort: None,
+        };
+
+        let caller_status = with_session_env(cache_home, Some("caller"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+        let child_launch = launch_inputs_for_session(cache_home, "caller", &common)
+            .expect("child launch inputs should build");
+        let mut child = session("child", &["root", "caller"], false);
+        child.launched_with_vibe = has_vibe_launch_marker(&child_launch.0);
+        store::save_session_to(&test_store.sessions_dir, &child).expect("child should save");
+        let child_status = with_session_env(cache_home, Some("child"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+
+        let grandchild_launch = launch_inputs_for_session(cache_home, "child", &common)
+            .expect("grandchild launch inputs should build");
+        let mut grandchild = session("grandchild", &["root", "caller", "child"], false);
+        grandchild.launched_with_vibe = has_vibe_launch_marker(&grandchild_launch.0);
+        store::save_session_to(&test_store.sessions_dir, &grandchild)
+            .expect("grandchild should save");
+        let grandchild_status = with_session_env(cache_home, Some("grandchild"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+
+        let root_off =
+            with_session_env(cache_home, Some("root"), || run(&VibeCommands::Off).is_ok());
+        let caller_status_after_off = with_session_env(cache_home, Some("caller"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+        let child_status_after_off = with_session_env(cache_home, Some("child"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+        let grandchild_status_after_off = with_session_env(cache_home, Some("grandchild"), || {
+            run(&VibeCommands::Status).is_ok()
+        });
+        let saved_vibe_flags = ["child", "grandchild"].map(|session_id| {
+            store::load_session_from(&test_store.sessions_dir, session_id)
+                .expect("session should load")
+                .map(|saved| (saved.vibe_enabled, saved.launched_with_vibe))
+        });
+
+        let actual = (
+            caller_status,
+            child_launch,
+            child_status,
+            grandchild_launch,
+            grandchild_status,
+            root_off,
+            caller_status_after_off,
+            child_status_after_off,
+            grandchild_status_after_off,
+            saved_vibe_flags,
+        );
+
+        assert_eq!(
+            actual,
+            (
+                true,
+                expected_inherited_launch_inputs("root,caller"),
+                true,
+                expected_inherited_launch_inputs("root,caller,child"),
+                true,
+                true,
+                false,
+                false,
+                false,
+                [Some((false, true)), Some((false, true))],
+            ),
+        );
+    }
+
+    fn launch_inputs_for_session(
+        cache_home: &str,
+        session_id: &str,
+        common: &CommonNewArgs,
+    ) -> anyhow::Result<(Vec<(String, String)>, bool)> {
+        with_session_env(cache_home, Some(session_id), || {
+            temp_env::with_vars(
+                [
+                    ("TQ_SESSION_ID", None::<&str>),
+                    ("CLAUDECODE", None::<&str>),
+                ],
+                || crate::commands::agent::new::tmux_launch_inputs(common, false),
+            )
+        })
+    }
+
+    fn has_vibe_launch_marker(env_vars: &[(String, String)]) -> bool {
+        env_vars
+            .iter()
+            .any(|(name, value)| name == EnvVars::session_vibe_launch_name() && value == "1")
+    }
+
+    fn expected_inherited_launch_inputs(ancestors: &str) -> (Vec<(String, String)>, bool) {
+        (
+            vec![
+                (
+                    EnvVars::session_child_launch_name().to_string(),
+                    "allow".to_string(),
+                ),
+                (
+                    EnvVars::session_vibe_launch_name().to_string(),
+                    "1".to_string(),
+                ),
+                (
+                    EnvVars::ancestor_session_ids_name().to_string(),
+                    ancestors.to_string(),
+                ),
+            ],
+            true,
+        )
     }
 
     #[rstest]

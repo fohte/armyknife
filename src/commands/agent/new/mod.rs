@@ -327,8 +327,13 @@ fn build_env_vars(
 
 /// Build the env vars and background flag shared by both the worktree and
 /// no-worktree tmux launch paths.
-fn tmux_launch_inputs(common: &CommonNewArgs, vibe: bool) -> Result<(Vec<(String, String)>, bool)> {
+pub(super) fn tmux_launch_inputs(
+    common: &CommonNewArgs,
+    vibe: bool,
+) -> Result<(Vec<(String, String)>, bool)> {
     let own_session_id = EnvVars::load().own_session_id();
+    // Automatic inheritance must not block an ordinary launch if session state is unavailable.
+    let vibe = vibe || is_vibe_enabled().unwrap_or(false);
     // Agent tools can invoke this command without a tmux context, so preserve the user's focus.
     let background = std::env::var("CLAUDECODE").is_ok() || own_session_id.is_some();
     let env_vars = build_env_vars(common, vibe, own_session_id)?;
