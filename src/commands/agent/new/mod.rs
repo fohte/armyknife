@@ -94,9 +94,9 @@ pub struct CommonNewArgs {
     /// Reasoning effort for the new session. Passed as `claude --effort`.
     /// For Codex, sent in the first `turn/start` on the daemon route and as
     /// `-c model_reasoning_effort=...` otherwise. With `--type`, defaults to
-    /// its reasoning effort. Otherwise falls back
-    /// to the selected engine's kind profile, then Codex's global
-    /// `agent.codex.reasoning_effort` when the selected engine is Codex.
+    /// its reasoning effort; otherwise falls back to the selected engine's kind
+    /// profile, then Codex's global `agent.codex.reasoning_effort` when the
+    /// selected engine is Codex.
     #[arg(long, value_enum)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -137,7 +137,8 @@ pub struct NewArgs {
     #[arg(long)]
     pub skip_hooks: bool,
 
-    /// Print the selected profile and type settings without launching a session.
+    /// Print the selected profile, type, effective settings, and their sources
+    /// without launching a session.
     #[arg(long, requires = "type_name")]
     pub dry_run: bool,
 }
@@ -896,6 +897,28 @@ mod tests {
             reasoning_effort_source: "agent.profiles[\"sample-profile\"][\"review-type\"].reasoning_effort",
         }
     )]
+    #[case::same_engine_override(
+        &["a", "--type", "review-type", "--engine", "codex"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-ember",
+            reasoning_effort: ReasoningEffort::High,
+            engine_source: "--engine",
+            model_source: "agent.profiles[\"sample-profile\"][\"review-type\"].model",
+            reasoning_effort_source: "agent.profiles[\"sample-profile\"][\"review-type\"].reasoning_effort",
+        }
+    )]
+    #[case::reasoning_effort_only_override(
+        &["a", "--type", "review-type", "--reasoning-effort", "low"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-ember",
+            reasoning_effort: ReasoningEffort::Low,
+            engine_source: "agent.profiles[\"sample-profile\"][\"review-type\"].engine",
+            model_source: "agent.profiles[\"sample-profile\"][\"review-type\"].model",
+            reasoning_effort_source: "--reasoning-effort",
+        }
+    )]
     fn profile_type_settings_reach_launcher_and_dry_run_with_kind_ignored(
         #[case] argv: &[&str],
         #[case] expected: ExpectedProfileLaunch,
@@ -964,7 +987,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[test]
     fn omitting_type_keeps_kind_launch_profile_behavior() {
         let session_only_root = session_only_root();
         let config: Config = serde_yaml::from_str(indoc::indoc! {
