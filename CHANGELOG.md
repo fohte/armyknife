@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.451](https://github.com/fohte/armyknife/compare/v0.1.450...v0.1.451) (2026-10-20)
+
+
+### Features
+
+* **agent:** allow per-invocation type overrides ([#1239](https://github.com/fohte/armyknife/issues/1239)) ([70f24a0](https://github.com/fohte/armyknife/commit/70f24a0dea272b1dd26b169b34c8b406e082afaf))
+
 ## [0.1.450](https://github.com/fohte/armyknife/compare/v0.1.449...v0.1.450) (2026-10-20)
 
 
