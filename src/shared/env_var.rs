@@ -9,7 +9,6 @@ const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const SESSION_WORK_TYPE: &str = "ARMYKNIFE_SESSION_WORK_TYPE";
 const SESSION_CHILD_LAUNCH: &str = "ARMYKNIFE_SESSION_CHILD_LAUNCH";
-const SESSION_DELEGATED: &str = "ARMYKNIFE_SESSION_DELEGATED";
 const SESSION_VIBE_LAUNCH: &str = "ARMYKNIFE_SESSION_VIBE_LAUNCH";
 const ANCESTOR_SESSION_IDS: &str = "ARMYKNIFE_ANCESTOR_SESSION_IDS";
 const CODEX_MANAGED_LAUNCH: &str = "ARMYKNIFE_CODEX_MANAGED_LAUNCH";
@@ -53,9 +52,6 @@ pub struct EnvVars {
     /// Child launch permission for the current session.
     pub session_child_launch: Option<String>,
 
-    /// Whether this session was launched by the legacy `--agent` option.
-    pub session_delegated: bool,
-
     /// Whether this session was launched with `a agent new --vibe`.
     pub session_vibe_launch: bool,
 
@@ -92,7 +88,6 @@ impl EnvVars {
             session_label: non_empty_var(SESSION_LABEL),
             session_work_type: non_empty_var(SESSION_WORK_TYPE),
             session_child_launch: non_empty_var(SESSION_CHILD_LAUNCH),
-            session_delegated: non_empty_var(SESSION_DELEGATED).is_some(),
             session_vibe_launch: non_empty_var(SESSION_VIBE_LAUNCH).is_some(),
             ancestor_session_ids: non_empty_var(ANCESTOR_SESSION_IDS),
             cc_hook_log: non_empty_var(CC_HOOK_LOG),
@@ -128,11 +123,6 @@ impl EnvVars {
     /// Returns the env var name for the child launch permission.
     pub fn session_child_launch_name() -> &'static str {
         SESSION_CHILD_LAUNCH
-    }
-
-    /// Returns the env var name that marks an `--agent` launch.
-    pub fn session_delegated_name() -> &'static str {
-        SESSION_DELEGATED
     }
 
     /// Returns the env var name that marks a `--vibe` launch.

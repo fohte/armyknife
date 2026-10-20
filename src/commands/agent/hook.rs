@@ -432,10 +432,7 @@ fn process_hook_event_impl_with_instruction(
             last_message: None,
             current_tool: None,
             label: env.session_label.clone(),
-            child_launch: ChildLaunchPermission::from_env(
-                env.session_child_launch.as_deref(),
-                env.session_delegated,
-            ),
+            child_launch: ChildLaunchPermission::from_env(env.session_child_launch.as_deref()),
             ancestor_session_ids,
             pending_bg_task_ids: BTreeSet::new(),
             pending_agent_task_ids: BTreeSet::new(),
@@ -3960,7 +3957,6 @@ mod tests {
                 [
                     (EnvVars::session_label_name(), None::<&str>),
                     (EnvVars::session_work_type_name(), None::<&str>),
-                    (EnvVars::session_delegated_name(), None::<&str>),
                     (EnvVars::session_vibe_launch_name(), None::<&str>),
                     (EnvVars::ancestor_session_ids_name(), None::<&str>),
                 ],
@@ -3991,7 +3987,6 @@ mod tests {
                 [
                     (EnvVars::session_label_name(), None::<&str>),
                     (EnvVars::session_work_type_name(), None::<&str>),
-                    (EnvVars::session_delegated_name(), None::<&str>),
                     (EnvVars::session_vibe_launch_name(), None::<&str>),
                     (EnvVars::ancestor_session_ids_name(), None::<&str>),
                 ],
@@ -4126,7 +4121,6 @@ mod tests {
                 [
                     (EnvVars::session_label_name(), None::<&str>),
                     (EnvVars::session_work_type_name(), None::<&str>),
-                    (EnvVars::session_delegated_name(), None::<&str>),
                     (EnvVars::session_vibe_launch_name(), Some("1")),
                     (EnvVars::ancestor_session_ids_name(), Some("root, parent")),
                 ],
@@ -4170,7 +4164,6 @@ mod tests {
                 [
                     (EnvVars::session_label_name(), None::<&str>),
                     (EnvVars::session_work_type_name(), None::<&str>),
-                    (EnvVars::session_delegated_name(), None::<&str>),
                     (EnvVars::session_child_launch_name(), Some("deny")),
                     (EnvVars::session_vibe_launch_name(), None::<&str>),
                     (EnvVars::ancestor_session_ids_name(), None::<&str>),

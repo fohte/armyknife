@@ -79,9 +79,7 @@ fn non_empty_env<'a>(env_vars: &[(&str, &'a str)], name: &str) -> Option<&'a str
 
 fn metadata_from_env<'a>(env_vars: &[(&str, &'a str)]) -> SessionMetadata<'a> {
     let child_launch_env = non_empty_env(env_vars, EnvVars::session_child_launch_name());
-    let legacy_is_delegated = non_empty_env(env_vars, EnvVars::session_delegated_name()).is_some();
-    let child_launch = (child_launch_env.is_some() || legacy_is_delegated)
-        .then(|| ChildLaunchPermission::from_env(child_launch_env, legacy_is_delegated));
+    let child_launch = child_launch_env.map(|value| ChildLaunchPermission::from_env(Some(value)));
 
     SessionMetadata {
         label: non_empty_env(env_vars, EnvVars::session_label_name()),
@@ -287,7 +285,6 @@ mod tests {
     #[case::kind_only(EnvVars::session_work_type_name(), "sample-skill")]
     #[case::child_launch_allowed(EnvVars::session_child_launch_name(), "allow")]
     #[case::child_launch_denied(EnvVars::session_child_launch_name(), "deny")]
-    #[case::legacy_agent_only(EnvVars::session_delegated_name(), "1")]
     #[case::vibe_launch_only(EnvVars::session_vibe_launch_name(), "1")]
     fn records_single_launch_metadata(
         sessions_dir: TempDir,
@@ -341,8 +338,6 @@ mod tests {
             if value == "deny" {
                 expected["child_launch"] = json!("deny");
             }
-        } else if key == EnvVars::session_delegated_name() {
-            expected["child_launch"] = json!("deny");
         } else {
             expected["launched_with_vibe"] = json!(true);
         }
@@ -461,7 +456,7 @@ mod tests {
             ("UNRELATED", "value"),
             (EnvVars::session_label_name(), "delegate label"),
             (EnvVars::session_work_type_name(), "sample-skill"),
-            (EnvVars::session_delegated_name(), "1"),
+            (EnvVars::session_child_launch_name(), "deny"),
             (EnvVars::session_vibe_launch_name(), "1"),
             (EnvVars::ancestor_session_ids_name(), "root, parent"),
         ];
