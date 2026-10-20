@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.450](https://github.com/fohte/armyknife/compare/v0.1.449...v0.1.450) (2026-10-20)
+
+
+### Bug Fixes
+
+* **agent:** reject the legacy launch flag ([#1237](https://github.com/fohte/armyknife/issues/1237)) ([ad7b688](https://github.com/fohte/armyknife/commit/ad7b688919a8a916ec0cffa9301a36958e416268))
+
 ## [0.1.449](https://github.com/fohte/armyknife/compare/v0.1.448...v0.1.449) (2026-10-19)
 
 
