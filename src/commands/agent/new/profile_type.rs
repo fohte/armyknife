@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::shared::config::{ResolvedAgentProfileType, ResolvedLaunchOptions, load_config};
+use crate::shared::config::{ResolvedAgentProfileType, load_config};
 
 use super::{CommonNewArgs, NewArgs};
 
@@ -32,36 +32,30 @@ pub(super) fn run_dry_run(common: &CommonNewArgs) -> Result<()> {
 pub(super) fn format_dry_run(
     common: &CommonNewArgs,
     resolved: &ResolvedAgentProfileType,
-    launch_options: &ResolvedLaunchOptions,
+    launch_options: &super::launch_options::ResolvedProfileTypeLaunchOptions,
 ) -> String {
     let source = format!(
         "agent.profiles[{:?}][{:?}]",
         resolved.profile_name, resolved.type_name
     );
-    let engine_source = if common.engine.is_some() {
-        "--engine".to_string()
-    } else {
-        format!("{source}.engine")
-    };
-    let model_source = if common.model.is_some() {
-        "--model".to_string()
-    } else {
-        format!("{source}.model")
-    };
-    let reasoning_effort_source = if common.reasoning_effort.is_some() {
-        "--reasoning-effort".to_string()
-    } else {
-        format!("{source}.reasoning_effort")
-    };
+    let engine_source = source_of(common.engine.map(|_| "--engine"), &source, "engine");
+    let model_source = source_of(common.model.as_deref().map(|_| "--model"), &source, "model");
+    let reasoning_effort_source = source_of(
+        common.reasoning_effort.map(|_| "--reasoning-effort"),
+        &source,
+        "reasoning_effort",
+    );
     format!(
         "Resolved agent launch settings:\n  profile: {}\n  type: {}\n  engine: {}\n    source: {engine_source}\n  model: {}\n    source: {model_source}\n  reasoning effort: {}\n    source: {reasoning_effort_source}\n",
         resolved.profile_name,
         resolved.type_name,
         launch_options.engine.process_name(),
-        launch_options.model.as_deref().unwrap_or("<none>"),
-        launch_options
-            .reasoning_effort
-            .map(|effort| effort.as_str())
-            .unwrap_or("<none>"),
+        launch_options.model,
+        launch_options.reasoning_effort.as_str(),
     )
+}
+
+fn source_of(flag: Option<&str>, profile_source: &str, field: &str) -> String {
+    flag.map(str::to_string)
+        .unwrap_or_else(|| format!("{profile_source}.{field}"))
 }

@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 
+use crate::commands::agent::types::{Engine, ReasoningEffort};
 use crate::shared::config::{Config, ResolvedAgentProfileType, ResolvedLaunchOptions};
 
 use super::CommonNewArgs;
@@ -10,7 +11,7 @@ pub(super) fn resolve_launch_options(
 ) -> Result<ResolvedLaunchOptions> {
     if let Some(type_name) = common.type_name.as_deref() {
         let resolved = config.agent.resolve_profile_type(type_name)?;
-        return resolve_profile_type_launch_options(common, &resolved);
+        return Ok(resolve_profile_type_launch_options(common, &resolved)?.into());
     }
 
     Ok(config.agent.resolve_launch_options(
@@ -21,10 +22,27 @@ pub(super) fn resolve_launch_options(
     ))
 }
 
+#[derive(Debug, PartialEq)]
+pub(super) struct ResolvedProfileTypeLaunchOptions {
+    pub engine: Engine,
+    pub model: String,
+    pub reasoning_effort: ReasoningEffort,
+}
+
+impl From<ResolvedProfileTypeLaunchOptions> for ResolvedLaunchOptions {
+    fn from(options: ResolvedProfileTypeLaunchOptions) -> Self {
+        Self {
+            engine: options.engine,
+            model: Some(options.model),
+            reasoning_effort: Some(options.reasoning_effort),
+        }
+    }
+}
+
 pub(super) fn resolve_profile_type_launch_options(
     common: &CommonNewArgs,
     resolved: &ResolvedAgentProfileType,
-) -> Result<ResolvedLaunchOptions> {
+) -> Result<ResolvedProfileTypeLaunchOptions> {
     if let Some(engine) = common.engine
         && engine != resolved.settings.engine
         && common.model.is_none()
@@ -37,15 +55,15 @@ pub(super) fn resolve_profile_type_launch_options(
         );
     }
 
-    Ok(ResolvedLaunchOptions {
+    Ok(ResolvedProfileTypeLaunchOptions {
         engine: common.engine.unwrap_or(resolved.settings.engine),
         model: common
             .model
             .clone()
-            .or_else(|| Some(resolved.settings.model.clone())),
+            .unwrap_or_else(|| resolved.settings.model.clone()),
         reasoning_effort: common
             .reasoning_effort
-            .or(Some(resolved.settings.reasoning_effort)),
+            .unwrap_or(resolved.settings.reasoning_effort),
     })
 }
 

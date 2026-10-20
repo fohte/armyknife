@@ -93,8 +93,8 @@ pub struct CommonNewArgs {
 
     /// Reasoning effort for the new session. Passed as `claude --effort`.
     /// For Codex, sent in the first `turn/start` on the daemon route and as
-    /// `-c model_reasoning_effort=...` otherwise. Falls back to the selected
-    /// With `--type`, defaults to its reasoning effort. Otherwise falls back
+    /// `-c model_reasoning_effort=...` otherwise. With `--type`, defaults to
+    /// its reasoning effort. Otherwise falls back
     /// to the selected engine's kind profile, then Codex's global
     /// `agent.codex.reasoning_effort` when the selected engine is Codex.
     #[arg(long, value_enum)]
@@ -928,7 +928,8 @@ mod tests {
 
         let launch = capture_session_only_launch(&args, context, Some("%caller-pane"));
         let resolved = config.agent.resolve_profile_type("review-type").unwrap();
-        let launch_options = resolve_launch_options(&args.common, &config).unwrap();
+        let launch_options =
+            launch_options::resolve_profile_type_launch_options(&args.common, &resolved).unwrap();
         let dry_run = profile_type::format_dry_run(&args.common, &resolved, &launch_options);
 
         assert_eq!(
@@ -940,15 +941,25 @@ mod tests {
                     model: Some(expected.model.to_string()),
                     reasoning_effort: Some(expected.reasoning_effort),
                 }),
-                format!(
-                    "Resolved agent launch settings:\n  profile: sample-profile\n  type: review-type\n  engine: {}\n    source: {}\n  model: {}\n    source: {}\n  reasoning effort: {}\n    source: {}\n",
-                    expected.engine.process_name(),
-                    expected.engine_source,
-                    expected.model,
-                    expected.model_source,
-                    expected.reasoning_effort.as_str(),
-                    expected.reasoning_effort_source,
-                ),
+                indoc::formatdoc! {
+                    "
+                    Resolved agent launch settings:
+                      profile: sample-profile
+                      type: review-type
+                      engine: {engine}
+                        source: {engine_source}
+                      model: {model}
+                        source: {model_source}
+                      reasoning effort: {reasoning_effort}
+                        source: {reasoning_effort_source}
+                    ",
+                    engine = expected.engine.process_name(),
+                    engine_source = expected.engine_source,
+                    model = expected.model,
+                    model_source = expected.model_source,
+                    reasoning_effort = expected.reasoning_effort.as_str(),
+                    reasoning_effort_source = expected.reasoning_effort_source,
+                },
             ),
         );
     }
