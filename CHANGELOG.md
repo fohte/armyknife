@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.452](https://github.com/fohte/armyknife/compare/v0.1.451...v0.1.452) (2026-10-20)
+
+
+### Features
+
+* **agent:** allow child sessions to inherit vibe ([#1241](https://github.com/fohte/armyknife/issues/1241)) ([379e6d4](https://github.com/fohte/armyknife/commit/379e6d4e4f4a199e3cf3a26c84b38d2ac7794095))
+
 ## [0.1.451](https://github.com/fohte/armyknife/compare/v0.1.450...v0.1.451) (2026-10-20)
 
 
