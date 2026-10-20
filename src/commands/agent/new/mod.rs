@@ -38,10 +38,6 @@ pub struct CommonNewArgs {
     #[arg(long)]
     pub prompt: Option<String>,
 
-    /// Legacy compatibility flag. Denies child launches from the new session.
-    #[arg(long, hide = true)]
-    pub agent: bool,
-
     /// Whether the new session may launch child sessions (default: allow).
     #[arg(long, value_enum)]
     pub child_launch: Option<ChildLaunchPermission>,
@@ -299,21 +295,11 @@ fn build_env_vars(
     if let Some(ref kind) = common.kind {
         env_vars.push((EnvVars::session_work_type_name().to_string(), kind.clone()));
     }
-    let child_launch = if common.agent {
-        ChildLaunchPermission::Deny
-    } else {
-        common.child_launch.unwrap_or_default()
-    };
+    let child_launch = common.child_launch.unwrap_or_default();
     env_vars.push((
         EnvVars::session_child_launch_name().to_string(),
         child_launch.as_env_str().to_string(),
     ));
-    if common.agent {
-        env_vars.push((
-            EnvVars::session_delegated_name().to_string(),
-            "1".to_string(),
-        ));
-    }
     if vibe {
         env_vars.push((
             EnvVars::session_vibe_launch_name().to_string(),
@@ -521,6 +507,16 @@ mod tests {
         let cli = TestCli::try_parse_from(argv).unwrap();
         let actual = cli.args.worktree.as_ref().map(|inner| inner.as_deref());
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn rejects_legacy_agent_flag() {
+        assert_eq!(
+            TestCli::try_parse_from(["a", "--agent"])
+                .map(|_| ())
+                .map_err(|error| error.kind()),
+            Err(clap::error::ErrorKind::UnknownArgument)
+        );
     }
 
     struct SessionOnlyRepoFixture {
@@ -1317,31 +1313,28 @@ mod tests {
     #[rstest]
     #[case::omitted(
         None,
-        false,
+        None,
         false,
         vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())]
     )]
     #[case::explicit_kind(
         Some("sample-skill"),
-        false,
+        None,
         false,
         vec![
             (EnvVars::session_work_type_name().to_string(), "sample-skill".to_string()),
             (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
         ]
     )]
-    #[case::agent_launch(
+    #[case::child_launch_denied(
         None,
-        true,
+        Some(ChildLaunchPermission::Deny),
         false,
-        vec![
-            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
-            (EnvVars::session_delegated_name().to_string(), "1".to_string()),
-        ]
+        vec![(EnvVars::session_child_launch_name().to_string(), "deny".to_string())]
     )]
     #[case::vibe_launch(
         None,
-        false,
+        None,
         true,
         vec![
             (EnvVars::session_child_launch_name().to_string(), "allow".to_string()),
@@ -1350,7 +1343,7 @@ mod tests {
     )]
     fn build_env_vars_passes_launch_metadata(
         #[case] kind: Option<&str>,
-        #[case] agent: bool,
+        #[case] child_launch: Option<ChildLaunchPermission>,
         #[case] vibe: bool,
         #[case] expected: Vec<(String, String)>,
     ) {
@@ -1363,8 +1356,7 @@ mod tests {
             || {
                 let common = CommonNewArgs {
                     prompt: None,
-                    agent,
-                    child_launch: None,
+                    child_launch,
                     label: None,
                     kind: kind.map(str::to_string),
                     type_name: None,
@@ -1423,30 +1415,6 @@ mod tests {
     #[case::human_tmux_shell(
         &["a"], None, None, None, Some("fake-tmux"),
         vec![(EnvVars::session_child_launch_name().to_string(), "allow".to_string())], false
-    )]
-    #[case::agent_flag_alone(
-        &["a", "--agent"],
-        None,
-        None,
-        None,
-        None,
-        vec![
-            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
-            (EnvVars::session_delegated_name().to_string(), "1".to_string())
-        ],
-        false
-    )]
-    #[case::legacy_agent_overrides_child_launch_allow(
-        &["a", "--agent", "--child-launch", "allow"],
-        None,
-        None,
-        None,
-        None,
-        vec![
-            (EnvVars::session_child_launch_name().to_string(), "deny".to_string()),
-            (EnvVars::session_delegated_name().to_string(), "1".to_string())
-        ],
-        false
     )]
     #[case::explicit_child_launch_deny(
         &["a", "--child-launch", "deny"], None, None, None, None,

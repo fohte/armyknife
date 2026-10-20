@@ -21,11 +21,10 @@ impl ChildLaunchPermission {
         }
     }
 
-    pub(crate) fn from_env(value: Option<&str>, legacy_is_delegated: bool) -> Self {
+    pub(crate) fn from_env(value: Option<&str>) -> Self {
         match value {
             Some("allow") => Self::Allow,
             Some("deny") | Some(_) => Self::Deny,
-            None if legacy_is_delegated => Self::Deny,
             None => Self::Allow,
         }
     }
@@ -301,7 +300,7 @@ mod tests {
     )]
     #[case::current_deny("child_launch", serde_json::Value::String("deny".to_string()), ChildLaunchPermission::Deny)]
     #[case::current_allow("child_launch", serde_json::Value::String("allow".to_string()), ChildLaunchPermission::Allow)]
-    fn child_launch_permission_reads_legacy_and_current_values(
+    fn child_launch_permission_migrates_legacy_and_current_values(
         #[case] field: &str,
         #[case] field_value: serde_json::Value,
         #[case] expected: ChildLaunchPermission,
@@ -319,27 +318,40 @@ mod tests {
         value[field] = field_value;
         let session: Session =
             serde_json::from_value(value).expect("session permission should deserialize");
-
-        assert_eq!(session.child_launch, expected);
+        let serialized =
+            serde_json::to_value(&session).expect("session permission should serialize");
+        let actual = serde_json::json!({
+            "permission": session.child_launch.as_env_str(),
+            "serialized_child_launch": serialized.get("child_launch"),
+            "legacy_field_present": serialized.get("is_delegated").is_some(),
+        });
+        let expected_permission = match expected {
+            ChildLaunchPermission::Allow => "allow",
+            ChildLaunchPermission::Deny => "deny",
+        };
+        let expected_serialized_child_launch = match expected {
+            ChildLaunchPermission::Allow => serde_json::Value::Null,
+            ChildLaunchPermission::Deny => serde_json::json!("deny"),
+        };
+        assert_eq!(
+            actual,
+            serde_json::json!({
+                "permission": expected_permission,
+                "serialized_child_launch": expected_serialized_child_launch,
+                "legacy_field_present": false,
+            })
+        );
     }
 
     #[rstest::rstest]
-    #[case::unspecified_defaults_to_allow("", false, ChildLaunchPermission::Allow)]
-    #[case::legacy_delegated_denies("", true, ChildLaunchPermission::Deny)]
-    #[case::explicit_allow_overrides_legacy("allow", true, ChildLaunchPermission::Allow)]
-    #[case::explicit_deny("deny", false, ChildLaunchPermission::Deny)]
-    #[case::invalid_value_fails_closed("unknown", false, ChildLaunchPermission::Deny)]
+    #[case::unspecified_defaults_to_allow(None, ChildLaunchPermission::Allow)]
+    #[case::explicit_allow(Some("allow"), ChildLaunchPermission::Allow)]
+    #[case::explicit_deny(Some("deny"), ChildLaunchPermission::Deny)]
+    #[case::invalid_value_fails_closed(Some("unknown"), ChildLaunchPermission::Deny)]
     fn child_launch_permission_reads_environment(
-        #[case] value: &str,
-        #[case] legacy_is_delegated: bool,
+        #[case] value: Option<&str>,
         #[case] expected: ChildLaunchPermission,
     ) {
-        assert_eq!(
-            ChildLaunchPermission::from_env(
-                (!value.is_empty()).then_some(value),
-                legacy_is_delegated
-            ),
-            expected
-        );
+        assert_eq!(ChildLaunchPermission::from_env(value), expected);
     }
 }
