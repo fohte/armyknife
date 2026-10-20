@@ -138,7 +138,7 @@ fn load_ancestor_session_ids(sessions_dir: &Path, session_id: &str) -> Vec<Strin
     )
 }
 
-/// Reads whether `session_id` was launched with `--vibe` from the store.
+/// Reads whether `session_id` was marked to inherit vibe from the store.
 fn load_launched_with_vibe(sessions_dir: &Path, session_id: &str) -> bool {
     load_session_field(
         sessions_dir,
