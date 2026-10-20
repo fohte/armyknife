@@ -54,14 +54,14 @@ pub struct CommonNewArgs {
     pub kind: Option<String>,
 
     /// Launch settings type from the active `agent.profiles` profile.
-    /// Cannot be combined with explicit engine, model, or reasoning effort flags.
-    #[arg(long = "type", conflicts_with_all = ["engine", "model", "reasoning_effort"])]
+    /// Explicit engine, model, and reasoning effort flags override its values.
+    #[arg(long = "type")]
     pub type_name: Option<String>,
 
     /// Model for the new session. Passed through to `<engine> --model`.
-    /// Accepts an alias or a full model name. Falls back to the selected
-    /// engine's `agent.launch_profiles.<kind>` model, then Codex's global
-    /// `agent.codex.model` when the selected engine is Codex.
+    /// Accepts an alias or a full model name. With `--type`, defaults to its
+    /// model; otherwise falls back to the selected engine's kind profile, then
+    /// Codex's global `agent.codex.model` when the selected engine is Codex.
     #[arg(long)]
     pub model: Option<String>,
 
@@ -76,9 +76,10 @@ pub struct CommonNewArgs {
     #[arg(short = 'R', long)]
     pub repo: Option<PathBuf>,
 
-    /// Coding agent CLI to launch for the new session. Falls back to
-    /// `agent.launch_profiles.<kind>.engine`, then `agent.default_engine`
-    /// (default: `claude`) when omitted.
+    /// Coding agent CLI to launch for the new session. With `--type`, defaults
+    /// to its engine; otherwise falls back to `agent.launch_profiles.<kind>.engine`,
+    /// then `agent.default_engine` (default: `claude`).
+    /// A different engine with `--type` requires an explicit `--model`.
     ///
     /// With `--worktree`, `config.agent.worktree.layout` panes running `claude` are
     /// replaced by this engine's CLI (without their arguments) unless the
@@ -88,9 +89,10 @@ pub struct CommonNewArgs {
 
     /// Reasoning effort for the new session. Passed as `claude --effort`.
     /// For Codex, sent in the first `turn/start` on the daemon route and as
-    /// `-c model_reasoning_effort=...` otherwise. Falls back to the selected
-    /// engine's `agent.launch_profiles.<kind>` value, then Codex's global
-    /// `agent.codex.reasoning_effort` when the selected engine is Codex.
+    /// `-c model_reasoning_effort=...` otherwise. With `--type`, defaults to
+    /// its reasoning effort; otherwise falls back to the selected engine's kind
+    /// profile, then Codex's global `agent.codex.reasoning_effort` when the
+    /// selected engine is Codex.
     #[arg(long, value_enum)]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
@@ -131,7 +133,8 @@ pub struct NewArgs {
     #[arg(long)]
     pub skip_hooks: bool,
 
-    /// Print the selected profile and type settings without launching a session.
+    /// Print the selected profile, type, effective settings, and their sources
+    /// without launching a session.
     #[arg(long, requires = "type_name")]
     pub dry_run: bool,
 }
@@ -597,6 +600,15 @@ mod tests {
         },
     }
 
+    struct ExpectedProfileLaunch {
+        engine: Engine,
+        model: &'static str,
+        reasoning_effort: ReasoningEffort,
+        engine_source: &'static str,
+        model_source: &'static str,
+        reasoning_effort_source: &'static str,
+    }
+
     fn capture_session_only_launch(
         args: &NewArgs,
         context: SessionOnlyRunContext<'_>,
@@ -847,28 +859,84 @@ mod tests {
         assert_eq!(actual, Some(expected),);
     }
 
-    #[test]
-    fn profile_type_settings_reach_launcher_and_dry_run_with_kind_ignored() {
-        let session_only_root = session_only_root();
+    #[rstest]
+    #[case::profile_values(
+        &["a", "--kind", "other-kind", "--type", "review-type"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-ember",
+            reasoning_effort: ReasoningEffort::High,
+            engine_source: "agent.profiles[\"sample-profile\"][\"review-type\"].engine",
+            model_source: "agent.profiles[\"sample-profile\"][\"review-type\"].model",
+            reasoning_effort_source: "agent.profiles[\"sample-profile\"][\"review-type\"].reasoning_effort",
+        }
+    )]
+    #[case::model_and_effort_overrides(
+        &["a", "--type", "review-type", "--model", "model-raven", "--reasoning-effort", "low"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-raven",
+            reasoning_effort: ReasoningEffort::Low,
+            engine_source: "agent.profiles[\"sample-profile\"][\"review-type\"].engine",
+            model_source: "--model",
+            reasoning_effort_source: "--reasoning-effort",
+        }
+    )]
+    #[case::engine_and_model_overrides(
+        &["a", "--type", "review-type", "--engine", "claude", "--model", "model-raven"],
+        ExpectedProfileLaunch {
+            engine: Engine::Claude,
+            model: "model-raven",
+            reasoning_effort: ReasoningEffort::High,
+            engine_source: "--engine",
+            model_source: "--model",
+            reasoning_effort_source: "agent.profiles[\"sample-profile\"][\"review-type\"].reasoning_effort",
+        }
+    )]
+    #[case::same_engine_override(
+        &["a", "--type", "review-type", "--engine", "codex"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-ember",
+            reasoning_effort: ReasoningEffort::High,
+            engine_source: "--engine",
+            model_source: "agent.profiles[\"sample-profile\"][\"review-type\"].model",
+            reasoning_effort_source: "agent.profiles[\"sample-profile\"][\"review-type\"].reasoning_effort",
+        }
+    )]
+    #[case::reasoning_effort_only_override(
+        &["a", "--type", "review-type", "--reasoning-effort", "low"],
+        ExpectedProfileLaunch {
+            engine: Engine::Codex,
+            model: "model-ember",
+            reasoning_effort: ReasoningEffort::Low,
+            engine_source: "agent.profiles[\"sample-profile\"][\"review-type\"].engine",
+            model_source: "agent.profiles[\"sample-profile\"][\"review-type\"].model",
+            reasoning_effort_source: "--reasoning-effort",
+        }
+    )]
+    fn profile_type_settings_reach_launcher_and_dry_run_with_kind_ignored(
+        #[case] argv: &[&str],
+        #[case] expected: ExpectedProfileLaunch,
+        session_only_root: SessionOnlyRootFixture,
+    ) {
         let config: Config = serde_yaml::from_str(indoc::indoc! {
             "
             agent:
-              active_profile: \"profile one\"
+              active_profile: sample-profile
               codex:
                 model: model-global
                 reasoning_effort: max
               profiles:
-                \"profile one\":
-                  \"review type\":
+                sample-profile:
+                  review-type:
                     engine: codex
                     model: model-ember
                     reasoning_effort: high
             "
         })
         .unwrap();
-        let args = TestCli::try_parse_from(["a", "--kind", "other-kind", "--type", "review type"])
-            .unwrap()
-            .args;
+        let args = TestCli::try_parse_from(argv).unwrap().args;
         let context = SessionOnlyRunContext {
             repo: None,
             repo_root: &session_only_root.cwd,
@@ -878,32 +946,39 @@ mod tests {
         };
 
         let launch = capture_session_only_launch(&args, context, Some("%caller-pane"));
-        let resolved = config.agent.resolve_profile_type("review type").unwrap();
-        let dry_run = profile_type::format_dry_run(&resolved);
+        let resolved = config.agent.resolve_profile_type("review-type").unwrap();
+        let launch_options =
+            launch_options::resolve_profile_type_launch_options(&args.common, &resolved).unwrap();
+        let dry_run = profile_type::format_dry_run(&args.common, &resolved, &launch_options);
 
         assert_eq!(
             (launch, dry_run),
             (
                 Some(CapturedSessionOnlyLaunch::Split {
                     cwd: session_only_root.cwd,
-                    engine: Engine::Codex,
-                    model: Some("model-ember".to_string()),
-                    reasoning_effort: Some(ReasoningEffort::High),
+                    engine: expected.engine,
+                    model: Some(expected.model.to_string()),
+                    reasoning_effort: Some(expected.reasoning_effort),
                 }),
-                indoc::indoc! {
+                indoc::formatdoc! {
                     "
                     Resolved agent launch settings:
-                      profile: profile one
-                      type: review type
-                      engine: codex
-                        source: agent.profiles[\"profile one\"][\"review type\"].engine
-                      model: model-ember
-                        source: agent.profiles[\"profile one\"][\"review type\"].model
-                      reasoning effort: high
-                        source: agent.profiles[\"profile one\"][\"review type\"].reasoning_effort
-                    "
-                }
-                .to_string(),
+                      profile: sample-profile
+                      type: review-type
+                      engine: {engine}
+                        source: {engine_source}
+                      model: {model}
+                        source: {model_source}
+                      reasoning effort: {reasoning_effort}
+                        source: {reasoning_effort_source}
+                    ",
+                    engine = expected.engine.process_name(),
+                    engine_source = expected.engine_source,
+                    model = expected.model,
+                    model_source = expected.model_source,
+                    reasoning_effort = expected.reasoning_effort.as_str(),
+                    reasoning_effort_source = expected.reasoning_effort_source,
+                },
             ),
         );
     }
@@ -1174,11 +1249,6 @@ mod tests {
     #[case::force_without_worktree(&["a", "--force"])]
     #[case::unknown_reasoning_effort(&["a", "--reasoning-effort", "maxx"])]
     #[case::dry_run_requires_type(&["a", "--dry-run"])]
-    #[case::type_conflicts_with_engine(&["a", "--type", "review", "--engine", "codex"])]
-    #[case::type_conflicts_with_model(&["a", "--type", "review", "--model", "model-ember"])]
-    #[case::type_conflicts_with_reasoning_effort(
-        &["a", "--type", "review", "--reasoning-effort", "high"]
-    )]
     fn rejects_missing_or_misplaced_flags(#[case] argv: &[&str]) {
         assert!(TestCli::try_parse_from(argv).is_err());
     }

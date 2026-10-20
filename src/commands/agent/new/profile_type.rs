@@ -23,21 +23,39 @@ pub(super) fn run_dry_run(common: &CommonNewArgs) -> Result<()> {
         .context("--dry-run requires --type")?;
     let config = load_config()?;
     let resolved = config.agent.resolve_profile_type(type_name)?;
-    print!("{}", format_dry_run(&resolved));
+    let launch_options =
+        super::launch_options::resolve_profile_type_launch_options(common, &resolved)?;
+    print!("{}", format_dry_run(common, &resolved, &launch_options));
     Ok(())
 }
 
-pub(super) fn format_dry_run(resolved: &ResolvedAgentProfileType) -> String {
+pub(super) fn format_dry_run(
+    common: &CommonNewArgs,
+    resolved: &ResolvedAgentProfileType,
+    launch_options: &super::launch_options::ResolvedProfileTypeLaunchOptions,
+) -> String {
     let source = format!(
         "agent.profiles[{:?}][{:?}]",
         resolved.profile_name, resolved.type_name
     );
+    let engine_source = source_of(common.engine.map(|_| "--engine"), &source, "engine");
+    let model_source = source_of(common.model.as_deref().map(|_| "--model"), &source, "model");
+    let reasoning_effort_source = source_of(
+        common.reasoning_effort.map(|_| "--reasoning-effort"),
+        &source,
+        "reasoning_effort",
+    );
     format!(
-        "Resolved agent launch settings:\n  profile: {}\n  type: {}\n  engine: {}\n    source: {source}.engine\n  model: {}\n    source: {source}.model\n  reasoning effort: {}\n    source: {source}.reasoning_effort\n",
+        "Resolved agent launch settings:\n  profile: {}\n  type: {}\n  engine: {}\n    source: {engine_source}\n  model: {}\n    source: {model_source}\n  reasoning effort: {}\n    source: {reasoning_effort_source}\n",
         resolved.profile_name,
         resolved.type_name,
-        resolved.settings.engine.process_name(),
-        resolved.settings.model,
-        resolved.settings.reasoning_effort.as_str(),
+        launch_options.engine.process_name(),
+        launch_options.model,
+        launch_options.reasoning_effort.as_str(),
     )
+}
+
+fn source_of(flag: Option<&str>, profile_source: &str, field: &str) -> String {
+    flag.map(str::to_string)
+        .unwrap_or_else(|| format!("{profile_source}.{field}"))
 }
