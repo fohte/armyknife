@@ -295,6 +295,7 @@ enum Outcome {
     Duplicate,
     Queued,
     ChildTurnPending,
+    ChildTurnInterrupted,
     UnknownChildTurnStatus(String),
     MissingParent,
     ParentNotIdle(ParentStatus),
@@ -324,6 +325,10 @@ where
         match wait_for_child_turn(control, input, max_reads, poll_interval, &mut sleep)? {
             ChildTurn::Completed(thread) => thread,
             ChildTurn::Pending => return Ok(Outcome::ChildTurnPending),
+            ChildTurn::Interrupted => {
+                lease.mark_processed()?;
+                return Ok(Outcome::ChildTurnInterrupted);
+            }
             ChildTurn::Unknown(status) => {
                 lease.mark_processed()?;
                 return Ok(Outcome::UnknownChildTurnStatus(status));
@@ -381,6 +386,7 @@ where
 
 enum ChildTurn {
     Completed(Value),
+    Interrupted,
     Pending,
     Unknown(String),
 }
@@ -412,9 +418,8 @@ where
             });
 
         match status {
-            Some("completed" | "interrupted" | "failed") => {
-                return Ok(ChildTurn::Completed(thread));
-            }
+            Some("completed" | "failed") => return Ok(ChildTurn::Completed(thread)),
+            Some("interrupted") => return Ok(ChildTurn::Interrupted),
             Some("inProgress") | None => {
                 if read_number + 1 < max_reads {
                     sleep(poll_interval);
@@ -616,7 +621,6 @@ mod tests {
 
     #[rstest]
     #[case::completed("completed")]
-    #[case::interrupted("interrupted")]
     #[case::failed("failed")]
     fn queues_once_for_the_direct_idle_parent_after_the_child_turn_completes(
         input: HookInput,
@@ -645,6 +649,31 @@ mod tests {
                     ),
                 ],
             },
+        );
+    }
+
+    #[rstest]
+    fn does_not_queue_or_retry_after_child_turn_is_interrupted(input: HookInput) {
+        let mut control = FakeControl::with_responses([Ok(child_thread("interrupted"))]);
+        let ledger = MemoryLedger::default();
+
+        let actual = (
+            observe(&input, &mut control, &ledger, 1),
+            observe(&input, &mut control, &ledger, 1),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                Observation {
+                    outcome: Ok(Outcome::ChildTurnInterrupted),
+                    calls: vec![ApiCall::Read("sample-child-thread".to_string(), true)],
+                },
+                Observation {
+                    outcome: Ok(Outcome::Duplicate),
+                    calls: vec![],
+                },
+            ),
         );
     }
 
