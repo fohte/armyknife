@@ -6,6 +6,7 @@
 const SKIP_HOOKS: &str = "ARMYKNIFE_SKIP_HOOKS";
 const SESSION_ID: &str = "ARMYKNIFE_SESSION_ID";
 const CODEX_SESSION_ID: &str = "CODEX_SESSION_ID";
+const CODEX_THREAD_ID: &str = "CODEX_THREAD_ID";
 const SESSION_LABEL: &str = "ARMYKNIFE_SESSION_LABEL";
 const SESSION_WORK_TYPE: &str = "ARMYKNIFE_SESSION_WORK_TYPE";
 const SESSION_CHILD_LAUNCH: &str = "ARMYKNIFE_SESSION_CHILD_LAUNCH";
@@ -42,6 +43,9 @@ pub struct EnvVars {
     /// Session ID of the current Codex session. Not an `ARMYKNIFE_*` variable:
     /// Codex exports it to every command it runs.
     pub codex_session_id: Option<String>,
+
+    /// Thread ID of the current Codex thread, which may be a subagent thread.
+    pub codex_thread_id: Option<String>,
 
     /// Session label set by `a agent new --label` or auto-generated.
     pub session_label: Option<String>,
@@ -85,6 +89,7 @@ impl EnvVars {
             skip_hooks: std::env::var(SKIP_HOOKS).is_ok(),
             session_id: non_empty_var(SESSION_ID),
             codex_session_id: non_empty_var(CODEX_SESSION_ID),
+            codex_thread_id: non_empty_var(CODEX_THREAD_ID),
             session_label: non_empty_var(SESSION_LABEL),
             session_work_type: non_empty_var(SESSION_WORK_TYPE),
             session_child_launch: non_empty_var(SESSION_CHILD_LAUNCH),
