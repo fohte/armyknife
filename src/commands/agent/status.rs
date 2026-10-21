@@ -9,7 +9,7 @@ use crate::shared::env_var::EnvVars;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum StatusCommands {
-    /// Set the calling session's reason for stopping
+    /// Set the calling session's reason for stopping; ignored in Codex subagent threads
     Set(SetArgs),
 }
 
@@ -304,8 +304,18 @@ mod tests {
     }
 
     #[rstest]
+    #[case::valid_note("child status", None)]
+    #[case::multiline_note(
+        indoc! {"
+            first line
+            second line
+        "},
+        Some("status note must be a single line"),
+    )]
     fn set_from_codex_subagent_leaves_the_shared_session_unchanged(
         configured_status_home: TempDir,
+        #[case] note: &str,
+        #[case] expected_error: Option<&str>,
     ) {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
         let xdg_cache_home = temp_dir
@@ -333,7 +343,7 @@ mod tests {
             .to_str()
             .expect("config home path should be valid UTF-8");
 
-        temp_env::with_vars(
+        let actual_result = temp_env::with_vars(
             [
                 ("XDG_CACHE_HOME", Some(xdg_cache_home)),
                 ("XDG_CONFIG_HOME", Some(xdg_config_home)),
@@ -344,11 +354,13 @@ mod tests {
             || {
                 run(&StatusCommands::Set(SetArgs {
                     kind: "needs_attention".to_string(),
-                    note: "child status".to_string(),
+                    note: note.to_string(),
                 }))
-                .expect("subagent status should succeed");
+                .map_err(|error| error.to_string())
             },
         );
+        let expected_result: std::result::Result<(), String> =
+            expected_error.map_or(Ok(()), |error| Err(error.to_string()));
 
         let after = store::serialize_session(
             &store::load_session_from(&sessions_dir, "codex-session")
@@ -359,6 +371,9 @@ mod tests {
         let after_revision =
             store::session_store_revision_from(&sessions_dir).expect("store revision should load");
 
-        assert_eq!((after, after_revision), (before, before_revision));
+        assert_eq!(
+            (actual_result, after, after_revision),
+            (expected_result, before, before_revision),
+        );
     }
 }
