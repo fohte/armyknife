@@ -38,17 +38,33 @@ fn set(args: &SetArgs, agent_config: &AgentConfig) -> Result<()> {
         configured_kind_names(agent_config),
     );
 
-    let session_id = EnvVars::load()
+    let status = AgentStatus {
+        kind: args.kind.clone(),
+        note: args.note.clone(),
+    };
+    ensure_single_line(&status.note)?;
+
+    let env_vars = EnvVars::load();
+    // Codex shares the root session ID with subagent threads, so their statuses
+    // must not overwrite the root record.
+    if is_codex_subagent_thread(&env_vars) {
+        return Ok(());
+    }
+
+    let session_id = env_vars
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
-    set_status_in(
-        &sessions_dir,
-        &session_id,
-        AgentStatus {
-            kind: args.kind.clone(),
-            note: args.note.clone(),
-        },
+    set_status_in(&sessions_dir, &session_id, status)
+}
+
+fn is_codex_subagent_thread(env_vars: &EnvVars) -> bool {
+    matches!(
+        (
+            env_vars.codex_session_id.as_deref(),
+            env_vars.codex_thread_id.as_deref(),
+        ),
+        (Some(session_id), Some(thread_id)) if session_id != thread_id
     )
 }
 
@@ -71,7 +87,6 @@ fn set_status_in(
     session_id: &str,
     status: AgentStatus,
 ) -> Result<()> {
-    ensure_single_line(&status.note)?;
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
     let mut session = lock
         .load()?
@@ -212,17 +227,38 @@ mod tests {
     }
 
     #[rstest]
-    fn set_status_persists_to_the_calling_codex_session(configured_status_home: TempDir) {
+    #[case::codex_root_without_thread(Engine::Codex, None, Some("codex-session"), None)]
+    #[case::codex_root_with_matching_thread_id(
+        Engine::Codex,
+        None,
+        Some("codex-session"),
+        Some("codex-session")
+    )]
+    #[case::empty_thread_id(Engine::Codex, None, Some("codex-session"), Some(""))]
+    #[case::claude_session(Engine::Claude, Some("codex-session"), None, None)]
+    #[case::thread_id_without_session_id(
+        Engine::Claude,
+        Some("codex-session"),
+        None,
+        Some("codex-subagent-thread")
+    )]
+    fn set_status_persists_to_the_calling_session(
+        configured_status_home: TempDir,
+        #[case] engine: Engine,
+        #[case] armyknife_session_id: Option<&str>,
+        #[case] codex_session_id: Option<&str>,
+        #[case] codex_thread_id: Option<&str>,
+    ) {
         let temp_dir = TempDir::new().expect("temp dir creation should succeed");
         let xdg_cache_home = temp_dir
             .path()
             .to_str()
             .expect("temp dir path should be valid UTF-8");
         let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
-        let mut codex_session = session("codex-session", Engine::Codex);
-        codex_session.agent_status_clear_pending = true;
+        let mut calling_session = session("codex-session", engine);
+        calling_session.agent_status_clear_pending = true;
         let other_session = session("other-session", Engine::Claude);
-        store::save_session_to(&sessions_dir, &codex_session).expect("session should save");
+        store::save_session_to(&sessions_dir, &calling_session).expect("session should save");
         store::save_session_to(&sessions_dir, &other_session).expect("session should save");
         let expected = AgentStatus {
             kind: "needs_attention".to_string(),
@@ -237,8 +273,9 @@ mod tests {
             [
                 ("XDG_CACHE_HOME", Some(xdg_cache_home)),
                 ("XDG_CONFIG_HOME", Some(xdg_config_home)),
-                ("ARMYKNIFE_SESSION_ID", None::<&str>),
-                ("CODEX_SESSION_ID", Some("codex-session")),
+                ("ARMYKNIFE_SESSION_ID", armyknife_session_id),
+                ("CODEX_SESSION_ID", codex_session_id),
+                ("CODEX_THREAD_ID", codex_thread_id),
             ],
             || {
                 run(&StatusCommands::Set(SetArgs {
@@ -249,13 +286,13 @@ mod tests {
             },
         );
 
-        let codex_session = store::load_session_from(&sessions_dir, "codex-session")
-            .expect("Codex session should load")
-            .expect("Codex session should exist");
+        let calling_session = store::load_session_from(&sessions_dir, "codex-session")
+            .expect("calling session should load")
+            .expect("calling session should exist");
         let actual = (
             (
-                codex_session.agent_status,
-                codex_session.agent_status_clear_pending,
+                calling_session.agent_status,
+                calling_session.agent_status_clear_pending,
             ),
             store::load_session_from(&sessions_dir, "other-session")
                 .expect("other session should load")
@@ -264,5 +301,64 @@ mod tests {
         );
 
         assert_eq!(actual, ((Some(expected), false), None));
+    }
+
+    #[rstest]
+    fn set_from_codex_subagent_leaves_the_shared_session_unchanged(
+        configured_status_home: TempDir,
+    ) {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let xdg_cache_home = temp_dir
+            .path()
+            .to_str()
+            .expect("temp dir path should be valid UTF-8");
+        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
+        let mut parent_session = session("codex-session", Engine::Codex);
+        parent_session.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: "parent status".to_string(),
+        });
+        parent_session.agent_status_clear_pending = true;
+        store::save_session_to(&sessions_dir, &parent_session).expect("session should save");
+        let before = store::serialize_session(
+            &store::load_session_from(&sessions_dir, "codex-session")
+                .expect("session should load")
+                .expect("session should exist"),
+        )
+        .expect("session should serialize");
+        let before_revision =
+            store::session_store_revision_from(&sessions_dir).expect("store revision should load");
+        let xdg_config_home = configured_status_home
+            .path()
+            .to_str()
+            .expect("config home path should be valid UTF-8");
+
+        temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(xdg_cache_home)),
+                ("XDG_CONFIG_HOME", Some(xdg_config_home)),
+                ("ARMYKNIFE_SESSION_ID", Some("codex-session")),
+                ("CODEX_SESSION_ID", Some("codex-session")),
+                ("CODEX_THREAD_ID", Some("codex-subagent-thread")),
+            ],
+            || {
+                run(&StatusCommands::Set(SetArgs {
+                    kind: "needs_attention".to_string(),
+                    note: "child status".to_string(),
+                }))
+                .expect("subagent status should succeed");
+            },
+        );
+
+        let after = store::serialize_session(
+            &store::load_session_from(&sessions_dir, "codex-session")
+                .expect("session should load")
+                .expect("session should exist"),
+        )
+        .expect("session should serialize");
+        let after_revision =
+            store::session_store_revision_from(&sessions_dir).expect("store revision should load");
+
+        assert_eq!((after, after_revision), (before, before_revision));
     }
 }
