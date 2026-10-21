@@ -16,6 +16,7 @@ use crate::commands::agent::codex_steer::Client;
 #[cfg(not(test))]
 use crate::infra::process;
 use crate::shared::cache;
+use crate::shared::log::short_run_id;
 
 const CHILD_TURN_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CHILD_TURN_READS: usize = 600;
@@ -55,12 +56,24 @@ impl From<&CodexSubagentStopWorkerArgs> for HookInput {
 pub fn run(_: &CodexSubagentStopArgs) -> Result<()> {
     let input: HookInput = serde_json::from_reader(std::io::stdin().lock())
         .context("failed to read Codex SubagentStop hook input")?;
+    let span = tracing::info_span!(
+        "agent.codex_subagent_stop",
+        run_id = %short_run_id(),
+        session = %input.session_id,
+    );
+    let _entered = span.enter();
     spawn_worker(&input);
     Ok(())
 }
 
 pub fn run_worker(args: &CodexSubagentStopWorkerArgs) -> Result<()> {
     let input = HookInput::from(args);
+    let span = tracing::info_span!(
+        "agent.codex_subagent_stop",
+        run_id = %short_run_id(),
+        session = %input.session_id,
+    );
+    let _entered = span.enter();
     let result = (|| {
         let mut client = Client::connect()?;
         let ledger = FileEventLedger::new()?;
@@ -432,10 +445,13 @@ mod tests {
     use std::cell::RefCell;
     use std::collections::{HashSet, VecDeque};
     use std::rc::Rc;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
 
     use super::*;
     use anyhow::anyhow;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::json;
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -454,6 +470,7 @@ mod tests {
     struct FakeControl {
         responses: VecDeque<std::result::Result<Value, String>>,
         calls: Vec<ApiCall>,
+        queue_error: Option<String>,
     }
 
     impl FakeControl {
@@ -463,6 +480,7 @@ mod tests {
             Self {
                 responses: responses.into_iter().collect(),
                 calls: Vec::new(),
+                queue_error: None,
             }
         }
     }
@@ -480,7 +498,10 @@ mod tests {
         fn queue_add(&mut self, thread_id: &str, content: &str) -> Result<()> {
             self.calls
                 .push(ApiCall::Queue(thread_id.to_string(), content.to_string()));
-            Ok(())
+            match &self.queue_error {
+                Some(error) => Err(anyhow!(error.clone())),
+                None => Ok(()),
+            }
         }
     }
 
@@ -531,6 +552,7 @@ mod tests {
         }
     }
 
+    #[fixture]
     fn input() -> HookInput {
         HookInput {
             session_id: "sample-root-session".to_string(),
@@ -592,16 +614,22 @@ mod tests {
         }
     }
 
-    #[test]
-    fn queues_once_for_the_direct_idle_parent_after_the_child_turn_completes() {
+    #[rstest]
+    #[case::completed("completed")]
+    #[case::interrupted("interrupted")]
+    #[case::failed("failed")]
+    fn queues_once_for_the_direct_idle_parent_after_the_child_turn_completes(
+        input: HookInput,
+        #[case] terminal_status: &str,
+    ) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("inProgress")),
-            Ok(child_thread("completed")),
+            Ok(child_thread(terminal_status)),
             Ok(parent_thread(Some("idle"))),
         ]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 3);
+        let actual = observe(&input, &mut control, &ledger, 3);
 
         assert_eq!(
             actual,
@@ -620,8 +648,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_treat_another_completed_turn_as_the_target_turn() {
+    #[rstest]
+    fn does_not_treat_another_completed_turn_as_the_target_turn(input: HookInput) {
         let mut control = FakeControl::with_responses([
             Ok(json!({
                 "thread": {
@@ -637,7 +665,7 @@ mod tests {
         ]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 3);
+        let actual = observe(&input, &mut control, &ledger, 3);
 
         assert_eq!(
             actual,
@@ -662,6 +690,7 @@ mod tests {
     #[case::system_error("systemError", ParentStatus::SystemError)]
     #[case::unknown("futureState", ParentStatus::Unknown(Some("futureState".to_string())))]
     fn does_not_queue_when_parent_is_not_known_idle(
+        input: HookInput,
         #[case] status: &str,
         #[case] expected: ParentStatus,
     ) {
@@ -671,7 +700,7 @@ mod tests {
         ]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 1);
+        let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
             actual,
@@ -685,13 +714,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_queue_when_parent_status_is_missing() {
+    #[rstest]
+    fn does_not_queue_when_parent_status_is_missing(input: HookInput) {
         let mut control =
             FakeControl::with_responses([Ok(child_thread("completed")), Ok(parent_thread(None))]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 1);
+        let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
             actual,
@@ -705,15 +734,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_queue_when_the_child_turn_is_still_in_progress() {
+    #[rstest]
+    fn does_not_queue_when_the_child_turn_is_still_in_progress(input: HookInput) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("inProgress")),
             Ok(child_thread("inProgress")),
         ]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 2);
+        let actual = observe(&input, &mut control, &ledger, 2);
 
         assert_eq!(
             actual,
@@ -727,13 +756,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_queue_when_thread_state_cannot_be_read() {
+    #[rstest]
+    fn does_not_queue_when_thread_state_cannot_be_read(input: HookInput) {
         let mut control =
             FakeControl::with_responses([Err("control socket unavailable".to_string())]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 1);
+        let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
             actual,
@@ -744,15 +773,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_queue_when_the_parent_thread_cannot_be_read() {
+    #[rstest]
+    fn does_not_queue_when_the_parent_thread_cannot_be_read(input: HookInput) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
             Err("parent thread is unavailable".to_string()),
         ]);
         let ledger = MemoryLedger::default();
 
-        let actual = observe(&input(), &mut control, &ledger, 1);
+        let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
             actual,
@@ -766,15 +795,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn does_not_queue_twice_for_a_duplicate_child_turn() {
+    #[rstest]
+    fn does_not_queue_twice_for_a_duplicate_child_turn(input: HookInput) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
             Ok(parent_thread(Some("idle"))),
         ]);
         let ledger = MemoryLedger::default();
-        let first = observe(&input(), &mut control, &ledger, 1);
-        let second = observe(&input(), &mut control, &ledger, 1);
+        let first = observe(&input, &mut control, &ledger, 1);
+        let second = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
             (first, second),
@@ -798,11 +827,44 @@ mod tests {
         );
     }
 
-    #[test]
-    fn records_a_processed_event_on_disk_for_duplicate_workers() {
+    #[rstest]
+    fn records_a_rejected_queue_attempt_without_retrying(input: HookInput) {
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread("completed")),
+            Ok(parent_thread(Some("idle"))),
+        ]);
+        control.queue_error = Some("queue rejected".to_string());
+        let ledger = MemoryLedger::default();
+        let first = observe(&input, &mut control, &ledger, 1);
+        let second = observe(&input, &mut control, &ledger, 1);
+
+        assert_eq!(
+            (first, second),
+            (
+                Observation {
+                    outcome: Ok(Outcome::QueueRejected),
+                    calls: vec![
+                        ApiCall::Read("sample-child-thread".to_string(), true),
+                        ApiCall::Read("sample-direct-parent".to_string(), false),
+                        ApiCall::Queue(
+                            "sample-direct-parent".to_string(),
+                            PARENT_WAKE_MESSAGE.to_string(),
+                        ),
+                    ],
+                },
+                Observation {
+                    outcome: Ok(Outcome::Duplicate),
+                    calls: Vec::new(),
+                },
+            ),
+        );
+    }
+
+    #[rstest]
+    fn records_a_processed_event_on_disk_for_duplicate_workers(input: HookInput) {
         let directory = tempfile::tempdir().expect("temporary state directory");
         let ledger = FileEventLedger::at_directory(directory.path()).expect("event ledger");
-        let key = EventKey::from(&input());
+        let key = EventKey::from(&input);
         let mut first = ledger
             .begin(&key)
             .expect("claim succeeds")
@@ -813,5 +875,47 @@ mod tests {
         let duplicate = ledger.begin(&key).expect("duplicate check succeeds");
 
         assert_eq!(duplicate.map(|_| "claimed"), None);
+    }
+
+    #[rstest]
+    fn serializes_concurrent_workers_for_the_same_child_turn(input: HookInput) {
+        let directory = tempfile::tempdir().expect("temporary state directory");
+        let first_ledger = FileEventLedger::at_directory(directory.path()).expect("first ledger");
+        let second_ledger = FileEventLedger::at_directory(directory.path()).expect("second ledger");
+        let key = EventKey::from(&input);
+        let mut first = first_ledger
+            .begin(&key)
+            .expect("first claim succeeds")
+            .expect("first worker owns event");
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (claim_tx, claim_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let second_worker = thread::spawn(move || {
+            attempt_tx.send(()).expect("signal lock attempt");
+            let claim = second_ledger
+                .begin(&key)
+                .map_err(|error| error.to_string())?;
+            let claimed = claim.is_some();
+            claim_tx.send(claimed).expect("report claim state");
+            if let Some(mut lease) = claim {
+                release_rx.recv().expect("release second worker");
+                lease.mark_processed().map_err(|error| error.to_string())?;
+            }
+            Ok::<_, String>(claimed)
+        });
+        attempt_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second worker attempts to claim event");
+        let overlap_claim = claim_rx.recv_timeout(Duration::from_millis(100));
+
+        first.mark_processed().expect("first worker marks event");
+        drop(first);
+        let _ = release_tx.send(());
+        let second_result = second_worker.join().expect("second worker");
+
+        assert_eq!(
+            (overlap_claim, second_result),
+            (Err(mpsc::RecvTimeoutError::Timeout), Ok(false)),
+        );
     }
 }

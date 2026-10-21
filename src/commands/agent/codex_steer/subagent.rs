@@ -1,4 +1,4 @@
-use anyhow::{Context, anyhow};
+use anyhow::anyhow;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -10,7 +10,7 @@ impl Client {
         thread_id: &str,
         include_turns: bool,
     ) -> anyhow::Result<Value> {
-        let request_id = self.next_subagent_request_id()?;
+        let request_id = self.next_request_id()?;
         let request = thread_read_request(thread_id, request_id, include_turns);
         let (response, _) =
             super::send_request_and_collect_notifications(&mut self.socket, &request)
@@ -23,7 +23,7 @@ impl Client {
         thread_id: &str,
         content: &str,
     ) -> anyhow::Result<()> {
-        let request_id = self.next_subagent_request_id()?;
+        let request_id = self.next_request_id()?;
         let request = queue_add_request(thread_id, content, request_id);
         let response = super::send_request_response(&mut self.socket, &request)
             .map_err(request_error_to_anyhow)?;
@@ -33,14 +33,6 @@ impl Client {
             ));
         }
         Ok(())
-    }
-
-    fn next_subagent_request_id(&mut self) -> anyhow::Result<u64> {
-        let request_id = self.next_status_read_request_id;
-        self.next_status_read_request_id = request_id
-            .checked_add(1)
-            .context("Codex app-server request ID space was exhausted")?;
-        Ok(request_id)
     }
 }
 
@@ -84,28 +76,30 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     use anyhow::anyhow;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::{Value, json};
     use tungstenite::{Message, WebSocket, client};
 
     use super::super::{Client, TURN_STATUS_READ_REQUEST_ID_START, test_support};
 
-    fn connected_client_and_server() -> anyhow::Result<(Client, WebSocket<UnixStream>)> {
-        let (client_stream, server_stream) = UnixStream::pair()?;
+    #[fixture]
+    fn connected_client_and_server() -> (Client, WebSocket<UnixStream>) {
+        let (client_stream, server_stream) = UnixStream::pair().expect("socket pair");
         let server =
             std::thread::spawn(move || test_support::accept_with_read_timeout(server_stream));
-        let (socket, _) = client("ws://localhost/rpc", client_stream)?;
+        let (socket, _) = client("ws://localhost/rpc", client_stream).expect("WebSocket client");
         let server = server
             .join()
-            .map_err(|_| anyhow!("Codex app-server test thread panicked"))??;
+            .expect("Codex app-server test thread")
+            .expect("WebSocket server");
 
-        Ok((
+        (
             Client {
                 socket,
-                next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+                next_request_id: TURN_STATUS_READ_REQUEST_ID_START,
             },
             server,
-        ))
+        )
     }
 
     fn request_value(message: Message) -> anyhow::Result<Value> {
@@ -118,8 +112,11 @@ mod tests {
     #[rstest]
     #[case::with_turns(true)]
     #[case::without_turns(false)]
-    fn reads_subagent_thread_with_requested_turn_history(#[case] include_turns: bool) {
-        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+    fn reads_subagent_thread_with_requested_turn_history(
+        #[case] include_turns: bool,
+        connected_client_and_server: (Client, WebSocket<UnixStream>),
+    ) {
+        let (mut client, mut server) = connected_client_and_server;
         let server_thread = std::thread::spawn(move || {
             let request =
                 request_value(server.read().expect("thread/read request")).expect("request JSON");
@@ -157,9 +154,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn adds_a_message_with_the_queue_only_request() {
-        let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
+    #[rstest]
+    fn adds_a_message_with_the_queue_only_request(
+        connected_client_and_server: (Client, WebSocket<UnixStream>),
+    ) {
+        let (mut client, mut server) = connected_client_and_server;
         let server_thread = std::thread::spawn(move || {
             let mut request =
                 request_value(server.read().expect("queue/add request")).expect("request JSON");
@@ -198,6 +197,59 @@ mod tests {
                     },
                 }),
                 Ok(()),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::missing_queue_submission(
+        json!({"result": {}}),
+        Err("Codex app-server thread/queue/add response did not contain a queued submission".to_string()),
+    )]
+    #[case::rejected_queue_submission(
+        json!({"error": {"code": 409, "message": "queue rejected"}}),
+        Err("Codex app-server `thread/queue/add` failed: queue rejected (code 409)".to_string()),
+    )]
+    fn reports_queue_add_failures(
+        #[case] response: Value,
+        #[case] expected_error: std::result::Result<(), String>,
+        connected_client_and_server: (Client, WebSocket<UnixStream>),
+    ) {
+        let (mut client, mut server) = connected_client_and_server;
+        let server_thread = std::thread::spawn(move || {
+            let mut request =
+                request_value(server.read().expect("queue/add request")).expect("request JSON");
+            request["params"]["clientUserMessageId"] = json!("sample-message-id");
+            let mut response = response;
+            response["id"] = json!(TURN_STATUS_READ_REQUEST_ID_START);
+            server
+                .send(Message::Text(response.to_string().into()))
+                .expect("queue/add response");
+            request
+        });
+
+        let result = client
+            .queue_subagent_message("sample-parent-thread", "A child Codex agent has completed.")
+            .map_err(|error| error.to_string());
+        let request = server_thread.join().expect("server thread");
+
+        assert_eq!(
+            (request, result),
+            (
+                json!({
+                    "id": TURN_STATUS_READ_REQUEST_ID_START,
+                    "method": "thread/queue/add",
+                    "params": {
+                        "threadId": "sample-parent-thread",
+                        "clientUserMessageId": "sample-message-id",
+                        "input": [{
+                            "type": "text",
+                            "text": "A child Codex agent has completed.",
+                            "textElements": [],
+                        }],
+                    },
+                }),
+                expected_error,
             ),
         );
     }

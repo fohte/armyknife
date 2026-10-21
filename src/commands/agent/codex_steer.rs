@@ -62,7 +62,7 @@ struct RpcRequest {
 /// before this client begins listening for it.
 pub struct Client {
     socket: WebSocket<UnixStream>,
-    next_status_read_request_id: u64,
+    next_request_id: u64,
 }
 
 impl Client {
@@ -94,7 +94,7 @@ impl Client {
 
         Ok(Self {
             socket,
-            next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+            next_request_id: TURN_STATUS_READ_REQUEST_ID_START,
         })
     }
 
@@ -145,11 +145,16 @@ impl Client {
 
     /// Reads the status of the latest turn recorded for `thread_id`.
     pub(crate) fn latest_turn_status(&mut self, thread_id: &str) -> anyhow::Result<Option<String>> {
-        let request_id = self.next_status_read_request_id;
-        self.next_status_read_request_id = request_id
-            .checked_add(1)
-            .context("Codex app-server request ID space was exhausted while reading turn status")?;
+        let request_id = self.next_request_id()?;
         delivery::latest_turn_status(&mut self.socket, thread_id, request_id)
+    }
+
+    fn next_request_id(&mut self) -> anyhow::Result<u64> {
+        let request_id = self.next_request_id;
+        self.next_request_id = request_id
+            .checked_add(1)
+            .context("Codex app-server request ID space was exhausted")?;
+        Ok(request_id)
     }
 }
 
@@ -520,7 +525,7 @@ mod tests {
         Ok((
             Client {
                 socket,
-                next_status_read_request_id: TURN_STATUS_READ_REQUEST_ID_START,
+                next_request_id: TURN_STATUS_READ_REQUEST_ID_START,
             },
             server,
         ))
