@@ -711,6 +711,26 @@ Register these in Codex's `hooks.json` (each command with `--engine codex`) to t
 }
 ```
 
+Register `SubagentStop` separately to resume an idle parent after a child turn finishes:
+
+```json
+{
+  "hooks": {
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent codex-subagent-stop" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+The handler reads `session_id`, `agent_id`, and `turn_id` from hook stdin, then starts a detached worker. The worker waits until that exact child turn is terminal, resolves its direct parent from `parentThreadId`, and queues a mailbox reminder only when the parent's live `thread/read` status is `idle`. An active parent, an unknown status, or a failed status read does not receive input. Repeated hooks for the same child turn are processed once.
+
+The idle check and queue request are separate operations. If the parent becomes active between them, the queued item can start an extra turn after the active turn ends. Codex also rejects queue submissions to a parent that is itself a multi-agent v2 subagent, so that parent cannot be resumed by this handler.
+
 Codex has no `Notification` event, so nothing maps to `a agent hook notification`. A Codex `SessionEnd` hook is best-effort and may not fire; when it does, it records the session as `Stopped`, or keeps it `Paused` when sweep has requested shutdown. The app-server daemon also fires this hook during shutdown, including restarts. Exiting through `a agent codex` marks the thread `Ended` when a thread ID is bound to its tmux pane. Exiting through `a agent resume` marks the thread bound to its pane `Ended`, falling back to the requested resume thread when no pane binding is available. Both paths preserve `Paused` when sweep has already requested shutdown. `a agent close` also marks a Codex session `Ended` after confirming its exit, and a new thread taking over a pane ends the previous Codex session. A raw `codex` invocation does not provide process-exit confirmation; if its `SessionEnd` hook does not arrive, `a agent sweep` handles the session like any other stopped session. Codex has no equivalent of `CLAUDE_ENV_FILE`, so `ARMYKNIFE_SESSION_ID` is never set inside a Codex session; commands that need the caller's own session ID (`a agent new`'s parent resolution, `a agent peer parent`/`children`) fall back to `CODEX_SESSION_ID`, which Codex exports to every command it runs.
 
 Both engines delay permission notifications by about one second because another `PermissionRequest` hook can resolve the request without showing the approval UI. A subsequent event that clears the pending request, such as `PostToolUse` or `Stop`, cancels the notification. Codex sessions with a top-level `approvals_reviewer = "auto_review"` in `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`) wait through Codex v0.155.1's 90-second automatic approval review timeout before rechecking, so the notification is delayed by about 92 seconds in that case. Profile-scoped values are not read. Launch-only `codex -c` overrides and Apps connector reviewer overrides are resolved inside Codex and are not visible to armyknife: when the persisted global setting is `auto_review`, those cases use the same conservative delayed path; when it is not, the one-second path can notify while an override review is running. An approved command that runs longer than this window can still leave the hook state pending until `PostToolUse` and may produce a notification because hooks do not expose a separate running-tool signal.

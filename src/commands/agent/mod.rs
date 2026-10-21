@@ -14,6 +14,7 @@ mod close;
 mod codex;
 mod codex_queue;
 pub(crate) mod codex_steer;
+mod codex_subagent_stop;
 mod crit;
 mod display;
 mod error;
@@ -59,6 +60,7 @@ pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
 pub(crate) use close::close_worktree_path;
 pub use codex::CodexArgs;
+pub use codex_subagent_stop::{CodexSubagentStopArgs, CodexSubagentStopWorkerArgs};
 pub use crit::CritCommands;
 pub use focus::FocusArgs;
 pub use generate_title_detached::GenerateTitleDetachedArgs;
@@ -86,6 +88,14 @@ pub enum AgentCommands {
 
     /// Start Codex and bind its thread ID to the current tmux pane
     Codex(CodexArgs),
+
+    /// Wake an idle Codex parent after a subagent turn completes
+    #[command(name = "codex-subagent-stop")]
+    CodexSubagentStop(CodexSubagentStopArgs),
+
+    /// Internal: wait for a Codex subagent turn and queue a wake for its idle parent.
+    #[command(name = "codex-subagent-stop-worker", hide = true)]
+    CodexSubagentStopWorker(CodexSubagentStopWorkerArgs),
 
     /// Delete merged or closed worktrees
     Clean(CleanArgs),
@@ -188,6 +198,8 @@ impl AgentCommands {
         match self {
             Self::New(args) => new::run(args)?,
             Self::Codex(args) => codex::run(args)?,
+            Self::CodexSubagentStop(args) => codex_subagent_stop::run(args)?,
+            Self::CodexSubagentStopWorker(args) => codex_subagent_stop::run_worker(args)?,
             Self::Clean(args) => clean::run(args).await?,
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,

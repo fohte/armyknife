@@ -25,6 +25,7 @@ const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(600);
 mod archive;
 mod delivery;
 mod launch_lock;
+mod subagent;
 
 pub(crate) use archive::archive_thread;
 pub use launch_lock::{acquire_launch_lock, acquire_launch_lock_with_timeout};
