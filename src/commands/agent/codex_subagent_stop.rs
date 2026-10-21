@@ -566,6 +566,11 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn ledger() -> MemoryLedger {
+        MemoryLedger::default()
+    }
+
     #[test]
     fn reads_hook_ids_from_stdin_fields() {
         let actual = serde_json::from_value::<HookInput>(json!({
@@ -624,6 +629,7 @@ mod tests {
     #[case::failed("failed")]
     fn queues_once_for_the_direct_idle_parent_after_the_child_turn_completes(
         input: HookInput,
+        ledger: MemoryLedger,
         #[case] terminal_status: &str,
     ) {
         let mut control = FakeControl::with_responses([
@@ -631,8 +637,6 @@ mod tests {
             Ok(child_thread(terminal_status)),
             Ok(parent_thread(Some("idle"))),
         ]);
-        let ledger = MemoryLedger::default();
-
         let actual = observe(&input, &mut control, &ledger, 3);
 
         assert_eq!(
@@ -653,9 +657,11 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_or_retry_after_child_turn_is_interrupted(input: HookInput) {
+    fn does_not_queue_or_retry_after_child_turn_is_interrupted(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
         let mut control = FakeControl::with_responses([Ok(child_thread("interrupted"))]);
-        let ledger = MemoryLedger::default();
 
         let actual = (
             observe(&input, &mut control, &ledger, 1),
@@ -678,7 +684,10 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_treat_another_completed_turn_as_the_target_turn(input: HookInput) {
+    fn does_not_treat_another_completed_turn_as_the_target_turn(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
         let mut control = FakeControl::with_responses([
             Ok(json!({
                 "thread": {
@@ -692,8 +701,6 @@ mod tests {
             Ok(child_thread("completed")),
             Ok(parent_thread(Some("idle"))),
         ]);
-        let ledger = MemoryLedger::default();
-
         let actual = observe(&input, &mut control, &ledger, 3);
 
         assert_eq!(
@@ -720,6 +727,7 @@ mod tests {
     #[case::unknown("futureState", ParentStatus::Unknown(Some("futureState".to_string())))]
     fn does_not_queue_when_parent_is_not_known_idle(
         input: HookInput,
+        ledger: MemoryLedger,
         #[case] status: &str,
         #[case] expected: ParentStatus,
     ) {
@@ -727,8 +735,6 @@ mod tests {
             Ok(child_thread("completed")),
             Ok(parent_thread(Some(status))),
         ]);
-        let ledger = MemoryLedger::default();
-
         let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
@@ -744,10 +750,9 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_when_parent_status_is_missing(input: HookInput) {
+    fn does_not_queue_when_parent_status_is_missing(input: HookInput, ledger: MemoryLedger) {
         let mut control =
             FakeControl::with_responses([Ok(child_thread("completed")), Ok(parent_thread(None))]);
-        let ledger = MemoryLedger::default();
 
         let actual = observe(&input, &mut control, &ledger, 1);
 
@@ -764,13 +769,14 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_when_the_child_turn_is_still_in_progress(input: HookInput) {
+    fn does_not_queue_when_the_child_turn_is_still_in_progress(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("inProgress")),
             Ok(child_thread("inProgress")),
         ]);
-        let ledger = MemoryLedger::default();
-
         let actual = observe(&input, &mut control, &ledger, 2);
 
         assert_eq!(
@@ -786,10 +792,9 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_when_thread_state_cannot_be_read(input: HookInput) {
+    fn does_not_queue_when_thread_state_cannot_be_read(input: HookInput, ledger: MemoryLedger) {
         let mut control =
             FakeControl::with_responses([Err("control socket unavailable".to_string())]);
-        let ledger = MemoryLedger::default();
 
         let actual = observe(&input, &mut control, &ledger, 1);
 
@@ -803,13 +808,14 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_when_the_parent_thread_cannot_be_read(input: HookInput) {
+    fn does_not_queue_when_the_parent_thread_cannot_be_read(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
             Err("parent thread is unavailable".to_string()),
         ]);
-        let ledger = MemoryLedger::default();
-
         let actual = observe(&input, &mut control, &ledger, 1);
 
         assert_eq!(
@@ -825,12 +831,11 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_twice_for_a_duplicate_child_turn(input: HookInput) {
+    fn does_not_queue_twice_for_a_duplicate_child_turn(input: HookInput, ledger: MemoryLedger) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
             Ok(parent_thread(Some("idle"))),
         ]);
-        let ledger = MemoryLedger::default();
         let first = observe(&input, &mut control, &ledger, 1);
         let second = observe(&input, &mut control, &ledger, 1);
 
@@ -857,13 +862,12 @@ mod tests {
     }
 
     #[rstest]
-    fn records_a_rejected_queue_attempt_without_retrying(input: HookInput) {
+    fn records_a_rejected_queue_attempt_without_retrying(input: HookInput, ledger: MemoryLedger) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
             Ok(parent_thread(Some("idle"))),
         ]);
         control.queue_error = Some("queue rejected".to_string());
-        let ledger = MemoryLedger::default();
         let first = observe(&input, &mut control, &ledger, 1);
         let second = observe(&input, &mut control, &ledger, 1);
 
