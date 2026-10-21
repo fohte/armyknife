@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.453](https://github.com/fohte/armyknife/compare/v0.1.452...v0.1.453) (2026-10-21)
+
+
+### Bug Fixes
+
+* **agent:** prevent Codex subagent status updates ([#1243](https://github.com/fohte/armyknife/issues/1243)) ([1a80327](https://github.com/fohte/armyknife/commit/1a80327ffd23207783b23a20fe4eecfd67881892))
+
 ## [0.1.452](https://github.com/fohte/armyknife/compare/v0.1.451...v0.1.452) (2026-10-20)
 
 
