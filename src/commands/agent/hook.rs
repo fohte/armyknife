@@ -225,7 +225,7 @@ fn process_hook_event_impl(
     let stop_hook_instruction = agent_config.as_ref().and_then(stop::configured_instruction);
     let status_inference_prompt = agent_config
         .as_ref()
-        .and_then(stop::configured_status_inference_prompt);
+        .and_then(|agent_config| agent_config.configured_status_inference_prompt());
     process_hook_event_impl_with_settings(
         event,
         input,

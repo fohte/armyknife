@@ -94,6 +94,10 @@ pub(super) fn set_inferred_status_if_unchanged(
         status.kind,
         configured_kind_names(agent_config),
     );
+    ensure!(
+        !status.note.trim().is_empty(),
+        "status note must not be empty"
+    );
     ensure_single_line(&status.note)?;
 
     let lock = store::lock_session_for_update(sessions_dir, session_id)?;
@@ -189,6 +193,25 @@ mod tests {
         home
     }
 
+    struct InferenceSessionStore {
+        _temp_dir: TempDir,
+        sessions_dir: PathBuf,
+        session: Session,
+    }
+
+    #[fixture]
+    fn inference_session_store() -> InferenceSessionStore {
+        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
+        let session = session("inference-session", Engine::Claude);
+        store::save_session_to(&sessions_dir, &session).expect("session should save");
+        InferenceSessionStore {
+            _temp_dir: temp_dir,
+            sessions_dir,
+            session,
+        }
+    }
+
     #[test]
     fn set_command_parses_kind_and_note() {
         let cli = TestCli::try_parse_from([
@@ -254,10 +277,10 @@ mod tests {
     fn inferred_status_write_checks_stop_snapshot(
         #[case] guard: InferenceWriteGuard,
         #[case] expected_written: bool,
+        inference_session_store: InferenceSessionStore,
     ) {
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
-        let mut original = session("inference-session", Engine::Claude);
+        let sessions_dir = &inference_session_store.sessions_dir;
+        let mut original = inference_session_store.session.clone();
         original.updated_at = chrono::DateTime::parse_from_rfc3339("2026-05-11T00:00:00Z")
             .expect("fixed timestamp should parse")
             .with_timezone(&Utc);
@@ -274,21 +297,21 @@ mod tests {
                 original.updated_at += chrono::TimeDelta::seconds(1);
             }
         }
-        store::save_session_to(&sessions_dir, &original).expect("session should save");
+        store::save_session_to(sessions_dir, &original).expect("session should save");
 
         let expected_status = AgentStatus {
             kind: "awaiting_build".to_string(),
             note: "wait for the build".to_string(),
         };
         let written = set_inferred_status_if_unchanged(
-            &sessions_dir,
+            sessions_dir,
             &original.session_id,
             stop_updated_at,
             &crate::shared::config::test_support::agent_config(),
             expected_status.clone(),
         )
         .expect("inference write should succeed");
-        let actual = store::load_session_from(&sessions_dir, &original.session_id)
+        let actual = store::load_session_from(sessions_dir, &original.session_id)
             .expect("session should load")
             .expect("session should exist");
 
@@ -315,6 +338,7 @@ mod tests {
         "valid note",
         "unknown agent status kind `removed_name`; configured kinds: awaiting_build, finished_work, needs_attention"
     )]
+    #[case::empty_note("needs_attention", "  ", "status note must not be empty")]
     #[case::multiline_note(
         "needs_attention",
         indoc! {"
@@ -327,15 +351,14 @@ mod tests {
         #[case] kind: &str,
         #[case] note: &str,
         #[case] expected_error: &str,
+        inference_session_store: InferenceSessionStore,
     ) {
-        let temp_dir = TempDir::new().expect("temp dir creation should succeed");
-        let sessions_dir = temp_dir.path().join("armyknife/cc/sessions");
-        let original = session("inference-session", Engine::Claude);
+        let sessions_dir = &inference_session_store.sessions_dir;
+        let original = inference_session_store.session.clone();
         let original_updated_at = original.updated_at;
-        store::save_session_to(&sessions_dir, &original).expect("session should save");
 
         let error = set_inferred_status_if_unchanged(
-            &sessions_dir,
+            sessions_dir,
             &original.session_id,
             original_updated_at,
             &crate::shared::config::test_support::agent_config(),
@@ -345,7 +368,7 @@ mod tests {
             },
         )
         .expect_err("invalid inference should be rejected");
-        let actual = store::load_session_from(&sessions_dir, &original.session_id)
+        let actual = store::load_session_from(sessions_dir, &original.session_id)
             .expect("session should load")
             .expect("session should exist");
 

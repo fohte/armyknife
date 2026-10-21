@@ -24,17 +24,6 @@ pub(super) fn configured_instruction(agent_config: &AgentConfig) -> Option<&str>
     }
 }
 
-pub(super) fn configured_status_inference_prompt(agent_config: &AgentConfig) -> Option<&str> {
-    if agent_config.statuses.is_empty() {
-        return None;
-    }
-
-    agent_config
-        .status_inference_prompt
-        .as_deref()
-        .filter(|prompt| !prompt.trim().is_empty())
-}
-
 pub(super) fn block_reason(conditions: StopConditions, instruction: Option<&str>) -> Option<&str> {
     if has_known_stop_reason(conditions) {
         None
@@ -168,7 +157,7 @@ mod tests {
         }
         agent_config.status_inference_prompt = prompt.map(str::to_string);
 
-        assert_eq!(configured_status_inference_prompt(&agent_config), expected);
+        assert_eq!(agent_config.configured_status_inference_prompt(), expected);
     }
 
     #[derive(Debug, Clone, Copy)]

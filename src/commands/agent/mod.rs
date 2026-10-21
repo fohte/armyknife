@@ -34,7 +34,7 @@ mod session_init;
 mod session_pr_context;
 pub(crate) mod session_status;
 mod signal;
-pub(super) mod status;
+mod status;
 mod status_inference;
 pub(crate) mod store;
 mod sweep;

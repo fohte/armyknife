@@ -37,14 +37,7 @@ fn selected_tools(config: &Config) -> Vec<ExternalTool> {
             // probe `nvim`, so silently skip when the user picked something else.
             ExternalTool::Nvim => config.editor.editor_command == "nvim",
             ExternalTool::Hammerspoon => config.notification.enabled,
-            ExternalTool::Codex => {
-                !config.agent.statuses.is_empty()
-                    && config
-                        .agent
-                        .status_inference_prompt
-                        .as_deref()
-                        .is_some_and(|prompt| !prompt.trim().is_empty())
-            }
+            ExternalTool::Codex => config.agent.configured_status_inference_prompt().is_some(),
             // Image conversion is an optional enhancement; notifications work without it.
             ExternalTool::ImageMagick => false,
             _ => true,

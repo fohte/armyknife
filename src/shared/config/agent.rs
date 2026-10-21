@@ -131,6 +131,17 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    /// Return the prompt when status inference is configured and usable.
+    pub fn configured_status_inference_prompt(&self) -> Option<&str> {
+        if self.statuses.is_empty() {
+            return None;
+        }
+
+        self.status_inference_prompt
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty())
+    }
+
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)

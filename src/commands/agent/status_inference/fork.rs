@@ -50,10 +50,17 @@ pub(super) fn infer_claude_status(
         .transcript_path
         .as_deref()
         .context("Claude session has no transcript path")?;
-    let model = latest_assistant_model(transcript_path)?;
+    let model = latest_model(
+        transcript_path,
+        "Claude",
+        Some("assistant"),
+        &["/message/model"],
+    )?;
+    let schema = serde_json::to_string(&status_schema(agent_config))
+        .context("serialize Claude output schema")?;
     let mut command = ExternalTool::Claude.command();
     command
-        .args(claude_args(&session.session_id, &model, prompt))
+        .args(claude_args(&session.session_id, &model, &schema, prompt))
         .current_dir(&session.cwd)
         .env("ARMYKNIFE_SKIP_HOOKS", "1");
 
@@ -66,7 +73,7 @@ pub(super) fn infer_claude_status(
         String::from_utf8_lossy(&output.stderr).trim()
     );
 
-    let (status, usage) = parse_claude_output(&output.stdout, agent_config)?;
+    let (status, usage) = parse_claude_output(&output.stdout)?;
     tracing::info!(
         event = "agent.status_inference.claude_usage",
         session = %session.session_id,
@@ -87,10 +94,13 @@ pub(super) fn infer_codex_status(
         .transcript_path
         .as_deref()
         .context("Codex session has no transcript path")?;
-    let model = latest_codex_model(transcript_path)?;
-    let mut schema_file = NamedTempFile::new().context("create Codex output schema")?;
-    serde_json::to_writer(&mut schema_file, &status_schema(agent_config))?;
-    schema_file.flush()?;
+    let model = latest_model(
+        transcript_path,
+        "Codex",
+        None,
+        &["/payload/model", "/message/model"],
+    )?;
+    let schema_file = status_schema_file(agent_config, "Codex")?;
     let output_file = NamedTempFile::new().context("create Codex output file")?;
 
     let mut command = ExternalTool::Codex.command();
@@ -123,11 +133,19 @@ pub(super) fn infer_codex_status(
         output_tokens = usage.output_tokens,
     );
     let response = fs::read_to_string(output_file.path()).context("read Codex final response")?;
-    parse_status_response(&response, agent_config)
+    parse_status_response(&response)
 }
 
-fn claude_args(session_id: &str, model: &str, prompt: &str) -> Vec<OsString> {
-    [
+fn status_schema_file(agent_config: &AgentConfig, engine: &str) -> Result<NamedTempFile> {
+    let mut schema_file =
+        NamedTempFile::new().with_context(|| format!("create {engine} output schema"))?;
+    serde_json::to_writer(&mut schema_file, &status_schema(agent_config))?;
+    schema_file.flush()?;
+    Ok(schema_file)
+}
+
+fn claude_args(session_id: &str, model: &str, schema: &str, prompt: &str) -> Vec<OsString> {
+    let mut args = [
         "--resume",
         session_id,
         "--fork-session",
@@ -144,14 +162,18 @@ fn claude_args(session_id: &str, model: &str, prompt: &str) -> Vec<OsString> {
         "none",
         "--output-format",
         "json",
-        "--model",
-        model,
-        "-p",
-        prompt,
     ]
     .into_iter()
     .map(OsString::from)
-    .collect()
+    .collect::<Vec<_>>();
+    args.push("--json-schema".into());
+    args.push(schema.into());
+    args.extend(
+        ["--model", model, "-p", prompt]
+            .into_iter()
+            .map(OsString::from),
+    );
+    args
 }
 
 fn codex_args(
@@ -185,48 +207,34 @@ fn codex_args(
     args
 }
 
-fn latest_assistant_model(transcript_path: &Path) -> Result<String> {
+fn latest_model(
+    transcript_path: &Path,
+    engine: &str,
+    required_event_type: Option<&str>,
+    model_pointers: &[&str],
+) -> Result<String> {
     let file = fs::File::open(transcript_path)
-        .with_context(|| format!("open Claude transcript {}", transcript_path.display()))?;
+        .with_context(|| format!("open {engine} transcript {}", transcript_path.display()))?;
     let mut model = None;
     for line in BufReader::new(file).lines() {
         let line = line?;
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if event.get("type").and_then(Value::as_str) != Some("assistant") {
+        if let Some(required_event_type) = required_event_type
+            && event.get("type").and_then(Value::as_str) != Some(required_event_type)
+        {
             continue;
         }
-        if let Some(value) = event
-            .pointer("/message/model")
-            .and_then(Value::as_str)
+        if let Some(value) = model_pointers
+            .iter()
+            .find_map(|pointer| event.pointer(pointer).and_then(Value::as_str))
             .filter(|value| !value.is_empty())
         {
             model = Some(value.to_string());
         }
     }
-    model.context("Claude transcript contains no assistant model")
-}
-
-fn latest_codex_model(transcript_path: &Path) -> Result<String> {
-    let file = fs::File::open(transcript_path)
-        .with_context(|| format!("open Codex transcript {}", transcript_path.display()))?;
-    let mut model = None;
-    for line in BufReader::new(file).lines() {
-        let line = line?;
-        let Ok(event) = serde_json::from_str::<Value>(&line) else {
-            continue;
-        };
-        if let Some(value) = event
-            .pointer("/payload/model")
-            .or_else(|| event.pointer("/message/model"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
-            model = Some(value.to_string());
-        }
-    }
-    model.context("Codex transcript contains no model")
+    model.with_context(|| format!("{engine} transcript contains no model"))
 }
 #[cfg(test)]
 mod tests {
@@ -235,7 +243,12 @@ mod tests {
     #[test]
     fn claude_arguments_fork_the_original_session_without_tools() {
         assert_eq!(
-            claude_args("fixture-session", "fixture-model", "infer the status"),
+            claude_args(
+                "fixture-session",
+                "fixture-model",
+                r#"{"type":"object"}"#,
+                "infer the status",
+            ),
             [
                 "--resume",
                 "fixture-session",
@@ -253,6 +266,8 @@ mod tests {
                 "none",
                 "--output-format",
                 "json",
+                "--json-schema",
+                r#"{"type":"object"}"#,
                 "--model",
                 "fixture-model",
                 "-p",
@@ -334,7 +349,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
     #[test]
-    fn latest_assistant_model_uses_the_last_assistant_record() {
+    fn latest_model_uses_the_last_matching_model_record() {
         let mut transcript = NamedTempFile::new().expect("transcript file should be created");
         writeln!(transcript, "{{\"type\":\"user\",\"message\":{{}}}}")
             .expect("user event should be written");
@@ -350,13 +365,19 @@ mod tests {
         .expect("latest assistant event should be written");
 
         assert_eq!(
-            latest_assistant_model(transcript.path()).expect("model should be found"),
+            latest_model(
+                transcript.path(),
+                "Claude",
+                Some("assistant"),
+                &["/message/model"],
+            )
+            .expect("model should be found"),
             "fixture-model-latest",
         );
     }
 
     #[test]
-    fn latest_codex_model_uses_the_latest_turn_context() {
+    fn latest_model_uses_first_matching_pointer_for_codex_records() {
         let mut transcript = NamedTempFile::new().expect("transcript file should be created");
         writeln!(
             transcript,
@@ -370,7 +391,13 @@ mod tests {
         .expect("latest turn context should be written");
 
         assert_eq!(
-            latest_codex_model(transcript.path()).expect("model should be found"),
+            latest_model(
+                transcript.path(),
+                "Codex",
+                None,
+                &["/payload/model", "/message/model"],
+            )
+            .expect("model should be found"),
             "fixture-codex-latest",
         );
     }
