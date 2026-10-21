@@ -14,6 +14,7 @@ use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 
 const INFERENCE_TIMEOUT: Duration = Duration::from_secs(120);
+// The global ask rule outranks user allow rules; dontAsk turns each prompt into a denial.
 const FORK_SETTINGS: &str = r#"{"disableAllHooks":true,"permissions":{"ask":["*"]}}"#;
 
 pub(super) fn infer_claude_status(session: &Session, prompt: &str) -> Result<AgentStatus> {
@@ -111,7 +112,7 @@ mod tests {
                 "--fork-session",
                 "--no-session-persistence",
                 "--settings",
-                FORK_SETTINGS,
+                r#"{"disableAllHooks":true,"permissions":{"ask":["*"]}}"#,
                 "--permission-mode",
                 "dontAsk",
                 "--permission-prompts",

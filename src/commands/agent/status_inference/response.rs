@@ -36,6 +36,13 @@ pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
         note: String,
     }
 
+    let text = text.trim();
+    let text = text
+        .strip_prefix("```json")
+        .or_else(|| text.strip_prefix("```"))
+        .and_then(|text| text.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(text);
     let response: Response = serde_json::from_str(text).context("parse inferred status JSON")?;
     Ok(AgentStatus {
         kind: response.kind,
@@ -46,10 +53,18 @@ pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
 
     #[rstest]
     #[case::valid(r#"{"kind":"needs_user","note":"review the proposal"}"#, Ok(("needs_user".to_string(), "review the proposal".to_string())))]
+    #[case::fenced_json(
+        indoc! {r#"
+            ```json
+            {"kind":"needs_user","note":"review the proposal"}
+            ```"#},
+        Ok(("needs_user".to_string(), "review the proposal".to_string())),
+    )]
     #[case::unknown_kind(r#"{"kind":"unknown","note":"review the proposal"}"#, Ok(("unknown".to_string(), "review the proposal".to_string())))]
     #[case::multiline_note(r#"{"kind":"needs_user","note":"first line\nsecond line"}"#, Ok(("needs_user".to_string(), "first line\nsecond line".to_string())))]
     #[case::extra_field(r#"{"kind":"needs_user","note":"review the proposal","extra":true}"#, Err("parse inferred status JSON: unknown field `extra`, expected `kind` or `note` at line 1 column 57".to_string()))]

@@ -2051,7 +2051,8 @@ mod tests {
             serde_json::json!({
                 "description": indoc! {"
                     Instruction returned by the Stop hook when it blocks a session.
-                    The hook blocks only when this is set and at least one status is configured."},
+                    Codex sessions always use this instruction; Claude sessions use it when
+                    status inference is not configured. At least one status must be configured."},
                 "type": ["string", "null"],
                 "default": null,
             })
@@ -2067,8 +2068,8 @@ mod tests {
             schema_value["$defs"]["AgentConfig"]["properties"]["status_inference_prompt"],
             serde_json::json!({
                 "description": indoc! {"
-                    Prompt sent to a forked session to infer a missing status at Stop.
-                    When unset, the Stop hook retains its existing `stop_hook_instruction` behavior."},
+                    Prompt sent to a forked Claude Code session to infer a missing status at Stop.
+                    Codex sessions continue to use `stop_hook_instruction`."},
                 "type": ["string", "null"],
                 "default": null,
             })
