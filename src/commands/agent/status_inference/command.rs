@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::super::types::{AgentStatus, Engine, Session};
 use super::super::{status, store};
-use super::fork::{infer_claude_status, infer_codex_status};
+use super::fork::infer_claude_status;
 use super::prompt::build_prompt;
 #[cfg(not(test))]
 use crate::infra::process;
@@ -97,21 +97,18 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
         &agent_config,
         configured_prompt,
         infer_claude_status,
-        infer_codex_status,
     )
 }
 
-fn run_inner_with<ClaudeInference, CodexInference>(
+fn run_inner_with<ClaudeInference>(
     args: &StatusInferenceArgs,
     sessions_dir: &Path,
     agent_config: &AgentConfig,
     configured_prompt: &str,
     infer_claude: ClaudeInference,
-    infer_codex: CodexInference,
 ) -> Result<()>
 where
-    ClaudeInference: FnOnce(&Session, &str, &AgentConfig) -> Result<AgentStatus>,
-    CodexInference: FnOnce(&Session, &str, &AgentConfig) -> Result<AgentStatus>,
+    ClaudeInference: FnOnce(&Session, &str) -> Result<AgentStatus>,
 {
     let Some(session) = store::load_session_from(sessions_dir, &args.session)? else {
         tracing::info!(
@@ -130,11 +127,17 @@ where
         return Ok(());
     }
 
-    let prompt = build_prompt(configured_prompt, &session, agent_config);
-    let inferred_status = match session.engine {
-        Engine::Claude => infer_claude(&session, &prompt, agent_config)?,
-        Engine::Codex => infer_codex(&session, &prompt, agent_config)?,
+    if session.engine != Engine::Claude {
+        tracing::info!(
+            event = "agent.status_inference.skipped",
+            session = %args.session,
+            reason = "unsupported_engine",
+        );
+        return Ok(());
     };
+
+    let prompt = build_prompt(configured_prompt, &session, agent_config);
+    let inferred_status = infer_claude(&session, &prompt)?;
 
     match status::set_inferred_status_if_unchanged(
         sessions_dir,
@@ -211,7 +214,7 @@ mod tests {
             read_at: None,
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
-            engine: Engine::Codex,
+            engine: Engine::Claude,
         };
         store::save_session_to(&sessions_dir, &session).expect("session should be saved");
         let agent_config: AgentConfig = serde_yaml::from_str(indoc! {
@@ -233,7 +236,7 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_inference_result_is_written_to_the_stopped_session(
+    fn claude_inference_result_is_written_to_the_stopped_session(
         inference_worker_context: InferenceWorkerContext,
     ) {
         let context = inference_worker_context;
@@ -253,8 +256,7 @@ mod tests {
                 .agent_config
                 .configured_status_inference_prompt()
                 .expect("status inference should be enabled"),
-            |_, _, _| Err(anyhow::anyhow!("Claude runner must not be used")),
-            |_, _, _| Ok(inferred_status.clone()),
+            |_, _| Ok(inferred_status.clone()),
         )
         .expect("status inference should succeed");
 
@@ -271,7 +273,7 @@ mod tests {
     }
 
     #[rstest]
-    fn failed_codex_inference_leaves_the_session_unchanged(
+    fn failed_claude_inference_leaves_the_session_unchanged(
         inference_worker_context: InferenceWorkerContext,
     ) {
         let context = inference_worker_context;
@@ -287,8 +289,7 @@ mod tests {
                 .agent_config
                 .configured_status_inference_prompt()
                 .expect("status inference should be enabled"),
-            |_, _, _| Err(anyhow::anyhow!("Claude runner must not be used")),
-            |_, _, _| Err(anyhow::anyhow!("Codex fork failed")),
+            |_, _| Err(anyhow::anyhow!("Claude fork failed")),
         );
         let actual = store::load_session_from(&context.sessions_dir, &args.session)
             .expect("session should load")
@@ -300,7 +301,45 @@ mod tests {
                 serde_json::to_value(actual).expect("session should serialize"),
             ),
             (
-                Err("Codex fork failed".to_string()),
+                Err("Claude fork failed".to_string()),
+                serde_json::to_value(context.session).expect("expected session should serialize"),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_worker_skips_inference_and_leaves_the_session_unchanged(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        context.session.engine = Engine::Codex;
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("Codex session should be saved");
+        let args = StatusInferenceArgs {
+            session: context.session.session_id.clone(),
+            updated_at: context.session.updated_at,
+        };
+        let result = run_inner_with(
+            &args,
+            &context.sessions_dir,
+            &context.agent_config,
+            context
+                .agent_config
+                .configured_status_inference_prompt()
+                .expect("status inference should be enabled"),
+            |_, _| Err(anyhow::anyhow!("Codex inference must not run")),
+        );
+        let actual = store::load_session_from(&context.sessions_dir, &args.session)
+            .expect("session should load")
+            .expect("session should still exist");
+
+        assert_eq!(
+            (
+                result.map_err(|error| format!("{error:#}")),
+                serde_json::to_value(actual).expect("session should serialize"),
+            ),
+            (
+                Ok(()),
                 serde_json::to_value(context.session).expect("expected session should serialize"),
             ),
         );

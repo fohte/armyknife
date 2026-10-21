@@ -79,13 +79,13 @@ pub struct AgentConfig {
     pub merge_notification: Option<String>,
 
     /// Instruction returned by the Stop hook when it blocks a session.
-    /// When `status_inference_prompt` is unset, blocking requires this instruction
-    /// and at least one configured status.
+    /// Codex sessions always use this instruction; Claude sessions use it when
+    /// status inference is not configured. At least one status must be configured.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
 
-    /// Prompt sent to a forked session to infer a missing status at Stop.
-    /// When unset, the Stop hook retains its existing `stop_hook_instruction` behavior.
+    /// Prompt sent to a forked Claude Code session to infer a missing status at Stop.
+    /// Codex sessions continue to use `stop_hook_instruction`.
     #[serde(default)]
     pub status_inference_prompt: Option<String>,
 

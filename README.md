@@ -41,9 +41,9 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear in YOUR TURN and tmux's next action; `waiting` and `done` status names mark TASKS rows without appearing in YOUR TURN. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
 
-`agent.stop_hook_instruction` is an optional message returned when the Stop hook cannot infer why the agent stopped. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
+`agent.stop_hook_instruction` is the optional blocking instruction used by Codex sessions and Claude sessions without status inference. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
 
-`agent.status_inference_prompt` optionally asks a detached worker to classify a missing status at Stop by forking the session with its source engine CLI (`claude` or `codex`), which consumes tokens. The CLI for the source session engine must be installed for inference to run. Armyknife appends the configured status names and required JSON format to this prompt. Fork failures, timeouts, and invalid output are logged and leave the status unset. When this prompt is omitted, a configured `agent.stop_hook_instruction` keeps its existing blocking behavior.
+`agent.status_inference_prompt` lets a detached worker infer a missing status from a fork of the Claude Code session, so the status can be filled without spending another turn. This uses tokens. Armyknife appends the configured status names and required JSON format to the prompt. Fork failures, timeouts, and invalid output are logged and leave the status unset. Codex sessions continue to use `agent.stop_hook_instruction`.
 
 `agent.bg_task_reminder.timeout` is an optional duration such as `17m`; when omitted, background task reminders are disabled. `message` overrides the reminder text. Entries in `excluded_commands` are substring matches against the command line and skip the reminder for matching commands.
 
@@ -65,11 +65,11 @@ agent:
     needs_attention: { state: user }
     awaiting_build: { state: waiting }
     work_finished: { state: done }
-  # Used to infer a missing status from a fork of the session at Stop.
+  # Used to infer a missing Claude Code status from a fork at Stop.
   status_inference_prompt: |
     Classify the session's current state based on the full conversation.
     Explain the next step in the note.
-  # Returned when status inference is omitted; only blocks when statuses are configured.
+  # Used by Codex and by Claude when status inference is not configured.
   stop_hook_instruction: 'Summarize the result before stopping.'
   bg_task_reminder:
     timeout: 17m
@@ -486,7 +486,7 @@ A session also enables the marker when its main-thread user prompt starts with `
 
 Run `a agent vibe on` in a tracked session to enable the marker. A new descendant automatically receives inheritance eligibility when `a agent new` runs while its caller's effective vibe is enabled; this records eligibility without copying the caller's explicit `on` state. `a agent vibe grant <session-id>` remains available for existing descendants, including sessions launched before an ancestor was enabled or after adoption. Inheritance remains active only while a recorded ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's explicit marker; descendants lose inherited status when the enabling ancestor turns it off.
 
-When a `Stop` hook cannot infer why the agent stopped and no status is set, `agent.status_inference_prompt` starts a detached worker that asynchronously forks the session through its source engine CLI (`claude` or `codex`), consuming tokens. Armyknife appends the configured status names and required JSON format to the prompt. The result is stored only after its kind and note pass validation and only if no status has been set and no new turn has started. Fork failures, timeouts, and invalid output are logged and leave the status unset. The fork is non-persistent and runs without hooks or tools. If the prompt is omitted, a configured `agent.stop_hook_instruction` retains the existing behavior: it blocks the stop when `agent.statuses` contains at least one name. If the instruction is also omitted or the status map is empty, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger either path. A blocked stop keeps the session running and skips stop notifications and auto-compaction. When status inference is not configured, require status reports by configuring an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
+When a Claude Code `Stop` hook cannot infer why the agent stopped and no status is set, `agent.status_inference_prompt` starts a detached worker that forks the session and fills the status without spending another turn. The worker uses tokens. Armyknife appends the configured status names and required JSON format to the prompt. The result is stored only after its kind and note pass validation and only if no status has been set and no new turn has started. Fork failures, timeouts, and invalid output are logged and leave the status unset. The fork is non-persistent; it keeps tool definitions available but denies tool execution through permissions, and disables all hooks. Codex sessions continue to use `agent.stop_hook_instruction`. If the status map or the instruction is missing, the hook allows the agent to stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger inference or blocking. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports from sessions without inference, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
 Define status names under `agent.statuses`; the configured state controls how each status is shown:
 
@@ -947,7 +947,7 @@ armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log
 
 ### `a doctor`
 
-Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). When `agent.statuses` contains an entry and `agent.status_inference_prompt` is nonblank, it also checks for `codex`. Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
+Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
 
 ```sh
 a doctor

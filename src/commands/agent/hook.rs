@@ -609,7 +609,7 @@ fn process_hook_event_impl_with_settings(
                 &session,
                 was_waiting_for_input,
                 was_asking_user,
-                if status_inference_prompt.is_some() {
+                if should_infer_status {
                     None
                 } else {
                     stop_hook_instruction
@@ -3290,6 +3290,45 @@ mod tests {
                 SessionStatus::Stopped,
                 None,
                 vec![("test-123".to_string(), session.updated_at)],
+            ),
+        );
+    }
+
+    #[test]
+    fn codex_status_inference_keeps_the_configured_stop_instruction() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Infer the configured status from the session."),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded),
+            (
+                ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
+                SessionStatus::Running,
+                None,
+                Vec::new(),
             ),
         );
     }

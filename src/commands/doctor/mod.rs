@@ -37,7 +37,6 @@ fn selected_tools(config: &Config) -> Vec<ExternalTool> {
             // probe `nvim`, so silently skip when the user picked something else.
             ExternalTool::Nvim => config.editor.editor_command == "nvim",
             ExternalTool::Hammerspoon => config.notification.enabled,
-            ExternalTool::Codex => config.agent.configured_status_inference_prompt().is_some(),
             // Image conversion is an optional enhancement; notifications work without it.
             ExternalTool::ImageMagick => false,
             _ => true,
@@ -262,30 +261,5 @@ mod tests {
     )]
     fn selected_tools_cases(#[case] config: Config, #[case] expected: &[ExternalTool]) {
         assert_eq!(selected_tools(&config), expected);
-    }
-
-    #[rstest]
-    #[case::prompt_without_statuses(false, &[])]
-    #[case::prompt_with_statuses(true, &[ExternalTool::Codex])]
-    fn codex_is_selected_only_when_status_inference_is_enabled(
-        #[case] configure_statuses: bool,
-        #[case] expected: &[ExternalTool],
-    ) {
-        let mut config = Config::default();
-        config.agent.status_inference_prompt = Some("Infer a missing status.".to_string());
-        if configure_statuses {
-            config.agent.statuses.insert(
-                "finished_work".to_string(),
-                crate::shared::config::AgentStatusConfig {
-                    state: crate::shared::config::AgentStatusState::Done,
-                },
-            );
-        }
-
-        let actual = selected_tools(&config)
-            .into_iter()
-            .filter(|tool| *tool == ExternalTool::Codex)
-            .collect::<Vec<_>>();
-        assert_eq!(actual, expected);
     }
 }

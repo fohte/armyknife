@@ -52,10 +52,11 @@ pub(super) fn should_infer_status_for_hook(
     was_asking_user: bool,
     inference_prompt: Option<&str>,
 ) -> bool {
-    should_infer_status(
-        stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user),
-        inference_prompt,
-    )
+    session.engine == Engine::Claude
+        && should_infer_status(
+            stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user),
+            inference_prompt,
+        )
 }
 
 fn should_infer_status(conditions: StopConditions, inference_prompt: Option<&str>) -> bool {
