@@ -79,9 +79,15 @@ pub struct AgentConfig {
     pub merge_notification: Option<String>,
 
     /// Instruction returned by the Stop hook when it blocks a session.
-    /// The hook blocks only when this is set and at least one status is configured.
+    /// When `status_inference_prompt` is unset, blocking requires this instruction
+    /// and at least one configured status.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
+
+    /// Prompt sent to a forked session to infer a missing status at Stop.
+    /// When unset, the Stop hook retains its existing `stop_hook_instruction` behavior.
+    #[serde(default)]
+    pub status_inference_prompt: Option<String>,
 
     /// Reminder settings for background tasks that run longer than expected.
     #[serde(default)]

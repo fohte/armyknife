@@ -845,6 +845,7 @@ mod tests {
                     profiles: HashMap::new(),
                     merge_notification: None,
                     stop_hook_instruction: None,
+                    status_inference_prompt: None,
                     bg_task_reminder: BgTaskReminderConfig::default(),
                     codex: CodexConfig {
                         model: None,
@@ -984,6 +985,7 @@ mod tests {
         let yaml = indoc! {"
             agent:
               stop_hook_instruction: Please summarize the result before stopping.
+              status_inference_prompt: 'Infer the current status and return JSON with kind and note.'
         "};
         let config: Config = serde_yaml::from_str(yaml).unwrap();
 
@@ -993,9 +995,33 @@ mod tests {
                 stop_hook_instruction: Some(
                     "Please summarize the result before stopping.".to_string()
                 ),
+                status_inference_prompt: Some(
+                    "Infer the current status and return JSON with kind and note.".to_string()
+                ),
                 ..Default::default()
             }
         );
+    }
+
+    #[test]
+    fn status_inference_prompt_round_trips_through_yaml() {
+        let config = Config {
+            agent: AgentConfig {
+                status_inference_prompt: Some(
+                    indoc! {"
+                        Infer the current status from the full conversation.
+                        Return one JSON object with kind and note.
+                    "}
+                    .to_string(),
+                ),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let yaml = serde_yaml::to_string(&config).unwrap();
+        let round_tripped: Config = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(round_tripped, config);
     }
 
     #[test]
@@ -2026,6 +2052,23 @@ mod tests {
                 "description": indoc! {"
                     Instruction returned by the Stop hook when it blocks a session.
                     The hook blocks only when this is set and at least one status is configured."},
+                "type": ["string", "null"],
+                "default": null,
+            })
+        );
+    }
+
+    #[cfg(feature = "schema-gen")]
+    #[rstest]
+    fn generate_schema_contains_status_inference_prompt_description(
+        schema_value: serde_json::Value,
+    ) {
+        assert_eq!(
+            schema_value["$defs"]["AgentConfig"]["properties"]["status_inference_prompt"],
+            serde_json::json!({
+                "description": indoc! {"
+                    Prompt sent to a forked session to infer a missing status at Stop.
+                    When unset, the Stop hook retains its existing `stop_hook_instruction` behavior."},
                 "type": ["string", "null"],
                 "default": null,
             })

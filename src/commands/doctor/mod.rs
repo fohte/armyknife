@@ -23,9 +23,9 @@ pub fn run(_args: &DoctorArgs) -> Result<()> {
 }
 
 /// Filters [`ExternalTool::ALL`] down to the tools the current config actually
-/// uses. Non-selected terminal alternatives, a non-nvim editor, and disabled
-/// notifications are dropped so users aren't flagged for tools they will never
-/// invoke.
+/// uses. Non-selected terminal alternatives, a non-nvim editor, disabled
+/// notifications, and an unset status-inference feature are dropped so users
+/// aren't flagged for tools they will never invoke.
 fn selected_tools(config: &Config) -> Vec<ExternalTool> {
     ExternalTool::ALL
         .iter()
@@ -37,6 +37,14 @@ fn selected_tools(config: &Config) -> Vec<ExternalTool> {
             // probe `nvim`, so silently skip when the user picked something else.
             ExternalTool::Nvim => config.editor.editor_command == "nvim",
             ExternalTool::Hammerspoon => config.notification.enabled,
+            ExternalTool::Codex => {
+                !config.agent.statuses.is_empty()
+                    && config
+                        .agent
+                        .status_inference_prompt
+                        .as_deref()
+                        .is_some_and(|prompt| !prompt.trim().is_empty())
+            }
             // Image conversion is an optional enhancement; notifications work without it.
             ExternalTool::ImageMagick => false,
             _ => true,
@@ -261,5 +269,30 @@ mod tests {
     )]
     fn selected_tools_cases(#[case] config: Config, #[case] expected: &[ExternalTool]) {
         assert_eq!(selected_tools(&config), expected);
+    }
+
+    #[rstest]
+    #[case::prompt_without_statuses(false, &[])]
+    #[case::prompt_with_statuses(true, &[ExternalTool::Codex])]
+    fn codex_is_selected_only_when_status_inference_is_enabled(
+        #[case] configure_statuses: bool,
+        #[case] expected: &[ExternalTool],
+    ) {
+        let mut config = Config::default();
+        config.agent.status_inference_prompt = Some("Infer a missing status.".to_string());
+        if configure_statuses {
+            config.agent.statuses.insert(
+                "finished_work".to_string(),
+                crate::shared::config::AgentStatusConfig {
+                    state: crate::shared::config::AgentStatusState::Done,
+                },
+            );
+        }
+
+        let actual = selected_tools(&config)
+            .into_iter()
+            .filter(|tool| *tool == ExternalTool::Codex)
+            .collect::<Vec<_>>();
+        assert_eq!(actual, expected);
     }
 }

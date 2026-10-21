@@ -31,6 +31,7 @@
         "launch_profiles": {},
         "merge_notification": null,
         "profiles": {},
+        "status_inference_prompt": null,
         "statuses": {},
         "stop_hook_instruction": null,
         "vibe_marker": null,
@@ -168,6 +169,14 @@
           },
           "default": {}
         },
+        "status_inference_prompt": {
+          "description": "Prompt sent to a forked session to infer a missing status at Stop.\nWhen unset, the Stop hook retains its existing `stop_hook_instruction` behavior.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
         "statuses": {
           "description": "User-defined status names and the state each name represents.",
           "type": "object",
@@ -177,7 +186,7 @@
           "default": {}
         },
         "stop_hook_instruction": {
-          "description": "Instruction returned by the Stop hook when it blocks a session.\nThe hook blocks only when this is set and at least one status is configured.",
+          "description": "Instruction returned by the Stop hook when it blocks a session.\nWhen `status_inference_prompt` is unset, blocking requires this instruction\nand at least one configured status.",
           "type": [
             "string",
             "null"
