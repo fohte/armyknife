@@ -79,9 +79,15 @@ pub struct AgentConfig {
     pub merge_notification: Option<String>,
 
     /// Instruction returned by the Stop hook when it blocks a session.
-    /// The hook blocks only when this is set and at least one status is configured.
+    /// Codex sessions always use this instruction; Claude sessions use it when
+    /// status inference is not configured. At least one status must be configured.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
+
+    /// Prompt sent to a forked Claude Code session to infer a missing status at Stop.
+    /// Codex sessions continue to use `stop_hook_instruction`.
+    #[serde(default)]
+    pub status_inference_prompt: Option<String>,
 
     /// Reminder settings for background tasks that run longer than expected.
     #[serde(default)]
@@ -125,6 +131,17 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    /// Return the prompt when status inference is configured and usable.
+    pub fn configured_status_inference_prompt(&self) -> Option<&str> {
+        if self.statuses.is_empty() {
+            return None;
+        }
+
+        self.status_inference_prompt
+            .as_deref()
+            .filter(|prompt| !prompt.trim().is_empty())
+    }
+
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)

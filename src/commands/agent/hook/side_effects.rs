@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
+
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
@@ -22,6 +24,9 @@ pub(super) struct SideEffects {
     /// Spawn the detached `a agent auto-compact schedule` worker on Stop events.
     /// Off in tests (would fork a real process and survive past the test).
     pub(super) auto_compact: bool,
+    /// Spawn the detached status inference worker on eligible Stop events.
+    /// Off in tests (would fork a real process and survive past the test).
+    pub(super) status_inference: bool,
     pub(super) capture_pr_context: Option<PrContextCapture>,
     /// Spawn the detached `a agent archive-tq-session-detached` worker on a
     /// genuine Ended transition. Off in tests (would fork a real process).
@@ -50,6 +55,10 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
+    /// Test-only sink that records (session id, Stop update time) passed to
+    /// the status inference worker.
+    #[cfg(test)]
+    pub(super) status_inference_calls: Option<StatusInferenceCallSink>,
     /// Test-only sink that records sessions passed to the redelivery worker.
     #[cfg(test)]
     pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
@@ -64,6 +73,8 @@ type TmuxSyncCall = (
 );
 #[cfg(test)]
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
+#[cfg(test)]
+type StatusInferenceCallSink = std::sync::Arc<std::sync::Mutex<Vec<(String, DateTime<Utc>)>>>;
 
 impl SideEffects {
     pub(super) fn all() -> Self {
@@ -71,6 +82,7 @@ impl SideEffects {
             tmux: true,
             notifications: true,
             auto_compact: true,
+            status_inference: true,
             capture_pr_context: Some(Arc::new(super::super::session_pr_context::capture)),
             tq_archive: true,
             track_bg_run_tasks: true,
@@ -86,6 +98,8 @@ impl SideEffects {
             #[cfg(test)]
             auto_compact_calls: None,
             #[cfg(test)]
+            status_inference_calls: None,
+            #[cfg(test)]
             redelivery_calls: None,
         }
     }
@@ -96,6 +110,7 @@ impl SideEffects {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            status_inference: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -105,6 +120,7 @@ impl SideEffects {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            status_inference_calls: None,
             redelivery_calls: None,
         }
     }
@@ -129,6 +145,25 @@ impl SideEffects {
         }
         #[cfg(not(test))]
         super::super::auto_compact::spawn_in_background(session_id);
+    }
+
+    pub(super) fn schedule_status_inference(
+        &self,
+        session_id: &str,
+        stop_updated_at: DateTime<Utc>,
+    ) {
+        if !self.status_inference {
+            return;
+        }
+        #[cfg(test)]
+        if let Some(calls) = &self.status_inference_calls {
+            calls
+                .lock()
+                .expect("status_inference_calls mutex poisoned")
+                .push((session_id.to_string(), stop_updated_at));
+        }
+        #[cfg(not(test))]
+        super::super::status_inference::spawn_in_background(session_id, stop_updated_at);
     }
 
     pub(super) fn redeliver_bg_notifications(&self, session_id: &str) {

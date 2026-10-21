@@ -23,9 +23,9 @@ pub fn run(_args: &DoctorArgs) -> Result<()> {
 }
 
 /// Filters [`ExternalTool::ALL`] down to the tools the current config actually
-/// uses. Non-selected terminal alternatives, a non-nvim editor, and disabled
-/// notifications are dropped so users aren't flagged for tools they will never
-/// invoke.
+/// uses. Non-selected terminal alternatives, a non-nvim editor, disabled
+/// notifications, and an unset status-inference feature are dropped so users
+/// aren't flagged for tools they will never invoke.
 fn selected_tools(config: &Config) -> Vec<ExternalTool> {
     ExternalTool::ALL
         .iter()

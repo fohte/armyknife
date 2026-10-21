@@ -223,21 +223,44 @@ fn process_hook_event_impl(
 ) -> Result<ProcessResult> {
     let agent_config = (event == HookEvent::Stop).then(|| config::load_config_or_default().agent);
     let stop_hook_instruction = agent_config.as_ref().and_then(stop::configured_instruction);
-    process_hook_event_impl_with_instruction(
+    let status_inference_prompt = agent_config
+        .as_ref()
+        .and_then(|agent_config| agent_config.configured_status_inference_prompt());
+    process_hook_event_impl_with_settings(
         event,
         input,
         sessions_dir,
         side_effects,
         stop_hook_instruction,
+        status_inference_prompt,
     )
 }
 
+#[cfg(test)]
 fn process_hook_event_impl_with_instruction(
     event: HookEvent,
     input: HookInput,
     sessions_dir: &Path,
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
+) -> Result<ProcessResult> {
+    process_hook_event_impl_with_settings(
+        event,
+        input,
+        sessions_dir,
+        side_effects,
+        stop_hook_instruction,
+        None,
+    )
+}
+
+fn process_hook_event_impl_with_settings(
+    event: HookEvent,
+    input: HookInput,
+    sessions_dir: &Path,
+    side_effects: &SideEffects,
+    stop_hook_instruction: Option<&str>,
+    status_inference_prompt: Option<&str>,
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
 
@@ -571,6 +594,14 @@ fn process_hook_event_impl_with_instruction(
         status = Some(SessionStatus::WaitingInput);
     }
 
+    let should_infer_status = event == HookEvent::Stop
+        && stop::should_infer_status_for_hook(
+            &input,
+            &session,
+            was_waiting_for_input,
+            was_asking_user,
+            status_inference_prompt,
+        );
     let stop_block_reason = (event == HookEvent::Stop)
         .then(|| {
             stop::block_reason_for_hook(
@@ -578,7 +609,11 @@ fn process_hook_event_impl_with_instruction(
                 &session,
                 was_waiting_for_input,
                 was_asking_user,
-                stop_hook_instruction,
+                if should_infer_status {
+                    None
+                } else {
+                    stop_hook_instruction
+                },
             )
         })
         .flatten();
@@ -746,6 +781,10 @@ fn process_hook_event_impl_with_instruction(
                 pending_agent_tasks = session.pending_agent_task_ids.len(),
             );
         }
+    }
+
+    if should_infer_status {
+        side_effects.schedule_status_inference(&session.session_id, session.updated_at);
     }
 
     // On Stop events, spawn a detached schedule worker that will SIGTERM +
@@ -2547,6 +2586,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            status_inference: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -2556,6 +2596,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            status_inference_calls: None,
             redelivery_calls: None,
         };
 
@@ -2985,6 +3026,7 @@ mod tests {
             tmux: false,
             notifications: false,
             auto_compact: false,
+            status_inference: false,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -2994,6 +3036,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: None,
             auto_compact_calls: None,
+            status_inference_calls: None,
             redelivery_calls: None,
         };
 
@@ -3208,6 +3251,86 @@ mod tests {
             ProcessResult::SessionSaved
         };
         assert_eq!(result, expected);
+    }
+
+    #[test]
+    fn configured_status_inference_schedules_worker_without_blocking() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-123", |_| {});
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let input: HookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "test-123",
+            "cwd": "/tmp/test",
+            "last_assistant_message": "Example response.",
+        }))
+        .expect("stop payload should deserialize");
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Infer the configured status from the session."),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                None,
+                vec![("test-123".to_string(), session.updated_at)],
+            ),
+        );
+    }
+
+    #[test]
+    fn codex_status_inference_keeps_the_configured_stop_instruction() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Infer the configured status from the session."),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded),
+            (
+                ProcessResult::StopBlocked(TEST_STOP_HOOK_INSTRUCTION.to_string()),
+                SessionStatus::Running,
+                None,
+                Vec::new(),
+            ),
+        );
     }
 
     fn stop_input(engine: Engine, message: &str, stop_hook_active: bool) -> HookInput {
@@ -3513,6 +3636,7 @@ mod tests {
             tmux: false,
             notifications: true,
             auto_compact: true,
+            status_inference: true,
             capture_pr_context: None,
             tq_archive: false,
             track_bg_run_tasks: false,
@@ -3522,6 +3646,7 @@ mod tests {
             tq_archive_calls: None,
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
+            status_inference_calls: None,
             redelivery_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({

@@ -36,6 +36,7 @@ mod session_pr_context;
 pub(crate) mod session_status;
 mod signal;
 mod status;
+mod status_inference;
 pub(crate) mod store;
 mod sweep;
 pub(crate) mod tmux_sync;
@@ -75,6 +76,7 @@ pub use profile::{ProfileCommands, UseProfileArgs};
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
+pub use status_inference::StatusInferenceArgs;
 pub use sweep::SweepArgs;
 pub(crate) use vibe::ensure_repo_vibe_access;
 pub use vibe::{VibeCommands, is_vibe_enabled};
@@ -133,6 +135,10 @@ pub enum AgentCommands {
     /// Set the calling session's reason for stopping
     #[command(subcommand)]
     Status(StatusCommands),
+
+    /// Internal: infer a missing stop status from a forked session.
+    #[command(name = "status-inference", hide = true)]
+    StatusInference(StatusInferenceArgs),
 
     /// Select a launch profile and inspect its type settings
     #[command(subcommand)]
@@ -210,6 +216,7 @@ impl AgentCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
+            Self::StatusInference(args) => status_inference::run(args)?,
             Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,
             Self::Resume(args) => resume::run(args)?,
