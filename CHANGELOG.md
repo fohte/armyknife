@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.454](https://github.com/fohte/armyknife/compare/v0.1.453...v0.1.454) (2026-10-21)
+
+
+### Features
+
+* **agent:** resume idle parents after child turns ([#1245](https://github.com/fohte/armyknife/issues/1245)) ([95d9bd5](https://github.com/fohte/armyknife/commit/95d9bd5987af82a812bfae4bc6808b6254985f49))
+
 ## [0.1.453](https://github.com/fohte/armyknife/compare/v0.1.452...v0.1.453) (2026-10-21)
 
 
