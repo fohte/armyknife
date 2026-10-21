@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.455](https://github.com/fohte/armyknife/compare/v0.1.454...v0.1.455) (2026-10-21)
+
+
+### Features
+
+* **agent:** fill in missing status after Stop ([#1247](https://github.com/fohte/armyknife/issues/1247)) ([5ddd7ef](https://github.com/fohte/armyknife/commit/5ddd7ef6d8cd1fbdcf0ac2eca0b49179bb8bd6b0))
+
 ## [0.1.454](https://github.com/fohte/armyknife/compare/v0.1.453...v0.1.454) (2026-10-21)
 
 
