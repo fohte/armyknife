@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::Args;
+use indoc::formatdoc;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -19,8 +20,8 @@ use self::ledger::{EventKey, EventLedger, FileEventLedger};
 
 const CHILD_TURN_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_CHILD_TURN_READS: usize = 600;
-const PARENT_WAKE_MESSAGE: &str =
-    "A Codex subagent has completed. Check its result in your agent mailbox and continue the task.";
+const MAX_QUEUE_MESSAGE_CHARS: usize = 1 << 20;
+const QUEUE_MESSAGE_TRUNCATION_NOTICE: &str = "[Result truncated to fit the Codex queue input limit; inspect the referenced child turn for the full result.]";
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct CodexSubagentStopArgs;
@@ -188,9 +189,13 @@ where
         return Ok(Outcome::Duplicate);
     };
 
-    let child_thread =
+    let (child_thread, completed_turn, turn_status) =
         match wait_for_child_turn(control, input, max_reads, poll_interval, &mut sleep)? {
-            ChildTurn::Completed(thread) => thread,
+            ChildTurn::Completed {
+                thread,
+                turn,
+                status,
+            } => (thread, turn, status),
             ChildTurn::Pending => return Ok(Outcome::ChildTurnPending),
             ChildTurn::Interrupted => {
                 lease.mark_processed()?;
@@ -227,15 +232,17 @@ where
     };
 
     let parent_status = parent_status(&parent_thread);
-    if parent_status != ParentStatus::Idle {
+    if !matches!(&parent_status, &ParentStatus::Idle | &ParentStatus::Active) {
         lease.mark_processed()?;
         return Ok(Outcome::ParentNotIdle(parent_status));
     }
 
+    let message = queue_result_message(input, turn_status, &completed_turn)?;
+
     // Mark before the request because a lost response cannot reveal whether the
     // queue accepted it, and a duplicate hook must not add a second message.
     lease.mark_processed()?;
-    match control.queue_add(parent_thread_id, PARENT_WAKE_MESSAGE) {
+    match control.queue_add(parent_thread_id, &message) {
         Ok(()) => Ok(Outcome::Queued),
         Err(error) => {
             tracing::warn!(
@@ -251,8 +258,27 @@ where
     }
 }
 
+#[derive(Clone, Copy)]
+enum TerminalTurnStatus {
+    Completed,
+    Failed,
+}
+
+impl TerminalTurnStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+}
+
 enum ChildTurn {
-    Completed(Value),
+    Completed {
+        thread: Value,
+        turn: Value,
+        status: TerminalTurnStatus,
+    },
     Interrupted,
     Pending,
     Unknown(String),
@@ -273,19 +299,41 @@ where
         let thread = control
             .read_thread(&input.agent_id, true)
             .with_context(|| format!("failed to read child thread {}", input.agent_id))?;
-        let status = thread
+        let target_turn = thread
             .pointer("/thread/turns")
             .and_then(Value::as_array)
             .and_then(|turns| {
-                turns.iter().find_map(|turn| {
-                    (turn.get("id").and_then(Value::as_str) == Some(&input.turn_id))
-                        .then(|| turn.get("status").and_then(Value::as_str))
-                        .flatten()
-                })
+                turns
+                    .iter()
+                    .find(|turn| turn.get("id").and_then(Value::as_str) == Some(&input.turn_id))
+                    .cloned()
             });
+        let status = target_turn
+            .as_ref()
+            .and_then(|turn| turn.get("status").and_then(Value::as_str))
+            .map(str::to_owned);
 
-        match status {
-            Some("completed" | "failed") => return Ok(ChildTurn::Completed(thread)),
+        match status.as_deref() {
+            Some("completed") => {
+                let Some(turn) = target_turn else {
+                    continue;
+                };
+                return Ok(ChildTurn::Completed {
+                    thread,
+                    turn,
+                    status: TerminalTurnStatus::Completed,
+                });
+            }
+            Some("failed") => {
+                let Some(turn) = target_turn else {
+                    continue;
+                };
+                return Ok(ChildTurn::Completed {
+                    thread,
+                    turn,
+                    status: TerminalTurnStatus::Failed,
+                });
+            }
             Some("interrupted") => return Ok(ChildTurn::Interrupted),
             Some("inProgress") | None => {
                 if read_number + 1 < max_reads {
@@ -296,6 +344,73 @@ where
         }
     }
     Ok(ChildTurn::Pending)
+}
+
+fn queue_result_message(
+    input: &HookInput,
+    status: TerminalTurnStatus,
+    turn: &Value,
+) -> Result<String> {
+    let (result_label, result) = match status {
+        TerminalTurnStatus::Completed => (
+            "Final answer",
+            final_answer(turn).unwrap_or("No final answer was available in the child turn."),
+        ),
+        TerminalTurnStatus::Failed => (
+            "Failure reason",
+            failure_reason(turn).unwrap_or("No failure reason was provided in the child turn."),
+        ),
+    };
+    let mut header = formatdoc! {"
+        Codex subagent turn finished before native mailbox delivery.
+        Child thread ID: {}
+        Turn ID: {}
+        Status: {}
+        {}:",
+        input.agent_id,
+        input.turn_id,
+        status.as_str(),
+        result_label,
+    };
+    header.push('\n');
+    let header_chars = header.chars().count();
+    let result_chars = result.chars().count();
+    if header_chars + result_chars <= MAX_QUEUE_MESSAGE_CHARS {
+        return Ok(format!("{header}{result}"));
+    }
+
+    let notice_chars = QUEUE_MESSAGE_TRUNCATION_NOTICE.chars().count() + 2;
+    let result_budget = MAX_QUEUE_MESSAGE_CHARS
+        .checked_sub(header_chars)
+        .and_then(|remaining| remaining.checked_sub(notice_chars))
+        .context("Codex subagent metadata exceeds the queue input limit")?;
+    let truncated_result = result.chars().take(result_budget).collect::<String>();
+    let mut message = format!("{header}{truncated_result}");
+    message.push('\n');
+    message.push('\n');
+    message.push_str(QUEUE_MESSAGE_TRUNCATION_NOTICE);
+    Ok(message)
+}
+
+fn final_answer(turn: &Value) -> Option<&str> {
+    let items = turn.get("items")?.as_array()?;
+    let final_answer = items.iter().rev().find(|item| {
+        item.get("type").and_then(Value::as_str) == Some("agentMessage")
+            && item.pointer("/phase").and_then(Value::as_str) == Some("final_answer")
+    });
+    let unphased_message = items.iter().rev().find(|item| {
+        item.get("type").and_then(Value::as_str) == Some("agentMessage")
+            && item.get("phase").is_none_or(Value::is_null)
+    });
+    final_answer
+        .or(unphased_message)
+        .and_then(|item| item.get("text").and_then(Value::as_str))
+}
+
+fn failure_reason(turn: &Value) -> Option<&str> {
+    turn.pointer("/error/message")
+        .and_then(Value::as_str)
+        .filter(|reason| !reason.is_empty())
 }
 
 fn parent_status(thread: &Value) -> ParentStatus {
@@ -321,6 +436,7 @@ mod tests {
 
     use super::*;
     use anyhow::anyhow;
+    use indoc::formatdoc;
     use rstest::{fixture, rstest};
     use serde_json::json;
 
@@ -457,15 +573,51 @@ mod tests {
     }
 
     fn child_thread(turn_status: &str) -> Value {
+        let turn = match turn_status {
+            "completed" => json!({
+                "id": "sample-child-turn",
+                "status": turn_status,
+                "items": [{
+                    "type": "agentMessage",
+                    "text": "sample completed result",
+                    "phase": "final_answer",
+                }],
+            }),
+            "failed" => json!({
+                "id": "sample-child-turn",
+                "status": turn_status,
+                "error": {"message": "sample child failure reason"},
+            }),
+            _ => json!({
+                "id": "sample-child-turn",
+                "status": turn_status,
+            }),
+        };
+        child_thread_with_turn(turn)
+    }
+
+    fn child_thread_with_turn(turn: Value) -> Value {
         json!({
             "thread": {
                 "parentThreadId": "sample-direct-parent",
-                "turns": [{
-                    "id": "sample-child-turn",
-                    "status": turn_status,
-                }],
+                "turns": [turn],
             },
         })
+    }
+
+    fn expected_queue_header(status: &str, result_label: &str) -> String {
+        let mut header = formatdoc! {"
+            Codex subagent turn finished before native mailbox delivery.
+            Child thread ID: sample-child-thread
+            Turn ID: sample-child-turn
+            Status: {status}
+            {result_label}:"};
+        header.push('\n');
+        header
+    }
+
+    fn expected_queue_message(status: &str, result_label: &str, result: &str) -> String {
+        format!("{}{result}", expected_queue_header(status, result_label))
     }
 
     fn parent_thread(status: Option<&str>) -> Value {
@@ -492,7 +644,7 @@ mod tests {
     #[rstest]
     #[case::completed("completed")]
     #[case::failed("failed")]
-    fn queues_once_for_the_direct_idle_parent_after_the_child_turn_completes(
+    fn queues_the_terminal_child_turn_result_for_the_direct_idle_parent(
         input: HookInput,
         ledger: MemoryLedger,
         #[case] terminal_status: &str,
@@ -503,6 +655,15 @@ mod tests {
             Ok(parent_thread(Some("idle"))),
         ]);
         let actual = observe(&input, &mut control, &ledger, 3);
+        let expected_message = match terminal_status {
+            "completed" => {
+                expected_queue_message("completed", "Final answer", "sample completed result")
+            }
+            "failed" => {
+                expected_queue_message("failed", "Failure reason", "sample child failure reason")
+            }
+            _ => unreachable!(),
+        };
 
         assert_eq!(
             actual,
@@ -512,10 +673,147 @@ mod tests {
                     ApiCall::Read("sample-child-thread".to_string(), true),
                     ApiCall::Read("sample-child-thread".to_string(), true),
                     ApiCall::Read("sample-direct-parent".to_string(), false),
+                    ApiCall::Queue("sample-direct-parent".to_string(), expected_message,),
+                ],
+            },
+        );
+    }
+
+    #[rstest]
+    fn queues_the_child_turn_result_for_an_active_parent_without_steering_its_turn(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread("completed")),
+            Ok(parent_thread(Some("active"))),
+        ]);
+        let actual = observe(&input, &mut control, &ledger, 1);
+
+        assert_eq!(
+            actual,
+            Observation {
+                outcome: Ok(Outcome::Queued),
+                calls: vec![
+                    ApiCall::Read("sample-child-thread".to_string(), true),
+                    ApiCall::Read("sample-direct-parent".to_string(), false),
                     ApiCall::Queue(
                         "sample-direct-parent".to_string(),
-                        PARENT_WAKE_MESSAGE.to_string(),
+                        expected_queue_message(
+                            "completed",
+                            "Final answer",
+                            "sample completed result",
+                        ),
                     ),
+                ],
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::final_answer_is_preferred("final_answer")]
+    #[case::missing_phase_uses_last_agent_message("missing_phase")]
+    fn selects_the_final_answer_or_last_unphased_agent_message(
+        input: HookInput,
+        ledger: MemoryLedger,
+        #[case] scenario: &str,
+    ) {
+        let (items, expected_result) = match scenario {
+            "final_answer" => (
+                json!([
+                    {
+                        "type": "agentMessage",
+                        "text": "sample final answer",
+                        "phase": "final_answer",
+                    },
+                    {
+                        "type": "agentMessage",
+                        "text": "sample later unphased message",
+                    },
+                ]),
+                "sample final answer",
+            ),
+            "missing_phase" => (
+                json!([
+                    {
+                        "type": "agentMessage",
+                        "text": "sample commentary",
+                        "phase": "commentary",
+                    },
+                    {
+                        "type": "agentMessage",
+                        "text": "sample latest legacy result",
+                    },
+                ]),
+                "sample latest legacy result",
+            ),
+            _ => unreachable!(),
+        };
+        let turn = json!({
+            "id": "sample-child-turn",
+            "status": "completed",
+            "items": items,
+        });
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread_with_turn(turn)),
+            Ok(parent_thread(Some("idle"))),
+        ]);
+        let actual = observe(&input, &mut control, &ledger, 1);
+
+        assert_eq!(
+            actual,
+            Observation {
+                outcome: Ok(Outcome::Queued),
+                calls: vec![
+                    ApiCall::Read("sample-child-thread".to_string(), true),
+                    ApiCall::Read("sample-direct-parent".to_string(), false),
+                    ApiCall::Queue(
+                        "sample-direct-parent".to_string(),
+                        expected_queue_message("completed", "Final answer", expected_result),
+                    ),
+                ],
+            },
+        );
+    }
+
+    #[rstest]
+    fn truncates_long_results_to_the_queue_limit_and_keeps_child_references(
+        input: HookInput,
+        ledger: MemoryLedger,
+    ) {
+        let result = "木".repeat(MAX_QUEUE_MESSAGE_CHARS);
+        let turn = json!({
+            "id": "sample-child-turn",
+            "status": "completed",
+            "items": [{
+                "type": "agentMessage",
+                "text": result,
+                "phase": "final_answer",
+            }],
+        });
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread_with_turn(turn)),
+            Ok(parent_thread(Some("idle"))),
+        ]);
+        let actual = observe(&input, &mut control, &ledger, 1);
+        let header = expected_queue_header("completed", "Final answer");
+        let result_budget = MAX_QUEUE_MESSAGE_CHARS
+            - header.chars().count()
+            - QUEUE_MESSAGE_TRUNCATION_NOTICE.chars().count()
+            - 2;
+        let mut expected_message = format!("{header}{}", "木".repeat(result_budget));
+        expected_message.push('\n');
+        expected_message.push('\n');
+        expected_message.push_str(QUEUE_MESSAGE_TRUNCATION_NOTICE);
+
+        assert_eq!(
+            actual,
+            Observation {
+                outcome: Ok(Outcome::Queued),
+                calls: vec![
+                    ApiCall::Read("sample-child-thread".to_string(), true),
+                    ApiCall::Read("sample-direct-parent".to_string(), false),
+                    ApiCall::Queue("sample-direct-parent".to_string(), expected_message),
                 ],
             },
         );
@@ -578,7 +876,11 @@ mod tests {
                     ApiCall::Read("sample-direct-parent".to_string(), false),
                     ApiCall::Queue(
                         "sample-direct-parent".to_string(),
-                        PARENT_WAKE_MESSAGE.to_string(),
+                        expected_queue_message(
+                            "completed",
+                            "Final answer",
+                            "sample completed result",
+                        ),
                     ),
                 ],
             },
@@ -586,11 +888,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::active("active", ParentStatus::Active)]
     #[case::not_loaded("notLoaded", ParentStatus::NotLoaded)]
     #[case::system_error("systemError", ParentStatus::SystemError)]
     #[case::unknown("futureState", ParentStatus::Unknown(Some("futureState".to_string())))]
-    fn does_not_queue_when_parent_is_not_known_idle(
+    fn does_not_queue_when_parent_status_is_not_idle_or_active(
         input: HookInput,
         ledger: MemoryLedger,
         #[case] status: &str,
@@ -696,10 +997,16 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_twice_for_a_duplicate_child_turn(input: HookInput, ledger: MemoryLedger) {
+    #[case::idle("idle")]
+    #[case::active("active")]
+    fn queues_a_child_turn_result_only_once_for_duplicate_hooks(
+        input: HookInput,
+        ledger: MemoryLedger,
+        #[case] parent_status: &str,
+    ) {
         let mut control = FakeControl::with_responses([
             Ok(child_thread("completed")),
-            Ok(parent_thread(Some("idle"))),
+            Ok(parent_thread(Some(parent_status))),
         ]);
         let first = observe(&input, &mut control, &ledger, 1);
         let second = observe(&input, &mut control, &ledger, 1);
@@ -714,7 +1021,11 @@ mod tests {
                         ApiCall::Read("sample-direct-parent".to_string(), false),
                         ApiCall::Queue(
                             "sample-direct-parent".to_string(),
-                            PARENT_WAKE_MESSAGE.to_string(),
+                            expected_queue_message(
+                                "completed",
+                                "Final answer",
+                                "sample completed result",
+                            ),
                         ),
                     ],
                 },
@@ -746,7 +1057,11 @@ mod tests {
                         ApiCall::Read("sample-direct-parent".to_string(), false),
                         ApiCall::Queue(
                             "sample-direct-parent".to_string(),
-                            PARENT_WAKE_MESSAGE.to_string(),
+                            expected_queue_message(
+                                "completed",
+                                "Final answer",
+                                "sample completed result",
+                            ),
                         ),
                     ],
                 },
