@@ -70,21 +70,20 @@ impl Client {
                 "params": params,
             }),
         };
-        let read_timeout = timeout.min(super::RESPONSE_TIMEOUT);
+        let deadline = deadline_after(timeout)?;
+        let write_timeout = deadline
+            .saturating_duration_since(Instant::now())
+            .min(super::RESPONSE_TIMEOUT);
+        ensure!(
+            !write_timeout.is_zero(),
+            "Codex app-server request timed out"
+        );
         self.socket
             .get_ref()
-            .set_read_timeout(Some(read_timeout))
-            .context("failed to set Codex app-server read timeout")?;
-        self.socket
-            .get_ref()
-            .set_write_timeout(Some(read_timeout))
+            .set_write_timeout(Some(write_timeout))
             .context("failed to set Codex app-server write timeout")?;
-        let response = super::send_request_response(&mut self.socket, &request)
+        let response = super::send_request_response_until(&mut self.socket, &request, deadline)
             .map_err(request_error_to_anyhow);
-        self.socket
-            .get_ref()
-            .set_read_timeout(Some(super::RESPONSE_TIMEOUT))
-            .context("failed to restore Codex app-server read timeout")?;
         self.socket
             .get_ref()
             .set_write_timeout(Some(super::RESPONSE_TIMEOUT))
