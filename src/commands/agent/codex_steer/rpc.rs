@@ -286,6 +286,41 @@ mod tests {
     }
 
     #[test]
+    fn preserves_structured_rpc_rejections_for_delivery() {
+        let actual = match is_response_to(
+            &json!({
+                "id": 2,
+                "error": {
+                    "code": -32600,
+                    "message": "list_turns is not supported yet",
+                },
+            }),
+            2,
+            "thread/read",
+        ) {
+            Err(RequestError::Rejected(rejection)) => json!({
+                "method": rejection.method,
+                "code": rejection.code,
+                "message": rejection.message,
+                "display_message": rejection.to_string(),
+                "thread_without_turns": rejection.is_thread_without_turns_error(),
+            }),
+            other => json!({"unexpected": format!("{other:?}")}),
+        };
+
+        assert_eq!(
+            actual,
+            json!({
+                "method": "thread/read",
+                "code": -32600,
+                "message": "list_turns is not supported yet",
+                "display_message": "Codex app-server `thread/read` failed: list_turns is not supported yet (code -32600)",
+                "thread_without_turns": true,
+            }),
+        );
+    }
+
+    #[test]
     fn waits_through_notifications_for_matching_response() {
         let mut messages = [
             Ok(Message::Text(
