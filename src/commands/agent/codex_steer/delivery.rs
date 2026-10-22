@@ -20,6 +20,9 @@ const PRE_TURN_READ_REQUEST_ID: u64 = 2;
 pub(super) const THREAD_RESUME_REQUEST_ID: u64 = 4;
 const THREAD_READ_REQUEST_ID: u64 = 5;
 const NEXT_THREAD_READ_REQUEST_ID: u64 = 6;
+const RECOVERY_THREAD_RESUME_REQUEST_ID: u64 = 7;
+const RETRY_TURN_START_REQUEST_ID: u64 = 8;
+const NEXT_THREAD_READ_REQUEST_ID_AFTER_RECOVERY: u64 = 9;
 const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
 struct DeliveryContext<'a> {
@@ -66,7 +69,7 @@ where
                 "Codex app-server thread/read response did not contain a thread before turn/start"
             ))
         })?,
-        Err(RequestError::Rejected(error)) if is_thread_without_turns_error(&error) => {
+        Err(RequestError::Rejected(error)) if error.is_thread_without_turns_error() => {
             json!({"turns": []})
         }
         Err(error) => {
@@ -78,11 +81,35 @@ where
     };
     let snapshot = matching_user_message_snapshot(&snapshot_thread, content);
 
-    let turn_start_response = super::send_request_response(
+    let (turn_start_response, next_thread_read_request_id) = match super::send_request_response(
         socket,
         &super::turn_start_request(thread_id, content, effort, client_user_message_id),
-    )
-    .map_err(start_request_error)?;
+    ) {
+        Ok(response) => (response, NEXT_THREAD_READ_REQUEST_ID),
+        Err(error) if is_unloaded_thread_rejection(&error, thread_id) => {
+            let recovery =
+                thread_resume_request_with_id(thread_id, RECOVERY_THREAD_RESUME_REQUEST_ID);
+            if let Err(error) = super::send_request_response(socket, &recovery) {
+                return Err(DeliveryError::NotDelivered(
+                    super::request_error_to_anyhow(error)
+                        .context("could not resume Codex thread after it was not loaded"),
+                ));
+            }
+
+            let retry = super::turn_start_request_with_id(
+                RETRY_TURN_START_REQUEST_ID,
+                thread_id,
+                content,
+                effort,
+                client_user_message_id,
+            );
+            (
+                super::send_request_response(socket, &retry).map_err(start_request_error)?,
+                NEXT_THREAD_READ_REQUEST_ID_AFTER_RECOVERY,
+            )
+        }
+        Err(error) => return Err(start_request_error(error)),
+    };
     let turn_id = turn_start_response
         .pointer("/turn/id")
         .and_then(Value::as_str)
@@ -141,11 +168,11 @@ where
     if has_completed_turn_notification(&resume_notifications, turn_id)
         || has_completed_turn_notification(&read_notifications, turn_id)
     {
-        let mut next_read_request_id = NEXT_THREAD_READ_REQUEST_ID;
+        let mut next_read_request_id = next_thread_read_request_id;
         return confirm_after_turn_end(socket, &delivery, &mut next_read_request_id);
     }
 
-    let mut next_read_request_id = NEXT_THREAD_READ_REQUEST_ID;
+    let mut next_read_request_id = next_thread_read_request_id;
     match turn_status(thread, turn_id) {
         Some(status) if is_terminal_turn_status(status) => {
             confirm_after_turn_end(socket, &delivery, &mut next_read_request_id)
@@ -162,11 +189,14 @@ where
     }
 }
 
-fn is_thread_without_turns_error(error: &anyhow::Error) -> bool {
-    let message = error.to_string();
-    // paginated history mode / legacy history mode
-    message.contains("list_turns is not supported yet")
-        || message.contains("is not materialized yet; includeTurns is unavailable")
+fn is_unloaded_thread_rejection(error: &RequestError, thread_id: &str) -> bool {
+    let expected_message = format!("thread not found: {thread_id}");
+    matches!(
+        error,
+        RequestError::Rejected(rejection)
+            if rejection.code == Some(-32600)
+                && rejection.message.as_deref() == Some(expected_message.as_str())
+    )
 }
 
 fn wait_for_delivery_with_reader<R>(
@@ -329,11 +359,15 @@ fn take_request_id(next_request_id: &mut u64) -> super::Result<u64> {
 }
 
 fn thread_resume_request(thread_id: &str) -> RpcRequest {
+    thread_resume_request_with_id(thread_id, THREAD_RESUME_REQUEST_ID)
+}
+
+fn thread_resume_request_with_id(thread_id: &str, request_id: u64) -> RpcRequest {
     RpcRequest {
-        id: THREAD_RESUME_REQUEST_ID,
+        id: request_id,
         method: "thread/resume",
         payload: json!({
-            "id": THREAD_RESUME_REQUEST_ID,
+            "id": request_id,
             "method": "thread/resume",
             "params": {"threadId": thread_id},
         }),
@@ -371,7 +405,7 @@ fn not_delivered() -> DeliveryError {
 
 fn start_request_error(error: RequestError) -> DeliveryError {
     match error {
-        RequestError::Rejected(error) => DeliveryError::NotDelivered(error),
+        RequestError::Rejected(error) => DeliveryError::NotDelivered(anyhow::Error::new(error)),
         RequestError::Transport(error) => DeliveryError::Unconfirmed(error),
     }
 }
@@ -391,6 +425,7 @@ mod tests {
     use serde_json::json;
     use tungstenite::{Message, WebSocket, client};
 
+    use super::super::RpcRejection;
     use super::super::TURN_START_REQUEST_ID;
     use super::super::test_support::{accept_with_read_timeout, join_server};
     use super::*;
@@ -427,6 +462,23 @@ mod tests {
             json!({"id": request_id, "result": result})
                 .to_string()
                 .into(),
+        ))?;
+        Ok(())
+    }
+
+    fn send_error(
+        socket: &mut WebSocket<UnixStream>,
+        request_id: u64,
+        code: i64,
+        message: &str,
+    ) -> anyhow::Result<()> {
+        socket.send(Message::Text(
+            json!({
+                "id": request_id,
+                "error": {"code": code, "message": message},
+            })
+            .to_string()
+            .into(),
         ))?;
         Ok(())
     }
@@ -522,6 +574,14 @@ mod tests {
 
     fn result_text(result: super::super::Result<()>) -> std::result::Result<(), String> {
         result.map_err(|error| error.to_string())
+    }
+
+    fn result_classification(result: super::super::Result<()>) -> (&'static str, String) {
+        match result {
+            Ok(()) => ("delivered", String::new()),
+            Err(error @ DeliveryError::NotDelivered(_)) => ("not_delivered", error.to_string()),
+            Err(error @ DeliveryError::Unconfirmed(_)) => ("unconfirmed", error.to_string()),
+        }
     }
 
     #[test]
@@ -671,6 +731,315 @@ mod tests {
         Ok(())
     }
 
+    #[rstest]
+    #[case::exact_rejection(-32600, "thread not found: thread-a", true)]
+    #[case::wrong_code(-32601, "thread not found: thread-a", false)]
+    #[case::wrong_thread(-32600, "thread not found: thread-b", false)]
+    #[case::extra_message_text(-32600, "thread not found: thread-a; retry", false)]
+    fn recognizes_only_exact_unloaded_thread_rejection(
+        #[case] code: i64,
+        #[case] message: &str,
+        #[case] expected: bool,
+    ) {
+        let error = RequestError::Rejected(RpcRejection::new(
+            "turn/start",
+            &json!({"code": code, "message": message}),
+        ));
+
+        assert_eq!(is_unloaded_thread_rejection(&error, THREAD_ID), expected);
+    }
+
+    #[rstest]
+    fn resumes_unloaded_thread_and_retries_once_with_the_same_message_id(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let first_turn_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                -32600,
+                "thread not found: thread-a",
+            )?;
+            let recovery_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                RECOVERY_THREAD_RESUME_REQUEST_ID,
+                json!({"thread": {"turns": []}}),
+            )?;
+            let retry_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                RETRY_TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let turn_resume_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                thread_response(
+                    "inProgress",
+                    Some(CLIENT_USER_MESSAGE_ID),
+                    Some("hello there"),
+                ),
+            )?;
+            Ok(vec![
+                snapshot_request,
+                first_turn_request,
+                recovery_request,
+                retry_request,
+                turn_resume_request,
+            ])
+        });
+
+        let result = result_text(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = join_server(&client_socket, &result, server)?;
+        let expected_requests = vec![
+            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            super::super::turn_start_request(
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+            thread_resume_request_with_id(THREAD_ID, RECOVERY_THREAD_RESUME_REQUEST_ID).payload,
+            super::super::turn_start_request_with_id(
+                RETRY_TURN_START_REQUEST_ID,
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+            thread_resume_request(THREAD_ID).payload,
+        ];
+
+        assert_eq!((result, requests), (Ok(()), expected_requests));
+        Ok(())
+    }
+
+    #[rstest]
+    fn does_not_retry_when_unloaded_thread_cannot_be_resumed(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let turn_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                -32600,
+                "thread not found: thread-a",
+            )?;
+            let recovery_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                RECOVERY_THREAD_RESUME_REQUEST_ID,
+                -32000,
+                "resume rejected",
+            )?;
+            Ok(vec![snapshot_request, turn_request, recovery_request])
+        });
+
+        let result = result_classification(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
+        let expected_requests = vec![
+            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            super::super::turn_start_request(
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+            thread_resume_request_with_id(THREAD_ID, RECOVERY_THREAD_RESUME_REQUEST_ID).payload,
+        ];
+
+        assert_eq!(
+            (result, requests),
+            (
+                (
+                    "not_delivered",
+                    "Codex app-server did not deliver the message: could not resume Codex thread after it was not loaded: Codex app-server `thread/resume` failed: resume rejected (code -32000)".to_string(),
+                ),
+                expected_requests,
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn does_not_retry_when_retried_turn_start_is_rejected(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let first_turn_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                -32600,
+                "thread not found: thread-a",
+            )?;
+            let recovery_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                RECOVERY_THREAD_RESUME_REQUEST_ID,
+                json!({"thread": {"turns": []}}),
+            )?;
+            let retry_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                RETRY_TURN_START_REQUEST_ID,
+                -32600,
+                "retry rejected",
+            )?;
+            Ok(vec![
+                snapshot_request,
+                first_turn_request,
+                recovery_request,
+                retry_request,
+            ])
+        });
+
+        let result = result_classification(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
+        let expected_requests = vec![
+            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            super::super::turn_start_request(
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+            thread_resume_request_with_id(THREAD_ID, RECOVERY_THREAD_RESUME_REQUEST_ID).payload,
+            super::super::turn_start_request_with_id(
+                RETRY_TURN_START_REQUEST_ID,
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+        ];
+
+        assert_eq!(
+            (result, requests),
+            (
+                (
+                    "not_delivered",
+                    "Codex app-server did not deliver the message: Codex app-server `turn/start` failed: retry rejected (code -32600)".to_string(),
+                ),
+                expected_requests,
+            ),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::initial_start(false)]
+    #[case::retry_start(true)]
+    fn turn_start_disconnect_is_unconfirmed_without_an_extra_retry(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] disconnect_on_retry: bool,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_empty_snapshot(&mut socket)?;
+            let first_turn_request = read_request(&mut socket)?;
+            let mut requests = vec![snapshot_request, first_turn_request];
+            if disconnect_on_retry {
+                send_error(
+                    &mut socket,
+                    TURN_START_REQUEST_ID,
+                    -32600,
+                    "thread not found: thread-a",
+                )?;
+                requests.push(read_request(&mut socket)?);
+                send_response(
+                    &mut socket,
+                    RECOVERY_THREAD_RESUME_REQUEST_ID,
+                    json!({"thread": {"turns": []}}),
+                )?;
+                requests.push(read_request(&mut socket)?);
+            }
+            socket.send(Message::Close(None))?;
+            Ok(requests)
+        });
+
+        let result = result_classification(send_and_confirm(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+        ));
+        let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
+        let mut expected_requests = vec![
+            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            super::super::turn_start_request(
+                THREAD_ID,
+                "hello there",
+                None,
+                CLIENT_USER_MESSAGE_ID,
+            )
+            .payload,
+        ];
+        if disconnect_on_retry {
+            expected_requests.extend([
+                thread_resume_request_with_id(THREAD_ID, RECOVERY_THREAD_RESUME_REQUEST_ID).payload,
+                super::super::turn_start_request_with_id(
+                    RETRY_TURN_START_REQUEST_ID,
+                    THREAD_ID,
+                    "hello there",
+                    None,
+                    CLIENT_USER_MESSAGE_ID,
+                )
+                .payload,
+            ]);
+        }
+
+        assert_eq!(
+            (result, requests),
+            (
+                (
+                    "unconfirmed",
+                    "Codex app-server delivery is unconfirmed: Codex app-server closed during `turn/start`: None".to_string(),
+                ),
+                expected_requests,
+            ),
+        );
+        Ok(())
+    }
+
     #[test]
     fn reports_not_delivered_when_pre_turn_read_fails_for_other_reasons() -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets()?;
@@ -700,7 +1069,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
+                Err("Codex app-server did not deliver the message: could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
                 vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
             ),
         );
@@ -771,7 +1140,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
                 expected_requests,
             ),
         );
@@ -897,7 +1266,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
                 expected_requests,
             ),
         );
@@ -1047,7 +1416,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
                 expected_requests,
             ),
         );

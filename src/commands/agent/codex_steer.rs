@@ -35,20 +35,62 @@ pub type Result<T> = std::result::Result<T, DeliveryError>;
 #[derive(Debug, Error)]
 pub enum DeliveryError {
     /// The request was rejected or the target turn ended without a matching history item.
-    #[error("{0:#}")]
+    #[error("Codex app-server did not deliver the message: {0:#}")]
     NotDelivered(anyhow::Error),
     /// Delivery could not be confirmed, so queue fallback could create a duplicate.
-    #[error("Codex app-server delivery is unconfirmed; not queueing to avoid a duplicate: {0:#}")]
+    #[error("Codex app-server delivery is unconfirmed: {0:#}")]
     Unconfirmed(anyhow::Error),
 }
 
 #[derive(Debug, Error)]
 enum RequestError {
-    #[error("{0:#}")]
-    Rejected(anyhow::Error),
+    #[error("{0}")]
+    Rejected(RpcRejection),
     #[error("{0:#}")]
     Transport(anyhow::Error),
 }
+
+#[derive(Debug)]
+struct RpcRejection {
+    method: String,
+    code: Option<i64>,
+    message: Option<String>,
+    display_message: String,
+}
+
+impl RpcRejection {
+    fn new(method: &str, error: &Value) -> Self {
+        Self {
+            method: method.to_string(),
+            code: error.get("code").and_then(Value::as_i64),
+            message: error
+                .get("message")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            display_message: rpc_error(error),
+        }
+    }
+
+    fn is_thread_without_turns_error(&self) -> bool {
+        let Some(message) = &self.message else {
+            return false;
+        };
+        message.contains("list_turns is not supported yet")
+            || message.contains("is not materialized yet; includeTurns is unavailable")
+    }
+}
+
+impl std::fmt::Display for RpcRejection {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "Codex app-server `{}` failed: {}",
+            self.method, self.display_message
+        )
+    }
+}
+
+impl std::error::Error for RpcRejection {}
 
 struct RpcRequest {
     id: u64,
@@ -202,6 +244,22 @@ fn turn_start_request(
     effort: Option<ReasoningEffort>,
     client_user_message_id: &str,
 ) -> RpcRequest {
+    turn_start_request_with_id(
+        TURN_START_REQUEST_ID,
+        thread_id,
+        content,
+        effort,
+        client_user_message_id,
+    )
+}
+
+fn turn_start_request_with_id(
+    request_id: u64,
+    thread_id: &str,
+    content: &str,
+    effort: Option<ReasoningEffort>,
+    client_user_message_id: &str,
+) -> RpcRequest {
     let mut params = json!({
         "threadId": thread_id,
         "clientUserMessageId": client_user_message_id,
@@ -216,10 +274,10 @@ fn turn_start_request(
     }
 
     RpcRequest {
-        id: TURN_START_REQUEST_ID,
+        id: request_id,
         method: "turn/start",
         payload: json!({
-            "id": TURN_START_REQUEST_ID,
+            "id": request_id,
             "method": "turn/start",
             "params": params,
         }),
@@ -436,10 +494,7 @@ fn is_response_to(
         return Ok(None);
     }
     if let Some(error) = response.get("error") {
-        return Err(RequestError::Rejected(anyhow!(
-            "Codex app-server `{method}` failed: {}",
-            rpc_error(error)
-        )));
+        return Err(RequestError::Rejected(RpcRejection::new(method, error)));
     }
     if response.get("result").is_none() {
         return Err(RequestError::Transport(anyhow!(
@@ -451,7 +506,8 @@ fn is_response_to(
 
 fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {
     match error {
-        RequestError::Rejected(error) | RequestError::Transport(error) => error,
+        RequestError::Rejected(error) => anyhow::Error::new(error),
+        RequestError::Transport(error) => error,
     }
 }
 
@@ -1110,7 +1166,7 @@ mod tests {
         assert_eq!(
             (result, server_result),
             (
-                Err("Codex app-server `turn/start` failed: turn rejected (code -1)".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server `turn/start` failed: turn rejected (code -1)".to_string()),
                 Ok((
                     json!({
                         "id": 2,
