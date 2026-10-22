@@ -1,22 +1,19 @@
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
-use std::process::{Command, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::process::Command;
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use indoc::indoc;
-use serde::Deserialize;
-use serde_json::Value;
 
 use super::super::history::CodexConversation;
+use crate::commands::agent::status_inference::{FORK_SETTINGS, parse_claude_status};
 use crate::commands::agent::types::AgentStatus;
 use crate::infra::external_tool::ExternalTool;
+use crate::infra::process;
 
 const CLASSIFIER_TIMEOUT: Duration = Duration::from_secs(120);
 const MAX_CLASSIFIER_INPUT_BYTES: usize = 2 * 1024 * 1024;
 const MAX_CLASSIFIER_OUTPUT_BYTES: usize = 64 * 1024;
-const FORK_SETTINGS: &str = r#"{"disableAllHooks":true,"permissions":{"ask":["*"]}}"#;
 const EMPTY_MCP_CONFIG: &str = r#"{"mcpServers":{}}"#;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -24,6 +21,7 @@ struct ProcessOutput {
     success: bool,
     exit_code: Option<i32>,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
 }
 
 pub(super) fn infer_status(
@@ -72,8 +70,9 @@ where
     .context("Claude standalone classifier process failed")?;
     ensure!(
         output.success,
-        "Claude standalone classifier exited with code {:?}",
-        output.exit_code
+        "Claude standalone classifier exited with code {:?}: {}",
+        output.exit_code,
+        String::from_utf8_lossy(&output.stderr).trim()
     );
     ensure!(
         output.stdout.len() <= MAX_CLASSIFIER_OUTPUT_BYTES,
@@ -157,17 +156,7 @@ fn claude_args(model: &str, system_prompt: &str) -> Vec<OsString> {
 }
 
 fn validate_classifier_output(stdout: &[u8], configured_kinds: &[String]) -> Result<AgentStatus> {
-    let response: Value = serde_json::from_slice(stdout).context("parse Claude JSON response")?;
-    ensure!(
-        response.get("is_error").and_then(Value::as_bool) != Some(true),
-        "Claude returned an error response"
-    );
-    let result = response
-        .get("result")
-        .and_then(Value::as_str)
-        .context("Claude response has no result text")?;
-    let status: ClassifierStatus =
-        serde_json::from_str(result).context("parse inferred status JSON")?;
+    let status = parse_claude_status(stdout)?;
     ensure!(
         configured_kinds.iter().any(|kind| kind == &status.kind),
         "Claude returned an unconfigured status kind"
@@ -180,17 +169,7 @@ fn validate_classifier_output(stdout: &[u8], configured_kinds: &[String]) -> Res
         is_single_line(&status.note),
         "Claude returned a multi-line status note"
     );
-    Ok(AgentStatus {
-        kind: status.kind,
-        note: status.note,
-    })
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ClassifierStatus {
-    kind: String,
-    note: String,
+    Ok(status)
 }
 
 fn is_single_line(note: &str) -> bool {
@@ -199,115 +178,16 @@ fn is_single_line(note: &str) -> bool {
     ])
 }
 
-fn run_claude_process(
-    mut command: Command,
-    input: &[u8],
-    timeout: Duration,
-) -> Result<ProcessOutput> {
-    let deadline = Instant::now()
-        .checked_add(timeout)
-        .context("Claude classifier timeout is out of range")?;
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("spawn Claude standalone classifier")?;
-    let (Some(mut stdin), Some(mut stdout), Some(mut stderr)) =
-        (child.stdin.take(), child.stdout.take(), child.stderr.take())
-    else {
-        let _ = child.kill();
-        let _ = child.wait();
-        bail!("Claude classifier process did not expose piped standard streams");
-    };
-
-    let input = input.to_vec();
-    let stdin_writer = thread::spawn(move || stdin.write_all(&input));
-    let stdout_reader =
-        thread::spawn(move || read_limited(&mut stdout, MAX_CLASSIFIER_OUTPUT_BYTES));
-    let stderr_reader =
-        thread::spawn(move || read_limited(&mut stderr, MAX_CLASSIFIER_OUTPUT_BYTES));
-
-    let mut poll_interval = Duration::from_millis(2);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {}
-            Err(error) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(error).context("wait for Claude standalone classifier");
-            }
-        }
-        if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(classifier_timeout_error(timeout));
-        }
-        thread::sleep(poll_interval);
-        poll_interval = (poll_interval * 2).min(Duration::from_millis(20));
-    };
-
-    join_thread_until(stdin_writer, deadline, timeout, "stdin writer")?
-        .context("write Claude classifier input")?;
-    let (stdout, stdout_truncated) =
-        join_thread_until(stdout_reader, deadline, timeout, "stdout reader")?
-            .context("read Claude classifier stdout")?;
-    let (_, stderr_truncated) =
-        join_thread_until(stderr_reader, deadline, timeout, "stderr reader")?
-            .context("read Claude classifier stderr")?;
-    ensure!(
-        !stdout_truncated && !stderr_truncated,
-        "Claude standalone classifier output exceeds the {MAX_CLASSIFIER_OUTPUT_BYTES}-byte limit"
-    );
-
+fn run_claude_process(command: Command, input: &[u8], timeout: Duration) -> Result<ProcessOutput> {
+    let output =
+        process::run_with_timeout_stdin(command, input, timeout, MAX_CLASSIFIER_OUTPUT_BYTES)
+            .context("run Claude standalone classifier")?;
     Ok(ProcessOutput {
-        success: status.success(),
-        exit_code: status.code(),
-        stdout,
+        success: output.status.success(),
+        exit_code: output.status.code(),
+        stdout: output.stdout,
+        stderr: output.stderr,
     })
-}
-
-fn read_limited(reader: &mut impl Read, limit: usize) -> io::Result<(Vec<u8>, bool)> {
-    let mut output = Vec::new();
-    let mut chunk = [0; 8 * 1024];
-    let mut truncated = false;
-    loop {
-        let read = reader.read(&mut chunk)?;
-        if read == 0 {
-            return Ok((output, truncated));
-        }
-        let remaining = limit.saturating_sub(output.len());
-        output.extend_from_slice(&chunk[..read.min(remaining)]);
-        truncated |= read > remaining;
-    }
-}
-
-fn join_thread_until<T>(
-    handle: thread::JoinHandle<T>,
-    deadline: Instant,
-    timeout: Duration,
-    label: &str,
-) -> Result<T> {
-    while !handle.is_finished() {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(classifier_timeout_error(timeout));
-        }
-        thread::sleep(Duration::from_millis(2).min(remaining));
-    }
-    handle
-        .join()
-        .map_err(|_| io::Error::other(format!("Claude classifier {label} thread panicked")))
-        .with_context(|| format!("join Claude classifier {label} thread"))
-}
-
-fn classifier_timeout_error(timeout: Duration) -> anyhow::Error {
-    io::Error::new(
-        io::ErrorKind::TimedOut,
-        format!("Claude standalone classifier timed out after {timeout:?}"),
-    )
-    .into()
 }
 
 #[cfg(test)]
@@ -348,6 +228,7 @@ mod tests {
             exit_code: Some(0),
             stdout: serde_json::to_vec(&json!({ "is_error": false, "result": result }))
                 .expect("CLI response should serialize"),
+            stderr: Vec::new(),
         }
     }
 
@@ -526,12 +407,16 @@ mod tests {
                     success: false,
                     exit_code: Some(7),
                     stdout: Vec::new(),
+                    stderr: b"fixture classifier failure".to_vec(),
                 })
             },
         );
         assert_eq!(
             error_text(nonzero),
-            Err("Claude standalone classifier exited with code Some(7)".to_string()),
+            Err(
+                "Claude standalone classifier exited with code Some(7): fixture classifier failure"
+                    .to_string()
+            ),
         );
     }
 
@@ -547,6 +432,7 @@ mod tests {
                     success: true,
                     exit_code: Some(0),
                     stdout: vec![b'x'; MAX_CLASSIFIER_OUTPUT_BYTES + 1],
+                    stderr: Vec::new(),
                 })
             },
         );

@@ -151,10 +151,13 @@ where
             wait_before_deadline(sleep, completion_deadline)?;
             continue;
         };
-        match status.as_str() {
-            "completed" | "interrupted" | "failed" => break,
-            "inProgress" => wait_before_deadline(sleep, completion_deadline)?,
-            _ => bail!("Codex target turn has unsupported status `{status}`"),
+        if is_terminal_turn_status(&status) {
+            break;
+        }
+        if status == "inProgress" {
+            wait_before_deadline(sleep, completion_deadline)?;
+        } else {
+            bail!("Codex target turn has unsupported status `{status}`");
         }
     }
 
@@ -218,34 +221,21 @@ fn read_target_turn_status<Rpc>(
 where
     Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
 {
-    let mut cursor = None;
-    let mut seen_cursors = HashSet::new();
-    for _ in 0..MAX_PAGES {
-        let response = request_turn_page(
-            rpc,
-            thread_id,
-            cursor.as_deref(),
-            "desc",
-            "notLoaded",
-            deadline,
-        )?;
-        let data = page_data(&response, "thread/turns/list")?;
-        for turn in data {
-            let (id, status) = validate_turn(turn)?;
-            if id == turn_id {
-                return Ok(Some(status.to_string()));
+    paginate(
+        rpc,
+        "thread/turns/list",
+        deadline,
+        |cursor| turn_page_params(thread_id, cursor, "desc", "notLoaded"),
+        |data| {
+            for turn in data {
+                let (id, status) = validate_turn(turn)?;
+                if id == turn_id {
+                    return Ok(Some(status.to_string()));
+                }
             }
-        }
-        cursor = next_cursor(&response, "thread/turns/list")?;
-        let Some(next) = cursor.as_deref() else {
-            return Ok(None);
-        };
-        ensure!(
-            seen_cursors.insert(next.to_string()),
-            "Codex thread/turns/list repeated a pagination cursor"
-        );
-    }
-    bail!("Codex thread/turns/list exceeded the {MAX_PAGES}-page limit")
+            Ok(None)
+        },
+    )
 }
 
 fn fetch_all_turns<Rpc>(rpc: &mut Rpc, thread_id: &str, deadline: Instant) -> Result<Vec<Value>>
@@ -254,51 +244,34 @@ where
 {
     let mut turns = Vec::new();
     let mut turn_ids = HashSet::new();
-    let mut seen_cursors = HashSet::new();
-    let mut cursor = None;
     let mut history_bytes = 0usize;
-
-    for _ in 0..MAX_PAGES {
-        let response = request_turn_page(
-            rpc,
-            thread_id,
-            cursor.as_deref(),
-            "asc",
-            "summary",
-            deadline,
-        )?;
-        for turn in page_data(&response, "thread/turns/list")? {
-            let (id, _) = validate_turn(turn)?;
-            ensure!(
-                turn_ids.insert(id.to_string()),
-                "Codex thread/turns/list returned a duplicate turn"
-            );
-            add_history_bytes(&mut history_bytes, turn)?;
-            turns.push(turn.clone());
-        }
-        cursor = next_cursor(&response, "thread/turns/list")?;
-        let Some(next) = cursor.as_deref() else {
-            return Ok(turns);
-        };
-        ensure!(
-            seen_cursors.insert(next.to_string()),
-            "Codex thread/turns/list repeated a pagination cursor"
-        );
-    }
-    bail!("Codex thread/turns/list exceeded the {MAX_PAGES}-page limit")
+    paginate(
+        rpc,
+        "thread/turns/list",
+        deadline,
+        |cursor| turn_page_params(thread_id, cursor, "asc", "summary"),
+        |data| {
+            for turn in data {
+                let (id, _) = validate_turn(turn)?;
+                ensure!(
+                    turn_ids.insert(id.to_string()),
+                    "Codex thread/turns/list returned a duplicate turn"
+                );
+                add_history_bytes(&mut history_bytes, turn)?;
+                turns.push(turn.clone());
+            }
+            Ok(None::<()>)
+        },
+    )?;
+    Ok(turns)
 }
 
-fn request_turn_page<Rpc>(
-    rpc: &mut Rpc,
+fn turn_page_params(
     thread_id: &str,
     cursor: Option<&str>,
     sort_direction: &str,
     items_view: &str,
-    deadline: Instant,
-) -> Result<Value>
-where
-    Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
-{
+) -> Value {
     let mut params = json!({
         "threadId": thread_id,
         "limit": PAGE_SIZE,
@@ -308,7 +281,7 @@ where
     if let Some(cursor) = cursor {
         params["cursor"] = json!(cursor);
     }
-    rpc("thread/turns/list", params, remaining(deadline)?)
+    params
 }
 
 fn fetch_all_items<Rpc>(rpc: &mut Rpc, thread_id: &str, deadline: Instant) -> Result<Vec<Value>>
@@ -317,43 +290,72 @@ where
 {
     let mut items = Vec::new();
     let mut item_ids = HashSet::new();
-    let mut seen_cursors = HashSet::new();
-    let mut cursor = None;
     let mut history_bytes = 0usize;
+    paginate(
+        rpc,
+        "thread/items/list",
+        deadline,
+        |cursor| {
+            let mut params = json!({
+                "threadId": thread_id,
+                "limit": PAGE_SIZE,
+                "sortDirection": "asc",
+            });
+            if let Some(cursor) = cursor {
+                params["cursor"] = json!(cursor);
+            }
+            params
+        },
+        |data| {
+            for entry in data {
+                validate_item_entry(entry)?;
+                let item_id = entry
+                    .pointer("/item/id")
+                    .and_then(Value::as_str)
+                    .context("Codex thread/items/list item has no ID")?;
+                ensure!(
+                    item_ids.insert(item_id.to_string()),
+                    "Codex thread/items/list returned a duplicate item"
+                );
+                add_history_bytes(&mut history_bytes, entry)?;
+                items.push(entry.clone());
+            }
+            Ok(None::<()>)
+        },
+    )?;
+    Ok(items)
+}
 
+fn paginate<Rpc, Params, HandlePage, T>(
+    rpc: &mut Rpc,
+    method: &'static str,
+    deadline: Instant,
+    mut params: Params,
+    mut handle_page: HandlePage,
+) -> Result<Option<T>>
+where
+    Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
+    Params: FnMut(Option<&str>) -> Value,
+    HandlePage: FnMut(&[Value]) -> Result<Option<T>>,
+{
+    let mut cursor = None;
+    let mut seen_cursors = HashSet::new();
     for _ in 0..MAX_PAGES {
-        let mut params = json!({
-            "threadId": thread_id,
-            "limit": PAGE_SIZE,
-            "sortDirection": "asc",
-        });
-        if let Some(cursor) = cursor.as_deref() {
-            params["cursor"] = json!(cursor);
+        let response = rpc(method, params(cursor.as_deref()), remaining(deadline)?)?;
+        let data = page_data(&response, method)?;
+        if let Some(result) = handle_page(data)? {
+            return Ok(Some(result));
         }
-        let response = rpc("thread/items/list", params, remaining(deadline)?)?;
-        for entry in page_data(&response, "thread/items/list")? {
-            validate_item_entry(entry)?;
-            let item_id = entry
-                .pointer("/item/id")
-                .and_then(Value::as_str)
-                .context("Codex thread/items/list item has no ID")?;
-            ensure!(
-                item_ids.insert(item_id.to_string()),
-                "Codex thread/items/list returned a duplicate item"
-            );
-            add_history_bytes(&mut history_bytes, entry)?;
-            items.push(entry.clone());
-        }
-        cursor = next_cursor(&response, "thread/items/list")?;
+        cursor = next_cursor(&response, method)?;
         let Some(next) = cursor.as_deref() else {
-            return Ok(items);
+            return Ok(None);
         };
         ensure!(
             seen_cursors.insert(next.to_string()),
-            "Codex thread/items/list repeated a pagination cursor"
+            "Codex {method} repeated a pagination cursor"
         );
     }
-    bail!("Codex thread/items/list exceeded the {MAX_PAGES}-page limit")
+    bail!("Codex {method} exceeded the {MAX_PAGES}-page limit")
 }
 
 fn deadline_after(timeout: Duration) -> Result<Instant> {
@@ -587,11 +589,17 @@ mod tests {
         let pending = page(vec![turn(TURN_ID, "inProgress")], None);
         let completed = page(vec![turn(TURN_ID, "completed")], None);
         let turns = page(vec![turn(TURN_ID, "completed")], None);
-        let missing_message = page(
-            vec![item_entry(
-                TURN_ID,
-                json!({ "id": "fixture-user-item", "type": "userMessage", "content": [] }),
-            )],
+        let stale_matching_message = page(
+            vec![
+                item_entry(
+                    TURN_ID,
+                    json!({ "id": "fixture-earlier-item", "type": "agentMessage", "text": FINAL_MESSAGE }),
+                ),
+                item_entry(
+                    TURN_ID,
+                    json!({ "id": "fixture-later-item", "type": "agentMessage", "text": "still working" }),
+                ),
+            ],
             None,
         );
         let reflected_message = page(
@@ -606,7 +614,7 @@ mod tests {
             ("thread/turns/list", pending),
             ("thread/turns/list", completed),
             ("thread/turns/list", turns),
-            ("thread/items/list", missing_message),
+            ("thread/items/list", stale_matching_message),
             ("thread/items/list", reflected_message.clone()),
         ]);
         let mut calls = Vec::new();
