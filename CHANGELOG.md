@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.457](https://github.com/fohte/armyknife/compare/v0.1.456...v0.1.457) (2026-10-22)
+
+
+### Bug Fixes
+
+* **agent:** queue child results for active parents ([#1251](https://github.com/fohte/armyknife/issues/1251)) ([5e0def5](https://github.com/fohte/armyknife/commit/5e0def569ca1a8ad97ad8e2eca6049fa27c6eefd))
+
+## [0.1.456](https://github.com/fohte/armyknife/compare/v0.1.455...v0.1.456) (2026-10-22)
+
+
+### Bug Fixes
+
+* **agent/peer:** deliver to unloaded Codex threads ([#1249](https://github.com/fohte/armyknife/issues/1249)) ([78e0ba3](https://github.com/fohte/armyknife/commit/78e0ba32e44154f548df4c3b34e4d40d42faf221))
+
 ## [0.1.455](https://github.com/fohte/armyknife/compare/v0.1.454...v0.1.455) (2026-10-21)
 
 

@@ -12,7 +12,6 @@ mod clean;
 mod clean_detached;
 mod close;
 mod codex;
-mod codex_queue;
 pub(crate) mod codex_steer;
 mod codex_subagent_stop;
 mod crit;

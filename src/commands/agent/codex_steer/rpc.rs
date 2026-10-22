@@ -5,7 +5,7 @@ use anyhow::{Context, anyhow};
 use serde_json::Value;
 use tungstenite::{Message, WebSocket};
 
-use super::{RequestError, RpcRequest};
+use super::{RequestError, RpcRejection, RpcRequest};
 
 const RPC_READ_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
@@ -232,10 +232,7 @@ fn is_response_to(
         return Ok(None);
     }
     if let Some(error) = response.get("error") {
-        return Err(RequestError::Rejected(anyhow!(
-            "Codex app-server `{method}` failed: {}",
-            rpc_error(error)
-        )));
+        return Err(RequestError::Rejected(RpcRejection::new(method, error)));
     }
     if response.get("result").is_none() {
         return Err(RequestError::Transport(anyhow!(
@@ -243,16 +240,6 @@ fn is_response_to(
         )));
     }
     Ok(response.get("result").cloned())
-}
-
-fn rpc_error(error: &Value) -> String {
-    let Some(message) = error.get("message").and_then(Value::as_str) else {
-        return error.to_string();
-    };
-    match error.get("code").and_then(Value::as_i64) {
-        Some(code) => format!("{message} (code {code})"),
-        None => message.to_string(),
-    }
 }
 
 #[cfg(test)]
@@ -263,11 +250,14 @@ mod tests {
     use tungstenite::protocol::Role;
 
     #[rstest]
-    #[case::message_and_code(json!({"code": -32600, "message": "Not initialized"}), "Not initialized (code -32600)")]
-    #[case::message_only(json!({"message": "thread not found"}), "thread not found")]
-    #[case::unknown_shape(json!({"reason": "unavailable"}), r#"{"reason":"unavailable"}"#)]
+    #[case::message_and_code(json!({"code": -32600, "message": "Not initialized"}), "Codex app-server `thread/read` failed: Not initialized (code -32600)")]
+    #[case::message_only(json!({"message": "thread not found"}), "Codex app-server `thread/read` failed: thread not found")]
+    #[case::unknown_shape(json!({"reason": "unavailable"}), r#"Codex app-server `thread/read` failed: {"reason":"unavailable"}"#)]
     fn formats_rpc_errors(#[case] error: Value, #[case] expected: &str) {
-        assert_eq!(rpc_error(&error), expected);
+        assert_eq!(
+            RpcRejection::new("thread/read", &error).to_string(),
+            expected
+        );
     }
 
     #[rstest]

@@ -7,7 +7,7 @@
 //! e.g. reporting that a delegated PR merged from inside `a agent close`
 //! itself. This command is that missing send path: a Claude Code target gets
 //! `claude_messaging`'s direct socket write, while a Codex target is steered
-//! through its app-server and falls back to `codex queue` when unavailable.
+//! through its app-server.
 
 use anyhow::Result;
 use clap::Args;
@@ -15,7 +15,6 @@ use clap::Args;
 use super::wake;
 use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
-use crate::commands::agent::codex_queue;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
@@ -53,10 +52,6 @@ pub enum Delivery {
     Steered,
     /// Delivered through app-server while armyknife tracked an idle thread.
     Started,
-    /// Appended to the target Codex session's queue. The running `codex`
-    /// injects it later (polls every ~10s, and only once the session is
-    /// idle), so it may not have reached the session yet.
-    Queued { reason: String },
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
@@ -105,9 +100,6 @@ fn delivery_output(session_id: &str, delivery: &Delivery) -> Option<String> {
         )),
         Delivery::Started => Some(format!(
             "Started a new turn in idle Codex session {session_id}."
-        )),
-        Delivery::Queued { reason } => Some(format!(
-            "Queued for Codex session {session_id}. Direct delivery failed: {reason}. Not delivered yet: the current turn must finish and the session must become idle before `codex queue` can start the queued turn (polled about every 10s)."
         )),
     }
 }
@@ -329,36 +321,18 @@ pub fn notify(
                 SessionStatus::Running | SessionStatus::WaitingInput
             ),
             codex_steer::send_message,
-            codex_queue::queue_message,
         ),
     }
 }
 
-fn send_to_codex<S, Q>(
-    session_id: &str,
-    content: &str,
-    was_active: bool,
-    steer: S,
-    queue: Q,
-) -> Result<Delivery>
+fn send_to_codex<S>(session_id: &str, content: &str, was_active: bool, steer: S) -> Result<Delivery>
 where
     S: FnOnce(&str, &str) -> codex_steer::Result<()>,
-    Q: FnOnce(&str, &str) -> Result<()>,
 {
     match steer(session_id, content) {
         Ok(()) if was_active => Ok(Delivery::Steered),
         Ok(()) => Ok(Delivery::Started),
-        Err(codex_steer::DeliveryError::NotDelivered(direct_error)) => {
-            queue(session_id, content).map_err(|queue_error| {
-                anyhow::anyhow!(
-                    "direct Codex delivery failed: {direct_error}; queue fallback failed: {queue_error}"
-                )
-            })?;
-            Ok(Delivery::Queued {
-                reason: direct_error.to_string(),
-            })
-        }
-        Err(error @ codex_steer::DeliveryError::Unconfirmed(_)) => Err(error.into()),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -825,67 +799,27 @@ mod tests {
             "hello",
             matches!(status, SessionStatus::Running | SessionStatus::WaitingInput),
             |_, _| Ok(()),
-            |_, _| Err(anyhow::anyhow!("queue must not run")),
         );
         assert_eq!(actual.map_err(|error| error.to_string()), Ok(expected));
     }
 
     #[rstest]
-    #[case::queued(
-        "thread not found",
-        None,
-        Ok(Delivery::Queued { reason: "thread not found".to_string() })
+    #[case::not_delivered(
+        false,
+        "Codex app-server did not deliver the message: thread not found"
     )]
-    #[case::both_failed(
-        "daemon unavailable",
-        Some("thread archived"),
-        Err("direct Codex delivery failed: daemon unavailable; queue fallback failed: thread archived".to_string())
-    )]
-    fn codex_delivery_fallback(
-        #[case] direct_error: &str,
-        #[case] queue_error: Option<&str>,
-        #[case] expected: std::result::Result<Delivery, String>,
-    ) {
-        let actual = send_to_codex(
-            "thread-a",
-            "hello",
-            true,
-            |_, _| {
-                Err(codex_steer::DeliveryError::NotDelivered(anyhow::anyhow!(
-                    direct_error.to_string()
-                )))
-            },
-            |_, _| match queue_error {
-                Some(error) => Err(anyhow::anyhow!(error.to_string())),
-                None => Ok(()),
-            },
-        );
-        assert_eq!(actual.map_err(|error| error.to_string()), expected,);
-    }
-
-    #[test]
-    fn codex_delivery_does_not_queue_when_direct_outcome_is_unknown() {
-        let queue_called = std::cell::Cell::new(false);
-        let actual = send_to_codex(
-            "thread-a",
-            "hello",
-            true,
-            |_, _| {
-                Err(codex_steer::DeliveryError::Unconfirmed(anyhow::anyhow!(
-                    "response timed out"
-                )))
-            },
-            |_, _| {
-                queue_called.set(true);
-                Ok(())
-            },
-        );
+    #[case::unconfirmed(true, "Codex app-server delivery is unconfirmed: response timed out")]
+    fn codex_delivery_errors_remain_nonzero(#[case] unconfirmed: bool, #[case] expected: &str) {
+        let actual = send_to_codex("thread-a", "hello", true, move |_, _| {
+            Err(if unconfirmed {
+                codex_steer::DeliveryError::Unconfirmed(anyhow::anyhow!("response timed out"))
+            } else {
+                codex_steer::DeliveryError::NotDelivered(anyhow::anyhow!("thread not found"))
+            })
+        });
         assert_eq!(
-            (actual.map_err(|error| error.to_string()), queue_called.get()),
-            (
-                Err("Codex app-server delivery is unconfirmed; not queueing to avoid a duplicate: response timed out".to_string()),
-                false,
-            ),
+            actual.map_err(|error| error.to_string()),
+            Err(expected.to_string())
         );
     }
 
@@ -898,10 +832,6 @@ mod tests {
     #[case::started(
         Delivery::Started,
         Some("Started a new turn in idle Codex session thread-a.".to_string())
-    )]
-    #[case::queued(
-        Delivery::Queued { reason: "thread not found".to_string() },
-        Some("Queued for Codex session thread-a. Direct delivery failed: thread not found. Not delivered yet: the current turn must finish and the session must become idle before `codex queue` can start the queued turn (polled about every 10s).".to_string())
     )]
     fn delivery_output_cases(#[case] delivery: Delivery, #[case] expected: Option<String>) {
         assert_eq!(delivery_output("thread-a", &delivery), expected);
