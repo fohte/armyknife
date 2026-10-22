@@ -35,11 +35,10 @@ pub(super) fn send_request_response(
     send_request_and_collect_notifications(socket, request).map(|(response, _)| response)
 }
 
-pub(super) fn send_request_response_until(
+fn send_rpc_request(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
-    deadline: Instant,
-) -> std::result::Result<Value, RequestError> {
+) -> std::result::Result<(), RequestError> {
     socket
         .send(Message::Text(request.payload.to_string().into()))
         .with_context(|| {
@@ -48,7 +47,15 @@ pub(super) fn send_request_response_until(
                 request.method
             )
         })
-        .map_err(RequestError::Transport)?;
+        .map_err(RequestError::Transport)
+}
+
+pub(super) fn send_request_response_until(
+    socket: &mut WebSocket<UnixStream>,
+    request: &RpcRequest,
+    deadline: Instant,
+) -> std::result::Result<Value, RequestError> {
+    send_rpc_request(socket, request)?;
     // Per-read timeouts reset for notifications and partial frames.
     // The deadline loop must regain control between reads.
     socket
@@ -57,13 +64,13 @@ pub(super) fn send_request_response_until(
         .context("failed to enable nonblocking Codex app-server reads")
         .map_err(RequestError::Transport)?;
 
-    let mut remaining = || deadline.saturating_duration_since(Instant::now());
+    let mut time_left = || deadline.saturating_duration_since(Instant::now());
     let result = wait_for_response_with_notifications_until(
         || socket.read(),
         request.id,
         request.method,
         |_| {},
-        &mut remaining,
+        &mut time_left,
         std::thread::sleep,
     );
     let restore_mode = socket
@@ -86,15 +93,7 @@ pub(super) fn send_request_and_collect_notifications(
     socket: &mut WebSocket<UnixStream>,
     request: &RpcRequest,
 ) -> std::result::Result<(Value, Vec<Value>), RequestError> {
-    socket
-        .send(Message::Text(request.payload.to_string().into()))
-        .with_context(|| {
-            format!(
-                "failed to send Codex app-server `{}` request",
-                request.method
-            )
-        })
-        .map_err(RequestError::Transport)?;
+    send_rpc_request(socket, request)?;
     let mut notifications = Vec::new();
     let response = wait_for_response_with_notifications(
         || socket.read(),
@@ -135,7 +134,7 @@ fn wait_for_response_with_notifications_until<R, F, Remaining, Sleep>(
     request_id: u64,
     method: &str,
     mut on_notification: F,
-    mut remaining: Remaining,
+    mut time_left: Remaining,
     mut sleep: Sleep,
 ) -> std::result::Result<Value, RequestError>
 where
@@ -145,21 +144,15 @@ where
     Sleep: FnMut(Duration),
 {
     loop {
-        if remaining().is_zero() {
-            return Err(rpc_request_timeout(method));
-        }
+        request_time_left(method, &mut time_left)?;
 
         match ignore_interrupted_read(read()) {
             Ok(Some(message)) => {
-                if remaining().is_zero() {
-                    return Err(rpc_request_timeout(method));
-                }
+                request_time_left(method, &mut time_left)?;
                 if let Some(response) =
                     handle_response_message(message, request_id, method, &mut on_notification)?
                 {
-                    if remaining().is_zero() {
-                        return Err(rpc_request_timeout(method));
-                    }
+                    request_time_left(method, &mut time_left)?;
                     return Ok(response);
                 }
             }
@@ -170,11 +163,8 @@ where
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                let remaining = remaining();
-                if remaining.is_zero() {
-                    return Err(rpc_request_timeout(method));
-                }
-                sleep(RPC_READ_POLL_INTERVAL.min(remaining));
+                let left = request_time_left(method, &mut time_left)?;
+                sleep(RPC_READ_POLL_INTERVAL.min(left));
             }
             Err(error) => {
                 return Err(RequestError::Transport(anyhow!(error).context(format!(
@@ -182,6 +172,21 @@ where
                 ))));
             }
         }
+    }
+}
+
+fn request_time_left<Remaining>(
+    method: &str,
+    remaining: &mut Remaining,
+) -> std::result::Result<Duration, RequestError>
+where
+    Remaining: FnMut() -> Duration,
+{
+    let left = remaining();
+    if left.is_zero() {
+        Err(rpc_request_timeout(method))
+    } else {
+        Ok(left)
     }
 }
 
@@ -406,35 +411,48 @@ mod tests {
     }
 
     #[test]
-    fn resumes_a_nonblocking_read_after_a_partial_websocket_frame() -> anyhow::Result<()> {
+    fn deadline_covers_partial_frame_reads_through_request_wrapper() -> anyhow::Result<()> {
         use std::io::Write;
 
-        let (client_stream, mut server_stream) = UnixStream::pair()?;
+        let (client_stream, server_stream) = UnixStream::pair()?;
         let mut socket = WebSocket::from_raw_socket(client_stream, Role::Client, None);
-        socket.get_ref().set_nonblocking(true)?;
+        server_stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        let server = std::thread::spawn(move || -> anyhow::Result<()> {
+            let mut server = WebSocket::from_raw_socket(server_stream, Role::Server, None);
+            let Message::Text(_) = server.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
 
-        let text = json!({"id": 2, "result": {"state": "complete"}}).to_string();
-        let payload = text.as_bytes();
-        let frame_header = [0x81, u8::try_from(payload.len())?];
-        let split = payload.len() / 2;
-        server_stream.write_all(&frame_header)?;
-        server_stream.write_all(&payload[..split])?;
-        let partial_read = socket.read().map_err(|error| match error {
-            tungstenite::Error::Io(error) => error.kind(),
-            _ => std::io::ErrorKind::Other,
+            let payload = json!({"id": 2, "result": {"state": "complete"}}).to_string();
+            let frame_header = [0x81, u8::try_from(payload.len())?];
+            let split = payload.len() / 2;
+            server.get_mut().write_all(&frame_header)?;
+            server.get_mut().write_all(&payload.as_bytes()[..split])?;
+            std::thread::sleep(Duration::from_millis(150));
+            server.get_mut().write_all(&payload.as_bytes()[split..])?;
+            Ok(())
         });
 
-        server_stream.write_all(&payload[split..])?;
-        let complete_read = socket.read().map_err(|error| match error {
-            tungstenite::Error::Io(error) => error.kind(),
-            _ => std::io::ErrorKind::Other,
-        });
+        let request = RpcRequest {
+            id: 2,
+            method: "thread/read",
+            payload: json!({"id": 2, "method": "thread/read", "params": {}}),
+        };
+        let actual = send_request_response_until(
+            &mut socket,
+            &request,
+            Instant::now() + Duration::from_millis(50),
+        )
+        .map_err(|error| error.to_string());
+        let server_result = server
+            .join()
+            .map_err(|_| anyhow!("Codex app-server test thread panicked"))?;
 
         assert_eq!(
-            (partial_read, complete_read),
+            (actual, server_result.map_err(|error| error.to_string()),),
             (
-                Err(std::io::ErrorKind::WouldBlock),
-                Ok(Message::Text(text.into())),
+                Err("Codex app-server `thread/read` request timed out".to_string()),
+                Ok(()),
             ),
         );
         Ok(())
