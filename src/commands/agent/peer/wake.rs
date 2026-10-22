@@ -16,9 +16,8 @@
 //! one this command was asked to wake.
 //!
 //! A Codex session has no `SendMessage` name to wait for, so waking one only
-//! respawns the pane and returns no name. That is enough for
-//! `peer::notify`: it first attempts app-server delivery, then falls back to
-//! the persistent `codex queue` if the resumed thread is not registered yet.
+//! respawns the pane and returns no name. `peer::notify` then attempts
+//! app-server delivery and returns any delivery failure to its caller.
 
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -185,9 +184,8 @@ impl EnginePolicy for CodexPolicy {
         Ok(false)
     }
 
-    /// Nothing to wait for: there is no name to resolve, and the resumed
-    /// `codex` picks up its queue on its own. A busy pane named `codex` is
-    /// therefore trusted as-is.
+    /// Nothing to wait for: there is no `SendMessage` name to resolve. A busy
+    /// pane named `codex` is therefore trusted as-is.
     fn await_awake(&self, _host: &dyn Host, _session_id: &str) -> Result<Option<String>> {
         Ok(None)
     }

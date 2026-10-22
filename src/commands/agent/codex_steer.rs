@@ -37,7 +37,7 @@ pub enum DeliveryError {
     /// The request was rejected or the target turn ended without a matching history item.
     #[error("Codex app-server did not deliver the message: {0:#}")]
     NotDelivered(anyhow::Error),
-    /// Delivery could not be confirmed, so queue fallback could create a duplicate.
+    /// The request may have been accepted, but delivery could not be confirmed.
     #[error("Codex app-server delivery is unconfirmed: {0:#}")]
     Unconfirmed(anyhow::Error),
 }
