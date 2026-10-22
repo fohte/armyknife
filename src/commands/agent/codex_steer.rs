@@ -24,7 +24,17 @@ const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(600);
 
 mod archive;
 mod delivery;
+#[expect(
+    dead_code,
+    reason = "The backend is consumed by the follow-up stop-hook integration."
+)]
+mod history;
 mod launch_lock;
+#[expect(
+    dead_code,
+    reason = "The backend is consumed by the follow-up stop-hook integration."
+)]
+pub(crate) mod status_inference;
 mod subagent;
 
 pub(crate) use archive::archive_thread;
