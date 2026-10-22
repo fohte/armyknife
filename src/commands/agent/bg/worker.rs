@@ -67,12 +67,6 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
             notify::notify(&args.session, &message, None, None),
             undelivered::save,
         ) {
-            Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
-                event = "agent.bg_run.notification_queued",
-                session = %args.session,
-                task = %args.task_id,
-                reason,
-            ),
             Ok(_) => tracing::info!(
                 event = "agent.bg_run.completed",
                 session = %args.session,
@@ -199,12 +193,6 @@ fn run_command(
                 .name("agent-bg-reminder".to_string())
                 .spawn(move || {
                     span.in_scope(|| match notify::notify(&session, &message, None, None) {
-                        Ok(notify::Delivery::Queued { reason }) => tracing::warn!(
-                            event = "agent.bg_run.reminder_queued",
-                            session = %session,
-                            task = %task_id,
-                            reason,
-                        ),
                         Ok(_) => tracing::info!(
                             event = "agent.bg_run.reminder_sent",
                             session = %session,
@@ -396,9 +384,7 @@ mod tests {
             "fixture-session",
             "a1b2c3d4-e5f6-4789-8abc-def012345678",
             "fixture completion",
-            Ok(notify::Delivery::Queued {
-                reason: "fixture queue fallback".to_string(),
-            }),
+            Ok(notify::Delivery::Started),
             |_, _, _| {
                 save_called = true;
                 anyhow::bail!("save should not be called")
@@ -407,12 +393,7 @@ mod tests {
 
         assert_eq!(
             (result.map_err(|error| error.to_string()), save_called),
-            (
-                Ok(notify::Delivery::Queued {
-                    reason: "fixture queue fallback".to_string(),
-                }),
-                false,
-            ),
+            (Ok(notify::Delivery::Started), false),
         );
     }
 }

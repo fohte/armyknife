@@ -166,9 +166,7 @@ mod tests {
                 if attempts < 3 {
                     anyhow::bail!("fixture delivery unavailable");
                 }
-                Ok(notify::Delivery::Queued {
-                    reason: "fixture queue fallback".to_string(),
-                })
+                Ok(notify::Delivery::Started)
             },
             |session_id, task_id| {
                 removed.push((session_id.to_string(), task_id.to_string()));

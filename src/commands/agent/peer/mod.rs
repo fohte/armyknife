@@ -58,7 +58,7 @@ pub enum PeerCommands {
 
     /// Send a message to another session without going through any session's
     /// own SendMessage tool call (SendMessage socket for Claude Code,
-    /// app-server turn steering for Codex, with `codex queue` as a fallback)
+    /// app-server turn steering for Codex)
     Notify(NotifyArgs),
 
     /// Adopt an existing session as a direct child of the calling session
