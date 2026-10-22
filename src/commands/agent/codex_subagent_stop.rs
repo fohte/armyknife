@@ -166,7 +166,7 @@ enum Outcome {
     ChildTurnInterrupted,
     UnknownChildTurnStatus(String),
     MissingParent,
-    ParentNotIdle(ParentStatus),
+    ParentNotQueueable(ParentStatus),
     ParentUnavailable,
     QueueRejected,
 }
@@ -232,9 +232,9 @@ where
     };
 
     let parent_status = parent_status(&parent_thread);
-    if !matches!(&parent_status, &ParentStatus::Idle | &ParentStatus::Active) {
+    if !matches!(&parent_status, ParentStatus::Idle | ParentStatus::Active) {
         lease.mark_processed()?;
-        return Ok(Outcome::ParentNotIdle(parent_status));
+        return Ok(Outcome::ParentNotQueueable(parent_status));
     }
 
     let message = queue_result_message(input, turn_status, &completed_turn)?;
@@ -306,41 +306,31 @@ where
                 turns
                     .iter()
                     .find(|turn| turn.get("id").and_then(Value::as_str) == Some(&input.turn_id))
-                    .cloned()
             });
-        let status = target_turn
-            .as_ref()
-            .and_then(|turn| turn.get("status").and_then(Value::as_str))
-            .map(str::to_owned);
+        let status = target_turn.and_then(|turn| turn.get("status").and_then(Value::as_str));
+        let terminal_status = match status {
+            Some("completed") => Some(TerminalTurnStatus::Completed),
+            Some("failed") => Some(TerminalTurnStatus::Failed),
+            _ => None,
+        };
 
-        match status.as_deref() {
-            Some("completed") => {
-                let Some(turn) = target_turn else {
-                    continue;
-                };
-                return Ok(ChildTurn::Completed {
-                    thread,
-                    turn,
-                    status: TerminalTurnStatus::Completed,
-                });
-            }
-            Some("failed") => {
-                let Some(turn) = target_turn else {
-                    continue;
-                };
-                return Ok(ChildTurn::Completed {
-                    thread,
-                    turn,
-                    status: TerminalTurnStatus::Failed,
-                });
-            }
+        if let (Some(turn), Some(status)) = (target_turn, terminal_status) {
+            let turn = turn.clone();
+            return Ok(ChildTurn::Completed {
+                thread,
+                turn,
+                status,
+            });
+        }
+
+        match status {
             Some("interrupted") => return Ok(ChildTurn::Interrupted),
             Some("inProgress") | None => {
                 if read_number + 1 < max_reads {
                     sleep(poll_interval);
                 }
             }
-            Some(status) => return Ok(ChildTurn::Unknown(status.to_string())),
+            Some(status) => return Ok(ChildTurn::Unknown(status.to_owned())),
         }
     }
     Ok(ChildTurn::Pending)
@@ -396,7 +386,7 @@ fn final_answer(turn: &Value) -> Option<&str> {
     let items = turn.get("items")?.as_array()?;
     let final_answer = items.iter().rev().find(|item| {
         item.get("type").and_then(Value::as_str) == Some("agentMessage")
-            && item.pointer("/phase").and_then(Value::as_str) == Some("final_answer")
+            && item.get("phase").and_then(Value::as_str) == Some("final_answer")
     });
     let unphased_message = items.iter().rev().find(|item| {
         item.get("type").and_then(Value::as_str) == Some("agentMessage")
@@ -680,6 +670,69 @@ mod tests {
     }
 
     #[rstest]
+    #[case::completed_without_final_answer(
+        "completed",
+        None,
+        "Final answer",
+        "No final answer was available in the child turn."
+    )]
+    #[case::failed_without_error(
+        "failed",
+        None,
+        "Failure reason",
+        "No failure reason was provided in the child turn."
+    )]
+    #[case::failed_with_empty_error(
+        "failed",
+        Some(""),
+        "Failure reason",
+        "No failure reason was provided in the child turn."
+    )]
+    fn queues_fallback_text_when_the_terminal_turn_has_no_result(
+        input: HookInput,
+        ledger: MemoryLedger,
+        #[case] terminal_status: &str,
+        #[case] error_message: Option<&str>,
+        #[case] result_label: &str,
+        #[case] expected_result: &str,
+    ) {
+        let mut turn = json!({
+            "id": "sample-child-turn",
+            "status": terminal_status,
+        });
+        if terminal_status == "completed" {
+            turn["items"] = json!([{
+                "type": "agentMessage",
+                "text": "sample commentary",
+                "phase": "commentary",
+            }]);
+        }
+        if let Some(error_message) = error_message {
+            turn["error"] = json!({"message": error_message});
+        }
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread_with_turn(turn)),
+            Ok(parent_thread(Some("idle"))),
+        ]);
+        let actual = observe(&input, &mut control, &ledger, 1);
+
+        assert_eq!(
+            actual,
+            Observation {
+                outcome: Ok(Outcome::Queued),
+                calls: vec![
+                    ApiCall::Read("sample-child-thread".to_string(), true),
+                    ApiCall::Read("sample-direct-parent".to_string(), false),
+                    ApiCall::Queue(
+                        "sample-direct-parent".to_string(),
+                        expected_queue_message(terminal_status, result_label, expected_result,),
+                    ),
+                ],
+            },
+        );
+    }
+
+    #[rstest]
     fn queues_the_child_turn_result_for_an_active_parent_without_steering_its_turn(
         input: HookInput,
         ledger: MemoryLedger,
@@ -906,7 +959,7 @@ mod tests {
         assert_eq!(
             actual,
             Observation {
-                outcome: Ok(Outcome::ParentNotIdle(expected)),
+                outcome: Ok(Outcome::ParentNotQueueable(expected)),
                 calls: vec![
                     ApiCall::Read("sample-child-thread".to_string(), true),
                     ApiCall::Read("sample-direct-parent".to_string(), false),
@@ -925,7 +978,7 @@ mod tests {
         assert_eq!(
             actual,
             Observation {
-                outcome: Ok(Outcome::ParentNotIdle(ParentStatus::Unknown(None))),
+                outcome: Ok(Outcome::ParentNotQueueable(ParentStatus::Unknown(None))),
                 calls: vec![
                     ApiCall::Read("sample-child-thread".to_string(), true),
                     ApiCall::Read("sample-direct-parent".to_string(), false),
