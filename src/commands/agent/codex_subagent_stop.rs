@@ -163,7 +163,6 @@ enum Outcome {
     Duplicate,
     Queued,
     ChildTurnPending,
-    ChildTurnInterrupted,
     UnknownChildTurnStatus(String),
     MissingParent,
     ParentNotQueueable(ParentStatus),
@@ -197,10 +196,6 @@ where
                 status,
             } => (thread, turn, status),
             ChildTurn::Pending => return Ok(Outcome::ChildTurnPending),
-            ChildTurn::Interrupted => {
-                lease.mark_processed()?;
-                return Ok(Outcome::ChildTurnInterrupted);
-            }
             ChildTurn::Unknown(status) => {
                 lease.mark_processed()?;
                 return Ok(Outcome::UnknownChildTurnStatus(status));
@@ -279,7 +274,6 @@ enum ChildTurn {
         turn: Value,
         status: TerminalTurnStatus,
     },
-    Interrupted,
     Pending,
     Unknown(String),
 }
@@ -324,8 +318,7 @@ where
         }
 
         match status {
-            Some("interrupted") => return Ok(ChildTurn::Interrupted),
-            Some("inProgress") | None => {
+            Some("interrupted") | Some("inProgress") | None => {
                 if read_number + 1 < max_reads {
                     sleep(poll_interval);
                 }
@@ -623,12 +616,33 @@ mod tests {
         ledger: &MemoryLedger,
         max_reads: usize,
     ) -> Observation {
-        let outcome = process_event(input, control, ledger, max_reads, Duration::ZERO, |_| {})
-            .map_err(|error| error.to_string());
-        Observation {
-            outcome,
-            calls: std::mem::take(&mut control.calls),
-        }
+        observe_with_sleeps(input, control, ledger, max_reads, Duration::ZERO).0
+    }
+
+    fn observe_with_sleeps(
+        input: &HookInput,
+        control: &mut FakeControl,
+        ledger: &MemoryLedger,
+        max_reads: usize,
+        poll_interval: Duration,
+    ) -> (Observation, Vec<Duration>) {
+        let mut sleeps = Vec::new();
+        let outcome = process_event(
+            input,
+            control,
+            ledger,
+            max_reads,
+            poll_interval,
+            |duration| sleeps.push(duration),
+        )
+        .map_err(|error| error.to_string());
+        (
+            Observation {
+                outcome,
+                calls: std::mem::take(&mut control.calls),
+            },
+            sleeps,
+        )
     }
 
     #[rstest]
@@ -873,28 +887,109 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_or_retry_after_child_turn_is_interrupted(
+    #[case::completed("completed", "Final answer", "sample completed result")]
+    #[case::failed("failed", "Failure reason", "sample child failure reason")]
+    fn queues_terminal_result_after_an_interrupted_read(
+        input: HookInput,
+        ledger: MemoryLedger,
+        #[case] terminal_status: &str,
+        #[case] result_label: &str,
+        #[case] result: &str,
+    ) {
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread("interrupted")),
+            Ok(child_thread(terminal_status)),
+            Ok(parent_thread(Some("idle"))),
+        ]);
+
+        let first = observe_with_sleeps(&input, &mut control, &ledger, 2, CHILD_TURN_POLL_INTERVAL);
+        let second =
+            observe_with_sleeps(&input, &mut control, &ledger, 2, CHILD_TURN_POLL_INTERVAL);
+
+        assert_eq!(
+            (first, second),
+            (
+                (
+                    Observation {
+                        outcome: Ok(Outcome::Queued),
+                        calls: vec![
+                            ApiCall::Read("sample-child-thread".to_string(), true),
+                            ApiCall::Read("sample-child-thread".to_string(), true),
+                            ApiCall::Read("sample-direct-parent".to_string(), false),
+                            ApiCall::Queue(
+                                "sample-direct-parent".to_string(),
+                                expected_queue_message(terminal_status, result_label, result),
+                            ),
+                        ],
+                    },
+                    vec![CHILD_TURN_POLL_INTERVAL],
+                ),
+                (
+                    Observation {
+                        outcome: Ok(Outcome::Duplicate),
+                        calls: vec![],
+                    },
+                    vec![],
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn releases_the_event_when_interrupted_status_exhausts_the_read_budget(
         input: HookInput,
         ledger: MemoryLedger,
     ) {
-        let mut control = FakeControl::with_responses([Ok(child_thread("interrupted"))]);
+        let mut control = FakeControl::with_responses([
+            Ok(child_thread("interrupted")),
+            Ok(child_thread("interrupted")),
+            Ok(child_thread("completed")),
+            Ok(parent_thread(Some("idle"))),
+        ]);
 
-        let actual = (
-            observe(&input, &mut control, &ledger, 1),
-            observe(&input, &mut control, &ledger, 1),
-        );
+        let first = observe_with_sleeps(&input, &mut control, &ledger, 2, CHILD_TURN_POLL_INTERVAL);
+        let second =
+            observe_with_sleeps(&input, &mut control, &ledger, 2, CHILD_TURN_POLL_INTERVAL);
+        let third = observe_with_sleeps(&input, &mut control, &ledger, 2, CHILD_TURN_POLL_INTERVAL);
 
         assert_eq!(
-            actual,
+            (first, second, third),
             (
-                Observation {
-                    outcome: Ok(Outcome::ChildTurnInterrupted),
-                    calls: vec![ApiCall::Read("sample-child-thread".to_string(), true)],
-                },
-                Observation {
-                    outcome: Ok(Outcome::Duplicate),
-                    calls: vec![],
-                },
+                (
+                    Observation {
+                        outcome: Ok(Outcome::ChildTurnPending),
+                        calls: vec![
+                            ApiCall::Read("sample-child-thread".to_string(), true),
+                            ApiCall::Read("sample-child-thread".to_string(), true),
+                        ],
+                    },
+                    vec![CHILD_TURN_POLL_INTERVAL],
+                ),
+                (
+                    Observation {
+                        outcome: Ok(Outcome::Queued),
+                        calls: vec![
+                            ApiCall::Read("sample-child-thread".to_string(), true),
+                            ApiCall::Read("sample-direct-parent".to_string(), false),
+                            ApiCall::Queue(
+                                "sample-direct-parent".to_string(),
+                                expected_queue_message(
+                                    "completed",
+                                    "Final answer",
+                                    "sample completed result",
+                                ),
+                            ),
+                        ],
+                    },
+                    vec![],
+                ),
+                (
+                    Observation {
+                        outcome: Ok(Outcome::Duplicate),
+                        calls: vec![],
+                    },
+                    vec![],
+                ),
             ),
         );
     }
