@@ -3555,6 +3555,7 @@ mod tests {
     #[case::permission_pending(StopReason::PermissionPrompt)]
     #[case::asking_user(StopReason::AskUserQuestion)]
     #[case::paused(StopReason::Paused)]
+    #[case::stop_hook_active(StopReason::StopHookActive)]
     fn codex_background_status_preserves_higher_priority_reasons(#[case] reason: StopReason) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
@@ -3597,6 +3598,7 @@ mod tests {
             id: "fixture-task".to_string(),
             task_type: "shell".to_string(),
         }];
+        input.stop_hook_active = matches!(reason, StopReason::StopHookActive);
         let agent_config = codex_status_inference_config(false);
 
         let result = process_hook_event_impl_with_settings(
