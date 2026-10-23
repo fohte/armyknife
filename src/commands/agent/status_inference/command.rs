@@ -94,7 +94,13 @@ where
     }
 
     match spawn(executable, &args) {
-        Ok(()) => Ok(()),
+        Ok(()) => {
+            tracing::info!(
+                event = "agent.status_inference.spawned",
+                session = %request.session_id,
+            );
+            Ok(())
+        }
         Err(error) => {
             if let Some(path) = snapshot_path {
                 let _ = std::fs::remove_file(path);
@@ -715,6 +721,7 @@ mod tests {
             .expect("Codex session should be saved");
         enable_codex_inference(&mut context.agent_config, true);
         let args = args_for(&context.session);
+        let mut classifier_called = false;
         run_inner_with(
             &args,
             &context.sessions_dir,
@@ -722,6 +729,7 @@ mod tests {
             Ok(Some(codex_snapshot())),
             |_, _| Err(anyhow!("Claude inference must not run")),
             |_, _, _, _, _, _| {
+                classifier_called = true;
                 Ok(AgentStatus {
                     kind: "finished".to_string(),
                     note: "work is complete".to_string(),
@@ -730,7 +738,10 @@ mod tests {
         )
         .expect("shadow inference should succeed");
 
-        assert_eq!(stored_session(&context), session_value(&context.session));
+        assert_eq!(
+            (stored_session(&context), classifier_called),
+            (session_value(&context.session), true),
+        );
     }
 
     #[rstest]
