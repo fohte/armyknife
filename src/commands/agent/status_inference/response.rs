@@ -23,9 +23,15 @@ pub(super) fn parse_claude_output(stdout: &[u8]) -> Result<(AgentStatus, ClaudeU
         .get("result")
         .and_then(Value::as_str)
         .context("Claude response has no result text")?;
-    let usage_value = response.get("usage").cloned().unwrap_or_default();
-    let usage: ClaudeUsage = serde_json::from_value(usage_value).context("parse Claude usage")?;
+    let usage = match response.get("usage") {
+        Some(usage) => serde_json::from_value(usage.clone()).context("parse Claude usage")?,
+        None => ClaudeUsage::default(),
+    };
     Ok((parse_status_response(result)?, usage))
+}
+
+pub(in crate::commands::agent) fn parse_claude_status(stdout: &[u8]) -> Result<AgentStatus> {
+    parse_claude_output(stdout).map(|(status, _)| status)
 }
 
 pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
@@ -55,6 +61,29 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use rstest::rstest;
+    use serde_json::json;
+
+    #[test]
+    fn claude_output_without_usage_uses_empty_usage() {
+        let actual = parse_claude_output(
+            &serde_json::to_vec(&json!({
+                "result": r#"{"kind":"ready","note":"waiting"}"#,
+            }))
+            .expect("response should serialize"),
+        )
+        .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            actual,
+            Ok((
+                AgentStatus {
+                    kind: "ready".to_string(),
+                    note: "waiting".to_string(),
+                },
+                ClaudeUsage::default(),
+            )),
+        );
+    }
 
     #[rstest]
     #[case::valid(r#"{"kind":"needs_user","note":"review the proposal"}"#, Ok(("needs_user".to_string(), "review the proposal".to_string())))]

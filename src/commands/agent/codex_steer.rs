@@ -24,8 +24,24 @@ const DEFAULT_THREAD_STARTED_TIMEOUT: Duration = Duration::from_secs(600);
 
 mod archive;
 mod delivery;
+#[expect(
+    dead_code,
+    reason = "The backend is consumed by the follow-up stop-hook integration."
+)]
+mod history;
 mod launch_lock;
+mod rpc;
+#[expect(
+    dead_code,
+    reason = "The backend is consumed by the follow-up stop-hook integration."
+)]
+pub(crate) mod status_inference;
 mod subagent;
+
+use rpc::{
+    ignore_interrupted_read, send_request, send_request_and_collect_notifications,
+    send_request_response, send_request_response_until,
+};
 
 pub(crate) use archive::archive_thread;
 pub use launch_lock::{acquire_launch_lock, acquire_launch_lock_with_timeout};
@@ -357,18 +373,6 @@ fn thread_started_timeout_error(timeout: Duration) -> anyhow::Error {
     )
 }
 
-fn ignore_interrupted_read(
-    result: tungstenite::Result<Message>,
-) -> tungstenite::Result<Option<Message>> {
-    match result {
-        Ok(message) => Ok(Some(message)),
-        Err(tungstenite::Error::Io(error)) if error.kind() == std::io::ErrorKind::Interrupted => {
-            Ok(None)
-        }
-        Err(error) => Err(error),
-    }
-}
-
 fn thread_started_from_message(message: Message, cwd: &Path) -> anyhow::Result<Option<String>> {
     match message {
         Message::Text(text) => {
@@ -407,101 +411,6 @@ fn paths_refer_to_same_location(left: &Path, right: &Path) -> bool {
         (Ok(left), Ok(right)) => left == right,
         _ => left == right,
     }
-}
-
-fn send_request(
-    socket: &mut WebSocket<UnixStream>,
-    request: &RpcRequest,
-) -> std::result::Result<(), RequestError> {
-    send_request_response(socket, request).map(|_| ())
-}
-
-fn send_request_response(
-    socket: &mut WebSocket<UnixStream>,
-    request: &RpcRequest,
-) -> std::result::Result<Value, RequestError> {
-    send_request_and_collect_notifications(socket, request).map(|(response, _)| response)
-}
-
-fn send_request_and_collect_notifications(
-    socket: &mut WebSocket<UnixStream>,
-    request: &RpcRequest,
-) -> std::result::Result<(Value, Vec<Value>), RequestError> {
-    socket
-        .send(Message::Text(request.payload.to_string().into()))
-        .with_context(|| {
-            format!(
-                "failed to send Codex app-server `{}` request",
-                request.method
-            )
-        })
-        .map_err(RequestError::Transport)?;
-    let mut notifications = Vec::new();
-    let response = wait_for_response_with_notifications(
-        || socket.read(),
-        request.id,
-        request.method,
-        |notification| notifications.push(notification),
-    )?;
-    Ok((response, notifications))
-}
-
-fn wait_for_response_with_notifications<R, F>(
-    mut read: R,
-    request_id: u64,
-    method: &str,
-    mut on_notification: F,
-) -> std::result::Result<Value, RequestError>
-where
-    R: FnMut() -> tungstenite::Result<Message>,
-    F: FnMut(Value),
-{
-    loop {
-        let Some(message) = ignore_interrupted_read(read())
-            .with_context(|| format!("failed to read Codex app-server `{method}` response"))
-            .map_err(RequestError::Transport)?
-        else {
-            continue;
-        };
-        match message {
-            Message::Text(text) => {
-                let response: Value = serde_json::from_str(&text)
-                    .with_context(|| format!("invalid JSON in `{method}` response"))
-                    .map_err(RequestError::Transport)?;
-                if let Some(result) = is_response_to(&response, request_id, method)? {
-                    return Ok(result);
-                }
-                if response.get("method").and_then(Value::as_str).is_some() {
-                    on_notification(response);
-                }
-            }
-            Message::Close(frame) => {
-                return Err(RequestError::Transport(anyhow!(
-                    "Codex app-server closed during `{method}`: {frame:?}"
-                )));
-            }
-            Message::Binary(_) | Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
-        }
-    }
-}
-
-fn is_response_to(
-    response: &Value,
-    request_id: u64,
-    method: &str,
-) -> std::result::Result<Option<Value>, RequestError> {
-    if response.get("id").and_then(Value::as_u64) != Some(request_id) {
-        return Ok(None);
-    }
-    if let Some(error) = response.get("error") {
-        return Err(RequestError::Rejected(RpcRejection::new(method, error)));
-    }
-    if response.get("result").is_none() {
-        return Err(RequestError::Transport(anyhow!(
-            "Codex app-server `{method}` returned no result"
-        )));
-    }
-    Ok(response.get("result").cloned())
 }
 
 fn request_error_to_anyhow(error: RequestError) -> anyhow::Error {
@@ -889,103 +798,6 @@ mod tests {
         assert_eq!(
             actual.map_err(|error| error.to_string()),
             Err(expected.to_string())
-        );
-    }
-
-    #[rstest]
-    #[case::message_and_code(json!({"code": -32600, "message": "Not initialized"}), "Not initialized (code -32600)")]
-    #[case::message_only(json!({"message": "thread not found"}), "thread not found")]
-    #[case::unknown_shape(json!({"reason": "unavailable"}), r#"{"reason":"unavailable"}"#)]
-    fn formats_rpc_errors(#[case] error: Value, #[case] expected: &str) {
-        assert_eq!(rpc_error(&error), expected);
-    }
-
-    #[rstest]
-    #[case::matching_success(
-        json!({"id": 2, "result": {"turn": {"id": "turn-a"}}}),
-        Ok(Some(json!({"turn": {"id": "turn-a"}})))
-    )]
-    #[case::notification(json!({"method": "turn/started", "params": {}}), Ok(None))]
-    #[case::different_request(json!({"id": 1, "result": {}}), Ok(None))]
-    #[case::server_error(
-        json!({"id": 2, "error": {"code": -32600, "message": "thread not found"}}),
-        Err("Codex app-server `turn/start` failed: thread not found (code -32600)")
-    )]
-    #[case::missing_result(
-        json!({"id": 2}),
-        Err("Codex app-server `turn/start` returned no result")
-    )]
-    fn selects_matching_rpc_response(
-        #[case] response: Value,
-        #[case] expected: std::result::Result<Option<Value>, &str>,
-    ) {
-        assert_eq!(
-            is_response_to(&response, 2, "turn/start").map_err(|error| error.to_string()),
-            expected.map_err(str::to_string),
-        );
-    }
-
-    #[test]
-    fn waits_through_notifications_for_matching_response() {
-        let mut messages = [
-            Ok(Message::Text(
-                json!({"method": "turn/started", "params": {}})
-                    .to_string()
-                    .into(),
-            )),
-            Ok(Message::Text(
-                json!({"id": 2, "result": {}}).to_string().into(),
-            )),
-        ]
-        .into_iter();
-        let mut notifications = Vec::new();
-        let actual = wait_for_response_with_notifications(
-            || {
-                messages
-                    .next()
-                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
-            },
-            2,
-            "turn/start",
-            |notification| notifications.push(notification),
-        );
-        assert_eq!(
-            (actual.map_err(|error| error.to_string()), notifications,),
-            (
-                Ok(json!({})),
-                vec![json!({"method": "turn/started", "params": {}})],
-            ),
-        );
-    }
-
-    #[test]
-    fn waits_for_matching_response_after_interrupted_read() {
-        let mut messages = [
-            Err(tungstenite::Error::Io(std::io::Error::from(
-                std::io::ErrorKind::Interrupted,
-            ))),
-            Ok(Message::Text(
-                json!({"id": 2, "result": {"turn": {"id": "turn-a"}}})
-                    .to_string()
-                    .into(),
-            )),
-        ]
-        .into_iter();
-
-        let actual = wait_for_response_with_notifications(
-            || {
-                messages
-                    .next()
-                    .unwrap_or_else(|| Err(tungstenite::Error::ConnectionClosed))
-            },
-            2,
-            "turn/start",
-            |_| {},
-        );
-
-        assert_eq!(
-            actual.map_err(|error| error.to_string()),
-            Ok(json!({"turn": {"id": "turn-a"}}))
         );
     }
 

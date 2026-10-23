@@ -15,6 +15,10 @@ use std::time::{Duration, Instant};
 use crate::infra::external_tool::ExternalTool;
 use crate::shared::command;
 
+mod with_timeout_stdin;
+
+pub(crate) use with_timeout_stdin::run_with_timeout_stdin;
+
 /// Upper bound on how long we sleep between exit checks in [`run_with_timeout`].
 const MAX_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
