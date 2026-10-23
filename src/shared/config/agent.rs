@@ -49,7 +49,7 @@ pub struct StatusInferenceStatusConfig {
     pub note: String,
 }
 
-/// Opt-in settings for inferring Codex Stop status from saved conversation history.
+/// Opt-in settings for inferring Codex Stop status from saved conversation history; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
