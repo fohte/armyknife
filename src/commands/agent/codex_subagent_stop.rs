@@ -158,11 +158,18 @@ enum ParentStatus {
     Unknown(Option<String>),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PendingChildTurnStatus {
+    Missing,
+    InProgress,
+    Interrupted,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Outcome {
     Duplicate,
     Queued,
-    ChildTurnPending,
+    ChildTurnPending(PendingChildTurnStatus),
     UnknownChildTurnStatus(String),
     MissingParent,
     ParentNotQueueable(ParentStatus),
@@ -195,7 +202,7 @@ where
                 turn,
                 status,
             } => (thread, turn, status),
-            ChildTurn::Pending => return Ok(Outcome::ChildTurnPending),
+            ChildTurn::Pending(status) => return Ok(Outcome::ChildTurnPending(status)),
             ChildTurn::Unknown(status) => {
                 lease.mark_processed()?;
                 return Ok(Outcome::UnknownChildTurnStatus(status));
@@ -274,7 +281,7 @@ enum ChildTurn {
         turn: Value,
         status: TerminalTurnStatus,
     },
-    Pending,
+    Pending(PendingChildTurnStatus),
     Unknown(String),
 }
 
@@ -289,6 +296,7 @@ where
     C: WakeParentControl,
     S: FnMut(Duration),
 {
+    let mut pending_status = PendingChildTurnStatus::Missing;
     for read_number in 0..max_reads {
         let thread = control
             .read_thread(&input.agent_id, true)
@@ -318,15 +326,16 @@ where
         }
 
         match status {
-            Some("interrupted") | Some("inProgress") | None => {
-                if read_number + 1 < max_reads {
-                    sleep(poll_interval);
-                }
-            }
+            Some("interrupted") => pending_status = PendingChildTurnStatus::Interrupted,
+            Some("inProgress") => pending_status = PendingChildTurnStatus::InProgress,
+            None => pending_status = PendingChildTurnStatus::Missing,
             Some(status) => return Ok(ChildTurn::Unknown(status.to_owned())),
         }
+        if read_number + 1 < max_reads {
+            sleep(poll_interval);
+        }
     }
-    Ok(ChildTurn::Pending)
+    Ok(ChildTurn::Pending(pending_status))
 }
 
 fn queue_result_message(
@@ -957,7 +966,9 @@ mod tests {
             (
                 (
                     Observation {
-                        outcome: Ok(Outcome::ChildTurnPending),
+                        outcome: Ok(Outcome::ChildTurnPending(
+                            PendingChildTurnStatus::Interrupted,
+                        )),
                         calls: vec![
                             ApiCall::Read("sample-child-thread".to_string(), true),
                             ApiCall::Read("sample-child-thread".to_string(), true),
@@ -1083,20 +1094,31 @@ mod tests {
     }
 
     #[rstest]
-    fn does_not_queue_when_the_child_turn_is_still_in_progress(
+    #[case::in_progress(Some("inProgress"), PendingChildTurnStatus::InProgress)]
+    #[case::interrupted(Some("interrupted"), PendingChildTurnStatus::Interrupted)]
+    #[case::missing(None, PendingChildTurnStatus::Missing)]
+    fn does_not_queue_when_the_child_turn_remains_unresolved(
         input: HookInput,
         ledger: MemoryLedger,
+        #[case] status: Option<&str>,
+        #[case] expected_status: PendingChildTurnStatus,
     ) {
-        let mut control = FakeControl::with_responses([
-            Ok(child_thread("inProgress")),
-            Ok(child_thread("inProgress")),
-        ]);
+        let response = match status {
+            Some(status) => child_thread(status),
+            None => json!({
+                "thread": {
+                    "parentThreadId": "sample-direct-parent",
+                    "turns": [],
+                },
+            }),
+        };
+        let mut control = FakeControl::with_responses([Ok(response.clone()), Ok(response)]);
         let actual = observe(&input, &mut control, &ledger, 2);
 
         assert_eq!(
             actual,
             Observation {
-                outcome: Ok(Outcome::ChildTurnPending),
+                outcome: Ok(Outcome::ChildTurnPending(expected_status)),
                 calls: vec![
                     ApiCall::Read("sample-child-thread".to_string(), true),
                     ApiCall::Read("sample-child-thread".to_string(), true),
