@@ -129,6 +129,24 @@ pub(super) fn set_inferred_status_if_unchanged(
     Ok(true)
 }
 
+pub(super) fn with_inference_candidate_if_unchanged(
+    sessions_dir: &std::path::Path,
+    session_id: &str,
+    stop_updated_at: chrono::DateTime<chrono::Utc>,
+    record_candidate: impl FnOnce(),
+) -> Result<bool> {
+    let lock = store::lock_session_for_update(sessions_dir, session_id)?;
+    let Some(session) = lock.load()? else {
+        return Ok(false);
+    };
+    if session.agent_status.is_some() || session.updated_at != stop_updated_at {
+        return Ok(false);
+    }
+
+    record_candidate();
+    Ok(true)
+}
+
 fn ensure_single_line(note: &str) -> Result<()> {
     ensure!(
         !note.contains('\n') && !note.contains('\r'),
@@ -343,6 +361,61 @@ mod tests {
             (
                 expected_written,
                 serde_json::to_value(&expected_session).expect("session should serialize"),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::clear(InferenceWriteGuard::Clear, true)]
+    #[case::status_already_set(InferenceWriteGuard::StatusAlreadySet, false)]
+    #[case::session_updated(InferenceWriteGuard::SessionUpdated, false)]
+    fn inference_candidate_checks_stop_snapshot(
+        #[case] guard: InferenceWriteGuard,
+        #[case] expected_candidate: bool,
+        inference_session_store: InferenceSessionStore,
+    ) {
+        let sessions_dir = &inference_session_store.sessions_dir;
+        let mut original = inference_session_store.session.clone();
+        original.updated_at = chrono::DateTime::parse_from_rfc3339("2026-05-11T00:00:00Z")
+            .expect("fixed timestamp should parse")
+            .with_timezone(&Utc);
+        let stop_updated_at = original.updated_at;
+        match guard {
+            InferenceWriteGuard::Clear => {}
+            InferenceWriteGuard::StatusAlreadySet => {
+                original.agent_status = Some(AgentStatus {
+                    kind: "needs_attention".to_string(),
+                    note: "existing note".to_string(),
+                });
+            }
+            InferenceWriteGuard::SessionUpdated => {
+                original.updated_at += chrono::TimeDelta::seconds(1);
+            }
+        }
+        store::save_session_to(sessions_dir, &original).expect("session should save");
+
+        let mut candidate_recorded = false;
+        let eligible = with_inference_candidate_if_unchanged(
+            sessions_dir,
+            &original.session_id,
+            stop_updated_at,
+            || candidate_recorded = true,
+        )
+        .expect("candidate check should succeed");
+        let actual = store::load_session_from(sessions_dir, &original.session_id)
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                eligible,
+                candidate_recorded,
+                serde_json::to_value(&actual).expect("session should serialize"),
+            ),
+            (
+                expected_candidate,
+                expected_candidate,
+                serde_json::to_value(&original).expect("session should serialize"),
             ),
         );
     }

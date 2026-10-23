@@ -47,7 +47,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.codex_status_inference.enabled` opts Codex sessions into detached classification of the saved conversation. Enabling it requires a non-empty `agent.status_inference_prompt`, at least one `agent.statuses` entry, and both `failure_status` and `background_status`. Each configured `kind` must name an entry in `agent.statuses`, and each `note` must be a non-empty single line. A worker failure records `failure_status` unless shadow mode is active. Pending background work records `background_status` without running the classifier. Invalid enabled settings fail configuration validation.
 
-Set `agent.codex_status_inference.shadow_mode` to `true` to classify without writing an inferred status. The worker logs the resulting kind and note for evaluation. Background and failure candidates are logged too; no inference status is written to the database while shadow mode is active.
+Set `agent.codex_status_inference.shadow_mode` to `true` to classify without writing an inferred status. While the stopped session remains unchanged and has no explicit status, the worker logs the inferred kind and note, or the configured failure kind and note if inference fails. The Stop hook logs the configured background kind and note while work is pending. Shadow mode does not write inferred statuses to the session database.
 
 Codex classification reads the complete public app-server history for the stopped turn and sends it as untrusted input to Claude standalone using the `haiku` model alias. Tools, MCP servers, hooks, and session persistence are disabled. The public history may not reproduce the model's complete input, and child agent message bodies are not included.
 

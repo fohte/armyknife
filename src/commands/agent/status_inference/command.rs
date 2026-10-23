@@ -279,12 +279,19 @@ where
             };
 
             if codex_config.shadow_mode {
-                tracing::info!(
-                    event = "agent.status_inference.shadow_result",
-                    session = %args.session,
-                    kind = %inferred_status.kind,
-                    note = %inferred_status.note,
-                );
+                status::with_inference_candidate_if_unchanged(
+                    sessions_dir,
+                    &args.session,
+                    args.updated_at,
+                    || {
+                        tracing::info!(
+                            event = "agent.status_inference.shadow_result",
+                            session = %args.session,
+                            kind = %inferred_status.kind,
+                            note = %inferred_status.note,
+                        );
+                    },
+                )?;
                 return Ok(());
             }
 
@@ -334,14 +341,28 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
         session = %args.session,
         error = cause,
     );
-    if config.shadow_mode {
-        return Ok(false);
-    }
-
     let fallback = config
         .failure_status
         .as_ref()
         .context("Codex inference failure status is not configured")?;
+    if config.shadow_mode {
+        status::with_inference_candidate_if_unchanged(
+            sessions_dir,
+            &args.session,
+            args.updated_at,
+            || {
+                tracing::info!(
+                    event = "agent.status_inference.shadow_failure_candidate",
+                    session = %args.session,
+                    kind = %fallback.kind,
+                    note = %fallback.note,
+                    error = cause,
+                );
+            },
+        )?;
+        return Ok(false);
+    }
+
     let status_value = AgentStatus {
         kind: fallback.kind.clone(),
         note: fallback.note.clone(),
@@ -372,6 +393,7 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -379,10 +401,54 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
+    use tracing_subscriber::prelude::*;
 
     use super::*;
     use crate::commands::agent::types::SessionStatus;
     use crate::shared::config::{CodexStatusInferenceConfig, StatusInferenceStatusConfig};
+
+    struct TraceBufferWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for TraceBufferWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let mut output = self
+                .0
+                .lock()
+                .map_err(|_| io::Error::other("trace buffer lock was poisoned"))?;
+            output.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn capture_info_json_events<T>(operation: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
+        let log_output = Arc::new(Mutex::new(Vec::new()));
+        let writer_output = log_output.clone();
+        let fmt_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .flatten_event(true)
+            .without_time()
+            .with_level(false)
+            .with_target(false)
+            .with_writer(move || TraceBufferWriter(writer_output.clone()))
+            .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
+                *metadata.level() == tracing::Level::INFO
+            }));
+        let subscriber = tracing_subscriber::registry().with(fmt_layer);
+        let result = tracing::subscriber::with_default(subscriber, operation);
+        let log_output = log_output.lock().expect("log output lock").clone();
+        let log_events = String::from_utf8(log_output)
+            .expect("trace output should be UTF-8")
+            .lines()
+            .map(serde_json::from_str)
+            .collect::<Result<Vec<serde_json::Value>, _>>()
+            .expect("trace output should contain JSON events");
+
+        (result, log_events)
+    }
 
     struct InferenceWorkerContext {
         _temp_dir: TempDir,
@@ -745,7 +811,7 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_shadow_mode_does_not_write_failure_fallback(
+    fn codex_shadow_mode_logs_failure_candidate_without_writing_status(
         inference_worker_context: InferenceWorkerContext,
     ) {
         let mut context = inference_worker_context;
@@ -754,17 +820,68 @@ mod tests {
             .expect("Codex session should be saved");
         enable_codex_inference(&mut context.agent_config, true);
         let args = args_for(&context.session);
-        run_inner_with(
-            &args,
-            &context.sessions_dir,
-            &context.agent_config,
-            Err(anyhow!("snapshot file is unavailable")),
-            |_, _| Err(anyhow!("Claude inference must not run")),
-            |_, _, _, _, _, _| Err(anyhow!("Codex inference must not run")),
-        )
-        .expect("shadow failure should be handled");
+        let (result, log_events) = capture_info_json_events(|| {
+            run_inner_with(
+                &args,
+                &context.sessions_dir,
+                &context.agent_config,
+                Err(anyhow!("snapshot file is unavailable")),
+                |_, _| Err(anyhow!("Claude inference must not run")),
+                |_, _, _, _, _, _| Err(anyhow!("Codex inference must not run")),
+            )
+        });
+        result.expect("shadow failure should be handled");
 
-        assert_eq!(stored_session(&context), session_value(&context.session));
+        assert_eq!(
+            (stored_session(&context), log_events),
+            (
+                session_value(&context.session),
+                vec![serde_json::json!({
+                    "event": "agent.status_inference.shadow_failure_candidate",
+                    "session": "fixture-session",
+                    "kind": "needs_user",
+                    "note": "status inference failure investigation",
+                    "error": "snapshot file is unavailable",
+                }),],
+            ),
+        );
+    }
+
+    #[rstest]
+    fn codex_shadow_mode_discards_failure_candidate_after_manual_status(
+        inference_worker_context: InferenceWorkerContext,
+    ) {
+        let mut context = inference_worker_context;
+        context.session.engine = Engine::Codex;
+        store::save_session_to(&context.sessions_dir, &context.session)
+            .expect("Codex session should be saved");
+        enable_codex_inference(&mut context.agent_config, true);
+        let args = args_for(&context.session);
+        let mut expected = context.session.clone();
+        expected.agent_status = Some(AgentStatus {
+            kind: "finished".to_string(),
+            note: "manual status takes precedence".to_string(),
+        });
+        let (result, log_events) = capture_info_json_events(|| {
+            run_inner_with(
+                &args,
+                &context.sessions_dir,
+                &context.agent_config,
+                Ok(Some(codex_snapshot())),
+                |_, _| Err(anyhow!("Claude inference must not run")),
+                |_, _, _, _, _, _| {
+                    store::save_session_to(&context.sessions_dir, &expected)
+                        .expect("manual status should be saved");
+                    Err(anyhow!("Codex classifier failed"))
+                },
+            )
+        });
+        result.expect("shadow failure should be handled");
+
+        assert_eq!(
+            (stored_session(&context), log_events),
+            (session_value(&expected), Vec::new()),
+        );
     }
 
     #[rstest]
