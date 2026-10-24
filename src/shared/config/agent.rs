@@ -126,7 +126,9 @@ pub struct AgentConfig {
     pub status_inference_prompt: Option<String>,
 
     /// Explicit opt-in for Codex Stop status inference. Enabling this requires
-    /// valid failure and background statuses from `agent.statuses`.
+    /// a non-empty `agent.status_inference_prompt`, at least one
+    /// `agent.statuses` entry, and valid failure and background statuses from
+    /// `agent.statuses`.
     #[serde(default)]
     pub codex_status_inference: CodexStatusInferenceConfig,
 

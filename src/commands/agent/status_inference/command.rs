@@ -96,7 +96,7 @@ where
     match spawn(executable, &args) {
         Ok(()) => {
             tracing::info!(
-                event = "agent.status_inference.spawned",
+                event = "agent.hook.status_inference_spawned",
                 session = %request.session_id,
             );
             Ok(())
@@ -788,25 +788,36 @@ mod tests {
         enable_codex_inference(&mut context.agent_config, true);
         let args = args_for(&context.session);
         let mut classifier_called = false;
-        run_inner_with(
-            &args,
-            &context.sessions_dir,
-            &context.agent_config,
-            Ok(Some(codex_snapshot())),
-            |_, _| Err(anyhow!("Claude inference must not run")),
-            |_, _, _, _, _, _| {
-                classifier_called = true;
-                Ok(AgentStatus {
-                    kind: "finished".to_string(),
-                    note: "work is complete".to_string(),
-                })
-            },
-        )
-        .expect("shadow inference should succeed");
+        let (result, log_events) = capture_info_json_events(|| {
+            run_inner_with(
+                &args,
+                &context.sessions_dir,
+                &context.agent_config,
+                Ok(Some(codex_snapshot())),
+                |_, _| Err(anyhow!("Claude inference must not run")),
+                |_, _, _, _, _, _| {
+                    classifier_called = true;
+                    Ok(AgentStatus {
+                        kind: "finished".to_string(),
+                        note: "work is complete".to_string(),
+                    })
+                },
+            )
+        });
+        result.expect("shadow inference should succeed");
 
         assert_eq!(
-            (stored_session(&context), classifier_called),
-            (session_value(&context.session), true),
+            (stored_session(&context), classifier_called, log_events),
+            (
+                session_value(&context.session),
+                true,
+                vec![serde_json::json!({
+                    "event": "agent.status_inference.shadow_result",
+                    "session": "fixture-session",
+                    "kind": "finished",
+                    "note": "work is complete",
+                })],
+            ),
         );
     }
 

@@ -144,7 +144,7 @@
           }
         },
         "codex_status_inference": {
-          "description": "Explicit opt-in for Codex Stop status inference. Enabling this requires\nvalid failure and background statuses from `agent.statuses`.",
+          "description": "Explicit opt-in for Codex Stop status inference. Enabling this requires\na non-empty `agent.status_inference_prompt`, at least one\n`agent.statuses` entry, and valid failure and background statuses from\n`agent.statuses`.",
           "$ref": "#/$defs/CodexStatusInferenceConfig",
           "default": {
             "background_status": null,
