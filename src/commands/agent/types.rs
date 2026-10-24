@@ -254,6 +254,11 @@ pub struct HookInput {
     #[serde(default)]
     pub last_assistant_message: Option<String>,
 
+    /// Codex Stop payload's turn ID, paired with `last_assistant_message` so
+    /// the detached inference worker reads the same stopped turn.
+    #[serde(default)]
+    pub turn_id: Option<String>,
+
     // Ignore other fields from Claude Code / Codex hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
@@ -385,6 +390,22 @@ impl HookEvent {
 mod tests {
     use super::*;
     use rstest::rstest;
+
+    #[test]
+    fn hook_input_keeps_the_codex_stop_turn_snapshot_fields() {
+        let input: HookInput = serde_json::from_str(
+            r#"{"session_id":"fixture-thread","cwd":"/tmp/fixture","turn_id":"fixture-turn","last_assistant_message":"waiting for review"}"#,
+        )
+        .expect("Codex Stop payload should deserialize");
+
+        assert_eq!(
+            (input.turn_id, input.last_assistant_message),
+            (
+                Some("fixture-turn".to_string()),
+                Some("waiting for review".to_string()),
+            ),
+        );
+    }
 
     // The CLI flag, the YAML config, and the value handed to `codex` must all
     // spell each effort the same way.

@@ -17,10 +17,13 @@ use super::claude_sessions;
 use super::error::CcError;
 use super::session_init;
 use super::session_status;
+use super::status_inference::{
+    CodexStopSnapshot, StatusInferenceArgs, StatusInferenceSpawnRequest,
+};
 use super::store;
 use super::types::{
-    ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY, Session,
-    SessionStatus, TMUX_SESSION_OPTION, TmuxInfo,
+    AgentStatus, ChildLaunchPermission, Engine, HookEvent, HookInput, MAIN_THREAD_AGENT_KEY,
+    Session, SessionStatus, TMUX_SESSION_OPTION, TmuxInfo,
 };
 use crate::infra::notification::{Notification, NotificationAction};
 use crate::infra::tmux;
@@ -233,6 +236,7 @@ fn process_hook_event_impl(
         side_effects,
         stop_hook_instruction,
         status_inference_prompt,
+        agent_config.as_ref(),
     )
 }
 
@@ -251,6 +255,7 @@ fn process_hook_event_impl_with_instruction(
         side_effects,
         stop_hook_instruction,
         None,
+        None,
     )
 }
 
@@ -261,8 +266,11 @@ fn process_hook_event_impl_with_settings(
     side_effects: &SideEffects,
     stop_hook_instruction: Option<&str>,
     status_inference_prompt: Option<&str>,
+    agent_config: Option<&config::AgentConfig>,
 ) -> Result<ProcessResult> {
     let env = EnvVars::load();
+    let codex_status_inference =
+        agent_config.and_then(|config| config.configured_codex_status_inference());
 
     // Claude's SessionEnd confirms termination; Codex's hook does not because
     // the app-server also fires it during daemon shutdown.
@@ -601,6 +609,7 @@ fn process_hook_event_impl_with_settings(
             was_waiting_for_input,
             was_asking_user,
             status_inference_prompt,
+            codex_status_inference.is_some(),
         );
     let stop_block_reason = (event == HookEvent::Stop)
         .then(|| {
@@ -672,6 +681,38 @@ fn process_hook_event_impl_with_settings(
         work_type::update_session_work_type(&mut session, event, &input, &config.agent);
     }
     vibe::enable_on_prompt_submit(event, &input, &mut session);
+
+    if event == HookEvent::Stop
+        && stop::should_set_background_status_for_hook(
+            &input,
+            &session,
+            was_waiting_for_input,
+            was_asking_user,
+            codex_status_inference.is_some(),
+        )
+        && let Some(codex_config) = codex_status_inference
+        && let Some(background_status) = &codex_config.background_status
+    {
+        if codex_config.shadow_mode {
+            tracing::info!(
+                event = "agent.status_inference.shadow_background_status",
+                session = %session.session_id,
+                kind = %background_status.kind,
+                note = %background_status.note,
+            );
+        } else {
+            session.agent_status = Some(AgentStatus {
+                kind: background_status.kind.clone(),
+                note: background_status.note.clone(),
+            });
+            session.agent_status_clear_pending = false;
+            tracing::info!(
+                event = "agent.status_inference.background_status_set",
+                session = %session.session_id,
+                kind = %background_status.kind,
+            );
+        }
+    }
 
     // Commit before transcript and tmux work so they do not hold SQLite's
     // database-wide writer lock. `sync_tmux` also reloads this session.
@@ -784,7 +825,37 @@ fn process_hook_event_impl_with_settings(
     }
 
     if should_infer_status {
-        side_effects.schedule_status_inference(&session.session_id, session.updated_at);
+        let request = StatusInferenceSpawnRequest {
+            session_id: session.session_id.clone(),
+            stop_updated_at: session.updated_at,
+            codex_snapshot: (session.engine == Engine::Codex).then(|| CodexStopSnapshot {
+                thread_id: input.session_id.clone(),
+                turn_id: input.turn_id.clone(),
+                last_assistant_message: input.last_assistant_message.clone(),
+            }),
+        };
+        if let Err(error) = side_effects.schedule_status_inference(&request) {
+            tracing::warn!(
+                event = "agent.status_inference.spawn_failed",
+                session = %session.session_id,
+                error = %format!("{error:#}"),
+            );
+            if session.engine == Engine::Codex
+                && let Some(agent_config) = agent_config
+            {
+                let args = StatusInferenceArgs {
+                    session: session.session_id.clone(),
+                    updated_at: session.updated_at,
+                    codex_snapshot_file: None,
+                };
+                super::status_inference::record_codex_failure_status_if_unchanged(
+                    sessions_dir,
+                    &args,
+                    agent_config,
+                    &format!("worker spawn failed: {error:#}"),
+                )?;
+            }
+        }
     }
 
     // On Stop events, spawn a detached schedule worker that will SIGTERM +
@@ -2597,6 +2668,7 @@ mod tests {
             notification_calls: None,
             auto_compact_calls: None,
             status_inference_calls: None,
+            status_inference_spawn_error: None,
             redelivery_calls: None,
         };
 
@@ -3037,6 +3109,7 @@ mod tests {
             notification_calls: None,
             auto_compact_calls: None,
             status_inference_calls: None,
+            status_inference_spawn_error: None,
             redelivery_calls: None,
         };
 
@@ -3172,6 +3245,31 @@ mod tests {
 
     const TEST_STOP_HOOK_INSTRUCTION: &str = "Please summarize the result before stopping.";
 
+    fn codex_status_inference_config(shadow_mode: bool) -> config::AgentConfig {
+        let mut config: config::AgentConfig = serde_yaml::from_str(indoc::indoc! {"
+            status_inference_prompt: Classify the stopped work.
+            statuses:
+              follow_up_needed: { state: user }
+              awaiting_dependency: { state: waiting }
+              work_delivered: { state: done }
+            codex_status_inference:
+              enabled: true
+              shadow_mode: false
+              failure_status:
+                kind: follow_up_needed
+                note: status inference failure investigation
+              background_status:
+                kind: awaiting_dependency
+                note: background task completion
+        "})
+        .expect("Codex inference config should parse");
+        config.codex_status_inference.shadow_mode = shadow_mode;
+        config
+            .validate()
+            .expect("Codex inference config should validate");
+        config
+    }
+
     #[rstest]
     #[case::unknown_with_instruction(StopReason::Unknown, true, true)]
     #[case::unknown_without_instruction(StopReason::Unknown, false, false)]
@@ -3276,6 +3374,7 @@ mod tests {
             &side_effects,
             Some(TEST_STOP_HOOK_INSTRUCTION),
             Some("Infer the configured status from the session."),
+            None,
         )
         .expect("stop hook should succeed");
         let session = store::load_session_from(sessions_dir, "test-123")
@@ -3289,7 +3388,243 @@ mod tests {
                 ProcessResult::SessionSaved,
                 SessionStatus::Stopped,
                 None,
-                vec![("test-123".to_string(), session.updated_at)],
+                vec![StatusInferenceSpawnRequest {
+                    session_id: "test-123".to_string(),
+                    stop_updated_at: session.updated_at,
+                    codex_snapshot: None,
+                }],
+            ),
+        );
+    }
+
+    #[test]
+    fn enabled_codex_inference_schedules_the_same_turn_snapshot_without_blocking() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+        input.turn_id = Some("fixture-turn".to_string());
+        let agent_config = codex_status_inference_config(false);
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Classify the stopped work."),
+            Some(&agent_config),
+        )
+        .expect("stop hook should succeed");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                None,
+                vec![StatusInferenceSpawnRequest {
+                    session_id: "test-codex".to_string(),
+                    stop_updated_at: session.updated_at,
+                    codex_snapshot: Some(CodexStopSnapshot {
+                        thread_id: "test-codex".to_string(),
+                        turn_id: Some("fixture-turn".to_string()),
+                        last_assistant_message: Some("Example response.".to_string()),
+                    }),
+                }],
+            ),
+        );
+    }
+
+    #[test]
+    fn codex_worker_spawn_failure_records_the_configured_fallback_status() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        side_effects.status_inference_spawn_error = Some("fixture spawn failure".to_string());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+        input.turn_id = Some("fixture-turn".to_string());
+        let agent_config = codex_status_inference_config(false);
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Classify the stopped work."),
+            Some(&agent_config),
+        )
+        .expect("stop hook should not block on worker spawn failure");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded.len(),),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                Some(AgentStatus {
+                    kind: "follow_up_needed".to_string(),
+                    note: "status inference failure investigation".to_string(),
+                }),
+                1,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::writes_background_status(
+        false,
+        Some(AgentStatus {
+            kind: "awaiting_dependency".to_string(),
+            note: "background task completion".to_string(),
+        }),
+    )]
+    #[case::shadow_mode_does_not_write_background_status(true, None)]
+    fn codex_background_status_is_written_without_starting_inference(
+        #[case] shadow_mode: bool,
+        #[case] expected_agent_status: Option<AgentStatus>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+        input.turn_id = Some("fixture-turn".to_string());
+        input.background_tasks = vec![super::super::types::BackgroundTask {
+            id: "fixture-task".to_string(),
+            task_type: "shell".to_string(),
+        }];
+        let agent_config = codex_status_inference_config(shadow_mode);
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Classify the stopped work."),
+            Some(&agent_config),
+        )
+        .expect("background status should not block");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+        let recorded = calls.lock().expect("lock").clone();
+
+        assert_eq!(
+            (result, session.status, session.agent_status, recorded),
+            (
+                ProcessResult::SessionSaved,
+                SessionStatus::Stopped,
+                expected_agent_status,
+                Vec::<StatusInferenceSpawnRequest>::new(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::explicit_status(StopReason::StatusSet)]
+    #[case::permission_pending(StopReason::PermissionPrompt)]
+    #[case::asking_user(StopReason::AskUserQuestion)]
+    #[case::paused(StopReason::Paused)]
+    #[case::stop_hook_active(StopReason::StopHookActive)]
+    fn codex_background_status_preserves_higher_priority_reasons(#[case] reason: StopReason) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let expected_agent_status = match reason {
+            StopReason::StatusSet => Some(AgentStatus {
+                kind: "work_delivered".to_string(),
+                note: "Example completion.".to_string(),
+            }),
+            StopReason::BackgroundTask
+            | StopReason::SessionCron
+            | StopReason::PermissionPrompt
+            | StopReason::AskUserQuestion
+            | StopReason::StopHookActive
+            | StopReason::Paused
+            | StopReason::Unknown => None,
+        };
+        save_test_session(sessions_dir, "test-codex", |session| {
+            session.engine = Engine::Codex;
+            match reason {
+                StopReason::StatusSet => session.agent_status = expected_agent_status.clone(),
+                StopReason::PermissionPrompt => session.status = SessionStatus::WaitingInput,
+                StopReason::AskUserQuestion => {
+                    session.current_tool = Some("AskUserQuestion".to_string());
+                }
+                StopReason::Paused => session.status = SessionStatus::Paused,
+                StopReason::BackgroundTask
+                | StopReason::SessionCron
+                | StopReason::StopHookActive
+                | StopReason::Unknown => {}
+            }
+        });
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut side_effects = SideEffects::none();
+        side_effects.status_inference = true;
+        side_effects.status_inference_calls = Some(calls.clone());
+        let mut input = stop_input(Engine::Codex, "Example response.", false);
+        input.session_id = "test-codex".to_string();
+        input.turn_id = Some("fixture-turn".to_string());
+        input.background_tasks = vec![super::super::types::BackgroundTask {
+            id: "fixture-task".to_string(),
+            task_type: "shell".to_string(),
+        }];
+        input.stop_hook_active = matches!(reason, StopReason::StopHookActive);
+        let agent_config = codex_status_inference_config(false);
+
+        let result = process_hook_event_impl_with_settings(
+            HookEvent::Stop,
+            input,
+            sessions_dir,
+            &side_effects,
+            Some(TEST_STOP_HOOK_INSTRUCTION),
+            Some("Classify the stopped work."),
+            Some(&agent_config),
+        )
+        .expect("known stop reasons should be preserved");
+        let session = store::load_session_from(sessions_dir, "test-codex")
+            .expect("session should load")
+            .expect("session should exist");
+
+        assert_eq!(
+            (
+                result,
+                session.agent_status,
+                calls.lock().expect("lock").clone(),
+            ),
+            (
+                ProcessResult::SessionSaved,
+                expected_agent_status,
+                Vec::<StatusInferenceSpawnRequest>::new(),
             ),
         );
     }
@@ -3315,6 +3650,7 @@ mod tests {
             &side_effects,
             Some(TEST_STOP_HOOK_INSTRUCTION),
             Some("Infer the configured status from the session."),
+            None,
         )
         .expect("stop hook should succeed");
         let session = store::load_session_from(sessions_dir, "test-codex")
@@ -3647,6 +3983,7 @@ mod tests {
             notification_calls: Some(notification_calls.clone()),
             auto_compact_calls: Some(auto_compact_calls.clone()),
             status_inference_calls: None,
+            status_inference_spawn_error: None,
             redelivery_calls: None,
         };
         let input: HookInput = serde_json::from_value(serde_json::json!({

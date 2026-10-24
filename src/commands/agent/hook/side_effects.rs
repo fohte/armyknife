@@ -1,8 +1,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
+use anyhow::Result;
 
+use super::super::status_inference::StatusInferenceSpawnRequest;
 use super::super::tmux_sync::{LiveTmuxStatusSyncer, TmuxStatusSyncer};
 #[cfg(test)]
 use super::super::types::HookEvent;
@@ -55,10 +56,12 @@ pub(super) struct SideEffects {
     /// Test-only sink that records sessions passed to the auto-compact worker.
     #[cfg(test)]
     pub(super) auto_compact_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
-    /// Test-only sink that records (session id, Stop update time) passed to
-    /// the status inference worker.
+    /// Test-only sink that records each Stop snapshot passed to the worker.
     #[cfg(test)]
     pub(super) status_inference_calls: Option<StatusInferenceCallSink>,
+    /// Test-only failure injected at the detached status inference spawn boundary.
+    #[cfg(test)]
+    pub(super) status_inference_spawn_error: Option<String>,
     /// Test-only sink that records sessions passed to the redelivery worker.
     #[cfg(test)]
     pub(super) redelivery_calls: Option<std::sync::Arc<std::sync::Mutex<Vec<String>>>>,
@@ -74,7 +77,7 @@ type TmuxSyncCall = (
 #[cfg(test)]
 type TmuxSyncCallSink = std::sync::Arc<std::sync::Mutex<Vec<TmuxSyncCall>>>;
 #[cfg(test)]
-type StatusInferenceCallSink = std::sync::Arc<std::sync::Mutex<Vec<(String, DateTime<Utc>)>>>;
+type StatusInferenceCallSink = std::sync::Arc<std::sync::Mutex<Vec<StatusInferenceSpawnRequest>>>;
 
 impl SideEffects {
     pub(super) fn all() -> Self {
@@ -100,6 +103,8 @@ impl SideEffects {
             #[cfg(test)]
             status_inference_calls: None,
             #[cfg(test)]
+            status_inference_spawn_error: None,
+            #[cfg(test)]
             redelivery_calls: None,
         }
     }
@@ -121,6 +126,7 @@ impl SideEffects {
             notification_calls: None,
             auto_compact_calls: None,
             status_inference_calls: None,
+            status_inference_spawn_error: None,
             redelivery_calls: None,
         }
     }
@@ -149,21 +155,26 @@ impl SideEffects {
 
     pub(super) fn schedule_status_inference(
         &self,
-        session_id: &str,
-        stop_updated_at: DateTime<Utc>,
-    ) {
+        request: &StatusInferenceSpawnRequest,
+    ) -> Result<()> {
         if !self.status_inference {
-            return;
+            return Ok(());
         }
         #[cfg(test)]
         if let Some(calls) = &self.status_inference_calls {
             calls
                 .lock()
                 .expect("status_inference_calls mutex poisoned")
-                .push((session_id.to_string(), stop_updated_at));
+                .push(request.clone());
+            if let Some(error) = &self.status_inference_spawn_error {
+                return Err(anyhow::anyhow!(error.clone()));
+            }
+            return Ok(());
         }
         #[cfg(not(test))]
-        super::super::status_inference::spawn_in_background(session_id, stop_updated_at);
+        return super::super::status_inference::spawn_in_background(request);
+        #[cfg(test)]
+        Ok(())
     }
 
     pub(super) fn redeliver_bg_notifications(&self, session_id: &str) {

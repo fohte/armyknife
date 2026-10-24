@@ -51,12 +51,45 @@ pub(super) fn should_infer_status_for_hook(
     was_waiting_for_input: bool,
     was_asking_user: bool,
     inference_prompt: Option<&str>,
+    codex_inference_enabled: bool,
 ) -> bool {
-    session.engine == Engine::Claude
-        && should_infer_status(
+    match session.engine {
+        Engine::Claude => should_infer_status(
             stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user),
             inference_prompt,
-        )
+        ),
+        Engine::Codex => {
+            codex_inference_enabled
+                && should_infer_status(
+                    stop_conditions_for_hook(
+                        input,
+                        session,
+                        was_waiting_for_input,
+                        was_asking_user,
+                    ),
+                    inference_prompt,
+                )
+        }
+    }
+}
+
+pub(super) fn should_set_background_status_for_hook(
+    input: &HookInput,
+    session: &Session,
+    was_waiting_for_input: bool,
+    was_asking_user: bool,
+    codex_inference_enabled: bool,
+) -> bool {
+    let conditions =
+        stop_conditions_for_hook(input, session, was_waiting_for_input, was_asking_user);
+    session.engine == Engine::Codex
+        && codex_inference_enabled
+        && conditions.has_pending_work
+        && !conditions.stop_hook_active
+        && !conditions.has_agent_status
+        && !conditions.permission_pending
+        && !conditions.asking_user
+        && !conditions.paused
 }
 
 fn should_infer_status(conditions: StopConditions, inference_prompt: Option<&str>) -> bool {

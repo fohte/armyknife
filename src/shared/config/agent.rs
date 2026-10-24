@@ -36,6 +36,41 @@ pub struct BgTaskReminderConfig {
     pub excluded_commands: Vec<String>,
 }
 
+/// Status written when Codex status inference cannot be started or completed,
+/// or when the Stop hook observes background work.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct StatusInferenceStatusConfig {
+    /// Name from `agent.statuses`.
+    pub kind: String,
+
+    /// One-line explanation stored with the inferred status.
+    pub note: String,
+}
+
+/// Opt-in settings for inferring Codex Stop status from saved conversation history; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct CodexStatusInferenceConfig {
+    /// Enable Codex Stop inference. When enabled, failure and background statuses are required.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Log classifications without writing any status to the session database.
+    #[serde(default)]
+    pub shadow_mode: bool,
+
+    /// Status recorded if snapshot acquisition, classification, validation, or worker startup fails.
+    #[serde(default)]
+    pub failure_status: Option<StatusInferenceStatusConfig>,
+
+    /// Status recorded while armyknife background work is still pending.
+    #[serde(default)]
+    pub background_status: Option<StatusInferenceStatusConfig>,
+}
+
 impl Default for BgTaskReminderConfig {
     fn default() -> Self {
         Self {
@@ -79,15 +114,23 @@ pub struct AgentConfig {
     pub merge_notification: Option<String>,
 
     /// Instruction returned by the Stop hook when it blocks a session.
-    /// Codex sessions always use this instruction; Claude sessions use it when
-    /// status inference is not configured. At least one status must be configured.
+    /// Codex sessions use this instruction unless Codex status inference is
+    /// enabled; Claude sessions use it when status inference is not configured.
+    /// At least one status must be configured.
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
 
-    /// Prompt sent to a forked Claude Code session to infer a missing status at Stop.
-    /// Codex sessions continue to use `stop_hook_instruction`.
+    /// Prompt used by Claude forks or Codex standalone inference to classify a
+    /// missing status at Stop.
     #[serde(default)]
     pub status_inference_prompt: Option<String>,
+
+    /// Explicit opt-in for Codex Stop status inference. Enabling this requires
+    /// a non-empty `agent.status_inference_prompt`, at least one
+    /// `agent.statuses` entry, and valid failure and background statuses from
+    /// `agent.statuses`.
+    #[serde(default)]
+    pub codex_status_inference: CodexStatusInferenceConfig,
 
     /// Reminder settings for background tasks that run longer than expected.
     #[serde(default)]
@@ -142,6 +185,39 @@ impl AgentConfig {
             .filter(|prompt| !prompt.trim().is_empty())
     }
 
+    /// Validate the conditional requirements for Codex Stop inference.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if !self.codex_status_inference.enabled {
+            return Ok(());
+        }
+
+        if self.configured_status_inference_prompt().is_none() {
+            return Err(
+                "agent.status_inference_prompt and at least one agent.statuses entry are required"
+                    .to_string(),
+            );
+        }
+
+        validate_status_inference_status(
+            "agent.codex_status_inference.failure_status",
+            self.codex_status_inference.failure_status.as_ref(),
+            &self.statuses,
+        )?;
+        validate_status_inference_status(
+            "agent.codex_status_inference.background_status",
+            self.codex_status_inference.background_status.as_ref(),
+            &self.statuses,
+        )?;
+
+        Ok(())
+    }
+
+    /// Return the Codex inference settings only when the complete opt-in config is valid.
+    pub fn configured_codex_status_inference(&self) -> Option<&CodexStatusInferenceConfig> {
+        (self.codex_status_inference.enabled && self.validate().is_ok())
+            .then_some(&self.codex_status_inference)
+    }
+
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)
@@ -154,4 +230,36 @@ impl AgentConfig {
             None => self.work_type_fallback.as_ref(),
         }
     }
+}
+
+fn validate_status_inference_status(
+    field: &str,
+    status: Option<&StatusInferenceStatusConfig>,
+    configured_statuses: &HashMap<String, super::AgentStatusConfig>,
+) -> std::result::Result<(), String> {
+    let Some(status) = status else {
+        return Err(format!(
+            "{field} is required when Codex inference is enabled"
+        ));
+    };
+
+    if status.kind.trim().is_empty() {
+        return Err(format!("{field}.kind must not be empty"));
+    }
+    if !configured_statuses.contains_key(&status.kind) {
+        return Err(format!(
+            "{field}.kind `{}` is not configured in agent.statuses",
+            status.kind
+        ));
+    }
+    if status.note.trim().is_empty() {
+        return Err(format!("{field}.note must not be empty"));
+    }
+    if status.note.contains([
+        '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
+    ]) {
+        return Err(format!("{field}.note must be a single line"));
+    }
+
+    Ok(())
 }
