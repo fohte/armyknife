@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.458](https://github.com/fohte/armyknife/compare/v0.1.457...v0.1.458) (2026-10-24)
+
+
+### Bug Fixes
+
+* **agent:** recheck interrupted child turn status ([#1254](https://github.com/fohte/armyknife/issues/1254)) ([baab0ac](https://github.com/fohte/armyknife/commit/baab0ac1e656ce3c4b373582e848a9aa357bd855))
+
 ## [0.1.457](https://github.com/fohte/armyknife/compare/v0.1.456...v0.1.457) (2026-10-22)
 
 
