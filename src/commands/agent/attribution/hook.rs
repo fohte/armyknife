@@ -28,7 +28,7 @@ pub(super) fn transform(
         .get("tool_name")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("provider hook input has no tool name"))?;
-    if !is_shell_tool(provider, tool_name) {
+    if !is_shell_tool(tool_name) {
         return Ok(envelope.hook_output);
     }
     let tool_input = input
@@ -112,11 +112,8 @@ pub(super) fn blocked_output(_provider: Provider, reason: &str) -> Value {
     json!({"hookSpecificOutput": specific})
 }
 
-fn is_shell_tool(provider: Provider, tool_name: &str) -> bool {
-    match provider {
-        Provider::ClaudeCode => tool_name == "Bash",
-        Provider::Codex => tool_name == "Bash",
-    }
+fn is_shell_tool(tool_name: &str) -> bool {
+    tool_name == "Bash"
 }
 
 fn decision(output: &Option<Value>) -> Option<&str> {
