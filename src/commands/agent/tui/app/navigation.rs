@@ -15,6 +15,7 @@ impl App {
         if selectable.is_empty() {
             return;
         }
+        self.note_session_list_interaction();
 
         let current = self.list_state.selected();
         let next = match current.and_then(|pos| selectable.iter().position(|&i| i == pos)) {
@@ -32,6 +33,7 @@ impl App {
         if selectable.is_empty() {
             return;
         }
+        self.note_session_list_interaction();
 
         let current = self.list_state.selected();
         let next = match current.and_then(|pos| selectable.iter().position(|&i| i == pos)) {
@@ -50,6 +52,7 @@ impl App {
         }
         let selectable = self.selectable_positions();
         if let Some(&pos) = selectable.get(num - 1) {
+            self.note_session_list_interaction();
             self.list_state.select(Some(pos));
             self.persist_selection();
         }
@@ -87,6 +90,7 @@ impl App {
         match ancestor_id {
             Some(id) => {
                 if let Some(pos) = self.position_of_session_row(&id) {
+                    self.note_session_list_interaction();
                     self.list_state.select(Some(pos));
                     self.persist_selection();
                 }
@@ -137,25 +141,22 @@ impl App {
             return;
         }
 
+        let anchor = self.selection_anchor();
+        self.note_session_list_interaction();
         self.drilldown_scope = Some(session_id.clone());
         self.apply_filter();
-        if let Some(pos) = self.position_of_session_row(&session_id) {
-            self.list_state.select(Some(pos));
-        }
+        self.resync_selection(anchor);
     }
 
     /// Exits drill-down scope, restoring the search/status-filtered list.
     /// Keeps the cursor on the same session (the former scope root), which
     /// remains selectable in the exited list.
     pub fn exit_drilldown(&mut self) {
-        let old_id = self.selected_session().map(|s| s.session_id.clone());
+        let anchor = self.selection_anchor();
+        self.note_session_list_interaction();
         self.drilldown_scope = None;
         self.apply_filter();
-        if let Some(id) = old_id
-            && let Some(pos) = self.position_of_session_row(&id)
-        {
-            self.list_state.select(Some(pos));
-        }
+        self.resync_selection(anchor);
     }
 }
 

@@ -1,4 +1,3 @@
-use crate::commands::agent::types::Session;
 use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
@@ -8,7 +7,7 @@ use ratatui::{
 };
 
 use crate::commands::agent::tui::app::{App, AppMode};
-use crate::commands::agent::tui::session_rows::{SessionRow, build_session_rows_with_vibe};
+use crate::commands::agent::tui::session_rows::SessionRow;
 
 use super::super::helpers::DIM_FG;
 use super::items::{build_header_item, build_session_item, build_user_turn_item};
@@ -23,9 +22,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
     app: &mut App,
     now: DateTime<Utc>,
 ) {
-    let filtered_sessions: Vec<&Session> = app.filtered_sessions();
+    let no_filtered_sessions = app.filtered_sessions().is_empty();
 
-    if filtered_sessions.is_empty() {
+    if no_filtered_sessions {
         let message = if app.mode == AppMode::Search {
             format!("  No sessions match \"{}\"", app.search_query)
         } else if app.has_filter() {
@@ -44,7 +43,6 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         frame.render_widget(empty_message, area);
         return;
     }
-
     let term_width = area.width as usize;
 
     // Determine the active search query for highlighting.
@@ -55,14 +53,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         app.confirmed_query.clone()
     };
 
-    let rows = build_session_rows_with_vibe(
-        &filtered_sessions,
-        &app.task_by_session,
-        &app.agent_config,
-        &app.vibe_enabled_session_ids,
-    );
+    let rows = app.build_display_rows();
     // Build list items and owned row ids from the same `rows`, then drop
-    // `rows`/`filtered_sessions` (which borrow `app`) before mutating app.
+    // `rows` (which borrows `app`) before mutating app.
     //
     // `items` must stay in exact 1:1 correspondence with `rows` (same
     // length, same index for each entry): `list_state` indices select into
@@ -70,10 +63,10 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
     // position. A separate `ListItem` for the inter-section blank line
     // would desync the two spaces, so the blank line is instead prepended
     // to the following header's own `ListItem`.
-    let mut row_ids: Vec<Option<String>> = Vec::with_capacity(rows.len());
+    let mut row_keys = Vec::with_capacity(rows.len());
     let mut items: Vec<ListItem> = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
-        row_ids.push(row.session_id().map(String::from));
+        row_keys.push(row.row_key());
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
@@ -83,10 +76,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
         items.push(item);
     }
     drop(rows);
-    drop(filtered_sessions);
 
-    let row_id_refs: Vec<Option<&str>> = row_ids.iter().map(|id| id.as_deref()).collect();
-    app.update_row_order(&row_id_refs);
+    let row_heights = items.iter().map(ListItem::height).collect::<Vec<_>>();
+    app.update_rendered_rows(&row_keys, &row_heights, area.height as usize);
 
     let list = List::new(items)
         .highlight_style(Style::default().bg(Color::DarkGray))
@@ -105,6 +97,7 @@ mod tests {
         render_to_string, render_to_string_with, render_to_string_with_agent_config,
     };
     use crate::commands::agent::types::AgentStatus;
+    use crate::commands::agent::types::Session;
     use crate::commands::agent::types::SessionStatus;
     use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
@@ -1023,5 +1016,112 @@ mod tests {
         // matches it too, and search hits must win over kin coloring.
         let title_column = WAITING_QUESTION_INDENT + "├─ ".width();
         assert_eq!(buffer[(title_column as u16, 4)].fg, Color::Yellow);
+    }
+
+    #[test]
+    fn keeps_multiline_selection_on_the_same_screen_line_after_reordering() {
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::time::{Duration, Instant};
+
+        let base = Utc::now() - chrono::Duration::minutes(5);
+        let mut parent_a = create_test_session("parent-a");
+        parent_a.updated_at = base;
+        let mut question = create_test_session("question");
+        question.status = SessionStatus::WaitingInput;
+        question.last_message = Some("permission needed".to_string());
+        question.updated_at = base + chrono::Duration::seconds(2);
+        question.ancestor_session_ids = vec!["parent-a".to_string()];
+        let mut parent_b = create_test_session("parent-b");
+        parent_b.updated_at = base + chrono::Duration::seconds(3);
+        let mut app = App::with_sessions(vec![parent_a, question, parent_b]);
+        let selected = app
+            .position_of_session_row("question")
+            .expect("question row is displayed");
+        app.list_state.select(Some(selected));
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 5)).expect("test terminal created");
+        terminal
+            .draw(|frame| render_session_list(frame, frame.area(), &mut app, Utc::now()))
+            .expect("initial list rendered");
+        let initial_top = (0..5).find(|&y| terminal.backend().buffer()[(0, y)].symbol() == ">");
+
+        let start = Instant::now();
+        app.note_session_list_interaction_at(start);
+        let mut new_child = create_test_session("new-child");
+        new_child.updated_at = base + chrono::Duration::seconds(4);
+        new_child.ancestor_session_ids = vec!["parent-a".to_string()];
+        app.apply_session_store_changes(crate::commands::agent::store::SessionStoreChanges {
+            changed_sessions: vec![new_child],
+            existing_session_ids: std::collections::HashSet::from([
+                "parent-a".to_string(),
+                "parent-b".to_string(),
+                "question".to_string(),
+                "new-child".to_string(),
+            ]),
+            revision: 1,
+        })
+        .expect("session-store changes should apply");
+        let applied = app.finish_navigation_hold_if_due(start + Duration::from_secs(2));
+
+        terminal
+            .draw(|frame| render_session_list(frame, frame.area(), &mut app, Utc::now()))
+            .expect("reordered list rendered");
+        let reordered_top = (0..5).find(|&y| terminal.backend().buffer()[(0, y)].symbol() == ">");
+
+        assert_eq!(
+            (initial_top, applied, reordered_top),
+            (Some(3), true, Some(3))
+        );
+    }
+
+    #[test]
+    fn keeps_the_viewport_line_when_search_removes_the_selected_session() {
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::path::PathBuf;
+
+        let now = Utc::now();
+        let sessions = [
+            ("keep-before", true, 6),
+            ("drop-before", false, 5),
+            ("drop-target", false, 4),
+            ("keep-after-1", true, 3),
+            ("keep-after-2", true, 2),
+            ("keep-after-3", true, 1),
+        ]
+        .map(|(id, matches, seconds)| {
+            let mut session = create_test_session(id);
+            session.cwd = PathBuf::from(format!("/home/user/{id}"));
+            session.updated_at = now - chrono::Duration::seconds(seconds);
+            if matches {
+                session.label = Some(format!("keep {id}"));
+            }
+            session
+        });
+        let mut app = App::with_sessions(sessions.to_vec());
+        let target = app
+            .position_of_session_row("drop-target")
+            .expect("target row is displayed");
+        app.list_state.select(Some(target));
+
+        let mut terminal = Terminal::new(TestBackend::new(60, 4)).expect("test terminal created");
+        terminal
+            .draw(|frame| render_session_list(frame, frame.area(), &mut app, now))
+            .expect("initial list rendered");
+        let initial_top = (0..4).find(|&y| terminal.backend().buffer()[(0, y)].symbol() == ">");
+
+        app.enter_search_mode();
+        app.update_search_query("keep".to_string());
+        let selected_after_filter = app
+            .selected_session()
+            .map(|session| session.session_id.clone());
+        terminal
+            .draw(|frame| render_session_list(frame, frame.area(), &mut app, now))
+            .expect("filtered list rendered");
+        let filtered_top = (0..4).find(|&y| terminal.backend().buffer()[(0, y)].symbol() == ">");
+
+        assert_eq!(
+            (initial_top, selected_after_filter, filtered_top),
+            (Some(3), Some("keep-before".to_string()), Some(3)),
+        );
     }
 }

@@ -230,6 +230,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                         periodic_progress_refresh_due = true;
                     }
                 }
+                AppEvent::NavigationIdle => {
+                    app.finish_navigation_hold_if_due(Instant::now());
+                }
                 AppEvent::WorktreesLoaded(Ok(rows)) => {
                     app.set_worktrees(rows);
                     // If the user opened the clean view before discovery
@@ -395,6 +398,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
             |session_id| start_progress_refresh(&mut app, &event_handler, session_id),
         );
         app::persist_progress_cache(&mut app);
+        event_handler.schedule_navigation_idle(app.navigation_hold_deadline());
 
         if app.should_quit {
             break;

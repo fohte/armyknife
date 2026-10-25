@@ -9,11 +9,15 @@ use chrono::{DateTime, Utc};
 use ratatui::widgets::{ListState, TableState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::ProgressRow;
-use super::session_rows::{SessionTask, build_session_rows_with_vibe, tasks_row_occurrence};
+use super::session_rows::{
+    SessionRow, SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_order,
+    build_session_rows_with_vibe, tasks_row_occurrence,
+};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -152,6 +156,15 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
+    /// Distinguishes YOUR TURN and TASKS rows for the same session.
+    row_keys: Vec<Option<SessionRowKey>>,
+    /// Rendered item heights support restoring a selection's terminal line.
+    row_heights: Vec<usize>,
+    list_viewport_height: usize,
+    pending_selection_line: Option<usize>,
+    /// Frozen display order while recent list navigation continues.
+    session_row_order: Option<SessionRowOrder>,
+    navigation_hold_deadline: Option<Instant>,
     /// Currently active top-level view.
     pub view: View,
     /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
@@ -267,6 +280,12 @@ impl App {
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             row_sessions: Vec::new(),
+            row_keys: Vec::new(),
+            row_heights: Vec::new(),
+            list_viewport_height: 0,
+            pending_selection_line: None,
+            session_row_order: None,
+            navigation_hold_deadline: None,
             title_cache,
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
@@ -405,15 +424,85 @@ impl App {
             .collect()
     }
 
-    /// Updates `row_sessions` from display-ordered row session IDs (`None`
-    /// for a header/summary row). Called by the UI layer after building
-    /// the row list to keep the selection mapping in sync with the
-    /// rendered list order.
+    pub(super) fn build_display_rows(&self) -> Vec<SessionRow<'_>> {
+        let filtered = self.filtered_sessions();
+        build_session_rows_with_order(
+            &filtered,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+            self.session_row_order.as_ref(),
+        )
+    }
+
+    #[cfg(test)]
     pub fn update_row_order(&mut self, row_session_ids: &[Option<&str>]) {
-        self.row_sessions = row_session_ids
+        let row_keys = row_session_ids
             .iter()
-            .map(|id| id.and_then(|id| self.sessions.iter().position(|s| s.session_id == id)))
+            .map(|id| id.map(|id| SessionRowKey::Task(id.to_string())))
+            .collect::<Vec<_>>();
+        self.update_rendered_row_keys(&row_keys);
+    }
+
+    pub(super) fn update_rendered_rows(
+        &mut self,
+        row_keys: &[Option<SessionRowKey>],
+        row_heights: &[usize],
+        viewport_height: usize,
+    ) {
+        self.update_rendered_row_keys(row_keys);
+        self.row_heights = row_heights.to_vec();
+        self.list_viewport_height = viewport_height;
+        self.restore_pending_selection_line();
+    }
+
+    fn update_rendered_row_keys(&mut self, row_keys: &[Option<SessionRowKey>]) {
+        self.row_sessions = row_keys
+            .iter()
+            .map(|key| {
+                key.as_ref().and_then(|key| {
+                    self.sessions
+                        .iter()
+                        .position(|session| session.session_id == key.session_id())
+                })
+            })
             .collect();
+        self.row_keys = row_keys.to_vec();
+        if let Some(order) = self.session_row_order.as_mut() {
+            let keys = self.row_keys.iter().flatten().cloned().collect::<Vec<_>>();
+            order.remember_keys(&keys);
+        }
+    }
+
+    fn restore_pending_selection_line(&mut self) {
+        let Some(target_line) = self.pending_selection_line.take() else {
+            return;
+        };
+        let Some(selected) = self.list_state.selected() else {
+            return;
+        };
+        let Some(&selected_height) = self.row_heights.get(selected) else {
+            return;
+        };
+        if self.list_viewport_height == 0 || selected >= self.row_heights.len() {
+            return;
+        }
+
+        let visible_height = selected_height.min(self.list_viewport_height);
+        let max_top = self.list_viewport_height.saturating_sub(visible_height);
+        let target_line = target_line.min(max_top);
+        let mut best = (selected, usize::MAX);
+        for offset in 0..=selected {
+            let line = self.row_heights[offset..selected].iter().sum::<usize>();
+            if line + visible_height > self.list_viewport_height {
+                continue;
+            }
+            let distance = line.abs_diff(target_line);
+            if distance < best.1 {
+                best = (offset, distance);
+            }
+        }
+        *self.list_state.offset_mut() = best.0;
     }
 
     /// Signals that the application should quit.

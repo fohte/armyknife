@@ -20,6 +20,7 @@ impl App {
     /// Lazily builds the searchable text cache on first use.
     pub fn enter_search_mode(&mut self) {
         self.progress_focused = false;
+        self.note_session_list_interaction();
         // Build searchable text cache on first search
         if self.searchable_text_cache.is_none() {
             self.searchable_text_cache = Some(build_searchable_text_cache(&self.sessions));
@@ -34,6 +35,7 @@ impl App {
     /// Preserves the current selection (by session id) when possible.
     pub fn confirm_search(&mut self) {
         let selection = self.selection_anchor();
+        self.note_session_list_interaction();
         self.confirmed_query = self.search_query.clone();
         self.apply_filter();
         self.resync_selection(selection);
@@ -44,6 +46,7 @@ impl App {
     /// Exits search mode, cancelling the search.
     pub fn cancel_search(&mut self) {
         let selection = self.selection_anchor();
+        self.note_session_list_interaction();
         self.search_query = self.confirmed_query.clone();
         self.apply_filter();
         self.resync_selection(selection);
@@ -53,30 +56,40 @@ impl App {
 
     /// Clears the filter and shows all sessions.
     pub fn clear_filter(&mut self) {
+        let selection = self.selection_anchor();
+        self.note_session_list_interaction();
         self.search_query.clear();
         self.confirmed_query.clear();
         self.status_filter = None;
         self.drilldown_scope = None;
         self.filtered_indices = (0..self.sessions.len()).collect();
         self.rebuild_row_order();
-        self.list_state
-            .select(self.selectable_positions().first().copied());
+        self.resync_selection(selection);
     }
 
     /// Toggles a status filter. If the same status is already active, clears it.
     pub fn toggle_status_filter(&mut self, status: SessionStatus) {
+        let selection = self.selection_anchor();
+        self.note_session_list_interaction();
         if self.status_filter == Some(status) {
             self.status_filter = None;
         } else {
             self.status_filter = Some(status);
         }
         self.apply_filter();
+        self.resync_selection(selection);
     }
 
     /// Updates the search query and re-applies the filter.
     pub fn update_search_query(&mut self, query: String) {
+        if self.search_query == query {
+            return;
+        }
+        let selection = self.selection_anchor();
+        self.note_session_list_interaction();
         self.search_query = query;
         self.apply_filter();
+        self.resync_selection(selection);
     }
 
     /// Applies the current search query, status filter, and drill-down scope
