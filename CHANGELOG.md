@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.465](https://github.com/fohte/armyknife/compare/v0.1.464...v0.1.465) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** restore Crit after agent pane moves ([#1268](https://github.com/fohte/armyknife/issues/1268)) ([c56bf38](https://github.com/fohte/armyknife/commit/c56bf382124852e4f04b00f3a99e3a5b963669b5))
+
+## [0.1.464](https://github.com/fohte/armyknife/compare/v0.1.463...v0.1.464) (2026-10-25)
+
+
+### Features
+
+* **agent:** verify final AI commit attribution ([#1266](https://github.com/fohte/armyknife/issues/1266)) ([5ccc14c](https://github.com/fohte/armyknife/commit/5ccc14ccc2c4a19ff623a6c53bf9404bb7c3a41b))
+
+## [0.1.463](https://github.com/fohte/armyknife/compare/v0.1.462...v0.1.463) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** allow rev-parse reads ([#1264](https://github.com/fohte/armyknife/issues/1264)) ([07effa9](https://github.com/fohte/armyknife/commit/07effa96f9d489157ea7cd5f3abea3d8a322f641))
+
+## [0.1.462](https://github.com/fohte/armyknife/compare/v0.1.461...v0.1.462) (2026-10-25)
+
+
+### Features
+
+* **agent:** infer Codex Stop status with a fork ([#1262](https://github.com/fohte/armyknife/issues/1262)) ([deb297b](https://github.com/fohte/armyknife/commit/deb297b7f10502bd7459713406d17693810f30d5))
+
 ## [0.1.461](https://github.com/fohte/armyknife/compare/v0.1.460...v0.1.461) (2026-10-25)
 
 

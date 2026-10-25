@@ -3,16 +3,27 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 
-use super::command::{classify_command, inject_context};
+use super::command::{classify_command, inject_context, inject_context_with_final_object};
 use super::context::{self, OperationContext};
 use super::origin;
 use super::transcript;
 use super::{Provider, ProxyEnvelope, model_identity};
 
+#[cfg(test)]
 pub(super) fn transform(
     provider: Provider,
     raw_envelope: &str,
     unknown_reason: Option<&str>,
+    context_dir: &Path,
+) -> Result<Option<Value>> {
+    transform_with_final_object(provider, raw_envelope, unknown_reason, false, context_dir)
+}
+
+pub(super) fn transform_with_final_object(
+    provider: Provider,
+    raw_envelope: &str,
+    unknown_reason: Option<&str>,
+    final_object: bool,
     context_dir: &Path,
 ) -> Result<Option<Value>> {
     let envelope: ProxyEnvelope = serde_json::from_str(raw_envelope)
@@ -92,7 +103,11 @@ pub(super) fn transform(
     let context = OperationContext::new(provider, model, tool_use_id.to_owned())?;
     let context_path = context::create(&context, context_dir)?;
     let transformed = (|| {
-        let command = inject_context(&final_command, &context_path)?;
+        let command = if final_object {
+            inject_context_with_final_object(&final_command, &context_path, true)?
+        } else {
+            inject_context(&final_command, &context_path)?
+        };
         patch_hook_output(provider, input, envelope.hook_output, &command)
     })();
     match transformed {
@@ -183,8 +198,8 @@ mod tests {
     use std::io::Write;
 
     use super::super::Provider;
-    use super::super::{CONTEXT_ENV, REQUIRED_ENV};
-    use super::{blocked_output, transform};
+    use super::super::{CONTEXT_ENV, FINAL_OBJECT_REQUIRED_ENV, REQUIRED_ENV};
+    use super::{blocked_output, transform, transform_with_final_object};
     use crate::commands::agent::attribution::context::{self, ModelIdentity};
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
@@ -319,6 +334,40 @@ mod tests {
                     },
                 }),
             ),
+        );
+    }
+
+    #[rstest]
+    fn final_object_mode_is_scoped_to_the_git_child(context_dir: TempDir) {
+        let output = transform_with_final_object(
+            Provider::Codex,
+            &envelope(
+                codex_input(
+                    COMMIT_COMMAND,
+                    Some("fixture-model-red-2026"),
+                    "fixture-tool-use-red",
+                ),
+                None,
+            ),
+            None,
+            true,
+            context_dir.path(),
+        )
+        .expect("transform final-object request")
+        .expect("Codex must emit updated input");
+        let path = context_path(&output);
+
+        assert_eq!(
+            normalize_output(output, &path),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "updatedInput": {
+                        "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {FINAL_OBJECT_REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
+                    },
+                },
+            }),
         );
     }
 
@@ -503,11 +552,14 @@ mod tests {
     }
 
     #[rstest]
-    fn non_commit_commands_pass_through_unchanged(context_dir: TempDir) {
+    #[case::status("git status --short")]
+    #[case::single_rev_parse("git rev-parse --show-toplevel")]
+    #[case::compound_rev_parse("git rev-parse --show-toplevel && git status --short")]
+    fn non_commit_commands_pass_through_unchanged(context_dir: TempDir, #[case] command: &str) {
         let input = codex_input(
-            "git status --short",
+            command,
             Some("fixture-model-red-2026"),
-            "fixture-tool-use-status",
+            "fixture-tool-use-read",
         );
         let output = json!({
             "hookSpecificOutput": {

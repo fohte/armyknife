@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.461"
+version = "0.1.465"
 edition = "2024"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
@@ -35,7 +35,8 @@ clap = { version = "=4.6.6", features = ["derive"] }
 clap_complete = "=4.6.9"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "query"] }
 percent-encoding = "=2.3.2"
-tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "net", "time"] }
+httparse = "=1.10.1"
 indoc = "=2.0.7"
 lazy-regex = "=3.6.0"
 libc = "=0.2.189"
@@ -62,7 +63,7 @@ notify = "=8.2.0"
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["json", "env-filter"] }
 tracing-appender = "=0.2.5"
-tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake"] }
+tungstenite = { version = "=0.30.0", default-features = false, features = ["handshake", "rustls-tls-native-roots"] }
 uuid = { version = "=1.23.5", features = ["v4"] }
 
 [dev-dependencies]

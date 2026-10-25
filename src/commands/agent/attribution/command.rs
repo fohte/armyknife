@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::{CONTEXT_ENV, REQUIRED_ENV};
+use super::{CONTEXT_ENV, FINAL_OBJECT_REQUIRED_ENV, REQUIRED_ENV};
 use anyhow::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10,11 +10,25 @@ pub(super) enum GitOperation {
 }
 
 pub(super) fn inject_context(command: &str, context_path: &Path) -> Result<String> {
+    inject_context_with_final_object(command, context_path, false)
+}
+
+pub(super) fn inject_context_with_final_object(
+    command: &str,
+    context_path: &Path,
+    final_object: bool,
+) -> Result<String> {
     let context_path = context_path
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("attribution context path is not valid UTF-8"))?;
     let context_assignment = format!("{CONTEXT_ENV}={}", shlex::try_quote(context_path)?);
     let required_assignment = format!("{REQUIRED_ENV}=1");
+    let final_object_assignment = final_object.then(|| format!("{FINAL_OBJECT_REQUIRED_ENV}=1"));
+    let assignments = std::iter::once(context_assignment.as_str())
+        .chain(std::iter::once(required_assignment.as_str()))
+        .chain(final_object_assignment.as_deref())
+        .collect::<Vec<_>>()
+        .join(" ");
     let words = shlex::split(command)
         .ok_or_else(|| anyhow::anyhow!("commit command has invalid shell quoting"))?;
 
@@ -28,16 +42,14 @@ pub(super) fn inject_context(command: &str, context_path: &Path) -> Result<Strin
         if target.len() != 1 {
             anyhow::bail!("attribution supports runok wrappers with one shell-command argument");
         }
-        let wrapped = format!("{context_assignment} {required_assignment} {}", target[0]);
+        let wrapped = format!("{assignments} {}", target[0]);
         let mut rewritten = words;
         rewritten[delimiter + 1] = wrapped;
         return shlex::try_join(rewritten.iter().map(String::as_str))
             .map_err(|_| anyhow::anyhow!("failed to quote the transformed runok command"));
     }
 
-    Ok(format!(
-        "{context_assignment} {required_assignment} {command}"
-    ))
+    Ok(format!("{assignments} {command}"))
 }
 
 pub(super) fn classify_command(command: &str) -> Result<Option<GitOperation>> {
@@ -271,7 +283,10 @@ fn is_attribution_assignment(word: &str) -> bool {
 }
 
 fn is_attribution_variable(name: &str) -> bool {
-    matches!(name, super::CONTEXT_ENV | super::REQUIRED_ENV)
+    matches!(
+        name,
+        super::CONTEXT_ENV | super::REQUIRED_ENV | super::FINAL_OBJECT_REQUIRED_ENV
+    )
 }
 
 pub(super) fn git_subcommand_index(words: &[String]) -> usize {
@@ -484,7 +499,9 @@ pub(super) fn split_shell_control_operators(command: &str) -> (Vec<&str>, bool) 
 
 #[cfg(test)]
 mod tests {
-    use super::{GitOperation, classify_command};
+    use std::path::Path;
+
+    use super::{GitOperation, classify_command, inject_context_with_final_object};
     use rstest::rstest;
 
     #[rstest]
@@ -537,6 +554,20 @@ mod tests {
     }
 
     #[rstest]
+    fn final_object_marker_stays_inside_the_runok_git_command() {
+        let command =
+            r#"runok exec --ask --hook-origin fixture-token -- 'git commit -m "Fixture subject"'"#;
+        let injected =
+            inject_context_with_final_object(command, Path::new("/fixture/context"), true)
+                .expect("inject final-object context");
+
+        assert_eq!(
+            injected,
+            r#"runok exec --ask --hook-origin fixture-token -- 'ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT=/fixture/context ARMYKNIFE_AGENT_ATTRIBUTION_REQUIRED=1 ARMYKNIFE_AGENT_ATTRIBUTION_FINAL_OBJECT_REQUIRED=1 git commit -m "Fixture subject"'"#,
+        );
+    }
+
+    #[rstest]
     #[case::inline_assignment(
         "GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/fixture/hooks git commit -m 'Fixture subject'"
     )]
@@ -572,9 +603,15 @@ mod tests {
     #[case::env_assignment(
         "env ARMYKNIFE_AGENT_ATTRIBUTION_REQUIRED=1 git commit -m 'Fixture subject'"
     )]
+    #[case::final_object_assignment(
+        "ARMYKNIFE_AGENT_ATTRIBUTION_FINAL_OBJECT_REQUIRED=1 git commit -m 'Fixture subject'"
+    )]
     #[case::ignore_environment("env -i git commit -m 'Fixture subject'")]
     #[case::unset_context(
         "env -u ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT git commit -m 'Fixture subject'"
+    )]
+    #[case::unset_final_object_marker(
+        "env -u ARMYKNIFE_AGENT_ATTRIBUTION_FINAL_OBJECT_REQUIRED git commit -m 'Fixture subject'"
     )]
     fn context_overrides_are_rejected(#[case] command: &str) {
         let error = classify_command(command).expect_err("context override must fail closed");

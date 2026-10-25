@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::context::{self, OperationContext, unix_timestamp};
+use super::context::{self, CommitTarget, OperationContext, unix_timestamp};
 
 const TOOL_TRAILER: &str = "AI-Tool";
 const MODEL_TRAILER: &str = "AI-Model";
@@ -10,6 +10,20 @@ const MODEL_TRAILER: &str = "AI-Model";
 pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
     let context = context::claim(path, unix_timestamp()?)?;
     add_trailers(message, &context)
+}
+
+pub(super) fn prepare_for_final_object(
+    path: &Path,
+    message: &str,
+    target: CommitTarget,
+) -> Result<String> {
+    let context = context::claim_with_target(path, unix_timestamp()?, Some(target))?;
+    add_trailers(message, &context)
+}
+
+pub(super) fn verify_without_consuming(path: &Path, message: &str) -> Result<()> {
+    let context = context::claimed_context(path)?;
+    verify_trailers(message, &context)
 }
 
 pub(super) fn verify_and_consume(path: &Path, message: &str) -> Result<()> {
@@ -71,7 +85,7 @@ fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
     Ok(output)
 }
 
-fn verify_trailers(message: &str, context: &OperationContext) -> Result<()> {
+pub(super) fn verify_trailers(message: &str, context: &OperationContext) -> Result<()> {
     let lines = normalized_lines(message);
     let Some(start) = trailer_block_start(&lines) else {
         anyhow::bail!("commit message has no managed attribution trailer block");
@@ -156,8 +170,10 @@ fn is_managed_trailer(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
-    use super::{prepare, verify_and_consume};
-    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
+    use super::{prepare, prepare_for_final_object, verify_and_consume, verify_without_consuming};
+    use crate::commands::agent::attribution::context::{
+        self, CommitTarget, ModelIdentity, OperationContext,
+    };
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -175,6 +191,14 @@ mod tests {
         let context = OperationContext::new(Provider::Codex, model, tool_use_id.to_owned())
             .expect("create fixture operation context");
         context::create(&context, directory.path()).expect("persist fixture operation context")
+    }
+
+    fn final_object_target() -> CommitTarget {
+        CommitTarget {
+            repository: "/fixture/repository".to_owned(),
+            reference: "refs/heads/fixture-branch".to_owned(),
+            old_oid: Some("1111111111111111111111111111111111111111".to_owned()),
+        }
     }
 
     #[rstest]
@@ -271,6 +295,46 @@ mod tests {
         let result = verify_and_consume(&path, &message).map_err(|error| error.to_string());
 
         assert_eq!((result, path.exists()), (Ok(()), false));
+    }
+
+    #[rstest]
+    fn final_object_message_preflight_keeps_the_claim_for_reference_verification(
+        context_dir: TempDir,
+    ) {
+        let path = create_context(
+            &context_dir,
+            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
+            "fixture-tool-use-red",
+        );
+        let message = prepare_for_final_object(&path, "Fixture subject", final_object_target())
+            .expect("prepare final-object message");
+        let verification =
+            verify_without_consuming(&path, &message).map_err(|error| error.to_string());
+        let claim_remains = context::claimed_final_object_context(&path).is_ok();
+
+        assert_eq!((verification, claim_remains), (Ok(()), true));
+    }
+
+    #[rstest]
+    fn failed_final_object_message_preflight_keeps_the_claim(context_dir: TempDir) {
+        let path = create_context(
+            &context_dir,
+            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
+            "fixture-tool-use-red",
+        );
+        prepare_for_final_object(&path, "Fixture subject", final_object_target())
+            .expect("prepare final-object message");
+        let verification =
+            verify_without_consuming(&path, "Altered subject").map_err(|error| error.to_string());
+        let claim_remains = context::claimed_final_object_context(&path).is_ok();
+
+        assert_eq!(
+            (verification, claim_remains),
+            (
+                Err("commit message has no managed attribution trailer block".to_owned()),
+                true,
+            ),
+        );
     }
 
     #[rstest]

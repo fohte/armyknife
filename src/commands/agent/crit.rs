@@ -2,6 +2,7 @@
 
 mod monitor;
 mod pane;
+mod toggle;
 mod url;
 
 use anyhow::{Context, Result, bail};
@@ -162,6 +163,7 @@ fn add_without_agent_session(args: &AddArgs, pane_id: &str) -> Result<()> {
         url: &args.url,
         port,
         title: " crit · review ",
+        force_shpool_attach: false,
     });
     if let Err(error) = &result {
         tracing::warn!(event = "agent.crit.add.pane_open_failed", error = %error);
@@ -208,9 +210,8 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
     let pane_id = args.pane.clone().or_else(tmux::current_pane_id_from_env);
     if args.session.is_none()
         && let Some(pane_id) = pane_id.as_deref()
-        && tmux::is_crit_pane(pane_id)
+        && toggle::close_if_crit_pane(pane_id, &toggle::LiveCritPaneRuntime)?
     {
-        close_crit_pane(pane_id)?;
         return Ok(());
     }
 
@@ -230,30 +231,17 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
             .context("Provide --session or --pane outside an agent tmux pane")?
     };
 
-    if let Some(crit_pane_id) = tmux::find_crit_pane_for_parent(target_pane_id)? {
-        close_crit_pane(&crit_pane_id)?;
-        return Ok(());
-    }
-
-    let url = session
-        .crit_urls
-        .last()
-        .context("No crit review is associated with this agent session")?;
-    let port = parse_port(url)?;
-
-    tmux::focus_pane(target_pane_id).context("failed to focus the agent tmux pane")?;
-    tracing::info!(event = "agent.crit.open.floating_pane_requested", port);
     let title = format!(
         " crit · {} · {} ",
         display_label(Some(&session), &session.session_id),
         repo_name(&session.cwd)
     );
-    tmux::open_crit_pane(tmux::CritPaneSpec {
-        parent_pane_id: target_pane_id,
-        url,
-        port,
-        title: &title,
-    })
+    toggle::toggle_review_pane(
+        target_pane_id,
+        session.crit_urls.last().map(String::as_str),
+        &title,
+        &toggle::LiveCritPaneRuntime,
+    )
 }
 
 fn close_crit_pane(pane_id: &str) -> Result<()> {
