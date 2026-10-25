@@ -2,19 +2,18 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, ensure};
 use chrono::{DateTime, Utc};
 use clap::Args;
 
 use super::super::types::{AgentStatus, Engine, Session};
 use super::super::{codex_steer, status, store};
 use super::fork::infer_claude_status;
-use super::prompt::build_prompt;
+use super::prompt::{build_codex_prompt, build_prompt};
 #[cfg(not(test))]
 use crate::infra::process;
 use crate::shared::config::{self, AgentConfig};
 
-const CODEX_CLASSIFIER_MODEL: &str = "haiku";
 const SNAPSHOT_FILE_PREFIX: &str = "armyknife-status-inference-";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -151,12 +150,22 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
         &agent_config,
         codex_snapshot,
         infer_claude_status,
-        |thread_id, turn_id, last_assistant_message, model, prompt, configured_kinds| {
+        |session, snapshot, prompt, configured_kinds| {
+            let turn_id = snapshot
+                .turn_id
+                .as_deref()
+                .filter(|turn_id| !turn_id.is_empty())
+                .context("Codex Stop snapshot has no turn_id")?;
+            let last_assistant_message = snapshot
+                .last_assistant_message
+                .as_deref()
+                .filter(|message| !message.trim().is_empty())
+                .context("Codex Stop snapshot has no final assistant message")?;
             let request = codex_steer::status_inference::Request {
-                thread_id,
+                session,
+                thread_id: &snapshot.thread_id,
                 turn_id,
                 last_assistant_message,
-                model,
                 prompt,
                 configured_kinds,
             };
@@ -191,7 +200,7 @@ fn run_inner_with<ClaudeInference, CodexInference>(
 ) -> Result<()>
 where
     ClaudeInference: FnOnce(&Session, &str) -> Result<AgentStatus>,
-    CodexInference: FnOnce(&str, &str, &str, &str, &str, &[String]) -> Result<AgentStatus>,
+    CodexInference: FnOnce(&Session, &CodexStopSnapshot, &str, &[String]) -> Result<AgentStatus>,
 {
     let Some(session) = store::load_session_from(sessions_dir, &args.session)? else {
         tracing::info!(
@@ -233,7 +242,7 @@ where
                 );
                 return Ok(());
             };
-            let Some(prompt) = agent_config.configured_status_inference_prompt() else {
+            let Some(configured_prompt) = agent_config.configured_status_inference_prompt() else {
                 tracing::info!(
                     event = "agent.status_inference.skipped",
                     session = %args.session,
@@ -245,24 +254,22 @@ where
             configured_kinds.sort();
             let inference_result = (|| {
                 let snapshot = codex_snapshot?.context("Codex Stop snapshot is missing")?;
-                let turn_id = snapshot
+                let _turn_id = snapshot
                     .turn_id
                     .as_deref()
                     .filter(|turn_id| !turn_id.is_empty())
                     .context("Codex Stop snapshot has no turn_id")?;
-                let last_assistant_message = snapshot
+                let _last_assistant_message = snapshot
                     .last_assistant_message
                     .as_deref()
                     .filter(|message| !message.trim().is_empty())
                     .context("Codex Stop snapshot has no final assistant message")?;
-                infer_codex(
-                    &snapshot.thread_id,
-                    turn_id,
-                    last_assistant_message,
-                    CODEX_CLASSIFIER_MODEL,
-                    prompt,
-                    &configured_kinds,
-                )
+                ensure!(
+                    !snapshot.thread_id.is_empty(),
+                    "Codex Stop snapshot has no thread_id"
+                );
+                let prompt = build_codex_prompt(configured_prompt, &session, agent_config);
+                infer_codex(&session, &snapshot, &prompt, &configured_kinds)
             })();
 
             let inferred_status = match inference_result {
@@ -574,7 +581,7 @@ mod tests {
             &context.agent_config,
             Ok(None),
             |_, _| Ok(inferred_status.clone()),
-            |_, _, _, _, _, _| Err(anyhow!("Codex inference must not run")),
+            |_, _, _, _| Err(anyhow!("Codex inference must not run")),
         )
         .expect("status inference should succeed");
 
@@ -596,7 +603,7 @@ mod tests {
             &context.agent_config,
             Ok(None),
             |_, _| Err(anyhow!("Claude fork failed")),
-            |_, _, _, _, _, _| Err(anyhow!("Codex inference must not run")),
+            |_, _, _, _| Err(anyhow!("Codex inference must not run")),
         );
 
         assert_eq!(
@@ -625,8 +632,8 @@ mod tests {
             &context.agent_config,
             Ok(Some(codex_snapshot())),
             |_, _| Err(anyhow!("Claude inference must not run")),
-            |thread_id, _, _, _, _, _| {
-                calls.push(thread_id.to_string());
+            |_, _, _, _| {
+                calls.push("called".to_string());
                 Err(anyhow!("Codex inference must not run"))
             },
         )
@@ -660,12 +667,10 @@ mod tests {
             &context.agent_config,
             Ok(Some(codex_snapshot())),
             |_, _| Err(anyhow!("Claude inference must not run")),
-            move |thread_id, turn_id, message, model, prompt, kinds| {
+            move |session, snapshot, prompt, kinds| {
                 *captured.lock().expect("invocation lock") = Some((
-                    thread_id.to_string(),
-                    turn_id.to_string(),
-                    message.to_string(),
-                    model.to_string(),
+                    session.session_id.clone(),
+                    snapshot.clone(),
                     prompt.to_string(),
                     kinds.to_vec(),
                 ));
@@ -680,11 +685,13 @@ mod tests {
             note: "wait for review".to_string(),
         });
         let expected_invocation = Some((
-            "fixture-thread".to_string(),
-            "fixture-turn".to_string(),
-            "waiting for review".to_string(),
-            CODEX_CLASSIFIER_MODEL.to_string(),
-            "Classify why the session stopped.".to_string(),
+            "fixture-session".to_string(),
+            codex_snapshot(),
+            build_codex_prompt(
+                "Classify why the session stopped.",
+                &context.session,
+                &context.agent_config,
+            ),
             vec![
                 "external_wait".to_string(),
                 "finished".to_string(),
@@ -757,7 +764,7 @@ mod tests {
             &context.agent_config,
             snapshot_result,
             |_, _| Err(anyhow!("Claude inference must not run")),
-            |_, _, _, _, _, _| {
+            |_, _, _, _| {
                 classifier_called = true;
                 Err(anyhow!(
                     backend_error.unwrap_or("Codex classifier must not run")
@@ -795,7 +802,7 @@ mod tests {
                 &context.agent_config,
                 Ok(Some(codex_snapshot())),
                 |_, _| Err(anyhow!("Claude inference must not run")),
-                |_, _, _, _, _, _| {
+                |_, _, _, _| {
                     classifier_called = true;
                     Ok(AgentStatus {
                         kind: "finished".to_string(),
@@ -838,7 +845,7 @@ mod tests {
                 &context.agent_config,
                 Err(anyhow!("snapshot file is unavailable")),
                 |_, _| Err(anyhow!("Claude inference must not run")),
-                |_, _, _, _, _, _| Err(anyhow!("Codex inference must not run")),
+                |_, _, _, _| Err(anyhow!("Codex inference must not run")),
             )
         });
         result.expect("shadow failure should be handled");
@@ -880,7 +887,7 @@ mod tests {
                 &context.agent_config,
                 Ok(Some(codex_snapshot())),
                 |_, _| Err(anyhow!("Claude inference must not run")),
-                |_, _, _, _, _, _| {
+                |_, _, _, _| {
                     store::save_session_to(&context.sessions_dir, &expected)
                         .expect("manual status should be saved");
                     Err(anyhow!("Codex classifier failed"))
@@ -913,7 +920,7 @@ mod tests {
             &context.agent_config,
             Ok(Some(codex_snapshot())),
             |_, _| Err(anyhow!("Claude inference must not run")),
-            |_, _, _, _, _, _| {
+            |_, _, _, _| {
                 store::save_session_to(&context.sessions_dir, &expected)?;
                 Ok(AgentStatus {
                     kind: "finished".to_string(),
@@ -948,7 +955,7 @@ mod tests {
             &context.agent_config,
             Ok(Some(codex_snapshot())),
             |_, _| Err(anyhow!("Claude inference must not run")),
-            |_, _, _, _, _, _| {
+            |_, _, _, _| {
                 store::save_session_to(&context.sessions_dir, &expected)?;
                 Ok(AgentStatus {
                     kind: "finished".to_string(),

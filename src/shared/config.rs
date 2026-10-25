@@ -2270,8 +2270,8 @@ mod tests {
             schema_value["$defs"]["AgentConfig"]["properties"]["status_inference_prompt"],
             serde_json::json!({
                 "description": indoc! {"
-                    Prompt used by Claude forks or Codex standalone inference to classify a
-                    missing status at Stop."},
+                    Prompt used by a Claude Code fork or Codex fork to classify a missing
+                    status at Stop."},
                 "type": ["string", "null"],
                 "default": null,
             })
@@ -2284,7 +2284,7 @@ mod tests {
         assert_eq!(
             schema_value["$defs"]["CodexStatusInferenceConfig"],
             serde_json::json!({
-                "description": "Opt-in settings for inferring Codex Stop status from saved conversation history; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
+                "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation. Inference requires the built-in OpenAI provider; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
                 "type": "object",
                 "properties": {
                     "background_status": {
@@ -2301,7 +2301,7 @@ mod tests {
                         "default": false,
                     },
                     "failure_status": {
-                        "description": "Status recorded if snapshot acquisition, classification, validation, or worker startup fails.",
+                        "description": "Status recorded if snapshot acquisition, the Codex fork, classification, validation, or worker startup fails.",
                         "anyOf": [
                             { "$ref": "#/$defs/StatusInferenceStatusConfig" },
                             { "type": "null" },
