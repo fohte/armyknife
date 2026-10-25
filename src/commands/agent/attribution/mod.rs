@@ -460,7 +460,7 @@ mod tests {
         let raw_input = serde_json::json!({
             "hook_input": {
                 "hook_event_name": "PreToolUse",
-                "tool_name": "bash",
+                "tool_name": "Bash",
                 "tool_use_id": "fixture-tool-use-alias",
                 "model": "fixture-model-red-2026",
                 "tool_input": {
@@ -522,7 +522,7 @@ mod tests {
         let raw_input = serde_json::json!({
             "hook_input": {
                 "hook_event_name": "PreToolUse",
-                "tool_name": "bash",
+                "tool_name": "Bash",
                 "tool_use_id": "fixture-tool-use-shell",
                 "model": "fixture-model-red-2026",
                 "tool_input": {"command": "bash -i"},

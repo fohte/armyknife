@@ -115,7 +115,7 @@ pub(super) fn blocked_output(_provider: Provider, reason: &str) -> Value {
 fn is_shell_tool(provider: Provider, tool_name: &str) -> bool {
     match provider {
         Provider::ClaudeCode => tool_name == "Bash",
-        Provider::Codex => tool_name == "bash",
+        Provider::Codex => tool_name == "Bash",
     }
 }
 
@@ -212,7 +212,7 @@ mod tests {
     fn codex_input(command: &str, model: Option<&str>, tool_use_id: &str) -> Value {
         let mut input = json!({
             "hook_event_name": "PreToolUse",
-            "tool_name": "bash",
+            "tool_name": "Bash",
             "tool_use_id": tool_use_id,
             "tool_input": {
                 "command": command,
@@ -533,7 +533,10 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_exec_command_tool_name_is_not_mistaken_for_the_canonical_bash_payload(
+    #[case::lowercase("bash")]
+    #[case::function_name("exec_command")]
+    fn codex_noncanonical_shell_tool_names_are_ignored(
+        #[case] tool_name: &str,
         context_dir: TempDir,
     ) {
         let mut input = codex_input(
@@ -541,7 +544,7 @@ mod tests {
             Some("fixture-model-red-2026"),
             "fixture-tool-use-legacy-name",
         );
-        input["tool_name"] = json!("exec_command");
+        input["tool_name"] = json!(tool_name);
         let output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
