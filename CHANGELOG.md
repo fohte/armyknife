@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.463](https://github.com/fohte/armyknife/compare/v0.1.462...v0.1.463) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** allow rev-parse reads ([#1264](https://github.com/fohte/armyknife/issues/1264)) ([07effa9](https://github.com/fohte/armyknife/commit/07effa96f9d489157ea7cd5f3abea3d8a322f641))
+
 ## [0.1.462](https://github.com/fohte/armyknife/compare/v0.1.461...v0.1.462) (2026-10-25)
 
 
