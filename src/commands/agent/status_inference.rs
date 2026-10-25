@@ -6,7 +6,7 @@ mod response;
 // The global ask rule outranks user allow rules; dontAsk denies each prompt.
 pub(in crate::commands::agent) const FORK_SETTINGS: &str =
     r#"{"disableAllHooks":true,"permissions":{"ask":["*"]}}"#;
-pub(in crate::commands::agent) use response::parse_claude_status;
+pub(in crate::commands::agent) use response::parse_configured_status_response;
 
 #[cfg(not(test))]
 pub use command::spawn_in_background;

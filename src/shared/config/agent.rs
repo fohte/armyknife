@@ -49,7 +49,7 @@ pub struct StatusInferenceStatusConfig {
     pub note: String,
 }
 
-/// Opt-in settings for inferring Codex Stop status from saved conversation history; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.
+/// Opt-in settings for inferring Codex Stop status with a fork of the saved conversation; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Default, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -62,7 +62,7 @@ pub struct CodexStatusInferenceConfig {
     #[serde(default)]
     pub shadow_mode: bool,
 
-    /// Status recorded if snapshot acquisition, classification, validation, or worker startup fails.
+    /// Status recorded if snapshot acquisition, the Codex fork, classification, validation, or worker startup fails.
     #[serde(default)]
     pub failure_status: Option<StatusInferenceStatusConfig>,
 
@@ -120,8 +120,8 @@ pub struct AgentConfig {
     #[serde(default)]
     pub stop_hook_instruction: Option<String>,
 
-    /// Prompt used by Claude forks or Codex standalone inference to classify a
-    /// missing status at Stop.
+    /// Prompt used by a Claude Code fork or Codex fork to classify a missing
+    /// status at Stop.
     #[serde(default)]
     pub status_inference_prompt: Option<String>,
 

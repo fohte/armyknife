@@ -186,7 +186,7 @@
           "default": {}
         },
         "status_inference_prompt": {
-          "description": "Prompt used by Claude forks or Codex standalone inference to classify a\nmissing status at Stop.",
+          "description": "Prompt used by a Claude Code fork or Codex fork to classify a missing\nstatus at Stop.",
           "type": [
             "string",
             "null"
@@ -577,7 +577,7 @@
       "additionalProperties": false
     },
     "CodexStatusInferenceConfig": {
-      "description": "Opt-in settings for inferring Codex Stop status from saved conversation history; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
+      "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
       "type": "object",
       "properties": {
         "background_status": {
@@ -598,7 +598,7 @@
           "default": false
         },
         "failure_status": {
-          "description": "Status recorded if snapshot acquisition, classification, validation, or worker startup fails.",
+          "description": "Status recorded if snapshot acquisition, the Codex fork, classification, validation, or worker startup fails.",
           "anyOf": [
             {
               "$ref": "#/$defs/StatusInferenceStatusConfig"

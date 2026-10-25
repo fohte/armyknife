@@ -42,8 +42,16 @@ pub(super) struct ChildAgentState {
     status: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(super) struct CodexThreadMetadata {
+    pub(super) model_provider: String,
+    pub(super) model: String,
+    pub(super) session_id: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub(super) struct CodexConversation {
+    pub(super) thread: CodexThreadMetadata,
     pub(super) target_turn_id: String,
     pub(super) last_assistant_message: String,
     pub(super) turns: Vec<Value>,
@@ -142,6 +150,26 @@ where
         metadata_thread.get("id").and_then(Value::as_str) == Some(thread_id),
         "Codex app-server thread/read returned a different thread"
     );
+    let thread = CodexThreadMetadata {
+        model_provider: metadata_thread
+            .get("modelProvider")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("Codex app-server thread/read response has no model provider")?
+            .to_string(),
+        model: metadata_thread
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("Codex app-server thread/read response has no model")?
+            .to_string(),
+        session_id: metadata_thread
+            .get("sessionId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .context("Codex app-server thread/read response has no session ID")?
+            .to_string(),
+    };
 
     let completion_deadline = deadline_after(timeouts.turn_completion)?;
     loop {
@@ -194,6 +222,7 @@ where
         sanitize_nested_child_states(item, &mut child_state_map)?;
     }
     let conversation = CodexConversation {
+        thread,
         target_turn_id: turn_id.to_string(),
         last_assistant_message: last_assistant_message.to_string(),
         turns,
@@ -388,7 +417,8 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::{
-        ChildAgentState, CodexConversation, HistoryTimeouts, read_complete_conversation_with,
+        ChildAgentState, CodexConversation, CodexThreadMetadata, HistoryTimeouts,
+        read_complete_conversation_with,
     };
 
     const THREAD_ID: &str = "fixture-thread";
@@ -397,7 +427,14 @@ mod tests {
 
     #[fixture]
     fn metadata_response() -> Value {
-        json!({ "thread": { "id": THREAD_ID } })
+        json!({
+            "thread": {
+                "id": THREAD_ID,
+                "modelProvider": "openai",
+                "model": "fixture-model",
+                "sessionId": "fixture-session",
+            },
+        })
     }
 
     fn turn(id: &str, status: &str) -> Value {
@@ -517,6 +554,11 @@ mod tests {
             }),
         );
         let expected = CodexConversation {
+            thread: CodexThreadMetadata {
+                model_provider: "openai".to_string(),
+                model: "fixture-model".to_string(),
+                session_id: "fixture-session".to_string(),
+            },
             target_turn_id: TURN_ID.to_string(),
             last_assistant_message: FINAL_MESSAGE.to_string(),
             turns: vec![older_turn, target_turn],
@@ -640,6 +682,11 @@ mod tests {
         );
         let actual = result_text(result);
         let expected = CodexConversation {
+            thread: CodexThreadMetadata {
+                model_provider: "openai".to_string(),
+                model: "fixture-model".to_string(),
+                session_id: "fixture-session".to_string(),
+            },
             target_turn_id: TURN_ID.to_string(),
             last_assistant_message: FINAL_MESSAGE.to_string(),
             turns: vec![turn(TURN_ID, "completed")],

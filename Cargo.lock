@@ -106,6 +106,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "httparse",
  "indicatif",
  "indoc",
  "lazy-regex",
@@ -3320,6 +3321,9 @@ dependencies = [
  "httparse",
  "log",
  "rand",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "sha1",
  "thiserror",
 ]

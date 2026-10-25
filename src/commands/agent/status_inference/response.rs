@@ -30,8 +30,24 @@ pub(super) fn parse_claude_output(stdout: &[u8]) -> Result<(AgentStatus, ClaudeU
     Ok((parse_status_response(result)?, usage))
 }
 
-pub(in crate::commands::agent) fn parse_claude_status(stdout: &[u8]) -> Result<AgentStatus> {
-    parse_claude_output(stdout).map(|(status, _)| status)
+pub(in crate::commands::agent) fn parse_configured_status_response(
+    text: &str,
+    configured_kinds: &[String],
+) -> Result<AgentStatus> {
+    let status = parse_status_response(text)?;
+    ensure!(
+        configured_kinds.iter().any(|kind| kind == &status.kind),
+        "inferred status kind is not configured"
+    );
+    ensure!(
+        !status.note.trim().is_empty(),
+        "inferred status note is empty"
+    );
+    ensure!(
+        is_single_line(&status.note),
+        "inferred status note is not a single line"
+    );
+    Ok(status)
 }
 
 pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
@@ -54,6 +70,12 @@ pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
         kind: response.kind,
         note: response.note,
     })
+}
+
+fn is_single_line(note: &str) -> bool {
+    !note.contains([
+        '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
+    ])
 }
 
 #[cfg(test)]
@@ -104,6 +126,34 @@ mod tests {
         let actual = parse_status_response(text)
             .map(|status| (status.kind, status.note))
             .map_err(|error| format!("{error:#}"));
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::valid(
+        r#"{"kind":"needs_user","note":"review the proposal"}"#,
+        Ok(AgentStatus { kind: "needs_user".to_string(), note: "review the proposal".to_string() }),
+    )]
+    #[case::unknown_kind(
+        r#"{"kind":"unknown","note":"review the proposal"}"#,
+        Err("inferred status kind is not configured".to_string()),
+    )]
+    #[case::empty_note(
+        r#"{"kind":"needs_user","note":"  "}"#,
+        Err("inferred status note is empty".to_string()),
+    )]
+    #[case::multiline_note(
+        r#"{"kind":"needs_user","note":"first line\nsecond line"}"#,
+        Err("inferred status note is not a single line".to_string()),
+    )]
+    fn configured_status_response_is_validated(
+        #[case] text: &str,
+        #[case] expected: std::result::Result<AgentStatus, String>,
+    ) {
+        let configured_kinds = vec!["needs_user".to_string(), "finished".to_string()];
+        let actual = parse_configured_status_response(text, &configured_kinds)
+            .map_err(|error| format!("{error:#}"));
+
         assert_eq!(actual, expected);
     }
 }
