@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.462](https://github.com/fohte/armyknife/compare/v0.1.461...v0.1.462) (2026-10-25)
+
+
+### Features
+
+* **agent:** infer Codex Stop status with a fork ([#1262](https://github.com/fohte/armyknife/issues/1262)) ([deb297b](https://github.com/fohte/armyknife/commit/deb297b7f10502bd7459713406d17693810f30d5))
+
 ## [0.1.461](https://github.com/fohte/armyknife/compare/v0.1.460...v0.1.461) (2026-10-25)
 
 
