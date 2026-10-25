@@ -69,9 +69,7 @@ fn classify_command_at_depth(command: &str, depth: usize) -> Result<Option<GitOp
     if has_control_operator {
         let mut contains_commit = false;
         for segment in segments {
-            let words = shlex::split(segment)
-                .ok_or_else(|| anyhow::anyhow!("commit command has invalid shell quoting"))?;
-            if classify_words(&words, depth + 1)?.is_some() {
+            if classify_shell_segment(segment, depth + 1)?.is_some() {
                 contains_commit = true;
             }
         }
@@ -84,6 +82,17 @@ fn classify_command_at_depth(command: &str, depth: usize) -> Result<Option<GitOp
     let words = shlex::split(command)
         .ok_or_else(|| anyhow::anyhow!("commit command has invalid shell quoting"))?;
     classify_words(&words, depth)
+}
+
+fn classify_shell_segment(segment: &str, depth: usize) -> Result<Option<GitOperation>> {
+    let words = shlex::split(segment)
+        .ok_or_else(|| anyhow::anyhow!("commit command has invalid shell quoting"))?;
+    let words = match words.first().map(String::as_str) {
+        Some("if" | "then" | "elif" | "else" | "while" | "until" | "do") => &words[1..],
+        Some("fi" | "done" | "esac") => return Ok(None),
+        _ => &words,
+    };
+    classify_words(words, depth)
 }
 
 fn classify_words(words: &[String], depth: usize) -> Result<Option<GitOperation>> {
@@ -318,8 +327,14 @@ fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
             }
             Ok(Some(GitOperation::Commit))
         }
-        "cherry-pick" => classify_cherry_pick(&words[index + 1..]),
-        "commit-tree" | "rebase" | "am" | "merge" | "revert" => {
+        "cherry-pick" => {
+            let operation = classify_cherry_pick(&words[index + 1..])?;
+            if operation.is_some() && hooks_path_override {
+                anyhow::bail!("commit command overrides Git configuration for its hooks");
+            }
+            Ok(operation)
+        }
+        "commit-tree" | "rebase" | "am" | "merge" | "revert" | "pull" => {
             if subcommand == "merge" && words[index + 1..].iter().any(|word| word == "--squash") {
                 return Ok(None);
             }
@@ -482,6 +497,8 @@ mod tests {
     #[rstest]
     #[case::attached_semicolon("git commit -m 'Fixture subject';")]
     #[case::inline_chain("git commit -m 'Fixture subject' && git status")]
+    #[case::if_then("if true; then git commit -m 'Fixture subject'; fi")]
+    #[case::if_condition("if git commit -m 'Fixture subject'; then true; fi")]
     fn compound_commit_commands_are_rejected(#[case] command: &str) {
         let error = classify_command(command).expect_err("compound commit must fail closed");
 
@@ -506,12 +523,25 @@ mod tests {
     #[case::env_assignment(
         "env GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/fixture/hooks git commit -m 'Fixture subject'"
     )]
+    #[case::cherry_pick("git -c core.hooksPath=/fixture/hooks cherry-pick fixture-revision")]
     fn hook_path_environment_overrides_are_rejected(#[case] command: &str) {
         let error = classify_command(command).expect_err("Git config override must fail closed");
 
         assert_eq!(
             error.to_string(),
             "commit command overrides Git configuration for its hooks",
+        );
+    }
+
+    #[rstest]
+    #[case::merge("git pull origin fixture-branch")]
+    #[case::fast_forward_only("git pull --ff-only origin fixture-branch")]
+    fn pull_is_rejected_as_a_commit_producing_operation(#[case] command: &str) {
+        let error = classify_command(command).expect_err("pull may create a commit");
+
+        assert_eq!(
+            error.to_string(),
+            "git pull may create commits outside the supported single-commit hook path",
         );
     }
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::context::{self, OperationContext};
+use super::context::{self, OperationContext, unix_timestamp};
 
 const TOOL_TRAILER: &str = "AI-Tool";
 const MODEL_TRAILER: &str = "AI-Model";
@@ -153,14 +153,6 @@ fn is_managed_trailer(line: &str) -> bool {
     token.eq_ignore_ascii_case(TOOL_TRAILER) || token.eq_ignore_ascii_case(MODEL_TRAILER)
 }
 
-fn unix_timestamp() -> Result<i64> {
-    let elapsed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|error| anyhow::anyhow!("system clock is before the Unix epoch: {error}"))?;
-    i64::try_from(elapsed.as_secs())
-        .map_err(|error| anyhow::anyhow!("invalid system timestamp: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
@@ -227,7 +219,7 @@ mod tests {
         );
 
         assert_eq!(
-            prepare(&path, "Fixture subject\n").expect("prepare unknown attribution"),
+            prepare(&path, indoc! {"Fixture subject"}).expect("prepare unknown attribution"),
             indoc! {"
                 Fixture subject
 
@@ -238,13 +230,44 @@ mod tests {
     }
 
     #[rstest]
+    fn operation_context_can_be_claimed_for_only_one_commit(context_dir: TempDir) {
+        let path = create_context(
+            &context_dir,
+            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
+            "fixture-tool-use-red",
+        );
+        let first = prepare(&path, indoc! {"Fixture subject"}).map_err(|error| error.to_string());
+        let second = prepare(&path, indoc! {"Fixture subject"}).map_err(|error| {
+            error.to_string().replace(
+                path.to_str().expect("context path is UTF-8"),
+                "<context-file>",
+            )
+        });
+
+        assert_eq!(
+            (first, second),
+            (
+                Ok(indoc! {"
+                    Fixture subject
+
+                    AI-Tool: Codex
+                    AI-Model: fixture-model-red
+                "}
+                .to_owned()),
+                Err("attribution context was already claimed or could not be claimed: <context-file>"
+                    .to_owned()),
+            ),
+        );
+    }
+
+    #[rstest]
     fn verify_accepts_generated_trailers_and_consumes_context(context_dir: TempDir) {
         let path = create_context(
             &context_dir,
             ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
             "fixture-tool-use-red",
         );
-        let message = prepare(&path, "Fixture subject\n").expect("prepare commit message");
+        let message = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
         let result = verify_and_consume(&path, &message).map_err(|error| error.to_string());
 
         assert_eq!((result, path.exists()), (Ok(()), false));
@@ -257,7 +280,7 @@ mod tests {
             ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
             "fixture-tool-use-red",
         );
-        let prepared = prepare(&path, "Fixture subject\n").expect("prepare commit message");
+        let prepared = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
         let edited = prepared.replace("fixture-model-red", "fixture-model-blue");
         let result = verify_and_consume(&path, &edited).map_err(|error| error.to_string());
 

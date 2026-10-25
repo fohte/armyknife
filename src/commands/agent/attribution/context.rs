@@ -196,7 +196,7 @@ fn remove_if_present(path: &Path) -> Result<()> {
     }
 }
 
-fn unix_timestamp() -> Result<i64> {
+pub(super) fn unix_timestamp() -> Result<i64> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?;
@@ -283,7 +283,6 @@ fn prune_stale_files(directory: &Path) -> Result<()> {
 
 #[cfg(unix)]
 fn current_user_id() -> u32 {
-    // The temporary directory is private to the effective user.
     unsafe { libc::getuid() }
 }
 

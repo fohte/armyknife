@@ -187,8 +187,19 @@ struct ProxyEnvelope {
 
 #[cfg(test)]
 mod tests {
-    use super::{prepare_message_with_context, verify_message_with_context};
+    use super::{
+        CONTEXT_ENV, GitHookArgs, Provider, REQUIRED_ENV, prepare_message_with_context,
+        run_prepare_commit_msg, verify_message_with_context,
+    };
+    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
     use indoc::indoc;
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn hook_dir() -> TempDir {
+        tempfile::tempdir().expect("create temporary hook directory")
+    }
 
     #[test]
     fn human_commit_message_is_unchanged_without_operation_context() {
@@ -203,5 +214,82 @@ mod tests {
             verify_message_with_context(None, original).map_err(|error| error.to_string());
 
         assert_eq!((prepared, verified), (Ok(original.to_owned()), Ok(())),);
+    }
+
+    #[rstest]
+    #[case::human(None, false, false, None, false)]
+    #[case::missing_context(
+        Some("1"),
+        false,
+        false,
+        Some("attribution context environment is incomplete"),
+        false
+    )]
+    #[case::missing_required_marker(
+        None,
+        true,
+        false,
+        Some("attribution context environment is incomplete"),
+        false
+    )]
+    #[case::invalid_marker(
+        Some("invalid"),
+        true,
+        false,
+        Some("invalid attribution-required marker"),
+        false
+    )]
+    #[case::valid_context(Some("1"), true, true, None, true)]
+    fn prepare_commit_msg_checks_the_attribution_environment(
+        #[case] required_value: Option<&str>,
+        #[case] with_context: bool,
+        #[case] create_context: bool,
+        #[case] expected_error: Option<&str>,
+        #[case] expect_trailers: bool,
+        hook_dir: TempDir,
+    ) {
+        let message_file = hook_dir.path().join("fixture-message.txt");
+        let original = indoc! {"Fixture subject"};
+        std::fs::write(&message_file, original).expect("create fixture commit message");
+        let context_path = if create_context {
+            let operation = OperationContext::new(
+                Provider::Codex,
+                ModelIdentity::known("fixture-model-red".to_owned()).expect("valid fixture model"),
+                "fixture-tool-use-red".to_owned(),
+            )
+            .expect("create fixture operation context");
+            context::create(&operation, hook_dir.path()).expect("persist fixture context")
+        } else {
+            hook_dir.path().join("fixture-context.json")
+        };
+        let context_value =
+            with_context.then(|| context_path.to_str().expect("context path is UTF-8"));
+        let expected_result = expected_error.map_or(Ok(()), |error| Err(error.to_owned()));
+        let expected_message = if expect_trailers {
+            indoc! {"
+                Fixture subject
+
+                AI-Tool: Codex
+                AI-Model: fixture-model-red
+            "}
+            .to_owned()
+        } else {
+            original.to_owned()
+        };
+        let args = GitHookArgs {
+            message_file: message_file.clone(),
+        };
+
+        let actual = temp_env::with_vars(
+            [(REQUIRED_ENV, required_value), (CONTEXT_ENV, context_value)],
+            || {
+                let result = run_prepare_commit_msg(&args).map_err(|error| error.to_string());
+                let message =
+                    std::fs::read_to_string(&message_file).expect("read fixture commit message");
+                (result, message)
+            },
+        );
+
+        assert_eq!(actual, (expected_result, expected_message));
     }
 }

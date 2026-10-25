@@ -150,8 +150,7 @@ fn patch_hook_output(
         }
         (Provider::Codex, Some("allow")) | (Provider::ClaudeCode, Some("allow" | "ask")) => {}
         (Provider::Codex, None) => {
-            // Codex accepts updatedInput only with allow; this does not mark the
-            // rewritten command as natively approved.
+            // Codex requires allow to accept updatedInput.
             specific.insert("permissionDecision".to_owned(), json!("allow"));
         }
         (Provider::ClaudeCode, None) => {}
@@ -178,6 +177,8 @@ fn patch_hook_output(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::super::Provider;
     use super::super::{CONTEXT_ENV, REQUIRED_ENV};
     use super::{blocked_output, transform};
@@ -378,8 +379,9 @@ mod tests {
             },
         })
         .to_string();
-        std::fs::write(&transcript_path, format!("{transcript_line}\n"))
-            .expect("write fixture Claude transcript");
+        let mut transcript_file =
+            std::fs::File::create(&transcript_path).expect("create fixture Claude transcript");
+        writeln!(transcript_file, "{transcript_line}").expect("write fixture Claude transcript");
         let input = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
@@ -562,8 +564,9 @@ mod tests {
             },
         })
         .to_string();
-        std::fs::write(&transcript_path, format!("{unrelated_message}\n"))
-            .expect("write fixture Claude transcript");
+        let mut transcript_file =
+            std::fs::File::create(&transcript_path).expect("create fixture Claude transcript");
+        writeln!(transcript_file, "{unrelated_message}").expect("write fixture Claude transcript");
         let input = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
