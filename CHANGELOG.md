@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.464](https://github.com/fohte/armyknife/compare/v0.1.463...v0.1.464) (2026-10-25)
+
+
+### Features
+
+* **agent:** verify final AI commit attribution ([#1266](https://github.com/fohte/armyknife/issues/1266)) ([5ccc14c](https://github.com/fohte/armyknife/commit/5ccc14ccc2c4a19ff623a6c53bf9404bb7c3a41b))
+
 ## [0.1.463](https://github.com/fohte/armyknife/compare/v0.1.462...v0.1.463) (2026-10-25)
 
 
