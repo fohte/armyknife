@@ -283,7 +283,10 @@ fn is_attribution_assignment(word: &str) -> bool {
 }
 
 fn is_attribution_variable(name: &str) -> bool {
-    matches!(name, super::CONTEXT_ENV | super::REQUIRED_ENV)
+    matches!(
+        name,
+        super::CONTEXT_ENV | super::REQUIRED_ENV | super::FINAL_OBJECT_REQUIRED_ENV
+    )
 }
 
 pub(super) fn git_subcommand_index(words: &[String]) -> usize {
@@ -600,9 +603,15 @@ mod tests {
     #[case::env_assignment(
         "env ARMYKNIFE_AGENT_ATTRIBUTION_REQUIRED=1 git commit -m 'Fixture subject'"
     )]
+    #[case::final_object_assignment(
+        "ARMYKNIFE_AGENT_ATTRIBUTION_FINAL_OBJECT_REQUIRED=1 git commit -m 'Fixture subject'"
+    )]
     #[case::ignore_environment("env -i git commit -m 'Fixture subject'")]
     #[case::unset_context(
         "env -u ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT git commit -m 'Fixture subject'"
+    )]
+    #[case::unset_final_object_marker(
+        "env -u ARMYKNIFE_AGENT_ATTRIBUTION_FINAL_OBJECT_REQUIRED git commit -m 'Fixture subject'"
     )]
     fn context_overrides_are_rejected(#[case] command: &str) {
         let error = classify_command(command).expect_err("context override must fail closed");

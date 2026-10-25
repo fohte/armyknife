@@ -9,14 +9,20 @@ use crate::infra::git::cmd::run_git;
 
 pub(super) fn capture_target() -> Result<CommitTarget> {
     let repository = Path::new(".");
-    let root = run_git(repository, ["rev-parse", "--show-toplevel"])
+    capture_target_with(|args| run_git(repository, args.iter().copied()))
+}
+
+fn capture_target_with(
+    mut run_command: impl FnMut(&[&str]) -> Result<String>,
+) -> Result<CommitTarget> {
+    let root = run_command(&["rev-parse", "--show-toplevel"])
         .context("failed to identify attribution repository")?;
-    let reference = match run_git(repository, ["symbolic-ref", "--quiet", "HEAD"]) {
+    let reference = match run_command(&["symbolic-ref", "--quiet", "HEAD"]) {
         Ok(reference) => reference,
         Err(error) if is_command_failure(&error) => "HEAD".to_owned(),
         Err(error) => return Err(error).context("failed to identify attribution HEAD"),
     };
-    let old_oid = match run_git(repository, ["rev-parse", "--verify", "HEAD"]) {
+    let old_oid = match run_command(&["rev-parse", "--verify", "HEAD"]) {
         Ok(oid) => Some(oid),
         Err(error) if is_command_failure(&error) && reference != "HEAD" => None,
         Err(error) => return Err(error).context("failed to read attribution HEAD object"),
@@ -50,9 +56,7 @@ pub(super) fn run(state: &str, input: &str, context_path: Option<&Path>) -> Resu
     let Some(path) = context_path else {
         return Ok(());
     };
-    let Some((operation, target)) = context::claimed_final_object_context(path)? else {
-        return Ok(());
-    };
+    let (operation, target) = context::claimed_final_object_context(path)?;
     let updates = parse_updates(input)?;
     let repository = run_git(Path::new("."), ["rev-parse", "--show-toplevel"])
         .context("failed to identify reference-transaction repository")?;
@@ -102,23 +106,6 @@ fn is_command_failure(error: &anyhow::Error) -> bool {
 
 fn is_oid(value: &str) -> bool {
     matches!(value.len(), 40 | 64) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
-#[cfg(test)]
-fn select_target_update<'a>(
-    repository: &str,
-    target: &CommitTarget,
-    updates: &'a [ReferenceUpdate],
-) -> Result<Option<&'a ReferenceUpdate>> {
-    if repository != target.repository {
-        return Ok(None);
-    }
-    let matching = matching_target_updates(target, updates);
-    match matching.as_slice() {
-        [] => Ok(None),
-        [update] => Ok(Some(*update)),
-        _ => anyhow::bail!("reference-transaction contains ambiguous attribution targets"),
-    }
 }
 
 fn matching_target_updates<'a>(
@@ -201,7 +188,7 @@ fn read_commit_object(oid: &str) -> Result<CommitObject> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommitObject, ReferenceUpdate, parse_updates, select_target_update, verify_commit_object,
+        CommitObject, ReferenceUpdate, capture_target_with, parse_updates, verify_commit_object,
         verify_prepared_transaction,
     };
     use crate::commands::agent::attribution::Provider;
@@ -215,6 +202,12 @@ mod tests {
     const OLD_OID: &str = "1111111111111111111111111111111111111111";
     const NEW_OID: &str = "2222222222222222222222222222222222222222";
     const ZERO_OID: &str = "0000000000000000000000000000000000000000";
+
+    #[derive(Clone, Copy)]
+    enum GitCommandOutput {
+        Value(&'static str),
+        CommandFailure,
+    }
 
     #[fixture]
     fn context_dir() -> TempDir {
@@ -257,6 +250,52 @@ mod tests {
             "}
             .to_owned(),
         }
+    }
+
+    fn capture_target_for(
+        symbolic_ref: GitCommandOutput,
+        head_oid: GitCommandOutput,
+    ) -> CommitTarget {
+        capture_target_with(|args| match args {
+            ["rev-parse", "--show-toplevel"] => Ok("/fixture/repository".to_owned()),
+            ["symbolic-ref", "--quiet", "HEAD"] => command_result(symbolic_ref),
+            ["rev-parse", "--verify", "HEAD"] => command_result(head_oid),
+            _ => anyhow::bail!("unexpected fixture Git command"),
+        })
+        .expect("capture fixture HEAD target")
+    }
+
+    fn command_result(output: GitCommandOutput) -> anyhow::Result<String> {
+        match output {
+            GitCommandOutput::Value(value) => Ok(value.to_owned()),
+            GitCommandOutput::CommandFailure => {
+                Err(crate::infra::git::GitError::CommandFailed("fixture failure".to_owned()).into())
+            }
+        }
+    }
+
+    #[rstest]
+    #[case::attached_branch(
+        GitCommandOutput::Value("refs/heads/fixture-branch"),
+        GitCommandOutput::Value(OLD_OID),
+        target("/fixture/repository", "refs/heads/fixture-branch", Some(OLD_OID))
+    )]
+    #[case::detached_head(
+        GitCommandOutput::CommandFailure,
+        GitCommandOutput::Value(OLD_OID),
+        target("/fixture/repository", "HEAD", Some(OLD_OID))
+    )]
+    #[case::unborn_branch(
+        GitCommandOutput::Value("refs/heads/fixture-branch"),
+        GitCommandOutput::CommandFailure,
+        target("/fixture/repository", "refs/heads/fixture-branch", None)
+    )]
+    fn captures_attached_detached_and_unborn_head_targets(
+        #[case] symbolic_ref: GitCommandOutput,
+        #[case] head_oid: GitCommandOutput,
+        #[case] expected: CommitTarget,
+    ) {
+        assert_eq!(capture_target_for(symbolic_ref, head_oid), expected);
     }
 
     #[rstest]
@@ -325,15 +364,38 @@ mod tests {
         target("/fixture/repository", "refs/heads/fixture-branch", None),
         update(ZERO_OID, NEW_OID, "refs/heads/fixture-branch")
     )]
-    fn selects_the_matching_head_update(
+    fn verifies_the_matching_head_update(
         #[case] target: CommitTarget,
         #[case] update: ReferenceUpdate,
+        context_dir: TempDir,
     ) {
-        let updates = [update.clone()];
-        let selected = select_target_update("/fixture/repository", &target, &updates)
-            .expect("select target update");
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        context::claim_with_target(
+            &path,
+            context::unix_timestamp().expect("read clock"),
+            Some(target.clone()),
+        )
+        .expect("claim context");
+        let mut read_oid = None;
+        let result = verify_prepared_transaction(
+            &path,
+            "/fixture/repository",
+            &target,
+            &operation,
+            &[update],
+            context::unix_timestamp().expect("read clock"),
+            |oid| {
+                read_oid = Some(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
 
-        assert_eq!(selected, Some(&update));
+        assert_eq!(
+            (result, read_oid, context::read(&path).is_err()),
+            (Ok(true), Some(NEW_OID.to_owned()), true),
+        );
     }
 
     #[rstest]
@@ -344,42 +406,78 @@ mod tests {
         #[case] repository: &str,
         #[case] reference: &str,
         #[case] old_oid: &str,
+        context_dir: TempDir,
     ) {
-        let updates = [update(old_oid, NEW_OID, reference)];
-        let selected = select_target_update(
-            repository,
-            &target(
-                "/fixture/repository",
-                "refs/heads/fixture-branch",
-                Some(OLD_OID),
-            ),
-            &updates,
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        let target = target(
+            "/fixture/repository",
+            "refs/heads/fixture-branch",
+            Some(OLD_OID),
+        );
+        context::claim_with_target(
+            &path,
+            context::unix_timestamp().expect("read clock"),
+            Some(target.clone()),
         )
-        .expect("select target update");
+        .expect("claim context");
+        let mut read_oid = None;
+        let result = verify_prepared_transaction(
+            &path,
+            repository,
+            &target,
+            &operation,
+            &[update(old_oid, NEW_OID, reference)],
+            context::unix_timestamp().expect("read clock"),
+            |oid| {
+                read_oid = Some(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
 
-        assert_eq!(selected, None);
+        assert_eq!(
+            (result, read_oid, context::read(&path).is_ok()),
+            (Ok(false), None, true),
+        );
     }
 
     #[rstest]
-    fn rejects_duplicate_matching_updates() {
+    fn rejects_duplicate_matching_updates(context_dir: TempDir) {
         let updates = [
             update(OLD_OID, NEW_OID, "refs/heads/fixture-branch"),
             update(OLD_OID, NEW_OID, "refs/heads/fixture-branch"),
         ];
-        let error = select_target_update(
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        let target = target(
             "/fixture/repository",
-            &target(
-                "/fixture/repository",
-                "refs/heads/fixture-branch",
-                Some(OLD_OID),
-            ),
+            "refs/heads/fixture-branch",
+            Some(OLD_OID),
+        );
+        context::claim_with_target(
+            &path,
+            context::unix_timestamp().expect("read clock"),
+            Some(target.clone()),
+        )
+        .expect("claim context");
+        let error = verify_prepared_transaction(
+            &path,
+            "/fixture/repository",
+            &target,
+            &operation,
             &updates,
+            context::unix_timestamp().expect("read clock"),
+            |_| Ok(attributed_object()),
         )
         .expect_err("duplicate updates are ambiguous");
 
         assert_eq!(
-            error.to_string(),
-            "reference-transaction contains ambiguous attribution targets"
+            (error.to_string(), context::read(&path).is_err()),
+            (
+                "reference-transaction contains ambiguous attribution targets".to_owned(),
+                true,
+            ),
         );
     }
 
@@ -548,6 +646,42 @@ mod tests {
     }
 
     #[rstest]
+    fn consumes_an_expired_matching_context_and_rejects_the_update(context_dir: TempDir) {
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        let target = target(
+            "/fixture/repository",
+            "refs/heads/fixture-branch",
+            Some(OLD_OID),
+        );
+        context::claim_with_target(
+            &path,
+            context::unix_timestamp().expect("read clock"),
+            Some(target.clone()),
+        )
+        .expect("claim context");
+        let mut read_object = false;
+        let result = verify_prepared_transaction(
+            &path,
+            "/fixture/repository",
+            &target,
+            &operation,
+            &[update(OLD_OID, NEW_OID, "refs/heads/fixture-branch")],
+            context::unix_timestamp().expect("read clock") + 601,
+            |_| {
+                read_object = true;
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, context::read(&path).is_err(), read_object),
+            (Err("attribution context is stale".to_owned()), true, false),
+        );
+    }
+
+    #[rstest]
     fn leaves_context_available_for_an_unrelated_reference_update(context_dir: TempDir) {
         let operation = operation();
         let path = context::create(&operation, context_dir.path()).expect("create context");
@@ -588,6 +722,21 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn prepared_reference_update_fails_when_context_was_never_claimed(context_dir: TempDir) {
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        let result = super::run("prepared", "", Some(&path)).map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, context::read(&path).is_ok()),
+            (
+                Err("attribution context has no matching commit-message claim".to_owned()),
+                true,
+            ),
+        );
+    }
+
     #[test]
     fn unrelated_phase_does_not_consume_a_context() {
         let context_dir = tempfile::tempdir().expect("create test context directory");
@@ -605,9 +754,11 @@ mod tests {
         .expect("claim context");
 
         assert_eq!(
-            super::run("aborted", "", Some(&path)).map_err(|error| error.to_string()),
-            Ok(()),
+            (
+                super::run("aborted", "", Some(&path)).map_err(|error| error.to_string()),
+                context::read(&path).is_ok(),
+            ),
+            (Ok(()), true),
         );
-        assert!(context::read(&path).is_ok());
     }
 }

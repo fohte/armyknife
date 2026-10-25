@@ -263,10 +263,9 @@ fn run_reference_transaction(args: &ReferenceTransactionArgs) -> Result<()> {
     if args.state != "prepared" {
         return reference_transaction::run(&args.state, "", None);
     }
-    let context_path = std::env::var_os(CONTEXT_ENV).map(PathBuf::from);
-    let Some(context_path) = context_path else {
-        return Ok(());
-    };
+    let context_path = std::env::var_os(CONTEXT_ENV)
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow::anyhow!("final-object attribution context path is missing"))?;
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
@@ -584,9 +583,7 @@ mod tests {
             Some(OsString::from("1")),
         )
         .map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&context_path)
-            .expect("read final-object claim")
-            .is_some();
+        let claim_remains = context::claimed_final_object_context(&context_path).is_ok();
 
         assert_eq!((result, claim_remains), (Ok(()), true));
     }

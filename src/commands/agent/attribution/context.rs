@@ -154,12 +154,18 @@ pub(super) fn claim_with_target(
                 path.display()
             )
         })?;
-    let record = ClaimRecord {
-        operation_id: context.operation_id().to_owned(),
-        target,
-    };
-    serde_json::to_writer(&mut claim_file, &record)
-        .context("failed to mark attribution context as claimed")?;
+    if let Some(target) = target {
+        let record = ClaimRecord {
+            operation_id: context.operation_id().to_owned(),
+            target: Some(target),
+        };
+        serde_json::to_writer(&mut claim_file, &record)
+            .context("failed to mark attribution context as claimed")?;
+    } else {
+        claim_file
+            .write_all(context.operation_id().as_bytes())
+            .context("failed to mark attribution context as claimed")?;
+    }
     claim_file
         .sync_all()
         .context("failed to sync attribution claim")?;
@@ -175,20 +181,14 @@ pub(super) fn claimed_context(path: &Path) -> Result<OperationContext> {
 
 pub(super) fn claimed_final_object_context(
     path: &Path,
-) -> Result<Option<(OperationContext, CommitTarget)>> {
-    match fs::symlink_metadata(path) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(error).context("failed to inspect final-object attribution context");
-        }
-    }
+) -> Result<(OperationContext, CommitTarget)> {
     let context = read(path)?;
-    let Some(claim) = read_claim_if_present(path)? else {
-        return Ok(None);
-    };
+    let claim = read_claim(path)?;
     verify_claim_matches(&context, &claim)?;
-    Ok(claim.target.map(|target| (context, target)))
+    let target = claim
+        .target
+        .ok_or_else(|| anyhow::anyhow!("attribution claim has no final-object target"))?;
+    Ok((context, target))
 }
 
 pub(super) fn is_expired(context: &OperationContext, now: i64) -> bool {
@@ -410,6 +410,20 @@ mod tests {
             ],
         );
         assert_eq!(actual, (true, [first, second]),);
+    }
+
+    #[rstest]
+    fn message_only_claim_keeps_the_legacy_raw_operation_id_format(context_dir: TempDir) {
+        let created_at = unix_timestamp().expect("read clock");
+        let context = fixture_context("fixture-model-red", "fixture-tool-red", created_at);
+        let expected_operation_id = context.operation_id().to_owned();
+        let path = create(&context, context_dir.path()).expect("create operation context");
+        claim(&path, created_at).expect("claim message-only context");
+        let mut claim_path = path.as_os_str().to_os_string();
+        claim_path.push(".claimed");
+        let actual = std::fs::read_to_string(claim_path).expect("read message-only claim");
+
+        assert_eq!(actual, expected_operation_id);
     }
 
     #[rstest]
