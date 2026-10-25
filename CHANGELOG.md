@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.465](https://github.com/fohte/armyknife/compare/v0.1.464...v0.1.465) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** restore Crit after agent pane moves ([#1268](https://github.com/fohte/armyknife/issues/1268)) ([c56bf38](https://github.com/fohte/armyknife/commit/c56bf382124852e4f04b00f3a99e3a5b963669b5))
+
 ## [0.1.464](https://github.com/fohte/armyknife/compare/v0.1.463...v0.1.464) (2026-10-25)
 
 
