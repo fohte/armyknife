@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.461](https://github.com/fohte/armyknife/compare/v0.1.460...v0.1.461) (2026-10-25)
+
+
+### Bug Fixes
+
+* **agent:** stabilize session list navigation ([#1260](https://github.com/fohte/armyknife/issues/1260)) ([24426bf](https://github.com/fohte/armyknife/commit/24426bf75131696e1020a3e9a86706e87af25699))
+
 ## [0.1.460](https://github.com/fohte/armyknife/compare/v0.1.459...v0.1.460) (2026-10-25)
 
 
