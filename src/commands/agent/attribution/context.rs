@@ -60,6 +60,20 @@ pub(super) struct OperationContext {
     created_at: i64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct CommitTarget {
+    pub(super) repository: String,
+    pub(super) reference: String,
+    pub(super) old_oid: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ClaimRecord {
+    operation_id: String,
+    #[serde(default)]
+    target: Option<CommitTarget>,
+}
+
 impl OperationContext {
     pub(super) fn new(
         provider: Provider,
@@ -116,9 +130,16 @@ pub(super) fn create(context: &OperationContext, directory: &Path) -> Result<Pat
 }
 
 pub(super) fn claim(path: &Path, now: i64) -> Result<OperationContext> {
+    claim_with_target(path, now, None)
+}
+
+pub(super) fn claim_with_target(
+    path: &Path,
+    now: i64,
+    target: Option<CommitTarget>,
+) -> Result<OperationContext> {
     let context = read(path)?;
-    let age = now.saturating_sub(context.created_at);
-    if age < 0 || Duration::from_secs(age as u64) > CONTEXT_TTL {
+    if is_expired(&context, now) {
         anyhow::bail!("attribution context is stale");
     }
 
@@ -133,8 +154,11 @@ pub(super) fn claim(path: &Path, now: i64) -> Result<OperationContext> {
                 path.display()
             )
         })?;
-    claim_file
-        .write_all(context.operation_id().as_bytes())
+    let record = ClaimRecord {
+        operation_id: context.operation_id().to_owned(),
+        target,
+    };
+    serde_json::to_writer(&mut claim_file, &record)
         .context("failed to mark attribution context as claimed")?;
     claim_file
         .sync_all()
@@ -144,12 +168,32 @@ pub(super) fn claim(path: &Path, now: i64) -> Result<OperationContext> {
 
 pub(super) fn claimed_context(path: &Path) -> Result<OperationContext> {
     let context = read(path)?;
-    let claimed = fs::read_to_string(claim_path(path))
-        .context("attribution context has no matching commit-message claim")?;
-    if claimed != context.operation_id() {
-        anyhow::bail!("attribution commit-message claim does not match its context");
-    }
+    let claim = read_claim(path)?;
+    verify_claim_matches(&context, &claim)?;
     Ok(context)
+}
+
+pub(super) fn claimed_final_object_context(
+    path: &Path,
+) -> Result<Option<(OperationContext, CommitTarget)>> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).context("failed to inspect final-object attribution context");
+        }
+    }
+    let context = read(path)?;
+    let Some(claim) = read_claim_if_present(path)? else {
+        return Ok(None);
+    };
+    verify_claim_matches(&context, &claim)?;
+    Ok(claim.target.map(|target| (context, target)))
+}
+
+pub(super) fn is_expired(context: &OperationContext, now: i64) -> bool {
+    let age = now.saturating_sub(context.created_at);
+    age < 0 || Duration::from_secs(age as u64) > CONTEXT_TTL
 }
 
 pub(super) fn consume(path: &Path) -> Result<()> {
@@ -186,6 +230,34 @@ fn claim_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".claimed");
     path.with_file_name(name)
+}
+
+fn read_claim(path: &Path) -> Result<ClaimRecord> {
+    read_claim_if_present(path)?
+        .ok_or_else(|| anyhow::anyhow!("attribution context has no matching commit-message claim"))
+}
+
+fn read_claim_if_present(path: &Path) -> Result<Option<ClaimRecord>> {
+    let claim_path = claim_path(path);
+    let raw = match fs::read_to_string(&claim_path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to read attribution claim"),
+    };
+    match serde_json::from_str(&raw) {
+        Ok(claim) => Ok(Some(claim)),
+        Err(_) => Ok(Some(ClaimRecord {
+            operation_id: raw,
+            target: None,
+        })),
+    }
+}
+
+fn verify_claim_matches(context: &OperationContext, claim: &ClaimRecord) -> Result<()> {
+    if claim.operation_id != context.operation_id() {
+        anyhow::bail!("attribution commit-message claim does not match its context");
+    }
+    Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {
@@ -249,6 +321,7 @@ fn verify_private_file(metadata: &fs::Metadata) -> Result<()> {
 }
 
 fn prune_stale_files(directory: &Path) -> Result<()> {
+    let now = unix_timestamp()?;
     for entry in fs::read_dir(directory).with_context(|| {
         format!(
             "failed to scan attribution context directory {}",
@@ -267,10 +340,13 @@ fn prune_stale_files(directory: &Path) -> Result<()> {
             Err(error) => return Err(error).context("failed to inspect stale attribution context"),
         };
         let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-        let age = SystemTime::now()
+        let file_age = SystemTime::now()
             .duration_since(modified)
             .unwrap_or_default();
-        if age <= STALE_FILE_RETENTION {
+        let stale_context = read(&entry.path())
+            .map(|context| is_expired(&context, now))
+            .unwrap_or(false);
+        if !stale_context && file_age <= STALE_FILE_RETENTION {
             continue;
         }
         remove_if_present(&entry.path())?;
@@ -294,7 +370,9 @@ fn current_user_id() -> u32 {
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
-    use super::{CONTEXT_TTL, ModelIdentity, OperationContext, claim, create, read};
+    use super::{
+        CONTEXT_TTL, ModelIdentity, OperationContext, claim, create, read, unix_timestamp,
+    };
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
@@ -318,8 +396,9 @@ mod tests {
 
     #[rstest]
     fn context_records_keep_each_operation_model_separate(context_dir: TempDir) {
-        let first = fixture_context("fixture-model-red", "fixture-tool-red", 1_000);
-        let second = fixture_context("fixture-model-blue", "fixture-tool-blue", 1_000);
+        let created_at = unix_timestamp().expect("read clock");
+        let first = fixture_context("fixture-model-red", "fixture-tool-red", created_at);
+        let second = fixture_context("fixture-model-blue", "fixture-tool-blue", created_at);
         let first_path = create(&first, context_dir.path()).expect("create first operation");
         let second_path = create(&second, context_dir.path()).expect("create second operation");
 
@@ -342,5 +421,30 @@ mod tests {
         let error = claim(&path, now).expect_err("stale context must fail closed");
 
         assert_eq!(error.to_string(), "attribution context is stale");
+    }
+
+    #[rstest]
+    fn creating_a_new_operation_removes_expired_context_and_claim(context_dir: TempDir) {
+        let ttl = i64::try_from(CONTEXT_TTL.as_secs()).expect("ttl fits i64");
+        let created_at = unix_timestamp().expect("read clock") - ttl - 1;
+        let stale = fixture_context("fixture-model-red", "fixture-tool-red", created_at);
+        let stale_path = create(&stale, context_dir.path()).expect("create expired context");
+        claim(&stale_path, created_at + ttl).expect("claim before expiration");
+        let mut claim_path = stale_path.as_os_str().to_os_string();
+        claim_path.push(".claimed");
+        let claim_path = std::path::PathBuf::from(claim_path);
+        let fresh = fixture_context(
+            "fixture-model-blue",
+            "fixture-tool-blue",
+            unix_timestamp().expect("read clock"),
+        );
+        let fresh_path = create(&fresh, context_dir.path()).expect("create fresh context");
+
+        let actual = (
+            read(&stale_path).is_err(),
+            claim_path.exists(),
+            read(&fresh_path).expect("read fresh context"),
+        );
+        assert_eq!(actual, (true, false, fresh));
     }
 }
