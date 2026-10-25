@@ -503,11 +503,14 @@ mod tests {
     }
 
     #[rstest]
-    fn non_commit_commands_pass_through_unchanged(context_dir: TempDir) {
+    #[case::status("git status --short")]
+    #[case::single_rev_parse("git rev-parse --show-toplevel")]
+    #[case::compound_rev_parse("git rev-parse --show-toplevel && git status --short")]
+    fn non_commit_commands_pass_through_unchanged(context_dir: TempDir, #[case] command: &str) {
         let input = codex_input(
-            "git status --short",
+            command,
             Some("fixture-model-red-2026"),
-            "fixture-tool-use-status",
+            "fixture-tool-use-read",
         );
         let output = json!({
             "hookSpecificOutput": {

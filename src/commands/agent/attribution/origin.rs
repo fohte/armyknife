@@ -96,6 +96,7 @@ fn is_known_git_subcommand(subcommand: &str) -> bool {
             | "read-tree"
             | "rebase"
             | "reflog"
+            | "rev-parse"
             | "remote"
             | "repack"
             | "replace"
