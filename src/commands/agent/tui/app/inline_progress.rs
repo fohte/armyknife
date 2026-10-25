@@ -30,14 +30,29 @@ impl App {
 
     pub(super) fn progress_source_for_session_id(&self, session_id: &str) -> Option<String> {
         let session = self.session_by_id(session_id)?;
+        let selected_task_id = self
+            .task_by_session
+            .get(session_id)
+            .map(|task| task.task_id.as_str());
         if let Some(current_source) = self.progress_session_id.as_deref()
             && (session.session_id == current_source
                 || session
                     .ancestor_session_ids
                     .iter()
                     .any(|ancestor| ancestor == current_source))
+            && (session.session_id == current_source
+                || selected_task_id.is_none()
+                || selected_task_id
+                    == self
+                        .task_by_session
+                        .get(current_source)
+                        .map(|task| task.task_id.as_str()))
         {
             return Some(current_source.to_string());
+        }
+
+        if selected_task_id.is_some() {
+            return Some(session.session_id.clone());
         }
 
         session

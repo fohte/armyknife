@@ -435,7 +435,7 @@ mod tests {
         ProgressSelectionKey, StageMarks,
     };
     use crate::commands::agent::tui::session_rows::SessionRowKey;
-    use crate::commands::agent::types::{Engine, Session, SessionStatus};
+    use crate::commands::agent::types::{Engine, Session, SessionStatus, TmuxInfo};
     use chrono::Utc;
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
@@ -1728,6 +1728,30 @@ mod tests {
                 )),
                 None,
             ),
+        );
+    }
+
+    #[test]
+    fn o_without_a_pr_url_keeps_the_existing_crit_action() {
+        let mut app = create_test_app_with_sessions(1);
+        app.sessions[0].crit_urls = vec!["http://review.example.test:40123/session".to_string()];
+        app.sessions[0].tmux_info = Some(TmuxInfo {
+            session_name: "watch-test".to_string(),
+            window_name: "agent".to_string(),
+            window_index: 0,
+            pane_id: "%77".to_string(),
+            socket_path: None,
+        });
+        select_inline_progress_row(&mut app, &SessionRowKey::Task("session-0".to_string()));
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));
+
+        assert_eq!(
+            effects,
+            KeyEffects {
+                open_crit_session_id: Some("session-0".to_string()),
+                ..KeyEffects::default()
+            },
         );
     }
 

@@ -19,6 +19,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
     remaining_rows: Vec<SessionRow<'a>>,
     source_session_id: &str,
     progress_rows: &[ProgressRow],
+    matched_session_ids: &HashSet<String>,
     status: Option<String>,
 ) -> Vec<SessionRow<'a>> {
     let entries = original_rows
@@ -28,18 +29,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
             _ => None,
         })
         .collect::<HashMap<_, _>>();
-    let matched_session_ids = progress_rows
-        .iter()
-        .filter_map(|row| match row {
-            ProgressRow::ChecklistPullRequest { row, .. }
-                if entries.contains_key(&row.session_id) =>
-            {
-                Some(row.session_id.clone())
-            }
-            _ => None,
-        })
-        .collect::<HashSet<_>>();
-    let descendants = collect_matched_descendants(&original_rows, &matched_session_ids);
+    let descendants = collect_matched_descendants(&original_rows, matched_session_ids);
 
     let mut priority_rows = original_rows
         .into_iter()
@@ -68,13 +58,44 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         })
         .collect::<Vec<_>>();
 
-    let Some(source_position) = task_rows.iter().position(
-        |row| matches!(row, SessionRow::Session(entry) if entry.session.session_id == source_session_id),
-    ) else {
+    let Some(source_placement) = find_source_placement(&task_rows, source_session_id) else {
         priority_rows.extend(task_rows);
         return priority_rows;
     };
-    let source_depth = match &task_rows[source_position] {
+    let inline_rows = build_inline_progress_rows(
+        source_session_id,
+        progress_rows,
+        status,
+        source_placement.has_remaining_children,
+        &entries,
+        &descendants,
+    );
+
+    if inline_rows.is_empty() {
+        priority_rows.extend(task_rows);
+        return priority_rows;
+    }
+    task_rows.splice(
+        source_placement.row_index + 1..source_placement.row_index + 1,
+        inline_rows,
+    );
+    priority_rows.extend(task_rows);
+    priority_rows
+}
+
+struct SourcePlacement {
+    row_index: usize,
+    has_remaining_children: bool,
+}
+
+fn find_source_placement(
+    task_rows: &[SessionRow<'_>],
+    source_session_id: &str,
+) -> Option<SourcePlacement> {
+    let row_index = task_rows.iter().position(
+        |row| matches!(row, SessionRow::Session(entry) if entry.session.session_id == source_session_id),
+    )?;
+    let source_depth = match &task_rows[row_index] {
         SessionRow::Session(entry) => entry
             .tree_prefix
             .as_ref()
@@ -83,7 +104,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
     };
     let has_remaining_children = task_rows
         .iter()
-        .skip(source_position + 1)
+        .skip(row_index + 1)
         .take_while(|row| !matches!(row, SessionRow::Session(entry) if entry.tree_prefix.is_none()))
         .any(|row| {
             matches!(row, SessionRow::Session(entry)
@@ -91,6 +112,20 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
                     && entry.tree_prefix.as_ref().is_some_and(|prefix| prefix.len() == source_depth))
         });
 
+    Some(SourcePlacement {
+        row_index,
+        has_remaining_children,
+    })
+}
+
+fn build_inline_progress_rows<'a>(
+    source_session_id: &str,
+    progress_rows: &[ProgressRow],
+    status: Option<String>,
+    has_remaining_children: bool,
+    entries: &HashMap<String, SessionRowEntry<'a>>,
+    descendants: &HashMap<String, Vec<SessionRowEntry<'a>>>,
+) -> Vec<SessionRow<'a>> {
     let mut inline_rows = Vec::new();
     let has_visible_progress_rows = progress_rows.iter().any(|row| {
         matches!(
@@ -209,13 +244,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         }
     }
 
-    if inline_rows.is_empty() {
-        priority_rows.extend(task_rows);
-        return priority_rows;
-    }
-    task_rows.splice(source_position + 1..source_position + 1, inline_rows);
-    priority_rows.extend(task_rows);
-    priority_rows
+    inline_rows
 }
 
 fn collect_matched_descendants<'a>(

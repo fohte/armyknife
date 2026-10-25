@@ -122,9 +122,9 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                 ]),
                 Line::from(vec![
                     Span::styled("  h/←", bold),
-                    Span::raw(": parent  "),
+                    Span::raw(": parent / fold plan  "),
                     Span::styled("→/l", bold),
-                    Span::raw(": drill down  "),
+                    Span::raw(": drill down / expand plan  "),
                     Span::styled("C-r/w/s/p", bold),
                     Span::raw(": filter  "),
                     Span::styled("Esc", bold),
@@ -182,9 +182,9 @@ fn build_full_session_list_help_lines(bold: Style) -> Vec<Line<'static>> {
             Span::styled("/", bold),
             Span::raw(": search  "),
             Span::styled("h/←", bold),
-            Span::raw(": parent  "),
+            Span::raw(": parent / fold plan  "),
             Span::styled("→/l", bold),
-            Span::raw(": drill down"),
+            Span::raw(": drill down / expand plan"),
         ]),
         Line::from(vec![
             Span::styled("  C-r/w/s/p", bold),

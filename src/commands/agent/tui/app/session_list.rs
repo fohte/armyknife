@@ -68,6 +68,7 @@ impl App {
             remaining_rows,
             &source_session_id,
             progress_rows,
+            &matched_sessions,
             status,
         )
     }

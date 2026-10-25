@@ -319,7 +319,7 @@ mod tests {
     ])]
     #[case::session_view_expanded(View::Session, true, false, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
-        "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
+        "  1-9: quick  /: search  h/←: parent / fold plan  →/l: drill down / expand plan".to_string(),
         "  C-r/w/s/p: filter  o: open PR/crit  q: quit".to_string(),
         "  Tab: toggle progress".to_string(),
     ])]

@@ -241,7 +241,7 @@ mod tests {
 
     use super::*;
     use crate::commands::agent::tui::progress::{
-        PrProgressRow, ProgressMark, ProgressRow, StageMarks, WorkProgressRow,
+        PrProgressRow, ProgressMark, ProgressRow, ProgressSelectionKey, StageMarks, WorkProgressRow,
     };
     use crate::commands::agent::tui::progress_batches::build_implementation_plan;
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
@@ -383,6 +383,64 @@ mod tests {
                     merge: ProgressMark::NotStarted,
                 },
             },
+        );
+    }
+
+    #[test]
+    fn legacy_checklist_row_defaults_item_id_and_selection_key() {
+        let row = serde_json::from_value::<ProgressRow>(serde_json::json!({
+            "ChecklistPullRequest": {
+                "batch_id": "batch-placeholder",
+                "row": {
+                    "session_id": "delegate-placeholder",
+                    "repo": null,
+                    "title": "Placeholder change",
+                    "number": 7,
+                    "url": "https://example.test/pull/7",
+                    "pane_id": null,
+                    "is_ended": true,
+                    "lookup_unavailable": false,
+                    "stages": {
+                        "implementation": "Done",
+                        "diff_review": "User",
+                        "pr_body": "Working",
+                        "ci": "Waiting",
+                        "merge": "NotStarted"
+                    }
+                }
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            (row.clone(), row.selection_key()),
+            (
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-placeholder".to_string(),
+                    checklist_item_id: String::new(),
+                    row: PrProgressRow {
+                        session_id: "delegate-placeholder".to_string(),
+                        repo: None,
+                        title: "Placeholder change".to_string(),
+                        number: Some(7),
+                        url: Some("https://example.test/pull/7".to_string()),
+                        pane_id: None,
+                        is_ended: true,
+                        lookup_unavailable: false,
+                        stages: StageMarks {
+                            implementation: ProgressMark::Done,
+                            diff_review: ProgressMark::User,
+                            pr_body: ProgressMark::Working,
+                            ci: ProgressMark::Waiting,
+                            merge: ProgressMark::NotStarted,
+                        },
+                    },
+                },
+                Some(ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-placeholder".to_string(),
+                    item_id: "delegate-placeholder".to_string(),
+                }),
+            ),
         );
     }
 

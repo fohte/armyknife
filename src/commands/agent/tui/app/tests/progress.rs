@@ -226,6 +226,43 @@ fn inline_status_distinguishes_fetch_state_from_missing_checklist(
     assert_eq!(status_rows, vec![expected.to_string()]);
 }
 
+#[rstest]
+fn inline_status_displays_cached_pr_lookup_error(timestamp: DateTime<Utc>) {
+    let mut app = create_test_app(vec![create_test_session_at("source-session", timestamp)]);
+    app.progress_inline_expanded = true;
+    app.progress_session_id = Some("source-session".to_string());
+    app.progress_fetch_states
+        .insert("source-session".to_string(), ProgressFetchState::Ready);
+    app.set_cached_progress(
+        "source-session",
+        CachedProgress {
+            rows: Vec::new(),
+            error: Some("GitHub unavailable".to_string()),
+            implementation: None,
+            request_scope: None,
+            delegated_sessions: Vec::new(),
+            fetched_at: Some(timestamp),
+            last_attempt_at: Some(timestamp),
+        },
+    );
+
+    let status_rows = app
+        .build_display_rows()
+        .iter()
+        .filter_map(|row| match row {
+            crate::commands::agent::tui::session_rows::SessionRow::InlineProgress(entry) => {
+                entry.label.clone()
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        status_rows,
+        vec!["PR status lookup failed: GitHub unavailable".to_string()],
+    );
+}
+
 fn progress_delegate(id: &str, timestamp: DateTime<Utc>) -> Session {
     let mut session = create_test_session_at(id, timestamp);
     session.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
@@ -930,6 +967,37 @@ fn initial_focus_keeps_the_worker_selected_and_opens_parent_progress(
             app.selected_progress_source_id(),
         ),
         (Some("delegate"), true, Some("selected".to_string())),
+    );
+}
+
+#[rstest]
+#[case::same_task_keeps_the_parent_source("source-task", "source-session")]
+#[case::different_task_uses_the_selected_source("other-task", "selected-session")]
+fn selected_linked_session_uses_the_matching_task_source(
+    timestamp: DateTime<Utc>,
+    #[case] selected_task_id: &str,
+    #[case] expected_source_id: &str,
+) {
+    let source = create_test_session_at("source-session", timestamp);
+    let mut selected = create_test_session_at("selected-session", timestamp);
+    selected.ancestor_session_ids = vec![source.session_id.clone()];
+    let mut app = create_test_app(vec![source, selected]);
+    app.task_by_session
+        .insert("source-session".to_string(), task_link("source-task"));
+    app.task_by_session
+        .insert("selected-session".to_string(), task_link(selected_task_id));
+    app.progress_session_id = Some("source-session".to_string());
+    app.update_row_order(&[None, Some("source-session"), Some("selected-session")]);
+    let selected_position = app
+        .row_keys
+        .iter()
+        .position(|key| key.as_ref() == Some(&SessionRowKey::Task("selected-session".to_string())))
+        .expect("selected session should be visible");
+    app.list_state.select(Some(selected_position));
+
+    assert_eq!(
+        app.selected_progress_source_id(),
+        Some(expected_source_id.to_string()),
     );
 }
 
