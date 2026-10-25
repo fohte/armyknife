@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.460](https://github.com/fohte/armyknife/compare/v0.1.459...v0.1.460) (2026-10-25)
+
+
+### Features
+
+* **agent:** support AI commit attribution ([#1258](https://github.com/fohte/armyknife/issues/1258)) ([7773477](https://github.com/fohte/armyknife/commit/7773477bef592bca24c563e6141be8c0a57f8507))
+
 ## [0.1.459](https://github.com/fohte/armyknife/compare/v0.1.458...v0.1.459) (2026-10-24)
 
 
