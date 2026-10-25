@@ -195,9 +195,31 @@ fn handle_connection(mut stream: TcpStream, address: SocketAddr, state: RelaySta
             let _ = http::handle(&mut stream, &state);
         }
         Some(ConnectionProtocol::WebSocket) => {
-            let _ = websocket::handle(stream, &state);
+            if let Err(error) = websocket::handle(stream, &state)
+                && !state.cancelled.load(Ordering::Relaxed)
+            {
+                tracing::warn!(
+                    event = "agent.status_inference.relay.websocket_failed",
+                    reason = websocket_failure_reason(&error),
+                );
+            }
         }
         None => http::write_rejection(&mut stream, 400, "unsupported request"),
+    }
+}
+
+fn websocket_failure_reason(error: &anyhow::Error) -> &'static str {
+    if error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+            || cause
+                .downcast_ref::<tokio::time::error::Elapsed>()
+                .is_some()
+    }) {
+        "timeout"
+    } else {
+        "connection_or_protocol_error"
     }
 }
 
@@ -248,7 +270,7 @@ mod tests {
 
     use super::{
         ConnectionProtocol, MAX_ACTIVE_CONNECTIONS, child_authority, protocol_from_prefix,
-        try_acquire_connection,
+        try_acquire_connection, websocket_failure_reason,
     };
 
     #[test]
@@ -298,5 +320,17 @@ mod tests {
         #[case] expected: Option<ConnectionProtocol>,
     ) {
         assert_eq!(protocol_from_prefix(request_prefix), expected);
+    }
+
+    #[rstest]
+    #[case::timeout(std::io::ErrorKind::TimedOut, "timeout")]
+    #[case::connection_error(std::io::ErrorKind::ConnectionReset, "connection_or_protocol_error")]
+    fn websocket_failure_reason_classifies_without_logging_error_details(
+        #[case] kind: std::io::ErrorKind,
+        #[case] expected: &str,
+    ) {
+        let error = anyhow::Error::new(std::io::Error::new(kind, "fixture detail"));
+
+        assert_eq!(websocket_failure_reason(&error), expected);
     }
 }
