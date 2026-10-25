@@ -2,6 +2,7 @@ mod command;
 mod context;
 mod hook;
 mod message;
+mod origin;
 mod transcript;
 
 use std::ffi::{OsStr, OsString};
@@ -17,10 +18,12 @@ use self::context::ModelIdentity;
 
 const CONTEXT_ENV: &str = "ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT";
 const REQUIRED_ENV: &str = "ARMYKNIFE_AGENT_ATTRIBUTION_REQUIRED";
-const PROVIDER_SESSION_ENV_VARS: [&str; 3] = [
+const PROVIDER_ORIGIN_ENV: &str = "ARMYKNIFE_AGENT_ATTRIBUTION_PROVIDER_ORIGIN";
+const PROVIDER_ORIGIN_ENV_VARS: [&str; 4] = [
     "CLAUDE_CODE_SESSION_ID",
     "CODEX_SESSION_ID",
     "CODEX_THREAD_ID",
+    PROVIDER_ORIGIN_ENV,
 ];
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
@@ -120,7 +123,7 @@ fn run_prepare_commit_msg(args: &GitHookArgs) -> Result<()> {
         args,
         std::env::var_os(REQUIRED_ENV),
         std::env::var_os(CONTEXT_ENV),
-        provider_session_is_active(std::env::vars_os()),
+        provider_origin_is_active(std::env::vars_os()),
     )
 }
 
@@ -158,7 +161,7 @@ fn run_commit_msg(args: &GitHookArgs) -> Result<()> {
         args,
         std::env::var_os(REQUIRED_ENV),
         std::env::var_os(CONTEXT_ENV),
-        provider_session_is_active(std::env::vars_os()),
+        provider_origin_is_active(std::env::vars_os()),
     )
 }
 
@@ -217,10 +220,10 @@ fn required_context_path_from_environment(
     }
 }
 
-fn provider_session_is_active(variables: impl IntoIterator<Item = (OsString, OsString)>) -> bool {
+fn provider_origin_is_active(variables: impl IntoIterator<Item = (OsString, OsString)>) -> bool {
     variables.into_iter().any(|(name, value)| {
         !value.is_empty()
-            && PROVIDER_SESSION_ENV_VARS
+            && PROVIDER_ORIGIN_ENV_VARS
                 .iter()
                 .any(|marker| name == OsStr::new(marker))
     })
@@ -248,7 +251,8 @@ mod tests {
     use std::ffi::OsString;
 
     use super::{
-        GitHookArgs, Provider, hook, prepare_message_with_context, provider_session_is_active,
+        GitHookArgs, PROVIDER_ORIGIN_ENV, Provider, hook, prepare_message_with_context,
+        provider_origin_is_active, run_commit_msg_with_environment,
         run_prepare_commit_msg_with_environment, verify_message_with_context,
     };
     use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
@@ -263,7 +267,7 @@ mod tests {
 
     #[fixture]
     fn codex_provider_session() -> bool {
-        provider_session_is_active([
+        provider_origin_is_active([
             (
                 OsString::from("CODEX_SESSION_ID"),
                 OsString::from("fixture-session-id"),
@@ -381,7 +385,7 @@ mod tests {
         let args = GitHookArgs {
             message_file: message_file.clone(),
         };
-        let provider_session = provider_session_is_active([(
+        let provider_session = provider_origin_is_active([(
             OsString::from(marker),
             OsString::from("fixture-session-id"),
         )]);
@@ -402,7 +406,7 @@ mod tests {
     #[case::empty_value("CODEX_THREAD_ID", "")]
     #[case::unrelated_variable("CLAUDECODE", "1")]
     fn non_session_environment_does_not_mark_an_ai_origin(#[case] name: &str, #[case] value: &str) {
-        assert!(!provider_session_is_active([(
+        assert!(!provider_origin_is_active([(
             OsString::from(name),
             OsString::from(value),
         )]));
@@ -428,17 +432,40 @@ mod tests {
     }
 
     #[rstest]
-    fn unrecognized_codex_git_alias_commit_is_rejected_by_git_hook(
+    fn provider_commit_without_operation_context_is_rejected_by_commit_msg_hook(
         codex_provider_session: bool,
         hook_dir: TempDir,
     ) {
+        let message_file = hook_dir.path().join("fixture-message.txt");
+        let original = indoc! {"Fixture subject"};
+        std::fs::write(&message_file, original).expect("create fixture commit message");
+        let args = GitHookArgs {
+            message_file: message_file.clone(),
+        };
+        let result = run_commit_msg_with_environment(&args, None, None, codex_provider_session)
+            .map_err(|error| error.to_string());
+        let message = std::fs::read_to_string(&message_file).expect("read fixture commit message");
+
+        assert_eq!(
+            (result, message),
+            (
+                Err("AI provider session has no operation attribution context".to_owned()),
+                original.to_owned(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn unrecognized_codex_git_alias_commit_is_rejected_by_git_hook(hook_dir: TempDir) {
         let raw_input = serde_json::json!({
             "hook_input": {
                 "hook_event_name": "PreToolUse",
                 "tool_name": "bash",
                 "tool_use_id": "fixture-tool-use-alias",
                 "model": "fixture-model-red-2026",
-                "tool_input": {"command": "git ci -m 'Fixture subject'"},
+                "tool_input": {
+                    "command": "env -u CODEX_SESSION_ID -u CODEX_THREAD_ID git ci -m 'Fixture subject'"
+                },
             },
             "hook_output": null,
         })
@@ -446,14 +473,15 @@ mod tests {
         let pre_tool_use = hook::transform(Provider::Codex, &raw_input, None, hook_dir.path())
             .map_err(|error| error.to_string());
         let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = "Fixture subject\n";
+        let original = indoc! {"Fixture subject"};
         std::fs::write(&message_file, original).expect("create fixture commit message");
         let args = GitHookArgs {
             message_file: message_file.clone(),
         };
-        let git_hook =
-            run_prepare_commit_msg_with_environment(&args, None, None, codex_provider_session)
-                .map_err(|error| error.to_string());
+        let origin_marker =
+            provider_origin_is_active([(OsString::from(PROVIDER_ORIGIN_ENV), OsString::from("1"))]);
+        let git_hook = run_prepare_commit_msg_with_environment(&args, None, None, origin_marker)
+            .map_err(|error| error.to_string());
         let message = std::fs::read_to_string(&message_file).expect("read fixture commit message");
         let context_file_count = std::fs::read_dir(hook_dir.path())
             .expect("read context directory")
@@ -469,7 +497,17 @@ mod tests {
         assert_eq!(
             (pre_tool_use, git_hook, message, context_file_count,),
             (
-                Ok(None),
+                Ok(Some(serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": {
+                            "command": format!(
+                                "env -u CODEX_SESSION_ID -u CODEX_THREAD_ID '{PROVIDER_ORIGIN_ENV}=1' git ci -m 'Fixture subject'"
+                            ),
+                        },
+                    },
+                }))),
                 Err("AI provider session has no operation attribution context".to_owned()),
                 original.to_owned(),
                 0,
@@ -479,7 +517,6 @@ mod tests {
 
     #[rstest]
     fn persistent_codex_shell_commit_via_write_stdin_is_rejected_without_fresh_context(
-        codex_provider_session: bool,
         hook_dir: TempDir,
     ) {
         let raw_input = serde_json::json!({
@@ -496,20 +533,29 @@ mod tests {
         let shell_start = hook::transform(Provider::Codex, &raw_input, None, hook_dir.path())
             .map_err(|error| error.to_string());
         let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = "Fixture subject\n";
+        let original = indoc! {"Fixture subject"};
         std::fs::write(&message_file, original).expect("create fixture commit message");
         let args = GitHookArgs {
             message_file: message_file.clone(),
         };
-        let git_hook =
-            run_prepare_commit_msg_with_environment(&args, None, None, codex_provider_session)
-                .map_err(|error| error.to_string());
+        let origin_marker =
+            provider_origin_is_active([(OsString::from(PROVIDER_ORIGIN_ENV), OsString::from("1"))]);
+        let git_hook = run_prepare_commit_msg_with_environment(&args, None, None, origin_marker)
+            .map_err(|error| error.to_string());
         let message = std::fs::read_to_string(&message_file).expect("read fixture commit message");
 
         assert_eq!(
             (shell_start, git_hook, message),
             (
-                Ok(None),
+                Ok(Some(serde_json::json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "allow",
+                        "updatedInput": {
+                            "command": format!("{PROVIDER_ORIGIN_ENV}=1 bash -i"),
+                        },
+                    },
+                }))),
                 Err("AI provider session has no operation attribution context".to_owned()),
                 original.to_owned(),
             ),

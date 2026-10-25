@@ -5,6 +5,7 @@ use serde_json::{Map, Value, json};
 
 use super::command::{classify_command, inject_context};
 use super::context::{self, OperationContext};
+use super::origin;
 use super::transcript;
 use super::{Provider, ProxyEnvelope, model_identity};
 
@@ -38,10 +39,6 @@ pub(super) fn transform(
         .get("command")
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("provider hook input has no command"))?;
-    let Some(operation) = classify_command(original_command)? else {
-        return Ok(envelope.hook_output);
-    };
-
     let final_command = envelope
         .hook_output
         .as_ref()
@@ -49,6 +46,15 @@ pub(super) fn transform(
         .and_then(Value::as_str)
         .unwrap_or(original_command)
         .to_owned();
+    let Some(operation) = classify_command(original_command)? else {
+        if !origin::requires_marker(original_command)? && !origin::requires_marker(&final_command)?
+        {
+            return Ok(envelope.hook_output);
+        }
+        let marked_command = origin::inject_marker(&final_command)?;
+        return patch_hook_output(provider, input, envelope.hook_output, &marked_command).map(Some);
+    };
+
     if classify_command(&final_command)? != Some(operation) {
         anyhow::bail!("permission proxy changed the commit operation; attribution was not applied");
     }

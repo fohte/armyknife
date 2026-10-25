@@ -44,7 +44,7 @@ pub(super) fn classify_command(command: &str) -> Result<Option<GitOperation>> {
     classify_command_at_depth(command, 0)
 }
 
-fn runok_command_index(words: &[String]) -> Option<usize> {
+pub(super) fn runok_command_index(words: &[String]) -> Option<usize> {
     let index = if words
         .first()
         .is_some_and(|word| executable_name(word) == "runok")
@@ -274,21 +274,15 @@ fn is_attribution_variable(name: &str) -> bool {
     matches!(name, super::CONTEXT_ENV | super::REQUIRED_ENV)
 }
 
-fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
+pub(super) fn git_subcommand_index(words: &[String]) -> usize {
     let mut index = 1;
-    let mut hooks_path_override = false;
     while let Some(option) = words.get(index).map(String::as_str) {
         if !option.starts_with('-') {
             break;
         }
         match option {
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
-            | "--super-prefix" | "--config-env" => {
-                let value = words.get(index + 1).map(String::as_str).unwrap_or_default();
-                hooks_path_override |=
-                    matches!(option, "-c" | "--config-env") && is_hooks_path_assignment(value);
-                index += 2;
-            }
+            | "--super-prefix" | "--config-env" => index += 2,
             _ if option.starts_with("--git-dir=")
                 || option.starts_with("--work-tree=")
                 || option.starts_with("--namespace=")
@@ -296,14 +290,8 @@ fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
             {
                 index += 1;
             }
-            _ if option.starts_with("-c") && option.len() > 2 => {
-                hooks_path_override |= is_hooks_path_assignment(&option[2..]);
-                index += 1;
-            }
-            _ if option.starts_with("--config-env=") => {
-                hooks_path_override |= is_hooks_path_assignment(&option["--config-env=".len()..]);
-                index += 1;
-            }
+            _ if option.starts_with("-c") && option.len() > 2 => index += 1,
+            _ if option.starts_with("--config-env=") => index += 1,
             "--no-pager"
             | "--paginate"
             | "--no-optional-locks"
@@ -313,6 +301,12 @@ fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
             _ => break,
         }
     }
+    index
+}
+
+fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
+    let index = git_subcommand_index(words);
+    let hooks_path_override = git_hooks_path_override(words, index);
     let Some(subcommand) = words.get(index).map(String::as_str) else {
         return Ok(None);
     };
@@ -344,6 +338,32 @@ fn classify_git(words: &[String]) -> Result<Option<GitOperation>> {
         }
         _ => Ok(None),
     }
+}
+
+fn git_hooks_path_override(words: &[String], end_index: usize) -> bool {
+    let mut index = 1;
+    let mut overridden = false;
+    while index < end_index {
+        match words[index].as_str() {
+            "-c" | "--config-env" => {
+                let value = words.get(index + 1).map(String::as_str).unwrap_or_default();
+                overridden |= is_hooks_path_assignment(value);
+                index += 2;
+            }
+            option if option.starts_with("-c") && option.len() > 2 => {
+                overridden |= is_hooks_path_assignment(&option[2..]);
+                index += 1;
+            }
+            option if option.starts_with("--config-env=") => {
+                overridden |= is_hooks_path_assignment(&option["--config-env=".len()..]);
+                index += 1;
+            }
+            "-C" | "--git-dir" | "--work-tree" | "--namespace" | "--exec-path"
+            | "--super-prefix" => index += 2,
+            _ => index += 1,
+        }
+    }
+    overridden
 }
 
 fn classify_cherry_pick(arguments: &[String]) -> Result<Option<GitOperation>> {
@@ -392,14 +412,14 @@ fn classify_cherry_pick(arguments: &[String]) -> Result<Option<GitOperation>> {
     }
 }
 
-fn executable_name(word: &str) -> &str {
+pub(super) fn executable_name(word: &str) -> &str {
     Path::new(word)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(word)
 }
 
-fn is_shell_assignment(word: &str) -> bool {
+pub(super) fn is_shell_assignment(word: &str) -> bool {
     let Some((name, _)) = word.split_once('=') else {
         return false;
     };
@@ -421,7 +441,7 @@ fn is_hooks_path_assignment(value: &str) -> bool {
         .is_some_and(|(key, _)| key.eq_ignore_ascii_case("core.hooksPath"))
 }
 
-fn split_shell_control_operators(command: &str) -> (Vec<&str>, bool) {
+pub(super) fn split_shell_control_operators(command: &str) -> (Vec<&str>, bool) {
     let bytes = command.as_bytes();
     let mut segments = Vec::new();
     let mut start = 0;
