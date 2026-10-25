@@ -375,6 +375,28 @@ mod tests {
         }
     }
 
+    fn moved_missing_url_case() -> ToggleCase {
+        ToggleCase {
+            runtime: FakeRuntime::new(
+                vec![pane(OLD_CRIT, Some(PARENT), Some(58321))],
+                &[(PARENT, "@new-window"), (OLD_CRIT, "@old-window")],
+            ),
+            target_pane_id: PARENT,
+            latest_url: None,
+            expected_result: Err("No crit review is associated with this agent session".to_string()),
+            expected_operations: vec![
+                "find_parent:%test-parent",
+                "get_parent:%old-crit",
+                "get_window:%test-parent",
+                "get_window:%old-crit",
+                "get_port:%old-crit",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        }
+    }
+
     fn ordinary_open_case() -> ToggleCase {
         ToggleCase {
             runtime: FakeRuntime::new(Vec::new(), &[(PARENT, "@new-window")]),
@@ -637,6 +659,7 @@ mod tests {
     #[case::uses_regular_attach_when_the_moved_review_uses_a_different_port(
         moved_changed_port_case()
     )]
+    #[case::keeps_the_old_pane_when_the_moved_review_url_is_missing(moved_missing_url_case())]
     #[case::opens_without_an_existing_review(ordinary_open_case())]
     #[case::closes_a_review_in_the_same_window(same_window_case())]
     #[case::preserves_another_parents_same_port_review(same_port_conflict_case())]
