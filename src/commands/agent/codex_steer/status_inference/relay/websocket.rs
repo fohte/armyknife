@@ -1,8 +1,10 @@
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::Ordering;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::header::{AUTHORIZATION, HeaderMap};
@@ -100,22 +102,23 @@ fn accept_child(
 fn connect_upstream(
     child_headers: &HeaderMap,
     state: &RelayState,
-) -> Result<WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>> {
+) -> Result<WebSocket<tungstenite::stream::MaybeTlsStream<CancellableStream<TcpStream>>>> {
     let mut request = UPSTREAM_WS_URL
         .into_client_request()
         .context("build official Codex WebSocket request")?;
     apply_upstream_headers(&mut request, child_headers, &state.parent_session_id)?;
-    let stream = connect_tcp(state)?;
-    stream
-        .set_read_timeout(Some(CONNECT_TIMEOUT))
-        .context("set Codex WebSocket handshake read timeout")?;
-    stream
-        .set_write_timeout(Some(CONNECT_TIMEOUT))
-        .context("set Codex WebSocket handshake write timeout")?;
+    let stream = CancellableStream::new(
+        connect_tcp(state)?,
+        state.cancelled.clone(),
+        Some(Instant::now() + CONNECT_TIMEOUT),
+    );
     let (mut upstream, _) = client_tls_with_config(request, stream, Some(websocket_config()), None)
         .map_err(|error| anyhow::anyhow!(error))
         .context("connect to official Codex WebSocket endpoint")?;
-    set_upstream_read_timeout(&mut upstream, SOCKET_POLL_INTERVAL)?;
+    match upstream.get_mut() {
+        tungstenite::stream::MaybeTlsStream::Rustls(stream) => stream.sock.clear_deadline(),
+        _ => bail!("unsupported Codex WebSocket TLS transport"),
+    }
     Ok(upstream)
 }
 
@@ -155,7 +158,118 @@ fn connect_tcp(state: &RelayState) -> Result<TcpStream> {
     stream
         .set_nodelay(true)
         .context("set official Codex WebSocket TCP no-delay")?;
+    stream
+        .set_read_timeout(Some(CANCEL_POLL_INTERVAL))
+        .context("set Codex WebSocket handshake read poll interval")?;
+    stream
+        .set_write_timeout(Some(CANCEL_POLL_INTERVAL))
+        .context("set Codex WebSocket handshake write poll interval")?;
     Ok(stream)
+}
+
+struct CancellableStream<Stream> {
+    stream: Stream,
+    cancelled: Arc<std::sync::atomic::AtomicBool>,
+    deadline: Option<Instant>,
+}
+
+impl<Stream> CancellableStream<Stream> {
+    fn new(
+        stream: Stream,
+        cancelled: Arc<std::sync::atomic::AtomicBool>,
+        deadline: Option<Instant>,
+    ) -> Self {
+        Self {
+            stream,
+            cancelled,
+            deadline,
+        }
+    }
+
+    fn clear_deadline(&mut self) {
+        self.deadline = None;
+    }
+
+    fn stop_error(&self) -> Option<io::Error> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Some(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Codex status relay was cancelled",
+            ));
+        }
+        self.deadline
+            .filter(|deadline| Instant::now() >= *deadline)
+            .map(|_| {
+                io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "Codex WebSocket handshake deadline elapsed",
+                )
+            })
+    }
+}
+
+impl<Stream> Read for CancellableStream<Stream>
+where
+    Stream: Read + Write,
+{
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            if let Some(error) = self.stop_error() {
+                return Err(error);
+            }
+            match self.stream.read(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
+}
+
+impl<Stream> Write for CancellableStream<Stream>
+where
+    Stream: Read + Write,
+{
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        loop {
+            if let Some(error) = self.stop_error() {
+                return Err(error);
+            }
+            match self.stream.write(buffer) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        loop {
+            if let Some(error) = self.stop_error() {
+                return Err(error);
+            }
+            match self.stream.flush() {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::Interrupted
+                            | io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
 }
 
 async fn wait_until_cancelled(cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) {
@@ -316,22 +430,6 @@ fn websocket_config() -> WebSocketConfig {
     config
 }
 
-fn set_upstream_read_timeout(
-    socket: &mut WebSocket<tungstenite::stream::MaybeTlsStream<TcpStream>>,
-    timeout: Duration,
-) -> Result<()> {
-    match socket.get_mut() {
-        tungstenite::stream::MaybeTlsStream::Rustls(stream) => stream
-            .sock
-            .set_read_timeout(Some(timeout))
-            .context("set Codex WebSocket read timeout"),
-        tungstenite::stream::MaybeTlsStream::Plain(stream) => stream
-            .set_read_timeout(Some(timeout))
-            .context("set Codex WebSocket read timeout"),
-        _ => bail!("unsupported Codex WebSocket TLS transport"),
-    }
-}
-
 fn rejection_response() -> ErrorResponse {
     let mut response = ErrorResponse::new(Some("rejected".to_string()));
     *response.status_mut() = tungstenite::http::StatusCode::BAD_REQUEST;
@@ -345,10 +443,16 @@ mod tests {
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
     use rstest::rstest;
     use serde_json::json;
+    use std::io::{self, Read};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    use std::thread;
+    use std::time::{Duration, Instant};
     use tungstenite::client::IntoClientRequest;
 
     use super::{
-        RelaySocket, UPSTREAM_WS_URL, apply_upstream_headers, bridge, is_response_terminal_event,
+        CancellableStream, RelaySocket, UPSTREAM_WS_URL, apply_upstream_headers, bridge,
+        is_response_terminal_event,
     };
 
     struct FakeSocket {
@@ -501,5 +605,62 @@ mod tests {
                 Vec::new(),
             ),
         );
+    }
+
+    struct TimedOutStream;
+
+    impl io::Read for TimedOutStream {
+        fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
+            thread::sleep(Duration::from_millis(5));
+            Err(io::ErrorKind::TimedOut.into())
+        }
+    }
+
+    impl io::Write for TimedOutStream {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            thread::sleep(Duration::from_millis(5));
+            Err(io::ErrorKind::TimedOut.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            thread::sleep(Duration::from_millis(5));
+            Err(io::ErrorKind::TimedOut.into())
+        }
+    }
+
+    #[test]
+    fn cancellable_stream_enforces_an_absolute_handshake_deadline() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut stream = CancellableStream::new(
+            TimedOutStream,
+            cancelled,
+            Some(Instant::now() + Duration::from_millis(35)),
+        );
+
+        let error = stream
+            .read(&mut [0; 1])
+            .expect_err("the handshake deadline should stop repeated timeouts");
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn cancellable_stream_stops_waiting_when_the_relay_is_cancelled() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let signal = cancelled.clone();
+        let cancellation = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            signal.store(true, std::sync::atomic::Ordering::Relaxed);
+        });
+        let mut stream = CancellableStream::new(TimedOutStream, cancelled, None);
+
+        let error = stream
+            .read(&mut [0; 1])
+            .expect_err("cancellation should interrupt a stalled handshake");
+        cancellation
+            .join()
+            .expect("the cancellation fixture should finish");
+
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
     }
 }
