@@ -1,5 +1,6 @@
 mod archive_detached;
 mod archive_tq_session_detached;
+mod attribution;
 mod auto_compact;
 pub(crate) mod auto_pause;
 mod bg;
@@ -53,6 +54,7 @@ pub(crate) use display::{display_label, repo_name};
 pub use archive_detached::ArchiveDetachedArgs;
 pub(crate) use archive_detached::spawn_after_parent_exit;
 pub use archive_tq_session_detached::ArchiveTqSessionDetachedArgs;
+pub use attribution::AttributionCommands;
 pub use auto_compact::AutoCompactArgs;
 pub use bg::BgCommands;
 pub use clean::CleanArgs;
@@ -111,6 +113,10 @@ pub enum AgentCommands {
 
     /// Record Claude Code session events (called from hooks)
     Hook(HookArgs),
+
+    /// Attribute AI-created Git commits when explicitly wired into provider and Git hooks
+    #[command(subcommand)]
+    Attribution(AttributionCommands),
 
     /// Internal: send a delayed permission notification after the
     /// request remains unresolved through the grace period.
@@ -209,6 +215,7 @@ impl AgentCommands {
             Self::Close(args) => close::run(args).await?,
             Self::Crit(command) => crit::run(command)?,
             Self::Hook(args) => hook::run(args)?,
+            Self::Attribution(command) => attribution::run(command)?,
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,

@@ -43,6 +43,7 @@ async fn run() -> Result<ExitMode> {
         Commands::Update
             | Commands::Completions { .. }
             | Commands::Doctor(_)
+            | Commands::Agent(AgentCommands::Attribution(_))
             | Commands::Agent(AgentCommands::ArchiveDetached(_))
             | Commands::Agent(AgentCommands::Bg(BgCommands::ReminderHook(_)))
     ) {
