@@ -27,20 +27,21 @@ pub(crate) fn get_crit_pane_port(pane_id: &str) -> Option<u16> {
         .ok()
 }
 
-pub(crate) fn find_crit_pane_for_parent(parent_pane_id: &str) -> super::Result<Option<String>> {
-    find_crit_pane_for_parent_with(parent_pane_id, |args| super::run_tmux_output(args))
+pub(crate) fn find_crit_panes_for_parent(parent_pane_id: &str) -> super::Result<Vec<String>> {
+    find_crit_panes_for_parent_with(parent_pane_id, |args| super::run_tmux_output(args))
 }
 
-fn find_crit_pane_for_parent_with(
+fn find_crit_panes_for_parent_with(
     parent_pane_id: &str,
     run_tmux_output: impl FnOnce(&[&str]) -> super::Result<String>,
-) -> super::Result<Option<String>> {
+) -> super::Result<Vec<String>> {
     let filter = format!("#{{==:#{{{CRIT_PANE_OPTION}}},{parent_pane_id}}}");
     let output = run_tmux_output(&["list-panes", "-a", "-f", &filter, "-F", "#{pane_id}"])?;
     Ok(output
         .lines()
-        .find(|line| !line.is_empty())
-        .map(str::to_string))
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
 }
 
 pub(crate) fn find_crit_panes_for_port(port: u16) -> super::Result<Vec<String>> {
@@ -142,21 +143,30 @@ mod tests {
 
     #[rstest]
     #[case::searches_all_windows("%test-parent", "#{==:#{@armyknife-crit-pane},%test-parent}")]
-    fn find_crit_pane_for_parent_searches_all_windows(
+    fn find_crit_panes_for_parent_searches_all_windows(
         #[case] parent_pane_id: &str,
         #[case] filter: &str,
     ) {
         let mut operation = None;
-        let result = find_crit_pane_for_parent_with(parent_pane_id, |args| {
+        let result = find_crit_panes_for_parent_with(parent_pane_id, |args| {
             operation = Some(args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>());
-            Ok("%test-crit\n".to_string())
+            Ok(indoc::indoc! {
+                "
+                %test-crit
+                %other-test-crit
+                "
+            }
+            .to_string())
         })
         .map_err(|error| error.to_string());
 
         assert_eq!(
             (result, operation),
             (
-                Ok(Some("%test-crit".to_string())),
+                Ok(vec![
+                    "%test-crit".to_string(),
+                    "%other-test-crit".to_string()
+                ]),
                 Some(vec![
                     "list-panes".to_string(),
                     "-a".to_string(),
