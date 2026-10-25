@@ -139,8 +139,14 @@ pub(crate) fn toggle_review_pane(
         ensure_no_port_conflict(port_to_check, parent_pane_id, &closing_pane_ids, runtime)?;
     }
 
+    let mut close_errors = Vec::new();
     for crit_pane_id in closing_pane_ids {
-        runtime.close_crit_pane(&crit_pane_id)?;
+        if let Err(error) = runtime.close_crit_pane(&crit_pane_id) {
+            close_errors.push(format!("{crit_pane_id}: {error:#}"));
+        }
+    }
+    if !close_errors.is_empty() {
+        bail!("Failed to close Crit panes: {}", close_errors.join("; "));
     }
 
     open_review_pane(
@@ -235,6 +241,7 @@ mod tests {
         find_error: bool,
         port_lookup_error: bool,
         close_error: bool,
+        close_error_panes: Vec<String>,
     }
 
     impl FakeRuntime {
@@ -318,7 +325,12 @@ mod tests {
 
         fn close_crit_pane(&self, pane_id: &str) -> Result<()> {
             self.record(format!("close:{pane_id}"));
-            if self.close_error {
+            if self.close_error
+                || self
+                    .close_error_panes
+                    .iter()
+                    .any(|failed_pane_id| failed_pane_id == pane_id)
+            {
                 bail!("Crit pane close failed");
             }
             Ok(())
@@ -621,6 +633,33 @@ mod tests {
         }
     }
 
+    fn multiple_close_failure_case() -> ToggleCase {
+        let mut case = multiple_old_case(false, SECOND_REVIEW_URL, true);
+        case.runtime
+            .close_error_panes
+            .push(SECOND_OLD_CRIT.to_string());
+        case.expected_result =
+            Err("Failed to close Crit panes: %second-old-crit: Crit pane close failed".to_string());
+        case.expected_operations = vec![
+            "find_parent:%test-parent",
+            "get_parent:%old-crit",
+            "get_parent:%second-old-crit",
+            "get_window:%test-parent",
+            "get_window:%old-crit",
+            "get_window:%second-old-crit",
+            "get_port:%old-crit",
+            "get_port:%second-old-crit",
+            "find_port:58321",
+            "find_port:59432",
+            "close:%old-crit",
+            "close:%second-old-crit",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect();
+        case
+    }
+
     fn lookup_failure_case() -> ToggleCase {
         ToggleCase {
             runtime: FakeRuntime {
@@ -644,7 +683,9 @@ mod tests {
             runtime,
             target_pane_id: PARENT,
             latest_url: Some(REVIEW_URL),
-            expected_result: Err("Crit pane close failed".to_string()),
+            expected_result: Err(
+                "Failed to close Crit panes: %old-crit: Crit pane close failed".to_string(),
+            ),
             expected_operations: vec![
                 "find_parent:%test-parent",
                 "get_parent:%old-crit",
@@ -799,6 +840,9 @@ mod tests {
         SECOND_REVIEW_URL,
         true
     ))]
+    #[case::attempts_every_old_pane_close_but_skips_reopening_when_one_close_fails(
+        multiple_close_failure_case()
+    )]
     #[case::uses_regular_attach_when_the_new_port_is_not_in_multiple_old_panes(multiple_old_case(
         false,
         THIRD_REVIEW_URL,
