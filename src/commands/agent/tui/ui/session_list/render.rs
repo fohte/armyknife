@@ -59,7 +59,7 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
     //
     // `items` must stay in exact 1:1 correspondence with `rows` (same
     // length, same index for each entry): `list_state` indices select into
-    // `items`, while `row_ids`/`app.row_sessions` are indexed by `rows`
+    // `items`, while `row_keys`/`app.row_sessions` are indexed by `rows`
     // position. A separate `ListItem` for the inter-section blank line
     // would desync the two spaces, so the blank line is instead prepended
     // to the following header's own `ListItem`.
@@ -1110,6 +1110,7 @@ mod tests {
         let initial_top = (0..4).find(|&y| terminal.backend().buffer()[(0, y)].symbol() == ">");
 
         app.enter_search_mode();
+        app.update_search_query("keep-before".to_string());
         app.update_search_query("keep".to_string());
         let selected_after_filter = app
             .selected_session()

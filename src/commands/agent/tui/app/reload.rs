@@ -232,7 +232,10 @@ impl App {
                 .map(|session| session.session_id.clone()),
             occurrence: self.selected_session_row_occurrence().unwrap_or_default(),
             row_key: position.and_then(|position| self.row_keys.get(position).cloned().flatten()),
-            screen_line: position.and_then(|position| self.selection_screen_line(position)),
+            screen_line: position.and_then(|position| {
+                self.pending_selection_line
+                    .or_else(|| self.selection_screen_line(position))
+            }),
         }
     }
 
@@ -747,6 +750,7 @@ mod tests {
             revision: 1,
         })
         .expect("session-store changes should apply");
+        app.note_session_list_interaction_at(start + Duration::from_secs(1));
 
         let held_order_and_state = (
             app.row_keys.clone(),
@@ -758,13 +762,15 @@ mod tests {
                 .map(|session| session.updated_at),
             app.navigation_hold_deadline(),
         );
-        let early = app.finish_navigation_hold_if_due(start + Duration::from_millis(1_999));
-        let applied = app.finish_navigation_hold_if_due(start + SESSION_ORDER_GRACE_PERIOD);
+        let early = app.finish_navigation_hold_if_due(start + Duration::from_secs(2));
+        let almost = app.finish_navigation_hold_if_due(start + Duration::from_millis(2_999));
+        let applied = app.finish_navigation_hold_if_due(start + Duration::from_secs(3));
 
         assert_eq!(
             (
                 held_order_and_state,
                 early,
+                almost,
                 applied,
                 app.row_keys.clone(),
                 app.selected_session()
@@ -781,8 +787,9 @@ mod tests {
                     ],
                     Some("child-a".to_string()),
                     Some(t4),
-                    Some(start + SESSION_ORDER_GRACE_PERIOD),
+                    Some(start + Duration::from_secs(3)),
                 ),
+                false,
                 false,
                 true,
                 vec![
