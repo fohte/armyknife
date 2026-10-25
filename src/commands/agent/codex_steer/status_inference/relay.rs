@@ -1,8 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use reqwest::redirect::Policy;
@@ -12,6 +12,8 @@ mod http;
 mod websocket;
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const CONNECTION_PROTOCOL_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_ACTIVE_CONNECTIONS: usize = 4;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Clone)]
@@ -22,6 +24,7 @@ struct RelayState {
     client: reqwest::Client,
     runtime: Handle,
     cancelled: Arc<AtomicBool>,
+    active_connections: Arc<AtomicUsize>,
 }
 
 pub(super) struct Relay {
@@ -51,12 +54,10 @@ impl Relay {
             .local_addr()
             .context("read temporary Codex status relay address")?
             .port();
-        #[cfg(target_os = "linux")]
-        let authority = "localhost:3128".to_string();
-        #[cfg(not(target_os = "linux"))]
-        let authority = format!("localhost:{port}");
+        let authority = child_authority(port);
         let path = format!("/{}/backend-api/codex/responses", uuid::Uuid::new_v4());
         let cancelled = Arc::new(AtomicBool::new(false));
+        let active_connections = Arc::new(AtomicUsize::new(0));
         let state = RelayState {
             path: path.clone(),
             authority: authority.clone(),
@@ -64,6 +65,7 @@ impl Relay {
             client,
             runtime,
             cancelled: cancelled.clone(),
+            active_connections,
         };
         let listener_thread = thread::Builder::new()
             .name("armyknife-codex-status-relay".to_string())
@@ -103,12 +105,23 @@ impl Drop for Relay {
 fn accept_loop(listener: TcpListener, state: RelayState) {
     let mut connections = Vec::new();
     while !state.cancelled.load(Ordering::Relaxed) {
+        reap_finished_connections(&mut connections);
         match listener.accept() {
-            Ok((stream, address)) => {
+            Ok((mut stream, address)) => {
+                if !address.ip().is_loopback() {
+                    continue;
+                }
+                let Some(permit) = try_acquire_connection(&state.active_connections) else {
+                    http::write_rejection(&mut stream, 503, "relay busy");
+                    continue;
+                };
                 let connection_state = state.clone();
                 if let Ok(connection) = thread::Builder::new()
                     .name("armyknife-codex-status-relay-connection".to_string())
-                    .spawn(move || handle_connection(stream, address, connection_state))
+                    .spawn(move || {
+                        let _permit = permit;
+                        handle_connection(stream, address, connection_state);
+                    })
                 {
                     connections.push(connection);
                 }
@@ -121,6 +134,47 @@ fn accept_loop(listener: TcpListener, state: RelayState) {
     }
     for connection in connections {
         let _ = connection.join();
+    }
+}
+
+struct ConnectionPermit(Arc<AtomicUsize>);
+
+impl Drop for ConnectionPermit {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+fn try_acquire_connection(active_connections: &Arc<AtomicUsize>) -> Option<ConnectionPermit> {
+    active_connections
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |active| {
+            (active < MAX_ACTIVE_CONNECTIONS).then_some(active + 1)
+        })
+        .ok()
+        .map(|_| ConnectionPermit(active_connections.clone()))
+}
+
+fn reap_finished_connections(connections: &mut Vec<JoinHandle<()>>) {
+    let mut active = Vec::with_capacity(connections.len());
+    for connection in connections.drain(..) {
+        if connection.is_finished() {
+            let _ = connection.join();
+        } else {
+            active.push(connection);
+        }
+    }
+    *connections = active;
+}
+
+fn child_authority(port: u16) -> String {
+    #[cfg(target_os = "linux")]
+    {
+        let _ = port;
+        "localhost:3128".to_string()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        format!("localhost:{port}")
     }
 }
 
@@ -155,8 +209,9 @@ enum ConnectionProtocol {
 
 fn connection_protocol(stream: &TcpStream, cancelled: &AtomicBool) -> Option<ConnectionProtocol> {
     let mut prefix = [0u8; 4];
+    let deadline = Instant::now() + CONNECTION_PROTOCOL_TIMEOUT;
     loop {
-        if cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) || Instant::now() >= deadline {
             return None;
         }
         match stream.peek(&mut prefix) {
@@ -186,9 +241,53 @@ fn protocol_from_prefix(prefix: &[u8]) -> Option<ConnectionProtocol> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
     use rstest::rstest;
 
-    use super::{ConnectionProtocol, protocol_from_prefix};
+    use super::{
+        ConnectionProtocol, MAX_ACTIVE_CONNECTIONS, child_authority, protocol_from_prefix,
+        try_acquire_connection,
+    };
+
+    #[test]
+    fn relay_connection_capacity_is_bounded_and_released() {
+        let active_connections = Arc::new(AtomicUsize::new(0));
+        let mut permits = (0..MAX_ACTIVE_CONNECTIONS)
+            .map(|_| try_acquire_connection(&active_connections))
+            .collect::<Option<Vec<_>>>()
+            .expect("the configured relay capacity should be available");
+        let overflow = try_acquire_connection(&active_connections);
+        assert_eq!(
+            (
+                permits.len(),
+                overflow.is_some(),
+                active_connections.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            (MAX_ACTIVE_CONNECTIONS, false, MAX_ACTIVE_CONNECTIONS),
+        );
+
+        drop(permits.pop());
+        let replacement = try_acquire_connection(&active_connections);
+        assert_eq!(
+            (
+                replacement.is_some(),
+                active_connections.load(std::sync::atomic::Ordering::Relaxed),
+            ),
+            (true, MAX_ACTIVE_CONNECTIONS),
+        );
+    }
+
+    #[test]
+    fn child_authority_uses_the_srt_linux_bridge_when_available() {
+        let expected = if cfg!(target_os = "linux") {
+            "localhost:3128".to_string()
+        } else {
+            "localhost:43817".to_string()
+        };
+        assert_eq!(child_authority(43817), expected);
+    }
 
     #[rstest]
     #[case::post(b"POST", Some(ConnectionProtocol::Http))]

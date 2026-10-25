@@ -1,23 +1,19 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::Serialize;
 use serde_json::{Value, json};
 
 use super::{Client, RpcRequest, request_error_to_anyhow};
 use response::{
-    add_history_bytes, is_terminal_turn_status, last_assistant_message_is_reflected, next_cursor,
-    page_data, sanitize_nested_child_states, validate_item_entry, validate_item_turns,
-    validate_turn,
+    is_terminal_turn_status, next_cursor, page_data, validate_item_entry, validate_turn,
 };
 
 mod response;
 
 const PAGE_SIZE: u64 = 100;
 const MAX_PAGES: usize = 1_000;
-const MAX_HISTORY_BYTES: usize = 2 * 1024 * 1024;
 const TURN_COMPLETION_TIMEOUT: Duration = Duration::from_secs(15);
 const HISTORY_FETCH_TIMEOUT: Duration = Duration::from_secs(60);
 const FINAL_MESSAGE_REFLECTION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -36,27 +32,11 @@ const HISTORY_TIMEOUTS: HistoryTimeouts = HistoryTimeouts {
     final_message_reflection: FINAL_MESSAGE_REFLECTION_TIMEOUT,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct ChildAgentState {
-    thread_id: String,
-    status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct CodexThreadMetadata {
     pub(super) model_provider: String,
     pub(super) model: String,
     pub(super) session_id: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub(super) struct CodexConversation {
-    pub(super) thread: CodexThreadMetadata,
-    pub(super) target_turn_id: String,
-    pub(super) last_assistant_message: String,
-    pub(super) turns: Vec<Value>,
-    pub(super) items: Vec<Value>,
-    pub(super) child_agent_states: Vec<ChildAgentState>,
 }
 
 impl Client {
@@ -99,15 +79,15 @@ impl Client {
         response
     }
 
-    pub(super) fn read_complete_conversation(
+    pub(super) fn read_complete_thread(
         &mut self,
         thread_id: &str,
         turn_id: &str,
         last_assistant_message: &str,
-    ) -> Result<CodexConversation> {
+    ) -> Result<CodexThreadMetadata> {
         let mut request =
             |method, params, timeout| self.request_with_timeout(method, params, timeout);
-        read_complete_conversation_with(
+        read_complete_thread_with(
             thread_id,
             turn_id,
             last_assistant_message,
@@ -118,14 +98,14 @@ impl Client {
     }
 }
 
-fn read_complete_conversation_with<Rpc, Sleep>(
+fn read_complete_thread_with<Rpc, Sleep>(
     thread_id: &str,
     turn_id: &str,
     last_assistant_message: &str,
     rpc: &mut Rpc,
     sleep: &mut Sleep,
     timeouts: HistoryTimeouts,
-) -> Result<CodexConversation>
+) -> Result<CodexThreadMetadata>
 where
     Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
     Sleep: FnMut(Duration),
@@ -188,56 +168,23 @@ where
         }
     }
 
-    let history_deadline = deadline_after(timeouts.fetch)?;
-    let mut turns = fetch_all_turns(rpc, thread_id, history_deadline)?;
-    let target_status = turns
-        .iter()
-        .find(|turn| turn.get("id").and_then(Value::as_str) == Some(turn_id))
-        .and_then(|turn| turn.get("status"))
-        .and_then(Value::as_str)
-        .context("Codex turn pages did not contain the target turn")?;
-    ensure!(
-        is_terminal_turn_status(target_status),
-        "Codex target turn is not complete"
-    );
-
-    let mut items = fetch_all_items(rpc, thread_id, history_deadline)?;
-    if !last_assistant_message_is_reflected(&items, turn_id, last_assistant_message)? {
-        let reflection_deadline = deadline_after(timeouts.final_message_reflection)?;
-        loop {
-            wait_before_deadline(sleep, reflection_deadline)?;
-            items = fetch_all_items(rpc, thread_id, reflection_deadline)?;
-            if last_assistant_message_is_reflected(&items, turn_id, last_assistant_message)? {
-                break;
-            }
+    let reflection_deadline = deadline_after(timeouts.final_message_reflection)?;
+    loop {
+        if read_last_assistant_message_match(
+            rpc,
+            thread_id,
+            turn_id,
+            last_assistant_message,
+            reflection_deadline,
+        )?
+        .unwrap_or(false)
+        {
+            break;
         }
+        wait_before_deadline(sleep, reflection_deadline)?;
     }
 
-    validate_item_turns(&items, &turns)?;
-    let mut child_state_map = BTreeMap::new();
-    for turn in &mut turns {
-        sanitize_nested_child_states(turn, &mut child_state_map)?;
-    }
-    for item in &mut items {
-        sanitize_nested_child_states(item, &mut child_state_map)?;
-    }
-    let conversation = CodexConversation {
-        thread,
-        target_turn_id: turn_id.to_string(),
-        last_assistant_message: last_assistant_message.to_string(),
-        turns,
-        items,
-        child_agent_states: child_state_map
-            .into_iter()
-            .map(|(thread_id, status)| ChildAgentState { thread_id, status })
-            .collect(),
-    };
-    let encoded = serde_json::to_vec(&conversation).context("serialize Codex conversation")?;
-    ensure!(
-        encoded.len() <= MAX_HISTORY_BYTES,
-        "Codex conversation exceeds the {MAX_HISTORY_BYTES}-byte history limit"
-    );
-    Ok(conversation)
+    Ok(thread)
 }
 
 fn read_target_turn_status<Rpc>(
@@ -253,7 +200,7 @@ where
         rpc,
         "thread/turns/list",
         deadline,
-        |cursor| turn_page_params(thread_id, cursor, "desc", "notLoaded"),
+        |cursor| turn_page_params(thread_id, cursor),
         |data| {
             for turn in data {
                 let (id, status) = validate_turn(turn)?;
@@ -266,45 +213,47 @@ where
     )
 }
 
-fn fetch_all_turns<Rpc>(rpc: &mut Rpc, thread_id: &str, deadline: Instant) -> Result<Vec<Value>>
+fn read_last_assistant_message_match<Rpc>(
+    rpc: &mut Rpc,
+    thread_id: &str,
+    turn_id: &str,
+    expected: &str,
+    deadline: Instant,
+) -> Result<Option<bool>>
 where
     Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
 {
-    let mut turns = Vec::new();
-    let mut turn_ids = HashSet::new();
-    let mut history_bytes = 0usize;
     paginate(
         rpc,
-        "thread/turns/list",
+        "thread/items/list",
         deadline,
-        |cursor| turn_page_params(thread_id, cursor, "asc", "summary"),
+        |cursor| item_page_params(thread_id, turn_id, cursor),
         |data| {
-            for turn in data {
-                let (id, _) = validate_turn(turn)?;
+            for entry in data {
+                validate_item_entry(entry)?;
                 ensure!(
-                    turn_ids.insert(id.to_string()),
-                    "Codex thread/turns/list returned a duplicate turn"
+                    entry.get("turnId").and_then(Value::as_str) == Some(turn_id),
+                    "Codex thread/items/list returned an item for a different turn"
                 );
-                add_history_bytes(&mut history_bytes, turn)?;
-                turns.push(turn.clone());
+                if entry.pointer("/item/type").and_then(Value::as_str) == Some("agentMessage") {
+                    let message = entry
+                        .pointer("/item/text")
+                        .and_then(Value::as_str)
+                        .context("Codex assistant message item has no text")?;
+                    return Ok(Some(message == expected));
+                }
             }
-            Ok(None::<()>)
+            Ok(None)
         },
-    )?;
-    Ok(turns)
+    )
 }
 
-fn turn_page_params(
-    thread_id: &str,
-    cursor: Option<&str>,
-    sort_direction: &str,
-    items_view: &str,
-) -> Value {
+fn turn_page_params(thread_id: &str, cursor: Option<&str>) -> Value {
     let mut params = json!({
         "threadId": thread_id,
         "limit": PAGE_SIZE,
-        "sortDirection": sort_direction,
-        "itemsView": items_view,
+        "sortDirection": "desc",
+        "itemsView": "notLoaded",
     });
     if let Some(cursor) = cursor {
         params["cursor"] = json!(cursor);
@@ -312,46 +261,17 @@ fn turn_page_params(
     params
 }
 
-fn fetch_all_items<Rpc>(rpc: &mut Rpc, thread_id: &str, deadline: Instant) -> Result<Vec<Value>>
-where
-    Rpc: FnMut(&'static str, Value, Duration) -> Result<Value>,
-{
-    let mut items = Vec::new();
-    let mut item_ids = HashSet::new();
-    let mut history_bytes = 0usize;
-    paginate(
-        rpc,
-        "thread/items/list",
-        deadline,
-        |cursor| {
-            let mut params = json!({
-                "threadId": thread_id,
-                "limit": PAGE_SIZE,
-                "sortDirection": "asc",
-            });
-            if let Some(cursor) = cursor {
-                params["cursor"] = json!(cursor);
-            }
-            params
-        },
-        |data| {
-            for entry in data {
-                validate_item_entry(entry)?;
-                let item_id = entry
-                    .pointer("/item/id")
-                    .and_then(Value::as_str)
-                    .context("Codex thread/items/list item has no ID")?;
-                ensure!(
-                    item_ids.insert(item_id.to_string()),
-                    "Codex thread/items/list returned a duplicate item"
-                );
-                add_history_bytes(&mut history_bytes, entry)?;
-                items.push(entry.clone());
-            }
-            Ok(None::<()>)
-        },
-    )?;
-    Ok(items)
+fn item_page_params(thread_id: &str, turn_id: &str, cursor: Option<&str>) -> Value {
+    let mut params = json!({
+        "threadId": thread_id,
+        "turnId": turn_id,
+        "limit": PAGE_SIZE,
+        "sortDirection": "desc",
+    });
+    if let Some(cursor) = cursor {
+        params["cursor"] = json!(cursor);
+    }
+    params
 }
 
 fn paginate<Rpc, Params, HandlePage, T>(
@@ -416,10 +336,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
-    use super::{
-        ChildAgentState, CodexConversation, CodexThreadMetadata, HistoryTimeouts,
-        read_complete_conversation_with,
-    };
+    use super::{CodexThreadMetadata, HistoryTimeouts, read_complete_thread_with};
 
     const THREAD_ID: &str = "fixture-thread";
     const TURN_ID: &str = "fixture-turn";
@@ -437,19 +354,21 @@ mod tests {
         })
     }
 
-    fn turn(id: &str, status: &str) -> Value {
-        json!({ "id": id, "status": status })
+    fn turn(status: &str) -> Value {
+        json!({ "id": TURN_ID, "status": status })
     }
 
     fn page(data: Vec<Value>, next_cursor: Option<&str>) -> Value {
         json!({ "data": data, "nextCursor": next_cursor })
     }
 
-    fn item_entry(turn_id: &str, item: Value) -> Value {
-        json!({ "turnId": turn_id, "item": item })
+    fn item_entry(item: Value) -> Value {
+        json!({ "turnId": TURN_ID, "item": item })
     }
 
-    fn result_text(result: anyhow::Result<CodexConversation>) -> Result<CodexConversation, String> {
+    fn result_text(
+        result: anyhow::Result<CodexThreadMetadata>,
+    ) -> Result<CodexThreadMetadata, String> {
         result.map_err(|error| format!("{error:#}"))
     }
 
@@ -462,59 +381,24 @@ mod tests {
     }
 
     #[rstest]
-    fn loads_every_page_in_order_and_keeps_only_child_states(metadata_response: Value) {
-        let user_item = item_entry(
-            "fixture-old-turn",
-            json!({
-                "id": "fixture-user-item",
-                "type": "userMessage",
-                "content": [{ "type": "text", "text": "Continue the sample task." }],
-            }),
-        );
-        let child_item = item_entry(
-            TURN_ID,
-            json!({
-                "id": "fixture-child-item",
-                "type": "collabAgentToolCall",
-                "tool": "wait",
-                "status": "inProgress",
-                "senderThreadId": THREAD_ID,
-                "receiverThreadIds": ["fixture-child-thread"],
-                "agentsStates": {
-                    "fixture-child-thread": {
-                        "status": "running",
-                        "message": "child output is not conversation input",
-                    },
-                },
-            }),
-        );
-        let final_item = item_entry(
-            TURN_ID,
-            json!({
-                "id": "fixture-final-item",
-                "type": "agentMessage",
-                "text": FINAL_MESSAGE,
-            }),
-        );
-        let older_turn = json!({
-            "id": "fixture-old-turn",
-            "status": "completed",
-            "summary": "earlier compressed summary",
-        });
-        let target_turn = turn(TURN_ID, "completed");
+    fn reads_only_thread_metadata_and_the_target_turn(metadata_response: Value) {
         let responses = VecDeque::from([
             ("thread/read", metadata_response),
-            ("thread/turns/list", page(vec![target_turn.clone()], None)),
-            (
-                "thread/turns/list",
-                page(vec![older_turn.clone()], Some("turn-cursor")),
-            ),
-            ("thread/turns/list", page(vec![target_turn.clone()], None)),
+            ("thread/turns/list", page(vec![turn("completed")], None)),
             (
                 "thread/items/list",
-                page(vec![user_item.clone(), child_item], Some("item-cursor")),
+                page(
+                    vec![
+                        item_entry(json!({ "id": "fixture-tool-item", "type": "toolCall" })),
+                        item_entry(json!({
+                            "id": "fixture-final-item",
+                            "type": "agentMessage",
+                            "text": FINAL_MESSAGE,
+                        })),
+                    ],
+                    None,
+                ),
             ),
-            ("thread/items/list", page(vec![final_item.clone()], None)),
         ]);
         let mut responses = responses;
         let mut calls = Vec::new();
@@ -531,7 +415,7 @@ mod tests {
         };
         let mut sleep = |duration| sleeps.push(duration);
 
-        let actual = result_text(read_complete_conversation_with(
+        let actual = result_text(read_complete_thread_with(
             THREAD_ID,
             TURN_ID,
             FINAL_MESSAGE,
@@ -539,35 +423,6 @@ mod tests {
             &mut sleep,
             history_timeouts(Duration::from_secs(1)),
         ));
-        let sanitized_child_item = item_entry(
-            TURN_ID,
-            json!({
-                "id": "fixture-child-item",
-                "type": "collabAgentToolCall",
-                "tool": "wait",
-                "status": "inProgress",
-                "senderThreadId": THREAD_ID,
-                "receiverThreadIds": ["fixture-child-thread"],
-                "agentsStates": {
-                    "fixture-child-thread": { "status": "running" },
-                },
-            }),
-        );
-        let expected = CodexConversation {
-            thread: CodexThreadMetadata {
-                model_provider: "openai".to_string(),
-                model: "fixture-model".to_string(),
-                session_id: "fixture-session".to_string(),
-            },
-            target_turn_id: TURN_ID.to_string(),
-            last_assistant_message: FINAL_MESSAGE.to_string(),
-            turns: vec![older_turn, target_turn],
-            items: vec![user_item, sanitized_child_item.clone(), final_item],
-            child_agent_states: vec![ChildAgentState {
-                thread_id: "fixture-child-thread".to_string(),
-                status: "running".to_string(),
-            }],
-        };
         let expected_calls = vec![
             json!({
                 "method": "thread/read",
@@ -583,81 +438,60 @@ mod tests {
                 },
             }),
             json!({
-                "method": "thread/turns/list",
-                "params": {
-                    "threadId": THREAD_ID,
-                    "limit": 100,
-                    "sortDirection": "asc",
-                    "itemsView": "summary",
-                },
-            }),
-            json!({
-                "method": "thread/turns/list",
-                "params": {
-                    "threadId": THREAD_ID,
-                    "limit": 100,
-                    "sortDirection": "asc",
-                    "itemsView": "summary",
-                    "cursor": "turn-cursor",
-                },
-            }),
-            json!({
                 "method": "thread/items/list",
                 "params": {
                     "threadId": THREAD_ID,
+                    "turnId": TURN_ID,
                     "limit": 100,
-                    "sortDirection": "asc",
-                },
-            }),
-            json!({
-                "method": "thread/items/list",
-                "params": {
-                    "threadId": THREAD_ID,
-                    "limit": 100,
-                    "sortDirection": "asc",
-                    "cursor": "item-cursor",
+                    "sortDirection": "desc",
                 },
             }),
         ];
         assert_eq!(
-            (actual, calls, sleeps),
-            (Ok(expected), expected_calls, Vec::<Duration>::new())
+            (actual, calls, sleeps, responses,),
+            (
+                Ok(CodexThreadMetadata {
+                    model_provider: "openai".to_string(),
+                    model: "fixture-model".to_string(),
+                    session_id: "fixture-session".to_string(),
+                }),
+                expected_calls,
+                Vec::<Duration>::new(),
+                VecDeque::new(),
+            ),
         );
     }
 
     #[rstest]
-    fn waits_for_a_terminal_turn_and_the_final_message_to_be_saved(metadata_response: Value) {
-        let pending = page(vec![turn(TURN_ID, "inProgress")], None);
-        let completed = page(vec![turn(TURN_ID, "completed")], None);
-        let turns = page(vec![turn(TURN_ID, "completed")], None);
-        let stale_matching_message = page(
-            vec![
-                item_entry(
-                    TURN_ID,
-                    json!({ "id": "fixture-earlier-item", "type": "agentMessage", "text": FINAL_MESSAGE }),
-                ),
-                item_entry(
-                    TURN_ID,
-                    json!({ "id": "fixture-later-item", "type": "agentMessage", "text": "still working" }),
-                ),
-            ],
-            None,
-        );
-        let reflected_message = page(
-            vec![item_entry(
-                TURN_ID,
-                json!({ "id": "fixture-final-item", "type": "agentMessage", "text": FINAL_MESSAGE }),
-            )],
-            None,
-        );
-        let mut responses = VecDeque::from([
+    fn waits_for_turn_completion_and_the_final_message_to_be_saved(metadata_response: Value) {
+        let responses = VecDeque::from([
             ("thread/read", metadata_response),
-            ("thread/turns/list", pending),
-            ("thread/turns/list", completed),
-            ("thread/turns/list", turns),
-            ("thread/items/list", stale_matching_message),
-            ("thread/items/list", reflected_message.clone()),
+            ("thread/turns/list", page(vec![turn("inProgress")], None)),
+            ("thread/turns/list", page(vec![turn("completed")], None)),
+            (
+                "thread/items/list",
+                page(
+                    vec![item_entry(json!({
+                        "id": "fixture-latest-item",
+                        "type": "agentMessage",
+                        "text": "still working",
+                    }))],
+                    None,
+                ),
+            ),
+            (
+                "thread/items/list",
+                page(
+                    vec![item_entry(json!({
+                        "id": "fixture-final-item",
+                        "type": "agentMessage",
+                        "text": FINAL_MESSAGE,
+                    }))],
+                    None,
+                ),
+            ),
         ]);
+        let mut responses = responses;
         let mut calls = Vec::new();
         let mut sleeps = Vec::new();
         let mut rpc = |method: &'static str, params: Value, _timeout| {
@@ -672,99 +506,33 @@ mod tests {
         };
         let mut sleep = |duration| sleeps.push(duration);
 
-        let result = read_complete_conversation_with(
+        let actual = result_text(read_complete_thread_with(
             THREAD_ID,
             TURN_ID,
             FINAL_MESSAGE,
             &mut rpc,
             &mut sleep,
             history_timeouts(Duration::from_secs(1)),
-        );
-        let actual = result_text(result);
-        let expected = CodexConversation {
-            thread: CodexThreadMetadata {
-                model_provider: "openai".to_string(),
-                model: "fixture-model".to_string(),
-                session_id: "fixture-session".to_string(),
-            },
-            target_turn_id: TURN_ID.to_string(),
-            last_assistant_message: FINAL_MESSAGE.to_string(),
-            turns: vec![turn(TURN_ID, "completed")],
-            items: vec![reflected_message["data"][0].clone()],
-            child_agent_states: Vec::new(),
-        };
+        ));
         let expected_calls = vec![
             json!({ "method": "thread/read", "params": { "threadId": THREAD_ID, "includeTurns": false } }),
             json!({ "method": "thread/turns/list", "params": { "threadId": THREAD_ID, "limit": 100, "sortDirection": "desc", "itemsView": "notLoaded" } }),
             json!({ "method": "thread/turns/list", "params": { "threadId": THREAD_ID, "limit": 100, "sortDirection": "desc", "itemsView": "notLoaded" } }),
-            json!({ "method": "thread/turns/list", "params": { "threadId": THREAD_ID, "limit": 100, "sortDirection": "asc", "itemsView": "summary" } }),
-            json!({ "method": "thread/items/list", "params": { "threadId": THREAD_ID, "limit": 100, "sortDirection": "asc" } }),
-            json!({ "method": "thread/items/list", "params": { "threadId": THREAD_ID, "limit": 100, "sortDirection": "asc" } }),
+            json!({ "method": "thread/items/list", "params": { "threadId": THREAD_ID, "turnId": TURN_ID, "limit": 100, "sortDirection": "desc" } }),
+            json!({ "method": "thread/items/list", "params": { "threadId": THREAD_ID, "turnId": TURN_ID, "limit": 100, "sortDirection": "desc" } }),
         ];
         assert_eq!(
-            (actual, calls, sleeps),
+            (actual, calls, sleeps, responses,),
             (
-                Ok(expected),
+                Ok(CodexThreadMetadata {
+                    model_provider: "openai".to_string(),
+                    model: "fixture-model".to_string(),
+                    session_id: "fixture-session".to_string(),
+                }),
                 expected_calls,
                 vec![Duration::from_millis(250), Duration::from_millis(250)],
+                VecDeque::new(),
             ),
-        );
-    }
-
-    #[rstest]
-    #[case::incomplete_turn(
-        vec![page(vec![turn(TURN_ID, "inProgress")], None)],
-        Duration::from_millis(1),
-        "Codex history request timed out",
-        1,
-    )]
-    #[case::missing_page_cursor(
-        vec![
-            page(vec![turn(TURN_ID, "completed")], None),
-            json!({ "data": [] }),
-        ],
-        Duration::from_secs(1),
-        "Codex app-server `thread/turns/list` response has no nextCursor",
-        2,
-    )]
-    fn rejects_incomplete_or_unpageable_history(
-        metadata_response: Value,
-        #[case] turn_responses: Vec<Value>,
-        #[case] turn_timeout: Duration,
-        #[case] expected_error: &str,
-        #[case] expected_turn_page_calls: usize,
-    ) {
-        let mut responses = VecDeque::from([("thread/read", metadata_response)]);
-        responses.extend(
-            turn_responses
-                .into_iter()
-                .map(|response| ("thread/turns/list", response)),
-        );
-        let mut calls = Vec::new();
-        let mut rpc = |method: &'static str, params: Value, _timeout| {
-            calls.push(json!({ "method": method, "params": params }));
-            let (expected_method, response) = responses
-                .pop_front()
-                .ok_or_else(|| anyhow!("unexpected {method} request"))?;
-            if method != expected_method {
-                return Err(anyhow!("expected {expected_method}, got {method}"));
-            }
-            Ok(response)
-        };
-        let mut sleep = std::thread::sleep;
-
-        let actual = result_text(read_complete_conversation_with(
-            THREAD_ID,
-            TURN_ID,
-            FINAL_MESSAGE,
-            &mut rpc,
-            &mut sleep,
-            history_timeouts(turn_timeout),
-        ));
-        let expected = Err(expected_error.to_string());
-        assert_eq!(
-            (actual, calls.len()),
-            (expected, expected_turn_page_calls + 1)
         );
     }
 }

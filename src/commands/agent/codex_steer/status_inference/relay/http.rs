@@ -1,7 +1,7 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
@@ -14,41 +14,17 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const READ_CHUNK_BYTES: usize = 16 * 1024;
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(30);
 const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const HEADER_SEPARATOR: [u8; 4] = [0x0d, 0x0a, 0x0d, 0x0a];
 
 struct IncomingRequest {
-    method: String,
-    target: String,
     headers: HeaderMap,
     body: Vec<u8>,
 }
 
 pub(super) fn handle(stream: &mut TcpStream, state: &RelayState) -> Result<()> {
     let request = read_request(stream, state)?;
-    if request.method != "POST" {
-        write_rejection(stream, 405, "method rejected");
-        bail!("Codex relay rejected an unsupported HTTP method");
-    }
-    validate_target(
-        &request.target,
-        &request.headers,
-        &state.path,
-        &state.authority,
-    )?;
-    ensure!(
-        request.headers.contains_key(AUTHORIZATION),
-        "Codex relay request has no authorization header"
-    );
-    ensure!(
-        request
-            .headers
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|value| value.to_ascii_lowercase().starts_with("application/json")),
-        "Codex relay request is not JSON"
-    );
-
     let body = rewrite_request_body(&request.body, &state.parent_session_id)?;
     let headers = upstream_headers(&request.headers, &state.parent_session_id)?;
     let client = state.client.clone();
@@ -99,12 +75,32 @@ pub(super) fn handle(stream: &mut TcpStream, state: &RelayState) -> Result<()> {
 }
 
 fn read_request(stream: &mut TcpStream, state: &RelayState) -> Result<IncomingRequest> {
+    read_request_until(
+        stream,
+        &state.cancelled,
+        &state.path,
+        &state.authority,
+        Instant::now() + REQUEST_READ_TIMEOUT,
+    )
+}
+
+fn read_request_until(
+    stream: &mut TcpStream,
+    cancelled: &std::sync::atomic::AtomicBool,
+    expected_path: &str,
+    expected_authority: &str,
+    deadline: Instant,
+) -> Result<IncomingRequest> {
     let mut bytes = Vec::new();
     let mut chunk = [0u8; READ_CHUNK_BYTES];
     let header_end = loop {
-        if state.cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) {
             bail!("Codex relay was cancelled");
         }
+        ensure!(
+            Instant::now() < deadline,
+            "Codex relay request read timed out"
+        );
         if let Some(header_end) = find_header_end(&bytes) {
             break header_end;
         }
@@ -170,6 +166,13 @@ fn read_request(stream: &mut TcpStream, state: &RelayState) -> Result<IncomingRe
         content_length <= MAX_REQUEST_BYTES,
         "Codex relay request exceeds the size limit"
     );
+    validate_request_head(
+        &method,
+        &target,
+        &headers,
+        expected_path,
+        expected_authority,
+    )?;
     let body_start = header_end + 4;
     ensure!(
         body_start <= bytes.len(),
@@ -181,9 +184,13 @@ fn read_request(stream: &mut TcpStream, state: &RelayState) -> Result<IncomingRe
         "Codex relay does not support pipelined requests"
     );
     while body.len() < content_length {
-        if state.cancelled.load(Ordering::Relaxed) {
+        if cancelled.load(Ordering::Relaxed) {
             bail!("Codex relay was cancelled");
         }
+        ensure!(
+            Instant::now() < deadline,
+            "Codex relay request read timed out"
+        );
         let read = match stream.read(&mut chunk) {
             Ok(0) => bail!("Codex relay request body ended early"),
             Ok(read) => read,
@@ -203,12 +210,33 @@ fn read_request(stream: &mut TcpStream, state: &RelayState) -> Result<IncomingRe
         );
         body.extend_from_slice(&chunk[..read]);
     }
-    Ok(IncomingRequest {
-        method,
-        target,
-        headers,
-        body,
-    })
+    Ok(IncomingRequest { headers, body })
+}
+
+fn validate_request_head(
+    method: &str,
+    target: &str,
+    headers: &HeaderMap,
+    expected_path: &str,
+    expected_authority: &str,
+) -> Result<()> {
+    ensure!(
+        method == "POST",
+        "Codex relay rejected an unsupported HTTP method"
+    );
+    validate_target(target, headers, expected_path, expected_authority)?;
+    ensure!(
+        headers.contains_key(AUTHORIZATION),
+        "Codex relay request has no authorization header"
+    );
+    ensure!(
+        headers
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.to_ascii_lowercase().starts_with("application/json")),
+        "Codex relay request is not JSON"
+    );
+    Ok(())
 }
 
 fn find_header_end(bytes: &[u8]) -> Option<usize> {
@@ -424,20 +452,114 @@ pub(super) fn write_rejection(stream: &mut TcpStream, status: u16, reason: &str)
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::atomic::AtomicBool;
+    use std::time::{Duration, Instant};
+
     const SSE_TOOL_CALL_RESPONSE: &[u8] = indoc::indoc! {r#"
         event: response.output_item.added
         data: {"type":"response.output_item.added","item":{"type":"function_call"}}
 
     "#}
     .as_bytes();
+    const PARTIAL_BODY_REQUEST: &str = indoc::indoc! {"
+        POST /fixture-token/backend-api/codex/responses HTTP/1.1
+        Host: localhost:43817
+        Authorization: Bearer fixture-token
+        Content-Type: application/json
+        Content-Length: 8
+
+        {}
+    "};
+    const MISSING_AUTH_REQUEST: &str = indoc::indoc! {"
+        POST /fixture-token/backend-api/codex/responses HTTP/1.1
+        Host: localhost:43817
+        Content-Type: application/json
+        Content-Length: 8
+
+    "};
+    const WRONG_PATH_REQUEST: &str = indoc::indoc! {"
+        POST /other HTTP/1.1
+        Host: localhost:43817
+        Authorization: Bearer fixture-token
+        Content-Type: application/json
+        Content-Length: 8
+
+    "};
 
     use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
     use rstest::rstest;
     use serde_json::{Value, json};
 
     use super::{
-        contains_tool_call, rewrite_request_body, upstream_headers, value_contains_tool_call,
+        contains_tool_call, read_request_until, rewrite_request_body, upstream_headers,
+        value_contains_tool_call,
     };
+
+    #[rstest]
+    #[case::partial_headers("POST")]
+    #[case::partial_body(PARTIAL_BODY_REQUEST)]
+    fn partial_request_expires_at_the_absolute_deadline(#[case] request: &'static str) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener should bind");
+        let mut client = TcpStream::connect(listener.local_addr().expect("listener address"))
+            .expect("fixture client should connect");
+        let (mut server, _) = listener.accept().expect("fixture connection should arrive");
+        server
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("fixture socket should have a short read timeout");
+        let request = request.replace('\n', "\r\n");
+        client
+            .write_all(request.as_bytes())
+            .expect("fixture client should send a partial request");
+
+        let result = read_request_until(
+            &mut server,
+            &AtomicBool::new(false),
+            "/fixture-token/backend-api/codex/responses",
+            "localhost:43817",
+            Instant::now() + Duration::from_millis(10),
+        );
+        let actual = result
+            .map(|_| "ok".to_string())
+            .unwrap_or_else(|error| format!("{error:#}"));
+        assert_eq!(actual, "Codex relay request read timed out");
+    }
+
+    #[rstest]
+    #[case::missing_authorization(
+        MISSING_AUTH_REQUEST,
+        "Codex relay request has no authorization header"
+    )]
+    #[case::wrong_path(WRONG_PATH_REQUEST, "Codex relay rejected an unknown path")]
+    fn rejects_invalid_request_heads_before_reading_the_body(
+        #[case] request: &'static str,
+        #[case] expected_error: &str,
+    ) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("fixture listener should bind");
+        let mut client = TcpStream::connect(listener.local_addr().expect("listener address"))
+            .expect("fixture client should connect");
+        let (mut server, _) = listener.accept().expect("fixture connection should arrive");
+        server
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("fixture socket should have a short read timeout");
+        let request = request.replace('\n', "\r\n");
+        client
+            .write_all(request.as_bytes())
+            .expect("fixture client should send request headers");
+
+        let result = read_request_until(
+            &mut server,
+            &AtomicBool::new(false),
+            "/fixture-token/backend-api/codex/responses",
+            "localhost:43817",
+            Instant::now() + Duration::from_secs(1),
+        );
+        let actual = result
+            .map(|_| "ok".to_string())
+            .unwrap_or_else(|error| format!("{error:#}"));
+        assert_eq!(actual, expected_error);
+    }
 
     #[test]
     fn request_rewrite_disables_tools_and_uses_parent_cache_affinity() {
@@ -518,6 +640,11 @@ mod tests {
 
     #[rstest]
     #[case::sse_tool_call(SSE_TOOL_CALL_RESPONSE, "text/event-stream", true)]
+    #[case::json_function_call(
+        br#"{"output":[{"type":"function_call","name":"fixture_tool","arguments":"{}"}]}"#,
+        "application/json",
+        true
+    )]
     #[case::json_message(
         br#"{"output":[{"type":"message","content":[]}]}"#,
         "application/json",

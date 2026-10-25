@@ -2284,7 +2284,7 @@ mod tests {
         assert_eq!(
             schema_value["$defs"]["CodexStatusInferenceConfig"],
             serde_json::json!({
-                "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
+                "description": "Opt-in settings for inferring Codex Stop status with a fork of the saved conversation. Inference requires the built-in OpenAI provider; enabling requires a non-empty `agent.status_inference_prompt` and at least one `agent.statuses` entry.",
                 "type": "object",
                 "properties": {
                     "background_status": {

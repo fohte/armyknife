@@ -45,7 +45,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.status_inference_prompt` lets a detached worker infer a missing status from a Claude Code fork or, when enabled below, a temporary Codex fork of the saved conversation using the parent's model. Both paths use tokens.
 
-`agent.codex_status_inference.enabled` opts Codex sessions into detached classification through an ephemeral fork of the saved conversation. Enabling it requires a non-empty `agent.status_inference_prompt`, at least one `agent.statuses` entry, and both `failure_status` and `background_status`. Each configured `kind` must name an entry in `agent.statuses`, and each `note` must be a non-empty single line. A worker failure records `failure_status` only if the stopped session remains unchanged and has no explicit status, unless shadow mode is active. When pending background work is the applicable Stop reason and no higher-priority condition is active, the hook records `background_status` without running the classifier. Invalid enabled settings fail configuration validation.
+`agent.codex_status_inference.enabled` opts Codex sessions into detached classification through an ephemeral fork of the saved conversation. Inference requires Codex's built-in OpenAI provider, the `codex` CLI, and the `srt` sandbox runtime. Enabling it requires a non-empty `agent.status_inference_prompt`, at least one `agent.statuses` entry, and both `failure_status` and `background_status`. Each configured `kind` must name an entry in `agent.statuses`, and each `note` must be a non-empty single line. A worker failure records `failure_status` only if the stopped session remains unchanged and has no explicit status, unless shadow mode is active. When pending background work is the applicable Stop reason and no higher-priority condition is active, the hook records `background_status` without running the classifier. Invalid enabled settings fail configuration validation.
 
 Set `agent.codex_status_inference.shadow_mode` to `true` to classify without writing an inferred status. While the stopped session remains unchanged and has no explicit status, the worker logs the inferred kind and note, or the configured failure kind and note if inference fails. When pending background work is the applicable Stop reason and no higher-priority condition is active, the Stop hook logs the configured background kind and note. Shadow mode does not write inferred statuses to the session database.
 
@@ -999,7 +999,7 @@ armyknife writes JSONL diagnostic logs to `~/.cache/armyknife/logs/armyknife.log
 
 ### `a doctor`
 
-Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
+Check availability and versions of external tools armyknife depends on (`git`, `gh`, `tmux`, `nvim`, `wezterm`, `ghostty`, `delta`, `claude`, `opencode`, `lsof`, and Hammerspoon on macOS). `codex` and `srt` are also checked when Codex Stop inference is enabled. Missing tools include an install hint. Exits with status 0 regardless of findings — it is informational, not a gate.
 
 ```sh
 a doctor

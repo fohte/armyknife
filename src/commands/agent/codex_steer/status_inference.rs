@@ -25,18 +25,16 @@ pub(crate) fn infer_status(request: &Request<'_>) -> Result<AgentStatus> {
         "Codex Stop snapshot has no final assistant message"
     );
     let mut client = Client::connect()?;
-    let conversation = client.read_complete_conversation(
+    let thread = client.read_complete_thread(
         request.thread_id,
         request.turn_id,
         request.last_assistant_message,
     )?;
 
     ensure!(
-        conversation.thread.model_provider == "openai",
+        thread.model_provider == "openai",
         "Codex status fork requires the built-in OpenAI provider"
     );
-    let thread = conversation.thread.clone();
-    drop(conversation);
 
     fork::infer_status(
         request.session,
