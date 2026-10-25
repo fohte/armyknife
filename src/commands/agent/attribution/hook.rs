@@ -109,7 +109,7 @@ pub(super) fn blocked_output(_provider: Provider, reason: &str) -> Value {
 fn is_shell_tool(provider: Provider, tool_name: &str) -> bool {
     match provider {
         Provider::ClaudeCode => tool_name == "Bash",
-        Provider::Codex => tool_name == "exec_command",
+        Provider::Codex => tool_name == "bash",
     }
 }
 
@@ -206,11 +206,10 @@ mod tests {
     fn codex_input(command: &str, model: Option<&str>, tool_use_id: &str) -> Value {
         let mut input = json!({
             "hook_event_name": "PreToolUse",
-            "tool_name": "exec_command",
+            "tool_name": "bash",
             "tool_use_id": tool_use_id,
             "tool_input": {
                 "command": command,
-                "timeout_ms": 2_500,
             },
         });
         if let Some(model) = model {
@@ -250,7 +249,9 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_keeps_raw_model_and_separates_tool_operations(context_dir: TempDir) {
+    fn codex_canonical_bash_input_keeps_raw_model_and_separates_tool_operations(
+        context_dir: TempDir,
+    ) {
         let first = transform(
             Provider::Codex,
             &envelope(
@@ -311,7 +312,6 @@ mod tests {
                         "permissionDecision": "allow",
                         "updatedInput": {
                             "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
-                            "timeout_ms": 2_500,
                         },
                     },
                 }),
@@ -492,7 +492,6 @@ mod tests {
                         "permissionDecision": "allow",
                         "updatedInput": {
                             "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
-                            "timeout_ms": 2_500,
                         },
                     },
                 }),
@@ -520,6 +519,36 @@ mod tests {
             context_dir.path(),
         )
         .expect("pass through non-commit request");
+        let file_count = std::fs::read_dir(context_dir.path())
+            .expect("read context directory")
+            .count();
+
+        assert_eq!((result, file_count), (Some(output), 0));
+    }
+
+    #[rstest]
+    fn codex_exec_command_tool_name_is_not_mistaken_for_the_canonical_bash_payload(
+        context_dir: TempDir,
+    ) {
+        let mut input = codex_input(
+            COMMIT_COMMAND,
+            Some("fixture-model-red-2026"),
+            "fixture-tool-use-legacy-name",
+        );
+        input["tool_name"] = json!("exec_command");
+        let output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        });
+        let result = transform(
+            Provider::Codex,
+            &envelope(input, Some(output.clone())),
+            None,
+            context_dir.path(),
+        )
+        .expect("non-canonical tool input passes through unchanged");
         let file_count = std::fs::read_dir(context_dir.path())
             .expect("read context directory")
             .count();
