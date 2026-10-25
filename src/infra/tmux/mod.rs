@@ -21,8 +21,8 @@ pub(crate) use batch::pane_option_command;
 pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 pub(crate) use command::{run_tmux_output, run_tmux_output_untrimmed};
 pub(crate) use crit_pane::{
-    CritPaneSpec, close_crit_pane, find_crit_pane_for_parent, find_crit_panes_for_port,
-    is_crit_pane, open_crit_pane,
+    CritPaneSpec, close_crit_pane, find_crit_panes_for_parent, find_crit_panes_for_port,
+    get_crit_pane_parent_id, get_crit_pane_port, is_crit_pane, open_crit_pane,
 };
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;
@@ -444,28 +444,6 @@ pub fn get_pane_option(pane_id: &str, option: &str) -> Option<String> {
     } else {
         Some(output)
     }
-}
-
-/// Find a pane in the target pane's window whose user option has the given value.
-pub(crate) fn find_pane_with_option_value(
-    target_pane_id: &str,
-    option: &str,
-    value: &str,
-) -> Result<Option<String>> {
-    let filter = format!("#{{==:#{{{option}}},{value}}}");
-    let output = run_tmux_output(&[
-        "list-panes",
-        "-t",
-        target_pane_id,
-        "-f",
-        &filter,
-        "-F",
-        "#{pane_id}",
-    ])?;
-    Ok(output
-        .lines()
-        .find(|line| !line.is_empty())
-        .map(str::to_string))
 }
 
 /// Set a user option on a specific tmux window.
