@@ -26,26 +26,7 @@ pub(super) fn build_help_lines(app: &App) -> Vec<Line<'static>> {
         return vec![line];
     }
 
-    if app.mode == AppMode::Normal && app.progress_focused {
-        return build_progress_help_lines(bold);
-    }
-
     build_session_help_lines(app, bold)
-}
-
-fn build_progress_help_lines(bold: Style) -> Vec<Line<'static>> {
-    build_compact_help_line(
-        bold,
-        &[
-            ("j/k", "move"),
-            ("h/l", "fold/unfold"),
-            ("Enter", "toggle/focus"),
-            ("o", "open PR"),
-            ("Tab", "pane"),
-            ("Esc/←", "tasks"),
-            ("q", "quit"),
-        ],
-    )
 }
 
 fn clean_status_line(app: &App, bold: Style) -> Option<Line<'static>> {
@@ -77,10 +58,6 @@ fn build_compact_help_line(bold: Style, hints: &[(&str, &str)]) -> Vec<Line<'sta
 }
 
 fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
-    if app.mode == AppMode::Normal && app.narrow_layout {
-        return build_narrow_session_help_lines(app, bold);
-    }
-
     match &app.mode {
         AppMode::Confirm {
             is_alive,
@@ -135,7 +112,7 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                     Span::styled("r", bold),
                     Span::raw(": resume  "),
                     Span::styled("o", bold),
-                    Span::raw(": open crit  "),
+                    Span::raw(": open PR/crit  "),
                     Span::styled("d", bold),
                     Span::raw(": delete  "),
                     Span::styled("/", bold),
@@ -153,14 +130,17 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
                     Span::styled("Esc", bold),
                     Span::raw(": clear"),
                 ]),
-                Line::from(vec![Span::styled("  Tab", bold), Span::raw(": pane")]),
+                Line::from(vec![
+                    Span::styled("  Tab", bold),
+                    Span::raw(": toggle progress"),
+                ]),
             ]
         }
         AppMode::Normal if app.show_help => {
             let mut lines = build_full_session_list_help_lines(bold);
             lines.push(Line::from(vec![
                 Span::styled("  Tab", bold),
-                Span::raw(": pane"),
+                Span::raw(": toggle progress"),
             ]));
             lines
         }
@@ -168,31 +148,15 @@ fn build_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
             bold,
             &[
                 ("/", "search"),
-                ("Tab", "pane"),
+                ("Tab", "toggle progress"),
                 ("Esc", "clear filter"),
                 ("q", "quit"),
             ],
         ),
-        AppMode::Normal => {
-            build_compact_help_line(bold, &[("/", "search"), ("Tab", "pane"), ("q", "quit")])
-        }
-    }
-}
-
-fn build_narrow_session_help_lines(app: &App, bold: Style) -> Vec<Line<'static>> {
-    let escape_label = if app.has_filter() { "clear" } else { "quit" };
-
-    if app.show_help {
-        let mut lines = build_full_session_list_help_lines(bold);
-        lines.push(Line::from(vec![
-            Span::styled("  Tab", bold),
-            Span::raw(": pane  "),
-            Span::styled("Esc", bold),
-            Span::raw(format!(": {escape_label}")),
-        ]));
-        lines
-    } else {
-        build_compact_help_line(bold, &[("Tab", "pane"), ("Esc", escape_label)])
+        AppMode::Normal => build_compact_help_line(
+            bold,
+            &[("/", "search"), ("Tab", "toggle progress"), ("q", "quit")],
+        ),
     }
 }
 
@@ -226,7 +190,7 @@ fn build_full_session_list_help_lines(bold: Style) -> Vec<Line<'static>> {
             Span::styled("  C-r/w/s/p", bold),
             Span::raw(": filter  "),
             Span::styled("o", bold),
-            Span::raw(": open crit  "),
+            Span::raw(": open PR/crit  "),
             Span::styled("q", bold),
             Span::raw(": quit"),
         ]),

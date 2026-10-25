@@ -47,6 +47,13 @@ pub(super) enum ProgressMark {
     NotStarted,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum ProgressFetchState {
+    Loading,
+    Ready,
+    Failed(String),
+}
+
 impl ProgressMark {
     pub(super) fn symbol(self) -> &'static str {
         match self {
@@ -88,6 +95,8 @@ pub(super) enum ProgressRow {
     },
     ChecklistPullRequest {
         batch_id: String,
+        #[serde(default)]
+        checklist_item_id: String,
         row: PrProgressRow,
     },
     PlannedPullRequest {
@@ -97,36 +106,18 @@ pub(super) enum ProgressRow {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum ProgressSelectionKey {
     Session(String),
     Implementation,
     UnmatchedDelegates,
     Batch(String),
+    ChecklistItem { batch_id: String, item_id: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ProgressOpenTarget {
-    FocusPane(String),
     OpenUrl(String),
-}
-
-pub(super) fn open_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
-    match row {
-        ProgressRow::Work(row) => row
-            .pane_id
-            .as_ref()
-            .map(|pane_id| ProgressOpenTarget::FocusPane(pane_id.clone())),
-        ProgressRow::PullRequest(row) | ProgressRow::ChecklistPullRequest { row, .. } => (!row
-            .is_ended)
-            .then_some(row.pane_id.as_ref())
-            .flatten()
-            .map(|pane_id| ProgressOpenTarget::FocusPane(pane_id.clone())),
-        ProgressRow::ImplementationHeader { .. }
-        | ProgressRow::UnmatchedDelegatesHeader { .. }
-        | ProgressRow::BatchHeader { .. }
-        | ProgressRow::PlannedPullRequest { .. } => None,
-    }
 }
 
 pub(super) fn open_pr_url_target(row: &ProgressRow) -> Option<ProgressOpenTarget> {
@@ -144,32 +135,35 @@ pub(super) fn open_pr_url_target(row: &ProgressRow) -> Option<ProgressOpenTarget
 }
 
 impl ProgressRow {
-    pub(super) fn session_id(&self) -> Option<&str> {
-        match self {
-            Self::Work(row) => Some(&row.session_id),
-            Self::PullRequest(row) | Self::ChecklistPullRequest { row, .. } => {
-                Some(&row.session_id)
-            }
-            Self::ImplementationHeader { .. }
-            | Self::UnmatchedDelegatesHeader { .. }
-            | Self::BatchHeader { .. }
-            | Self::PlannedPullRequest { .. } => None,
-        }
-    }
-
     pub(super) fn selection_key(&self) -> Option<ProgressSelectionKey> {
         match self {
             Self::Work(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
             Self::PullRequest(row) => Some(ProgressSelectionKey::Session(row.session_id.clone())),
-            Self::ChecklistPullRequest { row, .. } => {
-                Some(ProgressSelectionKey::Session(row.session_id.clone()))
-            }
+            Self::ChecklistPullRequest {
+                batch_id,
+                checklist_item_id,
+                row,
+            } => Some(ProgressSelectionKey::ChecklistItem {
+                batch_id: batch_id.clone(),
+                item_id: if checklist_item_id.is_empty() {
+                    row.session_id.clone()
+                } else {
+                    checklist_item_id.clone()
+                },
+            }),
+            Self::PlannedPullRequest {
+                batch_id,
+                checklist_item_id,
+                ..
+            } => Some(ProgressSelectionKey::ChecklistItem {
+                batch_id: batch_id.clone(),
+                item_id: checklist_item_id.clone(),
+            }),
             Self::ImplementationHeader { .. } => Some(ProgressSelectionKey::Implementation),
             Self::UnmatchedDelegatesHeader { .. } => Some(ProgressSelectionKey::UnmatchedDelegates),
             Self::BatchHeader { batch_id, .. } => {
                 Some(ProgressSelectionKey::Batch(batch_id.clone()))
             }
-            Self::PlannedPullRequest { .. } => None,
         }
     }
 }
@@ -342,11 +336,6 @@ pub(super) fn pr_progress_row(
     row
 }
 
-pub(super) fn repo_from_pr_url(url: &str) -> Option<&str> {
-    lazy_regex::regex_captures!(r"^https?://[^/]+/(?:[^/]+/)+([^/]+)/pull/\d+(?:/.*)?$", url)
-        .map(|(_, repo)| repo)
-}
-
 fn apply_session_fields(row: &mut PrProgressRow, session: &Session) {
     row.pane_id = session.tmux_info.as_ref().map(|info| info.pane_id.clone());
     row.is_ended = session.status == SessionStatus::Ended;
@@ -483,27 +472,6 @@ mod tests {
     #[fixture]
     fn selected_session() -> Session {
         session("selected")
-    }
-
-    #[rstest]
-    #[case::github_url(
-        "https://github.com/example-owner/example-repo/pull/42",
-        Some("example-repo")
-    )]
-    #[case::github_files_url(
-        "https://github.com/example-owner/example-repo/pull/42/files",
-        Some("example-repo")
-    )]
-    #[case::repository_named_pull(
-        "https://github.com/example-owner/pull/example-repo/pull/42",
-        Some("example-repo")
-    )]
-    #[case::url_without_repository("https://example.test/pull/42", None)]
-    fn extracts_repository_from_pull_request_url(
-        #[case] url: &str,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(repo_from_pr_url(url), expected);
     }
 
     #[fixture]

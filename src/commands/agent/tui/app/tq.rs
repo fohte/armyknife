@@ -9,7 +9,7 @@ impl App {
     }
 
     pub fn set_tq_snapshot(&mut self, mut snapshot: TqSnapshot) -> bool {
-        let selected_session_id = self.selected_session_id().map(str::to_owned);
+        let selected_session_id = self.selected_progress_source_id();
         let previous_scope = selected_session_id
             .as_deref()
             .and_then(|session_id| self.progress_scope_for_session(session_id));

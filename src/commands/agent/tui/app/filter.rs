@@ -19,7 +19,6 @@ impl App {
     /// Enters search mode.
     /// Lazily builds the searchable text cache on first use.
     pub fn enter_search_mode(&mut self) {
-        self.progress_focused = false;
         self.note_session_list_interaction();
         // Build searchable text cache on first search
         if self.searchable_text_cache.is_none() {

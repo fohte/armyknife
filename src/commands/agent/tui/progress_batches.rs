@@ -297,11 +297,13 @@ pub(super) fn build_task_progress_rows(
                 }
                 rows.push(ProgressRow::ChecklistPullRequest {
                     batch_id: batch.id.clone(),
+                    checklist_item_id: item.id.clone(),
                     row,
                 });
             } else if item.has_pull_request() {
                 rows.push(ProgressRow::ChecklistPullRequest {
                     batch_id: batch.id.clone(),
+                    checklist_item_id: item.id.clone(),
                     row: pr_only_row(item),
                 });
             } else {
@@ -589,7 +591,7 @@ mod tests {
     }
 
     #[test]
-    fn collapses_merged_batches_and_leaves_unstarted_rows_unselectable() {
+    fn collapses_merged_batches_and_keeps_planned_rows_selectable() {
         let plan = build_implementation_plan(
             &checklist(),
             &[github_link()],
@@ -654,7 +656,10 @@ mod tests {
                     Some(ProgressSelectionKey::Implementation),
                     Some(ProgressSelectionKey::Batch("batch-1".to_string())),
                     Some(ProgressSelectionKey::Batch("batch-2".to_string())),
-                    None,
+                    Some(ProgressSelectionKey::ChecklistItem {
+                        batch_id: "batch-2".to_string(),
+                        item_id: "item-2".to_string(),
+                    }),
                 ],
             ),
         );
@@ -856,6 +861,7 @@ mod tests {
                 },
                 ProgressRow::ChecklistPullRequest {
                     batch_id: "batch-1".to_string(),
+                    checklist_item_id: "item-1".to_string(),
                     row: super::super::progress::PrProgressRow {
                         session_id: "checklist-item:item-1".to_string(),
                         repo: Some("sample-project".to_string()),

@@ -16,7 +16,8 @@ use crate::commands::agent::user_turn::user_turns;
 use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
 use super::helpers::{DIM_FG, count_statuses, truncate};
-use super::session_content::{minimum_two_pane_width, render_main_list};
+use super::session_content::render_main_list;
+use super::session_list::summary::selected_summary_lines;
 
 const HEADER_HEIGHT: u16 = 1;
 
@@ -27,8 +28,6 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 
 pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<Utc>) {
     let area = frame.area();
-    app.narrow_layout = app.view == View::Session && area.width < minimum_two_pane_width();
-
     // The top bar (search / rename) is session-view only.
     let has_error = app.error_message.is_some();
     let is_search_mode = app.view == View::Session && app.mode == AppMode::Search;
@@ -40,59 +39,45 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
-
-    let layouts: Vec<Constraint> = match (show_top_bar, has_error) {
-        (true, true) => vec![
-            Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(1), // Search / rename
-            Constraint::Min(1),    // Session list
-            Constraint::Length(help_height),
-            Constraint::Length(1), // Error
-        ],
-        (true, false) => vec![
-            Constraint::Length(HEADER_HEIGHT),
-            Constraint::Length(1), // Search / rename
-            Constraint::Min(1),    // Session list
-            Constraint::Length(help_height),
-        ],
-        (false, true) => vec![
-            Constraint::Length(HEADER_HEIGHT),
-            Constraint::Min(1), // Session list
-            Constraint::Length(help_height),
-            Constraint::Length(1), // Error
-        ],
-        (false, false) => vec![
-            Constraint::Length(HEADER_HEIGHT),
-            Constraint::Min(1), // Session list
-            Constraint::Length(help_height),
-        ],
+    let summary_lines = if app.view == View::Session {
+        selected_summary_lines(app, area.width.saturating_sub(2) as usize)
+    } else {
+        Vec::new()
     };
-
-    let areas = Layout::vertical(layouts).split(area);
+    let mut constraints = vec![Constraint::Length(HEADER_HEIGHT)];
+    if show_top_bar {
+        constraints.push(Constraint::Length(1));
+    }
+    constraints.push(Constraint::Min(1));
+    if !summary_lines.is_empty() {
+        constraints.push(Constraint::Length(summary_lines.len() as u16));
+    }
+    constraints.push(Constraint::Length(help_height));
+    if has_error {
+        constraints.push(Constraint::Length(1));
+    }
+    let areas = Layout::vertical(constraints).split(area);
 
     render_header(frame, areas[0], app);
-
-    match (show_top_bar, has_error) {
-        (true, true) => {
-            render_top_bar(frame, areas[1], app);
-            render_main_list(frame, areas[2], app, now);
-            render_help_lines(frame, areas[3], help_lines);
-            render_error(frame, areas[4], app.error_message.as_deref().unwrap_or(""));
-        }
-        (true, false) => {
-            render_top_bar(frame, areas[1], app);
-            render_main_list(frame, areas[2], app, now);
-            render_help_lines(frame, areas[3], help_lines);
-        }
-        (false, true) => {
-            render_main_list(frame, areas[1], app, now);
-            render_help_lines(frame, areas[2], help_lines);
-            render_error(frame, areas[3], app.error_message.as_deref().unwrap_or(""));
-        }
-        (false, false) => {
-            render_main_list(frame, areas[1], app, now);
-            render_help_lines(frame, areas[2], help_lines);
-        }
+    let mut area_index = 1;
+    if show_top_bar {
+        render_top_bar(frame, areas[area_index], app);
+        area_index += 1;
+    }
+    render_main_list(frame, areas[area_index], app, now);
+    area_index += 1;
+    if !summary_lines.is_empty() {
+        frame.render_widget(Paragraph::new(summary_lines), areas[area_index]);
+        area_index += 1;
+    }
+    render_help_lines(frame, areas[area_index], help_lines);
+    area_index += 1;
+    if has_error {
+        render_error(
+            frame,
+            areas[area_index],
+            app.error_message.as_deref().unwrap_or(""),
+        );
     }
 }
 
@@ -330,21 +315,21 @@ mod tests {
 
     #[rstest]
     #[case::session_view_default(View::Session, false, false, vec![
-        " ?: keys   /: search   Tab: pane   q: quit".to_string(),
+        " ?: keys   /: search   Tab: toggle progress   q: quit".to_string(),
     ])]
     #[case::session_view_expanded(View::Session, true, false, vec![
         "  j/k: move  f: focus  r: resume  p: preview  t: open task  d: delete".to_string(),
         "  1-9: quick  /: search  h/←: parent  →/l: drill down".to_string(),
-        "  C-r/w/s/p: filter  o: open crit  q: quit".to_string(),
-        "  Tab: pane".to_string(),
+        "  C-r/w/s/p: filter  o: open PR/crit  q: quit".to_string(),
+        "  Tab: toggle progress".to_string(),
     ])]
     #[case::progress_view(View::Session, false, true, vec![
-        " ?: keys   j/k: move   h/l: fold/unfold   Enter: toggle/focus   o: open PR   Tab: pane   Esc/←: tasks   q: quit".to_string(),
+        " ?: keys   /: search   Tab: toggle progress   q: quit".to_string(),
     ])]
     fn test_help_bar_default_vs_expanded(
         #[case] view: View,
         #[case] show_help: bool,
-        #[case] progress_focused: bool,
+        #[case] progress_expanded: bool,
         #[case] expected_lines: Vec<String>,
     ) {
         let now = Utc::now();
@@ -353,7 +338,7 @@ mod tests {
         let output = render_to_string_with(&sessions, None, now, 120, height, |app| {
             app.view = view;
             app.show_help = show_help;
-            app.progress_focused = progress_focused;
+            app.progress_inline_expanded = progress_expanded;
         });
 
         let actual_lines: Vec<&str> = output

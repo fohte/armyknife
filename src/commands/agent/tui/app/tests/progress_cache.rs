@@ -226,6 +226,7 @@ fn task_rows() -> Vec<ProgressRow> {
         },
         ProgressRow::ChecklistPullRequest {
             batch_id: "batch-placeholder".to_string(),
+            checklist_item_id: "item-placeholder".to_string(),
             row: PrProgressRow {
                 session_id: "delegate-placeholder".to_string(),
                 repo: None,

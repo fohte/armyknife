@@ -187,10 +187,10 @@ impl App {
     /// Indices of rows that are individually selectable (i.e. hold a
     /// session, as opposed to a section header).
     pub(super) fn selectable_positions(&self) -> Vec<usize> {
-        self.row_sessions
+        self.row_keys
             .iter()
             .enumerate()
-            .filter_map(|(i, s)| s.is_some().then_some(i))
+            .filter_map(|(i, key)| key.is_some().then_some(i))
             .collect()
     }
 
@@ -302,6 +302,12 @@ impl App {
         predicate: impl Fn(&Session) -> bool,
     ) -> Option<usize> {
         self.session_row_positions_where(predicate).next()
+    }
+
+    pub(super) fn position_of_task_row(&self, session_id: &str) -> Option<usize> {
+        self.row_keys
+            .iter()
+            .position(|key| matches!(key, Some(SessionRowKey::Task(id)) if id == session_id))
     }
 
     /// Resolves the selection after a row-order rebuild.

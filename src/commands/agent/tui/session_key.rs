@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::KeyEffects;
 use super::app::{App, AppMode, View};
 use super::event::KeyEvent;
-use super::{crit_key, progress_key, title_edit, worktree_session_children};
+use super::{crit_key, title_edit, worktree_session_children};
 use crate::commands::agent::resume;
 use crate::commands::agent::types::SessionStatus;
 use crate::infra::tmux;
@@ -130,17 +130,25 @@ fn handle_normal_key_event(app: &mut App, key: KeyEvent) {
 
         // Move to the selected session's parent
         (KeyCode::Char('h'), KeyModifiers::NONE) | (KeyCode::Left, _) => {
-            app.select_parent();
+            if !app.set_inline_progress_heading_expanded(false) {
+                app.select_parent();
+            }
         }
 
         (KeyCode::Char('l'), KeyModifiers::NONE) | (KeyCode::Right, _) => {
-            app.enter_drilldown();
+            if !app.set_inline_progress_heading_expanded(true) {
+                app.enter_drilldown();
+            }
         }
 
         // Focus on selected session's tmux pane
-        (KeyCode::Enter, _) | (KeyCode::Char('f'), KeyModifiers::NONE) => {
-            focus_selected_session(app);
+        (KeyCode::Enter, _) => {
+            if !app.toggle_inline_progress_heading() {
+                focus_selected_session(app);
+            }
         }
+
+        (KeyCode::Char('f'), KeyModifiers::NONE) => focus_selected_session(app),
 
         // Resume a paused session
         (KeyCode::Char('r'), KeyModifiers::NONE) => {
@@ -214,14 +222,18 @@ pub(super) fn handle_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
 
 fn handle_session_view_key_event(app: &mut App, key: KeyEvent) -> KeyEffects {
     if app.mode == AppMode::Normal && key.code == KeyCode::Tab {
-        app.cycle_pane_focus();
+        app.toggle_inline_progress();
         return KeyEffects::default();
     }
 
     if app.mode == AppMode::Normal
-        && let Some(effects) = progress_key::handle(app, key)
+        && let (KeyCode::Char('o'), KeyModifiers::NONE) = (key.code, key.modifiers)
+        && let Some(target) = app.selected_progress_open_target()
     {
-        return effects;
+        return KeyEffects {
+            open_progress_target: Some(target),
+            ..Default::default()
+        };
     }
 
     // `c` from Normal mode enters the clean view from the session list.

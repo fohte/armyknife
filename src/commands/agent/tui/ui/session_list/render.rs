@@ -10,6 +10,7 @@ use crate::commands::agent::tui::app::{App, AppMode};
 use crate::commands::agent::tui::session_rows::SessionRow;
 
 use super::super::helpers::DIM_FG;
+use super::inline_items::build_inline_progress_item;
 use super::items::{build_header_item, build_session_item, build_user_turn_item};
 /// Renders YOUR TURN first, followed by the TASKS session tree. YOUR TURN rows
 /// use the priority shared with tmux status. A session
@@ -72,6 +73,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
             SessionRow::UserTurn(turn) => build_user_turn_item(turn, app, now, term_width),
             SessionRow::Session(entry) => build_session_item(entry, app, now, term_width, &query),
+            SessionRow::InlineProgress(entry) => {
+                build_inline_progress_item(entry, app, now, term_width)
+            }
         };
         items.push(item);
     }
@@ -205,8 +209,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            Configured
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -355,8 +359,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            Wide
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -431,8 +435,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -473,8 +477,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            Fix the bug
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -588,8 +592,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
 
@@ -624,9 +628,9 @@ mod tests {
              ── TASKS ──────────────────────────────────────────────────────────────────────
              ◐ project                 session-name                                      48m
 
-
-
-             ?: keys   Tab: pane   Esc: quit"};
+            session-name
+            Waiting: choose an option
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -638,9 +642,9 @@ mod tests {
         36,
         indoc! {"
              agent watch1 needs you · 0 running
-             ── YOUR TURN ──────────────────────
             >◐  you     session-name ch just now
-             ?: keys   Tab: pane   Esc: quit"}
+            session-name
+             ?: keys   /: search   Tab: toggle p"}
     )]
     #[case::omitted_note(
         "needs_attention",
@@ -648,9 +652,9 @@ mod tests {
         43,
         indoc! {"
              agent watch1 needs you · 0 running · 0 idl
-             ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  session-name  just now
-             ?: keys   Tab: pane   Esc: quit"}
+            session-name
+             ?: keys   /: search   Tab: toggle progress"}
     )]
     #[case::long_session_name_keeps_time_column(
         "needs_attention",
@@ -658,9 +662,9 @@ mod tests {
         43,
         indoc! {"
              agent watch1 needs you · 0 running · 0 idl
-             ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  a-long-ses... just now
-             ?: keys   Tab: pane   Esc: quit"}
+            a-long-session-name
+             ?: keys   /: search   Tab: toggle progress"}
     )]
     fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
         mut you_user_turn_session: Session,
@@ -711,8 +715,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -744,8 +748,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -795,8 +799,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -843,8 +847,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }
@@ -872,8 +876,8 @@ mod tests {
 
 
 
-
-             ?: keys   Tab: pane   Esc: quit"};
+            project
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }

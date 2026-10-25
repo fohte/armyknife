@@ -1,15 +1,74 @@
+use std::collections::HashSet;
+
+use super::super::progress::ProgressRow;
+use super::super::session_rows::inline_progress::project_inline_progress_rows;
 use super::super::session_rows::{SessionRow, SessionRowKey, build_session_rows_with_order};
 use super::App;
 
 impl App {
     pub(in crate::commands::agent::tui) fn build_display_rows(&self) -> Vec<SessionRow<'_>> {
         let filtered = self.filtered_sessions();
-        build_session_rows_with_order(
+        let rows = build_session_rows_with_order(
             &filtered,
             &self.task_by_session,
             &self.agent_config,
             &self.vibe_enabled_session_ids,
             self.session_row_order.as_ref(),
+        );
+        if !self.progress_inline_expanded {
+            return rows;
+        }
+        let Some(source_session_id) = self.selected_progress_source_id() else {
+            return rows;
+        };
+        let progress_rows = if self.progress_session_id.as_deref() == Some(&source_session_id) {
+            self.progress_rows.as_slice()
+        } else {
+            &[]
+        };
+        let matched_sessions = progress_rows
+            .iter()
+            .filter_map(|row| match row {
+                ProgressRow::ChecklistPullRequest { row, .. }
+                    if filtered
+                        .iter()
+                        .any(|session| session.session_id == row.session_id) =>
+                {
+                    Some(row.session_id.clone())
+                }
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
+        let moved_sessions = filtered
+            .iter()
+            .filter(|session| {
+                matched_sessions.contains(&session.session_id)
+                    || session
+                        .ancestor_session_ids
+                        .iter()
+                        .any(|ancestor| matched_sessions.contains(ancestor))
+            })
+            .map(|session| session.session_id.as_str())
+            .collect::<HashSet<_>>();
+        let remaining = filtered
+            .iter()
+            .copied()
+            .filter(|session| !moved_sessions.contains(session.session_id.as_str()))
+            .collect::<Vec<_>>();
+        let remaining_rows = build_session_rows_with_order(
+            &remaining,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+            self.session_row_order.as_ref(),
+        );
+        let status = self.progress_status_label(&source_session_id, progress_rows);
+        project_inline_progress_rows(
+            rows,
+            remaining_rows,
+            &source_session_id,
+            progress_rows,
+            status,
         )
     }
 
@@ -42,9 +101,10 @@ impl App {
             .iter()
             .map(|key| {
                 key.as_ref().and_then(|key| {
+                    let session_id = key.session_id()?;
                     self.sessions
                         .iter()
-                        .position(|session| session.session_id == key.session_id())
+                        .position(|session| session.session_id == session_id)
                 })
             })
             .collect();

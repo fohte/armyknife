@@ -4,6 +4,7 @@ use chrono::Utc;
 
 use super::app::App;
 use super::event::EventHandler;
+use super::progress::ProgressFetchState;
 use super::tq_snapshot::TqSnapshot;
 
 pub(super) const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -86,7 +87,7 @@ pub(super) fn apply_tq_snapshot_and_schedule_progress_refresh(
 ) -> bool {
     let scope_changed = app.set_tq_snapshot(snapshot);
     if scope_changed {
-        let session_id = app.selected_session_id().map(str::to_owned);
+        let session_id = app.selected_progress_source_id();
         if let Some(session_id) = session_id.as_deref() {
             app.refresh_progress_from_sessions(session_id);
         }
@@ -105,15 +106,22 @@ pub(super) fn start_progress_refresh(
         .progress_scope_for_session(&session_id)
         .and_then(|scope| scope.fetch_scope())
     else {
+        app.progress_fetch_states
+            .insert(session_id, ProgressFetchState::Ready);
         return ProgressRefreshStart::MissingScope;
     };
     let now = Utc::now();
     if let Some(wait) = app.progress_refresh_wait(&session_id, now, PROGRESS_REFRESH_INTERVAL)
         && !wait.is_zero()
     {
+        app.progress_fetch_states
+            .entry(session_id)
+            .or_insert(ProgressFetchState::Ready);
         return ProgressRefreshStart::Fresh(wait);
     }
     app.mark_progress_refresh_started(&session_id, now);
+    app.progress_fetch_states
+        .insert(session_id.clone(), ProgressFetchState::Loading);
     event_handler.start_progress_fetch(session_id, fetch_scope);
     ProgressRefreshStart::Started
 }

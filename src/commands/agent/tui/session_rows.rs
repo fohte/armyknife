@@ -6,9 +6,8 @@ use crate::commands::agent::types::Session;
 use crate::commands::agent::user_turn::{UserTurn, user_turns};
 use crate::shared::config::AgentConfig;
 
+pub(super) mod inline_progress;
 mod task_tree;
-
-pub(super) use task_tree::task_mark;
 
 /// One row in the session list's selection/render order.
 ///
@@ -19,6 +18,7 @@ pub(super) enum SessionRow<'a> {
     SectionHeader(SectionHeaderRow),
     UserTurn(UserTurn<'a>),
     Session(SessionRowEntry<'a>),
+    InlineProgress(Box<inline_progress::InlineProgressEntry<'a>>),
 }
 
 #[derive(Debug)]
@@ -33,12 +33,30 @@ pub(super) struct SectionHeaderRow {
 pub(super) enum SessionRowKey {
     UserTurn(String),
     Task(String),
+    Progress {
+        source_session_id: String,
+        selection_key: crate::commands::agent::tui::progress::ProgressSelectionKey,
+        session_id: Option<String>,
+    },
 }
 
 impl SessionRowKey {
-    pub(super) fn session_id(&self) -> &str {
+    pub(super) fn session_id(&self) -> Option<&str> {
         match self {
-            Self::UserTurn(session_id) | Self::Task(session_id) => session_id,
+            Self::UserTurn(session_id) | Self::Task(session_id) => Some(session_id),
+            Self::Progress { session_id, .. } => session_id.as_deref(),
+        }
+    }
+
+    fn order_position(&self) -> Option<(bool, &str)> {
+        match self {
+            Self::UserTurn(session_id) => Some((true, session_id)),
+            Self::Task(session_id) => Some((false, session_id)),
+            Self::Progress {
+                session_id: Some(session_id),
+                ..
+            } => Some((false, session_id)),
+            Self::Progress { .. } => None,
         }
     }
 }
@@ -69,14 +87,17 @@ impl SessionRowOrder {
 
     pub(super) fn remember_keys(&mut self, keys: &[SessionRowKey]) {
         for key in keys {
-            let (positions, next_position) = match key {
-                SessionRowKey::UserTurn(_) => (
+            let Some((is_user_turn, session_id)) = key.order_position() else {
+                continue;
+            };
+            let (positions, next_position) = if is_user_turn {
+                (
                     &mut self.user_turn_positions,
                     &mut self.next_user_turn_position,
-                ),
-                SessionRowKey::Task(_) => (&mut self.task_positions, &mut self.next_task_position),
+                )
+            } else {
+                (&mut self.task_positions, &mut self.next_task_position)
             };
-            let session_id = key.session_id();
             if !positions.contains_key(session_id) {
                 positions.insert(session_id.to_string(), *next_position);
                 *next_position += 1;
@@ -102,7 +123,7 @@ impl SessionRowOrder {
 
 /// One TASKS row. `tree_prefix` is `None` for a root; descendants carry one
 /// sibling marker for each non-root ancestor between the root and parent.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct SessionRowEntry<'a> {
     pub session: &'a Session,
     pub mark: TaskMark,
@@ -139,15 +160,6 @@ pub(super) enum TaskMark {
 }
 
 impl<'a> SessionRow<'a> {
-    /// The session_id occupying this row, if it belongs to a session.
-    pub(super) fn session_id(&self) -> Option<&str> {
-        match self {
-            SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
-            SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
-            SessionRow::SectionHeader(_) => None,
-        }
-    }
-
     pub(super) fn row_key(&self) -> Option<SessionRowKey> {
         match self {
             SessionRow::SectionHeader(_) => None,
@@ -157,22 +169,9 @@ impl<'a> SessionRow<'a> {
             SessionRow::Session(entry) => {
                 Some(SessionRowKey::Task(entry.session.session_id.clone()))
             }
+            SessionRow::InlineProgress(entry) => entry.selection_key.clone(),
         }
     }
-}
-
-pub(super) fn tasks_row_occurrence(rows: &[SessionRow<'_>], session_id: &str) -> Option<usize> {
-    let mut occurrence = 0;
-    for row in rows {
-        match row {
-            SessionRow::Session(entry) if entry.session.session_id == session_id => {
-                return Some(occurrence);
-            }
-            _ if row.session_id() == Some(session_id) => occurrence += 1,
-            _ => {}
-        }
-    }
-    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -496,6 +495,11 @@ mod tests {
             child_count: usize,
             child_user_turn_count: usize,
         },
+        InlineProgress {
+            label: Option<String>,
+            selection_key: Option<SessionRowKey>,
+            session_id: Option<String>,
+        },
     }
 
     fn describe(rows: &[SessionRow]) -> Vec<RowDescription> {
@@ -515,6 +519,14 @@ mod tests {
                     tree_prefix: entry.tree_prefix.clone(),
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
+                },
+                SessionRow::InlineProgress(entry) => RowDescription::InlineProgress {
+                    label: entry.label.clone(),
+                    selection_key: entry.selection_key.clone(),
+                    session_id: entry
+                        .session
+                        .as_ref()
+                        .map(|entry| entry.session.session_id.clone()),
                 },
             })
             .collect()
@@ -797,7 +809,9 @@ mod tests {
 
         let task = rows.iter().find_map(|r| match r {
             SessionRow::Session(entry) => Some(entry.task.clone()),
-            SessionRow::SectionHeader(_) | SessionRow::UserTurn(_) => None,
+            SessionRow::SectionHeader(_)
+            | SessionRow::UserTurn(_)
+            | SessionRow::InlineProgress(_) => None,
         });
         assert_eq!(task, Some(expected));
     }

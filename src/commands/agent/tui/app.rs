@@ -13,10 +13,8 @@ use std::time::Instant;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
-use super::progress::ProgressRow;
-use super::session_rows::{
-    SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_vibe, tasks_row_occurrence,
-};
+use super::progress::{ProgressFetchState, ProgressRow};
+use super::session_rows::{SessionRowKey, SessionRowOrder, SessionTask};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -35,7 +33,7 @@ impl InitialProgressSelection {
         Self {
             parent_session_id,
             delegate_session_id,
-            select_row: true,
+            select_row: false,
             expand_batch: true,
         }
     }
@@ -44,12 +42,12 @@ impl InitialProgressSelection {
 struct FocusedTaskAncestor {
     task_session_id: String,
     progress_child_id: String,
-    task_row_occurrence: usize,
 }
 
 mod clean;
 mod delete;
 mod filter;
+mod inline_progress;
 mod navigation;
 mod progress;
 mod progress_cache;
@@ -184,9 +182,7 @@ pub struct App {
     pub tq_snapshot: Option<TqSnapshot>,
     /// Whether a tq lookup is currently running.
     pub tq_refreshing: bool,
-    /// Whether the session view is using the single-pane layout.
-    pub narrow_layout: bool,
-    /// Selection and rendered rows for the PROGRESS pane.
+    /// Selection and rendered rows used while folding cached PR progress.
     pub(super) progress_list_state: ListState,
     pub(super) progress_table_state: TableState,
     pub(super) progress_rows: Vec<ProgressRow>,
@@ -195,18 +191,15 @@ pub struct App {
     pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
     pub(super) initial_progress_selection: Option<InitialProgressSelection>,
+    /// Whether the selected task's implementation plan is projected into the session tree.
+    pub(super) progress_inline_expanded: bool,
     pub(super) progress_error: Option<String>,
+    pub(super) progress_fetch_states: HashMap<String, ProgressFetchState>,
     progress_cache: HashMap<String, CachedProgress>,
     progress_cache_dirty: bool,
-    /// Whether the PROGRESS pane currently receives keyboard input.
-    pub progress_focused: bool,
 }
 
 impl App {
-    pub fn cycle_pane_focus(&mut self) {
-        self.progress_focused = !self.progress_focused;
-    }
-
     /// Creates a new App instance with initial session data.
     /// Selects the focused session, the highest-priority user turn, or the
     /// previous selection, in that order.
@@ -297,7 +290,6 @@ impl App {
             task_by_session: HashMap::new(),
             tq_snapshot: None,
             tq_refreshing: false,
-            narrow_layout: false,
             progress_list_state: ListState::default(),
             progress_table_state: TableState::default(),
             progress_rows: Vec::new(),
@@ -306,10 +298,11 @@ impl App {
             progress_batch_expanded: HashMap::new(),
             progress_session_id: None,
             initial_progress_selection: None,
+            progress_inline_expanded: false,
             progress_error: None,
+            progress_fetch_states: HashMap::new(),
             progress_cache: HashMap::new(),
             progress_cache_dirty: false,
-            progress_focused: false,
         };
         app.rebuild_row_order();
         app.list_state
@@ -349,16 +342,16 @@ impl App {
     ) {
         let focused_session = focus_session_id
             .and_then(|focus_id| self.sessions.iter().find(|s| s.session_id == focus_id));
-        if let Some(ancestor) = focus_session_id.and_then(|id| self.focused_task_ancestor(id)) {
-            self.progress_focused = true;
+        if let Some(focus_id) = focus_session_id
+            && let Some(ancestor) = self.focused_task_ancestor(focus_id)
+        {
+            self.progress_inline_expanded = true;
+            self.progress_session_id = Some(ancestor.task_session_id.clone());
             self.initial_progress_selection = Some(InitialProgressSelection::new(
                 ancestor.task_session_id.clone(),
                 ancestor.progress_child_id,
             ));
-            self.restore_selection(SelectionAnchor::for_session_occurrence(
-                ancestor.task_session_id,
-                ancestor.task_row_occurrence,
-            ));
+            self.restore_selection(SelectionAnchor::for_session(focus_id.to_string()));
             return;
         }
 
@@ -380,38 +373,23 @@ impl App {
             .sessions
             .iter()
             .find(|session| session.session_id == focus_session_id)?;
-        let filtered_sessions = self
-            .filtered_indices
-            .iter()
-            .filter_map(|&index| self.sessions.get(index))
-            .collect::<Vec<_>>();
-        let rows = build_session_rows_with_vibe(
-            &filtered_sessions,
-            &self.task_by_session,
-            &self.agent_config,
-            &self.vibe_enabled_session_ids,
-        );
-
         child_session
             .ancestor_session_ids
             .iter()
             .enumerate()
             .rev()
             .find_map(|(index, ancestor_id)| {
-                let ancestor = self
-                    .sessions
+                self.sessions
                     .iter()
                     .find(|session| session.session_id == *ancestor_id)?;
-                let task_row_occurrence = tasks_row_occurrence(&rows, ancestor_id)?;
                 let progress_child_id = child_session
                     .ancestor_session_ids
                     .get(index + 1)
                     .unwrap_or(&child_session.session_id)
                     .clone();
                 Some(FocusedTaskAncestor {
-                    task_session_id: ancestor.session_id.clone(),
+                    task_session_id: ancestor_id.clone(),
                     progress_child_id,
-                    task_row_occurrence,
                 })
             })
     }
@@ -618,7 +596,7 @@ mod tests {
     }
 
     #[test]
-    fn child_focus_selects_the_nearest_parent_and_progress_pane() {
+    fn child_focus_selects_the_child_and_opens_its_parent_progress() {
         let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let root = create_test_session_at("root", timestamp);
         let mut task = create_test_session_at("task", timestamp);
@@ -649,13 +627,15 @@ mod tests {
             (
                 app.selected_session_id(),
                 app.selected_session_row_occurrence(),
-                app.progress_focused,
+                app.progress_inline_expanded,
+                app.progress_session_id.clone(),
                 app.initial_progress_selection.clone(),
             ),
             (
-                Some("intermediate-delegate"),
+                Some("delegate"),
                 Some(0),
                 true,
+                Some("intermediate-delegate".to_string()),
                 Some(InitialProgressSelection::new(
                     "intermediate-delegate".to_string(),
                     "delegate".to_string(),
@@ -680,7 +660,7 @@ mod tests {
         assert_eq!(
             (
                 app.selected_session_id(),
-                app.progress_focused,
+                app.progress_inline_expanded,
                 app.initial_progress_selection.clone(),
             ),
             (Some("delegate"), false, None),

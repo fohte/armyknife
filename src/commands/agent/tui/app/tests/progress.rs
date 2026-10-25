@@ -1,15 +1,17 @@
 use std::collections::HashMap;
 
+use super::super::progress::CachedProgress;
 use super::super::{App, ProgressScopeKind};
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
-    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressFetchScope, ProgressMark, ProgressRow,
-    ProgressSelectionKey, StageMarks, WorkProgressRow, build_progress_rows,
+    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressFetchScope, ProgressFetchState,
+    ProgressMark, ProgressRow, ProgressSelectionKey, StageMarks, WorkProgressRow,
+    build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
     ImplementationPlan, build_implementation_plan,
 };
-use crate::commands::agent::tui::session_rows::SessionTask;
+use crate::commands::agent::tui::session_rows::{SessionRowKey, SessionTask};
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
 use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
@@ -34,6 +36,194 @@ fn delegated_session(timestamp: DateTime<Utc>) -> Session {
 #[fixture]
 fn selected_task_session(timestamp: DateTime<Utc>) -> Session {
     create_test_session_at("selected", timestamp)
+}
+
+#[fixture]
+fn inline_progress_app(timestamp: DateTime<Utc>) -> App {
+    let root = create_test_session_at("design", timestamp);
+    let mut worker = create_test_session_at("worker", timestamp);
+    worker.ancestor_session_ids = vec![root.session_id.clone()];
+    let mut worker_child = create_test_session_at("worker-child", timestamp);
+    worker_child.ancestor_session_ids = vec![root.session_id.clone(), worker.session_id.clone()];
+    let mut unmatched = create_test_session_at("unmatched", timestamp);
+    unmatched.ancestor_session_ids = vec![root.session_id.clone()];
+    let mut app = create_test_app(vec![root, worker, worker_child, unmatched]);
+    app.progress_inline_expanded = true;
+    app.progress_session_id = Some("design".to_string());
+    app.progress_fetch_states
+        .insert("design".to_string(), ProgressFetchState::Ready);
+    app.progress_rows = vec![
+        ProgressRow::ImplementationHeader {
+            merged_pr_count: 0,
+            total_pr_count: 2,
+            collapsed: false,
+        },
+        ProgressRow::BatchHeader {
+            batch_id: "batch-a".to_string(),
+            title: "Batch A".to_string(),
+            merged_pr_count: 0,
+            collapsed: false,
+        },
+        ProgressRow::ChecklistPullRequest {
+            batch_id: "batch-a".to_string(),
+            checklist_item_id: "item-a".to_string(),
+            row: PrProgressRow {
+                session_id: "worker".to_string(),
+                repo: None,
+                title: "Worker PR".to_string(),
+                number: Some(23),
+                url: Some("https://example.test/pull/23".to_string()),
+                pane_id: None,
+                is_ended: false,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::Done,
+                    pr_body: ProgressMark::Done,
+                    ci: ProgressMark::Waiting,
+                    merge: ProgressMark::NotStarted,
+                },
+            },
+        },
+        ProgressRow::PlannedPullRequest {
+            batch_id: "batch-a".to_string(),
+            checklist_item_id: "item-b".to_string(),
+            title: "Planned PR".to_string(),
+        },
+    ];
+    app.rebuild_row_order();
+    app
+}
+
+#[rstest]
+fn inline_plan_merges_its_worker_once_and_keeps_unmatched_session_children(
+    inline_progress_app: App,
+) {
+    assert_eq!(
+        inline_progress_app.row_keys,
+        vec![
+            None,
+            Some(SessionRowKey::Task("design".to_string())),
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::Implementation,
+                session_id: None,
+            }),
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::Batch("batch-a".to_string()),
+                session_id: None,
+            }),
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-a".to_string(),
+                    item_id: "item-a".to_string(),
+                },
+                session_id: Some("worker".to_string()),
+            }),
+            Some(SessionRowKey::Task("worker-child".to_string())),
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-a".to_string(),
+                    item_id: "item-b".to_string(),
+                },
+                session_id: None,
+            }),
+            Some(SessionRowKey::Task("unmatched".to_string())),
+        ],
+    );
+}
+
+#[rstest]
+fn collapsing_a_checklist_item_selects_its_batch_header(
+    timestamp: DateTime<Utc>,
+    inline_progress_app: App,
+    linked_checklist_plan: ImplementationPlan,
+) {
+    let mut app = inline_progress_app;
+    app.set_cached_progress(
+        "design",
+        CachedProgress {
+            rows: app.progress_rows.clone(),
+            error: None,
+            implementation: Some(linked_checklist_plan),
+            request_scope: None,
+            delegated_sessions: Vec::new(),
+            fetched_at: Some(timestamp),
+            last_attempt_at: Some(timestamp),
+        },
+    );
+    let item_key = SessionRowKey::Progress {
+        source_session_id: "design".to_string(),
+        selection_key: ProgressSelectionKey::ChecklistItem {
+            batch_id: "batch-a".to_string(),
+            item_id: "item-a".to_string(),
+        },
+        session_id: Some("worker".to_string()),
+    };
+    let position = app
+        .row_keys
+        .iter()
+        .position(|key| key.as_ref() == Some(&item_key))
+        .expect("checklist row should be visible");
+    app.list_state.select(Some(position));
+    app.progress_list_state.select(Some(2));
+
+    let changed = app.set_inline_progress_heading_expanded(false);
+
+    assert_eq!(
+        (
+            changed,
+            app.progress_batch_expanded.get("batch-a").copied(),
+            app.selected_row_key().cloned(),
+        ),
+        (
+            true,
+            Some(false),
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::Batch("batch-a".to_string()),
+                session_id: None,
+            }),
+        ),
+    );
+}
+
+#[rstest]
+#[case::not_started(None, "PR progress not fetched")]
+#[case::loading(Some(ProgressFetchState::Loading), "Refreshing PR progress…")]
+#[case::no_checklist(Some(ProgressFetchState::Ready), "No implementation checklist")]
+#[case::failed(
+    Some(ProgressFetchState::Failed("network unavailable".to_string())),
+    "PR progress fetch failed: network unavailable"
+)]
+fn inline_status_distinguishes_fetch_state_from_missing_checklist(
+    timestamp: DateTime<Utc>,
+    #[case] fetch_state: Option<ProgressFetchState>,
+    #[case] expected: &str,
+) {
+    let mut app = create_test_app(vec![create_test_session_at("design", timestamp)]);
+    app.progress_inline_expanded = true;
+    app.progress_session_id = Some("design".to_string());
+    if let Some(state) = fetch_state {
+        app.progress_fetch_states
+            .insert("design".to_string(), state);
+    }
+
+    let rows = app.build_display_rows();
+    let status_rows = rows
+        .iter()
+        .filter_map(|row| match row {
+            crate::commands::agent::tui::session_rows::SessionRow::InlineProgress(entry) => {
+                entry.label.clone()
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(status_rows, vec![expected.to_string()]);
 }
 
 fn progress_delegate(id: &str, timestamp: DateTime<Utc>) -> Session {
@@ -129,6 +319,7 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
         },
         ProgressRow::ChecklistPullRequest {
             batch_id: "batch-a".to_string(),
+            checklist_item_id: "item-a".to_string(),
             row: PrProgressRow {
                 session_id: "checklist-item:item-a".to_string(),
                 repo: Some("example-project".to_string()),
@@ -719,7 +910,7 @@ fn local_progress_refresh_uses_current_delegate_state(
 }
 
 #[rstest]
-fn initial_focus_selects_the_delegated_pr_row(
+fn initial_focus_keeps_the_worker_selected_and_opens_parent_progress(
     selected_task_session: Session,
     delegated_session: Session,
 ) {
@@ -735,24 +926,15 @@ fn initial_focus_selects_the_delegated_pr_row(
     assert_eq!(
         (
             app.selected_session_id(),
-            app.progress_focused,
-            app.progress_list_state.selected(),
-            app.progress_list_state
-                .selected()
-                .and_then(|index| app.progress_rows.get(index))
-                .and_then(ProgressRow::selection_key),
+            app.progress_inline_expanded,
+            app.selected_progress_source_id(),
         ),
-        (
-            Some("selected"),
-            true,
-            Some(1),
-            Some(ProgressSelectionKey::Session("delegate".to_string())),
-        ),
+        (Some("delegate"), true, Some("selected".to_string())),
     );
 }
 
 #[rstest]
-fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: DateTime<Utc>) {
+fn nested_delegate_focus_keeps_the_worker_selected_in_its_parent_tree(timestamp: DateTime<Utc>) {
     let root = create_test_session_at("root", timestamp);
     let mut task = create_test_session_at("task", timestamp);
     task.ancestor_session_ids = vec![root.session_id.clone()];
@@ -779,22 +961,19 @@ fn nested_delegate_focus_selects_the_direct_delegate_progress_row(timestamp: Dat
     assert_eq!(
         (
             app.selected_session_id(),
-            app.progress_focused,
-            app.progress_list_state
-                .selected()
-                .and_then(|index| app.progress_rows.get(index))
-                .and_then(ProgressRow::selection_key),
+            app.progress_inline_expanded,
+            app.selected_progress_source_id(),
         ),
         (
-            Some("intermediate-delegate"),
+            Some("delegate"),
             true,
-            Some(ProgressSelectionKey::Session("delegate".to_string(),)),
+            Some("intermediate-delegate".to_string()),
         ),
     );
 }
 
 #[rstest]
-fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
+fn initial_focus_expands_the_worker_batch_without_moving_the_cursor(
     selected_task_session: Session,
     delegated_session: Session,
 ) {
@@ -859,19 +1038,31 @@ fn initial_focus_expands_and_selects_a_merged_checklist_pr_row(
 
     assert_eq!(
         (
-            app.progress_list_state.selected(),
-            app.progress_list_state
-                .selected()
-                .and_then(|index| app.progress_rows.get(index))
-                .and_then(ProgressRow::selection_key),
+            app.selected_session_id(),
+            app.progress_inline_expanded,
             app.progress_implementation_expanded,
             app.progress_batch_expanded.get("batch-a").copied(),
+            app.list_state
+                .selected()
+                .and_then(|position| app.row_keys.get(position))
+                .and_then(Option::as_ref)
+                .cloned(),
         ),
         (
-            Some(3),
-            Some(ProgressSelectionKey::Session("delegate".to_string())),
+            Some("delegate"),
+            true,
             true,
             Some(true),
+            Some(
+                crate::commands::agent::tui::session_rows::SessionRowKey::Progress {
+                    source_session_id: "selected".to_string(),
+                    selection_key: ProgressSelectionKey::ChecklistItem {
+                        batch_id: "batch-a".to_string(),
+                        item_id: "item-a".to_string(),
+                    },
+                    session_id: Some("delegate".to_string()),
+                }
+            ),
         ),
     );
 }

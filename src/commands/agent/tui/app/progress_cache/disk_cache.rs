@@ -297,6 +297,7 @@ mod tests {
             }),
             ProgressRow::ChecklistPullRequest {
                 batch_id: "batch-placeholder".to_string(),
+                checklist_item_id: "item-placeholder".to_string(),
                 row: PrProgressRow {
                     session_id: "delegate-placeholder".to_string(),
                     repo: Some("sample-repo".to_string()),
@@ -624,6 +625,7 @@ mod tests {
                 }),
                 ProgressRow::ChecklistPullRequest {
                     batch_id: "batch-placeholder".to_string(),
+                    checklist_item_id: "item-placeholder".to_string(),
                     row: PrProgressRow {
                         session_id: "delegate-placeholder".to_string(),
                         repo: Some("sample-repo".to_string()),

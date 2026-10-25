@@ -40,13 +40,10 @@ impl App {
         if was_collapsed == collapsed {
             return true;
         }
-        let Some(selected) = self
-            .selected_session()
-            .filter(|session| {
-                self.progress_session_id.as_deref() == Some(session.session_id.as_str())
-            })
-            .cloned()
-        else {
+        let Some(source_session_id) = self.selected_progress_source_id() else {
+            return false;
+        };
+        let Some(selected) = self.session_by_id(&source_session_id) else {
             return false;
         };
         let Some(plan) = self.current_progress_implementation().cloned() else {
@@ -74,7 +71,7 @@ impl App {
             .unwrap_or_default();
         let delegated =
             self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
-        let rows = self.checklist_rows(&scope.work_sessions, &delegated, &plan);
+        let rows = self.checklist_rows(&source_session_id, &scope.work_sessions, &delegated, &plan);
         self.replace_progress_rows(rows, Some(target.selection_key()), current_index);
         true
     }

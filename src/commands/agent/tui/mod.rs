@@ -7,7 +7,6 @@ mod pr_fetch;
 mod progress;
 mod progress_batches;
 mod progress_fetch;
-mod progress_key;
 mod progress_refresh;
 mod session_key;
 mod session_preview;
@@ -128,7 +127,7 @@ struct KeyEffects {
     fetch_task_url: Option<String>,
     /// User pressed `o`: leave watch and open this session's crit pane.
     open_crit_session_id: Option<String>,
-    /// User pressed Enter on a PROGRESS pane row.
+    /// URL opened from the selected progress row.
     open_progress_target: Option<ProgressOpenTarget>,
 }
 
@@ -186,7 +185,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     let mut crit_session_id = None;
 
     let mut progress_refresh_schedule = ProgressRefreshSchedule::new(Instant::now());
-    progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
+    progress_refresh_schedule.request(app.selected_progress_source_id());
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
@@ -208,7 +207,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
 
         let first_event = event_handler.next()?;
-        let selected_session_before_events = app.selected_session_id().map(str::to_owned);
+        let selected_session_before_events = app.selected_progress_source_id();
         let mut session_store_changed = false;
         let mut periodic_tq_refresh_due = false;
         let mut periodic_progress_refresh_due = false;
@@ -341,11 +340,6 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
         if let Some(target) = effects.open_progress_target {
             match target {
-                ProgressOpenTarget::FocusPane(pane_id) => {
-                    if let Err(error) = crate::infra::tmux::focus_pane(&pane_id) {
-                        app.set_error(format!("Failed to focus pane: {error}"));
-                    }
-                }
                 ProgressOpenTarget::OpenUrl(url) => open_url(&mut app, &url),
             }
         }
@@ -360,7 +354,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
         if sessions_changed {
             app.refresh_worktree_session_counts();
-            if let Some(session_id) = app.selected_session_id().map(str::to_owned)
+            if let Some(session_id) = app.selected_progress_source_id()
                 && app.progress_session_id.as_deref() == Some(session_id.as_str())
             {
                 app.refresh_progress_from_sessions(&session_id);
@@ -369,7 +363,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
                 }
             }
         }
-        let selected_session_after_events = app.selected_session_id().map(str::to_owned);
+        let selected_session_after_events = app.selected_progress_source_id();
         let selection_changed = selected_session_before_events != selected_session_after_events;
         if selection_changed || periodic_progress_refresh_due {
             if selection_changed
@@ -428,7 +422,7 @@ fn schedule_progress_after_first_tq_snapshot(
     progress_refresh_schedule: &mut ProgressRefreshSchedule,
 ) {
     if tq_refresh_schedule.mark_snapshot_applied() {
-        progress_refresh_schedule.request(app.selected_session_id().map(str::to_owned));
+        progress_refresh_schedule.request(app.selected_progress_source_id());
     }
 }
 
@@ -436,6 +430,11 @@ fn schedule_progress_after_first_tq_snapshot(
 mod tests {
     use super::*;
     use crate::commands::agent::tui::app::AppMode;
+    use crate::commands::agent::tui::progress::{
+        PrProgressRow, ProgressFetchState, ProgressMark, ProgressOpenTarget, ProgressRow,
+        ProgressSelectionKey, StageMarks,
+    };
+    use crate::commands::agent::tui::session_rows::SessionRowKey;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use chrono::Utc;
     use rstest::{fixture, rstest};
@@ -480,6 +479,71 @@ mod tests {
             .collect();
 
         App::with_sessions(sessions)
+    }
+
+    fn inline_progress_test_app() -> App {
+        let mut app = create_test_app_with_sessions(2);
+        app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];
+        app.progress_inline_expanded = true;
+        app.progress_session_id = Some("session-0".to_string());
+        app.progress_fetch_states
+            .insert("session-0".to_string(), ProgressFetchState::Ready);
+        app.progress_rows = vec![
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 2,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-a".to_string(),
+                title: "Batch A".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch-a".to_string(),
+                checklist_item_id: "item-a".to_string(),
+                row: PrProgressRow {
+                    session_id: "session-1".to_string(),
+                    repo: None,
+                    title: "Example change".to_string(),
+                    number: Some(23),
+                    url: Some("https://example.test/pull/23".to_string()),
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Done,
+                        diff_review: ProgressMark::Done,
+                        pr_body: ProgressMark::Done,
+                        ci: ProgressMark::Waiting,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+            ProgressRow::PlannedPullRequest {
+                batch_id: "batch-a".to_string(),
+                checklist_item_id: "item-b".to_string(),
+                title: "Another planned change".to_string(),
+            },
+        ];
+        let rows = app.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        drop(rows);
+        let heights = vec![1; row_keys.len()];
+        let viewport_height = heights.len();
+        app.update_rendered_rows(&row_keys, &heights, viewport_height);
+        app
+    }
+
+    fn select_inline_progress_row(app: &mut App, key: &SessionRowKey) {
+        let rows = app.build_display_rows();
+        let position = rows
+            .iter()
+            .position(|row| row.row_key().as_ref() == Some(key))
+            .expect("inline progress row should exist");
+        drop(rows);
+        app.list_state.select(Some(position));
     }
 
     fn key(code: KeyCode) -> KeyEvent {
@@ -1511,15 +1575,160 @@ mod tests {
     }
 
     #[test]
-    fn tab_switches_between_tasks_and_progress() {
+    fn tab_toggles_inline_progress() {
         let mut app = create_test_app_with_sessions(1);
 
         handle_key_event(&mut app, key(KeyCode::Tab));
-        let after_progress = app.progress_focused;
+        let after_progress = app.progress_inline_expanded;
         handle_key_event(&mut app, key(KeyCode::Tab));
-        let after_tasks = app.progress_focused;
+        let after_tasks = app.progress_inline_expanded;
 
         assert_eq!([after_progress, after_tasks], [true, false]);
+    }
+
+    #[test]
+    fn j_selects_a_planned_pr_item_in_the_single_tree() {
+        let mut app = inline_progress_test_app();
+        let pull_request_key = SessionRowKey::Progress {
+            source_session_id: "session-0".to_string(),
+            selection_key: ProgressSelectionKey::ChecklistItem {
+                batch_id: "batch-a".to_string(),
+                item_id: "item-a".to_string(),
+            },
+            session_id: Some("session-1".to_string()),
+        };
+        select_inline_progress_row(&mut app, &pull_request_key);
+
+        handle_key_event(&mut app, key(KeyCode::Char('j')));
+
+        assert_eq!(
+            (app.selected_row_key().cloned(), app.selected_session_id()),
+            (
+                Some(SessionRowKey::Progress {
+                    source_session_id: "session-0".to_string(),
+                    selection_key: ProgressSelectionKey::ChecklistItem {
+                        batch_id: "batch-a".to_string(),
+                        item_id: "item-b".to_string(),
+                    },
+                    session_id: None,
+                }),
+                None,
+            ),
+        );
+    }
+
+    #[test]
+    fn tab_on_a_planned_item_closes_progress_and_selects_its_source() {
+        let mut app = inline_progress_test_app();
+        let planned_key = SessionRowKey::Progress {
+            source_session_id: "session-0".to_string(),
+            selection_key: ProgressSelectionKey::ChecklistItem {
+                batch_id: "batch-a".to_string(),
+                item_id: "item-b".to_string(),
+            },
+            session_id: None,
+        };
+        select_inline_progress_row(&mut app, &planned_key);
+
+        handle_key_event(&mut app, key(KeyCode::Tab));
+
+        assert_eq!(
+            (
+                app.progress_inline_expanded,
+                app.selected_session_id(),
+                app.selected_row_key().cloned(),
+            ),
+            (
+                false,
+                Some("session-0"),
+                Some(SessionRowKey::Task("session-0".to_string())),
+            ),
+        );
+    }
+
+    #[test]
+    fn enter_on_a_planned_item_does_not_focus_a_session() {
+        let mut app = inline_progress_test_app();
+        let planned_key = SessionRowKey::Progress {
+            source_session_id: "session-0".to_string(),
+            selection_key: ProgressSelectionKey::ChecklistItem {
+                batch_id: "batch-a".to_string(),
+                item_id: "item-b".to_string(),
+            },
+            session_id: None,
+        };
+        select_inline_progress_row(&mut app, &planned_key);
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Enter));
+
+        assert_eq!(
+            (
+                effects,
+                app.selected_session_id(),
+                app.error_message.clone()
+            ),
+            (KeyEffects::default(), None, None),
+        );
+    }
+
+    #[test]
+    fn o_on_a_matched_pr_item_opens_the_real_pull_request() {
+        let mut app = inline_progress_test_app();
+        let pull_request_key = SessionRowKey::Progress {
+            source_session_id: "session-0".to_string(),
+            selection_key: ProgressSelectionKey::ChecklistItem {
+                batch_id: "batch-a".to_string(),
+                item_id: "item-a".to_string(),
+            },
+            session_id: Some("session-1".to_string()),
+        };
+        select_inline_progress_row(&mut app, &pull_request_key);
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));
+
+        assert_eq!(
+            effects.open_progress_target,
+            Some(ProgressOpenTarget::OpenUrl(
+                "https://example.test/pull/23".to_string()
+            )),
+        );
+    }
+
+    #[test]
+    fn o_on_an_unmatched_session_opens_its_real_pull_request() {
+        let mut app = inline_progress_test_app();
+        app.progress_inline_expanded = false;
+        app.progress_rows = vec![ProgressRow::PullRequest(PrProgressRow {
+            session_id: "session-1".to_string(),
+            repo: Some("example-project".to_string()),
+            title: "Unmatched change".to_string(),
+            number: Some(23),
+            url: Some("https://example.test/pull/23".to_string()),
+            pane_id: None,
+            is_ended: false,
+            lookup_unavailable: false,
+            stages: StageMarks {
+                implementation: ProgressMark::Done,
+                diff_review: ProgressMark::Done,
+                pr_body: ProgressMark::Done,
+                ci: ProgressMark::Waiting,
+                merge: ProgressMark::NotStarted,
+            },
+        })];
+        app.update_row_order(&[None, Some("session-0"), Some("session-1")]);
+        select_inline_progress_row(&mut app, &SessionRowKey::Task("session-1".to_string()));
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));
+
+        assert_eq!(
+            (effects.open_progress_target, effects.open_crit_session_id),
+            (
+                Some(ProgressOpenTarget::OpenUrl(
+                    "https://example.test/pull/23".to_string()
+                )),
+                None,
+            ),
+        );
     }
 
     #[test]

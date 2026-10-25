@@ -114,6 +114,7 @@ impl App {
                 let has_delegates = !delegated.is_empty();
                 let rows = if let Some(plan) = implementation.as_ref() {
                     self.checklist_rows(
+                        session_id,
                         &scope.work_sessions,
                         &delegated
                             .iter()
@@ -128,6 +129,10 @@ impl App {
                     .then_some(progress.github_error)
                     .flatten();
                 let fetched_at = Utc::now();
+                self.progress_fetch_states.insert(
+                    session_id.to_string(),
+                    super::super::progress::ProgressFetchState::Ready,
+                );
                 self.store_progress_snapshot(
                     session_id,
                     CachedProgress {
@@ -147,6 +152,10 @@ impl App {
             }
             Ok(_) => {}
             Err(error) => {
+                self.progress_fetch_states.insert(
+                    session_id.to_string(),
+                    super::super::progress::ProgressFetchState::Failed(error.clone()),
+                );
                 self.refresh_local_progress(session_id, Some(error), true);
             }
         }
@@ -194,7 +203,7 @@ impl App {
         let delegated =
             self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
         let rows = if let Some(plan) = implementation.as_ref() {
-            self.checklist_rows(&scope.work_sessions, &delegated, plan)
+            self.checklist_rows(&selected.session_id, &scope.work_sessions, &delegated, plan)
         } else {
             refresh_task_rows_from_sessions(
                 &scope.work_sessions,
@@ -255,8 +264,11 @@ impl App {
         snapshot: CachedProgress,
         resolve_initial_selection: bool,
     ) {
+        let inline_selection = self
+            .progress_inline_expanded
+            .then(|| self.selection_anchor());
         self.set_cached_progress(session_id, snapshot.clone());
-        if self.selected_session_id() != Some(session_id) {
+        if self.selected_progress_source_id().as_deref() != Some(session_id) {
             return;
         }
         let rows_unchanged = self.progress_session_id.as_deref() == Some(session_id)
@@ -321,27 +333,30 @@ impl App {
         self.progress_error = snapshot.error.clone();
         if !rows_unchanged {
             self.replace_progress_rows(snapshot.rows, selected_key, selected_index);
+            if let Some(selection) = inline_selection {
+                self.restore_selection(selection);
+            }
         }
     }
 
     fn checklist_rows(
         &self,
+        source_session_id: &str,
         work_sessions: &[Session],
         delegated: &[Session],
         plan: &ImplementationPlan,
     ) -> Vec<ProgressRow> {
-        let Some(selected) = work_sessions.first().or_else(|| self.selected_session()) else {
+        let Some(selected) = self.session_by_id(source_session_id) else {
             return Vec::new();
         };
-        let use_current_expansion = self.progress_session_id.as_deref()
-            == Some(selected.session_id.as_str())
-            && self.selected_session_id() == Some(selected.session_id.as_str());
+        let use_current_expansion =
+            self.progress_session_id.as_deref() == Some(selected.session_id.as_str());
         let mut expanded_batches = if use_current_expansion {
             self.progress_batch_expanded.clone()
         } else {
             HashMap::new()
         };
-        let initial_target = self.initial_progress_target(&selected.session_id);
+        let initial_target = self.initial_progress_target(source_session_id);
         expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
         let unmatched_expanded = initial_target
             .is_some_and(|target| plan.batch_id_for_delegate(target).is_none())

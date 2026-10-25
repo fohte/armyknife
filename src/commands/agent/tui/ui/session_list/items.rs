@@ -51,7 +51,7 @@ pub(super) const WAITING_QUESTION_BASE_INDENT: usize = TITLE_COLUMN_BASE_INDENT;
 const RECENT_TIME_THRESHOLD_SECS: i64 = 3600;
 /// Width of the work type icon column plus its trailing gap, expanded for the
 /// widest configured icon so every row's title starts in the same column.
-fn work_type_column_width(app: &App) -> usize {
+pub(super) fn work_type_column_width(app: &App) -> usize {
     app.agent_config
         .work_types
         .values()
@@ -256,6 +256,17 @@ pub(super) fn build_session_item(
     term_width: usize,
     query: &str,
 ) -> ListItem<'static> {
+    build_session_item_with_annotation(entry, app, now, term_width, query, None)
+}
+
+pub(super) fn build_session_item_with_annotation(
+    entry: &SessionRowEntry,
+    app: &App,
+    now: DateTime<Utc>,
+    term_width: usize,
+    query: &str,
+    annotation: Option<&str>,
+) -> ListItem<'static> {
     let session = entry.session;
     let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
     let (symbol, symbol_color) = mark_glyph(entry.mark, session);
@@ -267,13 +278,17 @@ pub(super) fn build_session_item(
     let repo_text = get_session_info(session, repo_name);
     let repo_col = pad_to_width(&truncate(&repo_text, REPO_COLUMN_WIDTH), REPO_COLUMN_WIDTH);
 
-    let own_title = match entry.task.as_ref() {
+    let mut own_title = match entry.task.as_ref() {
         Some(task) => task.task_title.clone(),
         None => app
             .get_cached_title(&session.session_id)
             .map(String::from)
             .unwrap_or_else(|| get_title_display_name_fallback(session)),
     };
+    if let Some(annotation) = annotation {
+        own_title.push_str(" · ");
+        own_title.push_str(annotation);
+    }
 
     let title_kin_color = app
         .selected_session()
