@@ -29,6 +29,77 @@ pub(super) struct SectionHeaderRow {
     pub kind: Section,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(super) enum SessionRowKey {
+    UserTurn(String),
+    Task(String),
+}
+
+impl SessionRowKey {
+    pub(super) fn session_id(&self) -> &str {
+        match self {
+            Self::UserTurn(session_id) | Self::Task(session_id) => session_id,
+        }
+    }
+}
+
+/// Captures session order while list navigation is active.
+#[derive(Debug, Default)]
+pub(super) struct SessionRowOrder {
+    user_turn_positions: HashMap<String, usize>,
+    task_positions: HashMap<String, usize>,
+    next_user_turn_position: usize,
+    next_task_position: usize,
+}
+
+impl SessionRowOrder {
+    pub(super) fn from_rows(rows: &[SessionRow<'_>]) -> Self {
+        let mut order = Self::default();
+        order.remember_rows(rows);
+        order
+    }
+
+    pub(super) fn remember_rows(&mut self, rows: &[SessionRow<'_>]) {
+        let keys = rows
+            .iter()
+            .filter_map(SessionRow::row_key)
+            .collect::<Vec<_>>();
+        self.remember_keys(&keys);
+    }
+
+    pub(super) fn remember_keys(&mut self, keys: &[SessionRowKey]) {
+        for key in keys {
+            let (positions, next_position) = match key {
+                SessionRowKey::UserTurn(_) => (
+                    &mut self.user_turn_positions,
+                    &mut self.next_user_turn_position,
+                ),
+                SessionRowKey::Task(_) => (&mut self.task_positions, &mut self.next_task_position),
+            };
+            let session_id = key.session_id();
+            if !positions.contains_key(session_id) {
+                positions.insert(session_id.to_string(), *next_position);
+                *next_position += 1;
+            }
+        }
+    }
+
+    pub(super) fn retain_sessions(&mut self, session_ids: &HashSet<String>) {
+        self.user_turn_positions
+            .retain(|session_id, _| session_ids.contains(session_id));
+        self.task_positions
+            .retain(|session_id, _| session_ids.contains(session_id));
+    }
+
+    fn user_turn_position(&self, session_id: &str) -> Option<usize> {
+        self.user_turn_positions.get(session_id).copied()
+    }
+
+    fn task_position(&self, session_id: &str) -> Option<usize> {
+        self.task_positions.get(session_id).copied()
+    }
+}
+
 /// One TASKS row. `tree_prefix` is `None` for a root; descendants carry one
 /// sibling marker for each non-root ancestor between the root and parent.
 #[derive(Debug)]
@@ -74,6 +145,18 @@ impl<'a> SessionRow<'a> {
             SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
             SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
             SessionRow::SectionHeader(_) => None,
+        }
+    }
+
+    pub(super) fn row_key(&self) -> Option<SessionRowKey> {
+        match self {
+            SessionRow::SectionHeader(_) => None,
+            SessionRow::UserTurn(turn) => {
+                Some(SessionRowKey::UserTurn(turn.session.session_id.clone()))
+            }
+            SessionRow::Session(entry) => {
+                Some(SessionRowKey::Task(entry.session.session_id.clone()))
+            }
         }
     }
 }
@@ -137,7 +220,30 @@ pub(super) fn build_session_rows_with_vibe<'a>(
     agent_config: &AgentConfig,
     vibe_enabled_session_ids: &HashSet<String>,
 ) -> Vec<SessionRow<'a>> {
-    let turns = user_turns(sessions.iter().copied(), agent_config);
+    build_session_rows_with_order(
+        sessions,
+        task_by_session,
+        agent_config,
+        vibe_enabled_session_ids,
+        None,
+    )
+}
+
+pub(super) fn build_session_rows_with_order<'a>(
+    sessions: &[&'a Session],
+    task_by_session: &HashMap<String, SessionTask>,
+    agent_config: &AgentConfig,
+    vibe_enabled_session_ids: &HashSet<String>,
+    order: Option<&SessionRowOrder>,
+) -> Vec<SessionRow<'a>> {
+    let mut turns = user_turns(sessions.iter().copied(), agent_config);
+    if let Some(order) = order {
+        turns.sort_by_key(|turn| {
+            order
+                .user_turn_position(&turn.session.session_id)
+                .unwrap_or(usize::MAX)
+        });
+    }
     let user_turn_session_ids: HashSet<String> = turns
         .iter()
         .map(|turn| turn.session.session_id.clone())
@@ -150,6 +256,7 @@ pub(super) fn build_session_rows_with_vibe<'a>(
         &user_turn_session_ids,
         agent_config,
         vibe_enabled_session_ids,
+        order,
     );
     if !task_rows.is_empty() {
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {

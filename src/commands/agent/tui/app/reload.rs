@@ -7,15 +7,20 @@ use crate::commands::agent::types::{Session, SessionStatus};
 use crate::infra::tmux;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
 
-use super::super::session_rows::build_session_rows_with_vibe;
+use super::super::session_rows::{SessionRowKey, SessionRowOrder, build_session_rows_with_vibe};
 use super::App;
+
+const SESSION_ORDER_GRACE_PERIOD: Duration = Duration::from_secs(2);
 
 #[derive(Debug)]
 pub(super) struct SelectionAnchor {
     position: Option<usize>,
     session_id: Option<String>,
     occurrence: usize,
+    row_key: Option<SessionRowKey>,
+    screen_line: Option<usize>,
 }
 
 impl SelectionAnchor {
@@ -28,6 +33,8 @@ impl SelectionAnchor {
             position: None,
             session_id: Some(session_id.into()),
             occurrence,
+            row_key: None,
+            screen_line: None,
         }
     }
 }
@@ -43,7 +50,7 @@ impl App {
         self.apply_session_store_changes(changes)
     }
 
-    fn apply_session_store_changes(
+    pub(crate) fn apply_session_store_changes(
         &mut self,
         changes: store::SessionStoreChanges,
     ) -> Result<(bool, bool)> {
@@ -112,6 +119,10 @@ impl App {
             visible_state_changed = true;
         }
 
+        if let Some(order) = self.session_row_order.as_mut() {
+            order.retain_sessions(&changes.existing_session_ids);
+        }
+
         for session_id in &changed_ids {
             if let Some(session) = self
                 .sessions
@@ -167,24 +178,10 @@ impl App {
     /// Runs the same section-grouping logic that the render layer uses, so
     /// that cursor positions always match the displayed order.
     pub(super) fn rebuild_row_order(&mut self) {
-        let filtered: Vec<&Session> = self
-            .filtered_indices
-            .iter()
-            .filter_map(|&i| self.sessions.get(i))
-            .collect();
-        let rows = build_session_rows_with_vibe(
-            &filtered,
-            &self.task_by_session,
-            &self.agent_config,
-            &self.vibe_enabled_session_ids,
-        );
-        self.row_sessions = rows
-            .iter()
-            .map(|r| {
-                r.session_id()
-                    .and_then(|id| self.sessions.iter().position(|s| s.session_id == id))
-            })
-            .collect();
+        let rows = self.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        drop(rows);
+        self.update_rendered_row_keys(&row_keys);
     }
 
     /// Indices of rows that are individually selectable (i.e. hold a
@@ -199,7 +196,7 @@ impl App {
 
     /// The row index whose session has the given id, if that session is
     /// currently displayed.
-    pub(super) fn position_of_session_row(&self, session_id: &str) -> Option<usize> {
+    pub(crate) fn position_of_session_row(&self, session_id: &str) -> Option<usize> {
         self.position_of_session_row_where(|session| session.session_id == session_id)
     }
 
@@ -227,13 +224,63 @@ impl App {
     }
 
     pub(super) fn selection_anchor(&self) -> SelectionAnchor {
+        let position = self.list_state.selected();
         SelectionAnchor {
-            position: self.list_state.selected(),
+            position,
             session_id: self
                 .selected_session()
                 .map(|session| session.session_id.clone()),
             occurrence: self.selected_session_row_occurrence().unwrap_or_default(),
+            row_key: position.and_then(|position| self.row_keys.get(position).cloned().flatten()),
+            screen_line: position.and_then(|position| {
+                self.pending_selection_line
+                    .or_else(|| self.selection_screen_line(position))
+            }),
         }
+    }
+
+    fn selection_screen_line(&self, selected: usize) -> Option<usize> {
+        let offset = self.list_state.offset().min(selected);
+        self.row_heights
+            .get(offset..selected)
+            .map(|heights| heights.iter().sum())
+    }
+
+    pub(super) fn note_session_list_interaction(&mut self) {
+        self.note_session_list_interaction_at(Instant::now());
+    }
+
+    pub(crate) fn note_session_list_interaction_at(&mut self, now: Instant) {
+        if self.session_row_order.is_none() {
+            let all_sessions = self.sessions.iter().collect::<Vec<_>>();
+            let rows = build_session_rows_with_vibe(
+                &all_sessions,
+                &self.task_by_session,
+                &self.agent_config,
+                &self.vibe_enabled_session_ids,
+            );
+            self.session_row_order = Some(SessionRowOrder::from_rows(&rows));
+        }
+        self.navigation_hold_deadline = Some(now + SESSION_ORDER_GRACE_PERIOD);
+    }
+
+    pub(crate) fn navigation_hold_deadline(&self) -> Option<Instant> {
+        self.navigation_hold_deadline
+    }
+
+    pub(crate) fn finish_navigation_hold_if_due(&mut self, now: Instant) -> bool {
+        if !self
+            .navigation_hold_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            return false;
+        }
+
+        let selection = self.selection_anchor();
+        self.navigation_hold_deadline = None;
+        self.session_row_order = None;
+        self.restore_selection(selection);
+        true
     }
 
     /// Returns the selected session's occurrence among its rows in display order.
@@ -265,25 +312,33 @@ impl App {
     /// selectable position at or after the previous one, else the last
     /// selectable position, else `None`.
     pub(super) fn resync_selection(&mut self, anchor: SelectionAnchor) {
-        if let Some(id) = anchor.session_id
-            && let Some(pos) = self.position_of_session_row_occurrence(&id, anchor.occurrence)
-        {
-            self.list_state.select(Some(pos));
-            return;
-        }
-
-        let selectable = self.selectable_positions();
         let next = anchor
-            .position
-            .and_then(|p| {
-                selectable
+            .row_key
+            .as_ref()
+            .and_then(|key| {
+                self.row_keys
                     .iter()
-                    .find(|&&i| i >= p)
-                    .copied()
-                    .or_else(|| selectable.last().copied())
+                    .position(|row_key| row_key.as_ref() == Some(key))
             })
-            .or_else(|| selectable.first().copied());
+            .or_else(|| {
+                anchor
+                    .session_id
+                    .as_deref()
+                    .and_then(|id| self.position_of_session_row_occurrence(id, anchor.occurrence))
+            })
+            .or_else(|| {
+                let selectable = self.selectable_positions();
+                anchor.position.and_then(|position| {
+                    selectable
+                        .iter()
+                        .find(|&&index| index >= position)
+                        .copied()
+                        .or_else(|| selectable.last().copied())
+                })
+            })
+            .or_else(|| self.selectable_positions().first().copied());
         self.list_state.select(next);
+        self.pending_selection_line = next.and(anchor.screen_line);
     }
 
     /// Restores a captured selection after rebuilding the row order.
@@ -381,9 +436,10 @@ mod tests {
     use super::*;
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
-    use chrono::{TimeDelta, Utc};
+    use chrono::{TimeDelta, TimeZone, Utc};
     use rstest::{fixture, rstest};
     use std::path::PathBuf;
+    use std::time::{Duration, Instant};
 
     /// Counter to assign distinct timestamps to test sessions.
     /// Each call returns a progressively older timestamp, so sessions
@@ -648,6 +704,181 @@ mod tests {
         );
     }
 
+    #[test]
+    fn navigation_holds_existing_order_until_two_seconds_after_the_last_interaction() {
+        let t0 = Utc
+            .timestamp_opt(1_000, 0)
+            .single()
+            .expect("valid timestamp");
+        let t1 = t0 + TimeDelta::seconds(1);
+        let t2 = t0 + TimeDelta::seconds(2);
+        let t3 = t0 + TimeDelta::seconds(3);
+        let t4 = t0 + TimeDelta::seconds(4);
+        let mut root_a = create_test_session("root-a");
+        root_a.updated_at = t0;
+        let mut child_a = create_test_session("child-a");
+        child_a.updated_at = t2;
+        child_a.ancestor_session_ids = vec!["root-a".to_string()];
+        let mut child_b = create_test_session("child-b");
+        child_b.updated_at = t1;
+        child_b.ancestor_session_ids = vec!["root-a".to_string()];
+        let mut root_b = create_test_session("root-b");
+        root_b.updated_at = t3;
+        let mut app = create_test_app(vec![root_a, child_a, child_b, root_b]);
+        let selected_position = app
+            .position_of_session_row("child-a")
+            .expect("selected row is displayed");
+        app.list_state.select(Some(selected_position));
+        let start = Instant::now();
+        app.note_session_list_interaction_at(start);
+
+        let mut updated_child_b = app
+            .sessions
+            .iter()
+            .find(|session| session.session_id == "child-b")
+            .expect("child-b exists")
+            .clone();
+        updated_child_b.updated_at = t4;
+        app.apply_session_store_changes(store::SessionStoreChanges {
+            changed_sessions: vec![updated_child_b],
+            existing_session_ids: HashSet::from([
+                "root-a".to_string(),
+                "child-a".to_string(),
+                "child-b".to_string(),
+                "root-b".to_string(),
+            ]),
+            revision: 1,
+        })
+        .expect("session-store changes should apply");
+        app.note_session_list_interaction_at(start + Duration::from_secs(1));
+
+        let held_order_and_state = (
+            app.row_keys.clone(),
+            app.selected_session()
+                .map(|session| session.session_id.clone()),
+            app.sessions
+                .iter()
+                .find(|session| session.session_id == "child-b")
+                .map(|session| session.updated_at),
+            app.navigation_hold_deadline(),
+        );
+        let early = app.finish_navigation_hold_if_due(start + Duration::from_secs(2));
+        let almost = app.finish_navigation_hold_if_due(start + Duration::from_millis(2_999));
+        let applied = app.finish_navigation_hold_if_due(start + Duration::from_secs(3));
+
+        assert_eq!(
+            (
+                held_order_and_state,
+                early,
+                almost,
+                applied,
+                app.row_keys.clone(),
+                app.selected_session()
+                    .map(|session| session.session_id.clone()),
+            ),
+            (
+                (
+                    vec![
+                        None,
+                        Some(SessionRowKey::Task("root-b".to_string())),
+                        Some(SessionRowKey::Task("root-a".to_string())),
+                        Some(SessionRowKey::Task("child-a".to_string())),
+                        Some(SessionRowKey::Task("child-b".to_string())),
+                    ],
+                    Some("child-a".to_string()),
+                    Some(t4),
+                    Some(start + Duration::from_secs(3)),
+                ),
+                false,
+                false,
+                true,
+                vec![
+                    None,
+                    Some(SessionRowKey::Task("root-a".to_string())),
+                    Some(SessionRowKey::Task("child-b".to_string())),
+                    Some(SessionRowKey::Task("child-a".to_string())),
+                    Some(SessionRowKey::Task("root-b".to_string())),
+                ],
+                Some("child-a".to_string()),
+            ),
+        );
+    }
+
+    #[test]
+    fn new_children_are_appended_after_existing_siblings_during_navigation() {
+        let t0 = Utc
+            .timestamp_opt(2_000, 0)
+            .single()
+            .expect("valid timestamp");
+        let mut root = create_test_session("root");
+        root.updated_at = t0;
+        let mut existing_child = create_test_session("existing-child");
+        existing_child.updated_at = t0 + TimeDelta::seconds(1);
+        existing_child.ancestor_session_ids = vec!["root".to_string()];
+        let mut app = create_test_app(vec![root, existing_child]);
+        app.note_session_list_interaction_at(Instant::now());
+
+        let mut new_child = create_test_session("new-child");
+        new_child.updated_at = t0 + TimeDelta::seconds(2);
+        new_child.ancestor_session_ids = vec!["root".to_string()];
+        app.apply_session_store_changes(store::SessionStoreChanges {
+            changed_sessions: vec![new_child],
+            existing_session_ids: HashSet::from([
+                "root".to_string(),
+                "existing-child".to_string(),
+                "new-child".to_string(),
+            ]),
+            revision: 1,
+        })
+        .expect("session-store changes should apply");
+
+        assert_eq!(
+            app.row_keys,
+            vec![
+                None,
+                Some(SessionRowKey::Task("root".to_string())),
+                Some(SessionRowKey::Task("existing-child".to_string())),
+                Some(SessionRowKey::Task("new-child".to_string())),
+            ],
+        );
+    }
+
+    #[test]
+    fn task_occurrence_remains_selected_when_a_user_turn_row_appears() {
+        let mut selected = create_test_session("selected");
+        let other = create_test_session("other");
+        let mut app = create_test_app(vec![selected.clone(), other]);
+        let task_position = app
+            .position_of_session_row("selected")
+            .expect("TASKS row is displayed");
+        app.list_state.select(Some(task_position));
+        selected.status = SessionStatus::WaitingInput;
+        selected
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        app.apply_session_store_changes(store::SessionStoreChanges {
+            changed_sessions: vec![selected],
+            existing_session_ids: HashSet::from(["selected".to_string(), "other".to_string()]),
+            revision: 1,
+        })
+        .expect("session-store changes should apply");
+
+        assert_eq!(
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.row_keys
+                    .get(app.list_state.selected().unwrap_or_default())
+                    .cloned()
+                    .flatten(),
+            ),
+            (
+                Some("selected"),
+                Some(SessionRowKey::Task("selected".to_string())),
+            ),
+        );
+    }
+
     #[rstest]
     fn test_tq_snapshot_updates_preserve_selected_task_occurrence(
         app_with_user_turn_and_active_session: App,
@@ -739,7 +970,7 @@ mod tests {
         app.toggle_status_filter(SessionStatus::Running);
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
-            Some("a")
+            Some("b")
         );
 
         app.restore_selection(selection);

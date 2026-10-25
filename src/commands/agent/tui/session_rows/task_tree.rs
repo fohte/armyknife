@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{SessionRowEntry, SessionTask, TaskMark, VibeMode};
+use super::{SessionRowEntry, SessionRowOrder, SessionTask, TaskMark, VibeMode};
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 
@@ -11,6 +11,7 @@ pub(super) fn build_task_rows<'a>(
     user_turn_session_ids: &HashSet<String>,
     agent_config: &AgentConfig,
     vibe_enabled_session_ids: &HashSet<String>,
+    order: Option<&SessionRowOrder>,
 ) -> Vec<SessionRowEntry<'a>> {
     let members: Vec<&'a Session> = sessions.to_vec();
     let member_ids: HashSet<&'a str> = members
@@ -43,7 +44,12 @@ pub(super) fn build_task_rows<'a>(
         }
     }
     for children in children_by_parent.values_mut() {
-        children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
+        if let Some(order) = order {
+            children
+                .sort_by_key(|child| order.task_position(&child.session_id).unwrap_or(usize::MAX));
+        } else {
+            children.sort_by_key(|child| std::cmp::Reverse(child.updated_at));
+        }
     }
 
     let mut visited = HashSet::new();
@@ -71,14 +77,24 @@ pub(super) fn build_task_rows<'a>(
             .map(|row| row.session.updated_at)
             .max()
             .unwrap_or(root.updated_at);
+        let position = order
+            .and_then(|order| order.task_position(&root.session_id))
+            .unwrap_or(usize::MAX);
         groups.push(TaskTreeGroup {
             rows,
             has_user_turn,
             last_moved,
+            position,
         });
     }
 
-    groups.sort_by_cached_key(|group| (!group.has_user_turn, std::cmp::Reverse(group.last_moved)));
+    if order.is_some() {
+        groups.sort_by_key(|group| group.position);
+    } else {
+        groups.sort_by_cached_key(|group| {
+            (!group.has_user_turn, std::cmp::Reverse(group.last_moved))
+        });
+    }
 
     let mut rows = Vec::with_capacity(members.len());
     for group in groups {
@@ -103,6 +119,7 @@ struct TaskTreeGroup<'a> {
     rows: Vec<SessionRowEntry<'a>>,
     has_user_turn: bool,
     last_moved: chrono::DateTime<chrono::Utc>,
+    position: usize,
 }
 
 struct TaskTreeBuilder<'context, 'session> {

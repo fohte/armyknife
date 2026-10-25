@@ -5,7 +5,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
@@ -31,6 +31,8 @@ pub enum AppEvent {
     SessionStoreChanged,
     /// Tick for periodic updates.
     Tick,
+    /// The list has been idle for the order-hold grace period.
+    NavigationIdle,
     /// Background worktree discovery finished.
     WorktreesLoaded(std::result::Result<Vec<super::worktree::WorktreeRow>, String>),
     /// Background session-label (repo name + worktree name) resolution
@@ -65,6 +67,7 @@ pub struct EventHandler {
     /// can be spawned without nesting a fresh runtime — `agent watch` is
     /// invoked from inside the top-level tokio runtime.
     rt_handle: Option<tokio::runtime::Handle>,
+    navigation_idle_sender: Sender<Option<Instant>>,
     /// Watcher must be kept alive to receive events.
     _watcher: Option<RecommendedWatcher>,
 }
@@ -74,6 +77,12 @@ impl EventHandler {
     /// Spawns background threads for keyboard and file system monitoring.
     pub fn new() -> Result<Self> {
         let (tx, rx) = mpsc::channel();
+
+        let (navigation_idle_sender, navigation_idle_receiver) = mpsc::channel();
+        let idle_tx = tx.clone();
+        thread::spawn(move || {
+            handle_navigation_idle_events(navigation_idle_receiver, idle_tx);
+        });
 
         // Spawn keyboard event thread
         let key_tx = tx.clone();
@@ -107,6 +116,7 @@ impl EventHandler {
             receiver: rx,
             sender,
             rt_handle: tokio::runtime::Handle::try_current().ok(),
+            navigation_idle_sender,
             _watcher: watcher,
         })
     }
@@ -121,6 +131,10 @@ impl EventHandler {
     /// Non-blocking receive: returns `Some(event)` if available, `None` otherwise.
     pub fn try_next(&self) -> Option<AppEvent> {
         self.receiver.try_recv().ok()
+    }
+
+    pub fn schedule_navigation_idle(&self, deadline: Option<Instant>) {
+        let _ = self.navigation_idle_sender.send(deadline);
     }
 
     /// Resolve session labels (repo + worktree names) for `cwds` in the
@@ -330,6 +344,31 @@ fn handle_tick_events(tx: Sender<AppEvent>) {
     }
 }
 
+fn handle_navigation_idle_events(receiver: Receiver<Option<Instant>>, sender: Sender<AppEvent>) {
+    let mut deadline: Option<Instant> = None;
+    loop {
+        let scheduled = match deadline {
+            Some(deadline) => {
+                match receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                    Ok(deadline) => Some(deadline),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if sender.send(AppEvent::NavigationIdle).is_err() {
+                            break;
+                        }
+                        None
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            None => match receiver.recv() {
+                Ok(deadline) => Some(deadline),
+                Err(_) => break,
+            },
+        };
+        deadline = scheduled.flatten();
+    }
+}
+
 /// Sets up a file system watcher for the session database and its WAL files.
 fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>> {
     let sessions_dir = match store::sessions_dir() {
@@ -467,10 +506,12 @@ mod tests {
     #[test]
     fn test_try_next_returns_none_on_empty_channel() {
         let (tx, rx) = mpsc::channel::<AppEvent>();
+        let (navigation_idle_sender, _) = mpsc::channel();
         let handler = EventHandler {
             receiver: rx,
             sender: tx,
             rt_handle: None,
+            navigation_idle_sender,
             _watcher: None,
         };
         assert!(handler.try_next().is_none());
@@ -479,10 +520,12 @@ mod tests {
     #[test]
     fn test_try_next_returns_events_then_none() {
         let (tx, rx) = mpsc::channel::<AppEvent>();
+        let (navigation_idle_sender, _) = mpsc::channel();
         let handler = EventHandler {
             receiver: rx,
             sender: tx.clone(),
             rt_handle: None,
+            navigation_idle_sender,
             _watcher: None,
         };
 
@@ -508,10 +551,12 @@ mod tests {
     #[test]
     fn test_try_next_drains_all_queued_events() {
         let (tx, rx) = mpsc::channel::<AppEvent>();
+        let (navigation_idle_sender, _) = mpsc::channel();
         let handler = EventHandler {
             receiver: rx,
             sender: tx.clone(),
             rt_handle: None,
+            navigation_idle_sender,
             _watcher: None,
         };
 

@@ -9,11 +9,14 @@ use chrono::{DateTime, Utc};
 use ratatui::widgets::{ListState, TableState};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::ProgressRow;
-use super::session_rows::{SessionTask, build_session_rows_with_vibe, tasks_row_occurrence};
+use super::session_rows::{
+    SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_vibe, tasks_row_occurrence,
+};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -53,6 +56,7 @@ mod progress_cache;
 mod progress_scope;
 mod progress_selection;
 mod reload;
+mod session_list;
 mod tq;
 mod worktree;
 
@@ -152,6 +156,15 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
+    /// Distinguishes YOUR TURN and TASKS rows for the same session.
+    row_keys: Vec<Option<SessionRowKey>>,
+    /// Rendered item heights support restoring a selection's terminal line.
+    row_heights: Vec<usize>,
+    list_viewport_height: usize,
+    pending_selection_line: Option<usize>,
+    /// Frozen display order while recent list navigation continues.
+    session_row_order: Option<SessionRowOrder>,
+    navigation_hold_deadline: Option<Instant>,
     /// Currently active top-level view.
     pub view: View,
     /// Whether the full key-binding list is shown in the help bar (toggled by `?`).
@@ -267,6 +280,12 @@ impl App {
             // Searchable text cache is lazily built on first search
             searchable_text_cache: None,
             row_sessions: Vec::new(),
+            row_keys: Vec::new(),
+            row_heights: Vec::new(),
+            list_viewport_height: 0,
+            pending_selection_line: None,
+            session_row_order: None,
+            navigation_hold_deadline: None,
             title_cache,
             worktree_label_cache: HashMap::new(),
             pending_label_cwds: HashSet::new(),
@@ -403,17 +422,6 @@ impl App {
             .iter()
             .filter_map(|&i| self.sessions.get(i))
             .collect()
-    }
-
-    /// Updates `row_sessions` from display-ordered row session IDs (`None`
-    /// for a header/summary row). Called by the UI layer after building
-    /// the row list to keep the selection mapping in sync with the
-    /// rendered list order.
-    pub fn update_row_order(&mut self, row_session_ids: &[Option<&str>]) {
-        self.row_sessions = row_session_ids
-            .iter()
-            .map(|id| id.and_then(|id| self.sessions.iter().position(|s| s.session_id == id)))
-            .collect();
     }
 
     /// Signals that the application should quit.
