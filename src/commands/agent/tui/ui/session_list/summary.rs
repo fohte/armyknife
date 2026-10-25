@@ -54,10 +54,7 @@ pub(in crate::commands::agent::tui::ui) fn selected_summary_lines(
                     .filter(|note| !note.is_empty())
                     .or(session.current_tool.as_deref())
                     .filter(|note| !note.is_empty());
-                match note {
-                    Some(note) => format!("{title}\nWaiting: {note}"),
-                    None => title,
-                }
+                session_summary_with_title(app, session_id, title, note)
             })
             .unwrap_or_default(),
     };
@@ -71,7 +68,16 @@ pub(in crate::commands::agent::tui::ui) fn selected_summary_lines(
 }
 
 fn session_summary(app: &App, session_id: &str, note: Option<&str>) -> String {
-    let mut lines = vec![session_title(app, session_id)];
+    session_summary_with_title(app, session_id, session_title(app, session_id), note)
+}
+
+fn session_summary_with_title(
+    app: &App,
+    session_id: &str,
+    title: String,
+    note: Option<&str>,
+) -> String {
+    let mut lines = vec![title];
     if let Some(note) = note.filter(|note| !note.is_empty()) {
         lines.push(format!("Waiting: {note}"));
     }
@@ -245,14 +251,30 @@ fn wrap_summary(text: &str, width: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use rstest::{fixture, rstest};
+
     use super::*;
     use crate::commands::agent::tui::app::App;
     use crate::commands::agent::tui::progress::{
-        ProgressFetchState, ProgressMark, ProgressSelectionKey, StageMarks,
+        PrProgressRow, ProgressFetchState, ProgressMark, ProgressSelectionKey, StageMarks,
     };
     use crate::commands::agent::tui::session_rows::SessionRowKey;
     use crate::commands::agent::tui::ui::test_support::create_test_session;
-    use crate::commands::agent::types::AgentStatus;
+    use crate::commands::agent::types::{AgentStatus, SessionStatus};
+
+    #[fixture]
+    fn user_turn_worker() -> crate::commands::agent::types::Session {
+        let mut worker = create_test_session("worker");
+        worker.label = Some("Cached worker title".to_string());
+        worker.cwd = PathBuf::from("/home/test/project-fallback");
+        worker.status = SessionStatus::WaitingInput;
+        worker
+            .crit_urls
+            .push("https://example.test/review".to_string());
+        worker
+    }
 
     fn select_display_row(app: &mut App, key: &SessionRowKey) {
         let rows = app.build_display_rows();
@@ -290,6 +312,64 @@ mod tests {
                 Line::from("A long design session title"),
                 Line::from("Waiting: implementation review"),
                 Line::from("PR progress: 2/5 merged"),
+            ],
+        );
+    }
+
+    #[rstest]
+    #[case::agent_status_note(
+        Some("review the change"),
+        Some("Bash cargo test"),
+        "review the change"
+    )]
+    #[case::current_tool_fallback(None, Some("Bash cargo test"), "Bash cargo test")]
+    fn selected_user_turn_summary_keeps_title_waiting_note_and_pr_stages(
+        mut user_turn_worker: crate::commands::agent::types::Session,
+        #[case] status_note: Option<&str>,
+        #[case] current_tool: Option<&str>,
+        #[case] expected_note: &str,
+    ) {
+        user_turn_worker.agent_status = status_note.map(|note| AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: note.to_string(),
+        });
+        user_turn_worker.current_tool = current_tool.map(str::to_owned);
+        let mut app = App::with_sessions(vec![user_turn_worker]);
+        app.progress_session_id = Some("worker".to_string());
+        app.progress_rows = vec![
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 1,
+                total_pr_count: 2,
+                collapsed: false,
+            },
+            ProgressRow::PullRequest(PrProgressRow {
+                session_id: "worker".to_string(),
+                repo: None,
+                title: "Implement sample feature".to_string(),
+                number: Some(41),
+                url: Some("https://example.test/pull/41".to_string()),
+                pane_id: None,
+                is_ended: false,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::User,
+                    pr_body: ProgressMark::Working,
+                    ci: ProgressMark::Waiting,
+                    merge: ProgressMark::NotStarted,
+                },
+            }),
+        ];
+        select_display_row(&mut app, &SessionRowKey::UserTurn("worker".to_string()));
+
+        assert_eq!(
+            selected_summary_lines(&app, 120),
+            vec![
+                Line::from("Cached worker title"),
+                Line::from(format!("Waiting: {expected_note}")),
+                Line::from("PR progress: 1/2 merged"),
+                Line::from("PR #41: Implement sample feature"),
+                Line::from("PR stages: implementation ✓ · review ◐ · PR body ● · CI ◷ · merge ○"),
             ],
         );
     }
