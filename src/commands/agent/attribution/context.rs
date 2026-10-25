@@ -1,0 +1,347 @@
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use super::Provider;
+
+const CONTEXT_TTL: Duration = Duration::from_secs(10 * 60);
+const STALE_FILE_RETENTION: Duration = Duration::from_secs(24 * 60 * 60);
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) enum ModelIdentity {
+    Known { raw_slug: String },
+    Unknown { reason: String },
+}
+
+impl ModelIdentity {
+    pub(super) fn known(raw_slug: String) -> Result<Self> {
+        if raw_slug.trim().is_empty() || raw_slug.contains(['\n', '\r', '\0']) {
+            anyhow::bail!("runtime model slug is empty or cannot fit in a trailer");
+        }
+        Ok(Self::Known { raw_slug })
+    }
+
+    pub(super) fn unknown(reason: Option<&str>) -> Result<Self> {
+        let reason = reason
+            .filter(|reason| !reason.trim().is_empty())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "runtime model is unavailable and no explicit unknown reason was supplied"
+                )
+            })?;
+        if reason.contains(['\n', '\r', '\0']) {
+            anyhow::bail!("unknown reason must be a single line");
+        }
+        Ok(Self::Unknown {
+            reason: reason.to_owned(),
+        })
+    }
+
+    pub(super) fn trailer_value(&self) -> &str {
+        match self {
+            Self::Known { raw_slug } => raw_slug,
+            Self::Unknown { .. } => "unknown",
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub(super) struct OperationContext {
+    schema_version: u8,
+    operation_id: String,
+    provider: Provider,
+    model: ModelIdentity,
+    tool_use_id: String,
+    created_at: i64,
+}
+
+impl OperationContext {
+    pub(super) fn new(
+        provider: Provider,
+        model: ModelIdentity,
+        tool_use_id: String,
+    ) -> Result<Self> {
+        if tool_use_id.trim().is_empty() || tool_use_id.contains(['\n', '\r', '\0']) {
+            anyhow::bail!("tool use identifier is missing or invalid");
+        }
+        Ok(Self {
+            schema_version: 1,
+            operation_id: Uuid::new_v4().to_string(),
+            provider,
+            model,
+            tool_use_id,
+            created_at: unix_timestamp()?,
+        })
+    }
+
+    pub(super) fn tool(&self) -> &'static str {
+        self.provider.label()
+    }
+
+    pub(super) fn model(&self) -> &ModelIdentity {
+        &self.model
+    }
+
+    fn operation_id(&self) -> &str {
+        &self.operation_id
+    }
+}
+
+pub(super) fn default_context_dir() -> PathBuf {
+    std::env::temp_dir().join(format!("armyknife-agent-attribution-{}", current_user_id()))
+}
+
+pub(super) fn create(context: &OperationContext, directory: &Path) -> Result<PathBuf> {
+    ensure_private_directory(directory)?;
+    prune_stale_files(directory)?;
+
+    let mut file = tempfile::Builder::new()
+        .prefix("context-")
+        .suffix(".json")
+        .tempfile_in(directory)
+        .context("failed to create private attribution context")?;
+    serde_json::to_writer(&mut file, context).context("failed to serialize attribution context")?;
+    file.flush()
+        .context("failed to flush attribution context")?;
+    file.as_file()
+        .sync_all()
+        .context("failed to sync attribution context")?;
+    let (_, path) = file.keep().context("failed to keep attribution context")?;
+    Ok(path)
+}
+
+pub(super) fn claim(path: &Path, now: i64) -> Result<OperationContext> {
+    let context = read(path)?;
+    let age = now.saturating_sub(context.created_at);
+    if age < 0 || Duration::from_secs(age as u64) > CONTEXT_TTL {
+        anyhow::bail!("attribution context is stale");
+    }
+
+    let claim_path = claim_path(path);
+    let mut claim_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&claim_path)
+        .with_context(|| {
+            format!(
+                "attribution context was already claimed or could not be claimed: {}",
+                path.display()
+            )
+        })?;
+    claim_file
+        .write_all(context.operation_id().as_bytes())
+        .context("failed to mark attribution context as claimed")?;
+    claim_file
+        .sync_all()
+        .context("failed to sync attribution claim")?;
+    Ok(context)
+}
+
+pub(super) fn claimed_context(path: &Path) -> Result<OperationContext> {
+    let context = read(path)?;
+    let claimed = fs::read_to_string(claim_path(path))
+        .context("attribution context has no matching commit-message claim")?;
+    if claimed != context.operation_id() {
+        anyhow::bail!("attribution commit-message claim does not match its context");
+    }
+    Ok(context)
+}
+
+pub(super) fn consume(path: &Path) -> Result<()> {
+    let claim = claim_path(path);
+    remove_if_present(path).context("failed to remove attribution context")?;
+    remove_if_present(&claim).context("failed to remove attribution claim")
+}
+
+pub(super) fn discard(path: &Path) -> Result<()> {
+    let claim = claim_path(path);
+    remove_if_present(path).context("failed to discard attribution context")?;
+    remove_if_present(&claim).context("failed to discard attribution claim")
+}
+
+pub(super) fn read(path: &Path) -> Result<OperationContext> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("attribution context is missing: {}", path.display()))?;
+    if !metadata.file_type().is_file() {
+        anyhow::bail!("attribution context is not a regular file");
+    }
+    verify_private_file(&metadata)?;
+    let context: OperationContext = serde_json::from_slice(
+        &fs::read(path)
+            .with_context(|| format!("failed to read attribution context: {}", path.display()))?,
+    )
+    .context("attribution context is invalid")?;
+    if context.schema_version != 1 {
+        anyhow::bail!("unsupported attribution context version");
+    }
+    Ok(context)
+}
+
+fn claim_path(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".claimed");
+    path.with_file_name(name)
+}
+
+fn remove_if_present(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn unix_timestamp() -> Result<i64> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock is before the Unix epoch")?;
+    i64::try_from(elapsed.as_secs()).context("system timestamp exceeds the supported range")
+}
+
+fn ensure_private_directory(directory: &Path) -> Result<()> {
+    fs::create_dir_all(directory).with_context(|| {
+        format!(
+            "failed to create attribution context directory {}",
+            directory.display()
+        )
+    })?;
+    let metadata = fs::symlink_metadata(directory).with_context(|| {
+        format!(
+            "failed to inspect attribution context directory {}",
+            directory.display()
+        )
+    })?;
+    if !metadata.file_type().is_dir() {
+        anyhow::bail!("attribution context directory is not a directory");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        if metadata.uid() != unsafe { libc::getuid() } {
+            anyhow::bail!("attribution context directory has a different owner");
+        }
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700)).with_context(|| {
+            format!(
+                "failed to protect attribution context directory {}",
+                directory.display()
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn verify_private_file(metadata: &fs::Metadata) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            anyhow::bail!("attribution context file is accessible by other users");
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = metadata;
+    Ok(())
+}
+
+fn prune_stale_files(directory: &Path) -> Result<()> {
+    for entry in fs::read_dir(directory).with_context(|| {
+        format!(
+            "failed to scan attribution context directory {}",
+            directory.display()
+        )
+    })? {
+        let entry = entry.context("failed to read attribution context directory entry")?;
+        let name = entry.file_name();
+        if !name.to_string_lossy().starts_with("context-") {
+            continue;
+        }
+        let metadata = match fs::symlink_metadata(entry.path()) {
+            Ok(metadata) if metadata.file_type().is_file() => metadata,
+            Ok(_) => continue,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).context("failed to inspect stale attribution context"),
+        };
+        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+        let age = SystemTime::now()
+            .duration_since(modified)
+            .unwrap_or_default();
+        if age <= STALE_FILE_RETENTION {
+            continue;
+        }
+        remove_if_present(&entry.path())?;
+        let mut claim = entry.path().into_os_string();
+        claim.push(".claimed");
+        remove_if_present(Path::new(&claim))?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn current_user_id() -> u32 {
+    // The temporary directory is private to the effective user.
+    unsafe { libc::getuid() }
+}
+
+#[cfg(not(unix))]
+fn current_user_id() -> u32 {
+    std::process::id()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::Provider;
+    use super::{CONTEXT_TTL, ModelIdentity, OperationContext, claim, create, read};
+    use rstest::{fixture, rstest};
+    use tempfile::TempDir;
+
+    #[fixture]
+    fn context_dir() -> TempDir {
+        tempfile::tempdir().expect("create test context directory")
+    }
+
+    fn fixture_context(model: &str, tool_use_id: &str, created_at: i64) -> OperationContext {
+        OperationContext {
+            schema_version: 1,
+            operation_id: format!("fixture-operation-{tool_use_id}"),
+            provider: Provider::Codex,
+            model: ModelIdentity::Known {
+                raw_slug: model.to_owned(),
+            },
+            tool_use_id: tool_use_id.to_owned(),
+            created_at,
+        }
+    }
+
+    #[rstest]
+    fn context_records_keep_each_operation_model_separate(context_dir: TempDir) {
+        let first = fixture_context("fixture-model-red", "fixture-tool-red", 1_000);
+        let second = fixture_context("fixture-model-blue", "fixture-tool-blue", 1_000);
+        let first_path = create(&first, context_dir.path()).expect("create first operation");
+        let second_path = create(&second, context_dir.path()).expect("create second operation");
+
+        let actual = (
+            first_path != second_path,
+            [
+                read(&first_path).expect("read first operation"),
+                read(&second_path).expect("read second operation"),
+            ],
+        );
+        assert_eq!(actual, (true, [first, second]),);
+    }
+
+    #[rstest]
+    fn stale_context_cannot_be_claimed(context_dir: TempDir) {
+        let context = fixture_context("fixture-model-red", "fixture-tool-red", 1_000);
+        let path = create(&context, context_dir.path()).expect("create operation context");
+        let now =
+            context.created_at + i64::try_from(CONTEXT_TTL.as_secs()).expect("ttl fits i64") + 1;
+        let error = claim(&path, now).expect_err("stale context must fail closed");
+
+        assert_eq!(error.to_string(), "attribution context is stale");
+    }
+}

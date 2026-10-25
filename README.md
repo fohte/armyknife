@@ -456,6 +456,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `close [target] [--child] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                              |
 | `clean [--dry-run] [--all] [--force]`                      |         | Delete merged or closed worktrees                                                           |
 | `hook <event>`                                             |         | Record session events (called from Claude Code hooks)                                       |
+| `attribution pre-tool-use <provider>`                      |         | Add operation context to a provider's commit command after its permission proxy             |
 | `list`                                                     | `ls`    | List all Claude Code sessions with status                                                   |
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                 |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
@@ -482,6 +483,18 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `status-inference --session <id> --updated-at <timestamp>` |         | Detached hidden worker spawned by Stop with its RFC 3339 timestamp (not for direct use)     |
 | `window-status <window_id>`                                |         | Print status symbols for the sessions in a tmux window                                      |
 | `pane-has-paused <pane_id>`                                |         | Print `1` when the pane holds a Paused Claude Code session, else empty                      |
+
+#### AI commit attribution
+
+`a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin with the original `hook_input` and the existing proxy's `hook_output` (or `null` when it passed). It only changes supported Git commit commands and returns the provider's PreToolUse response. Git's `prepare-commit-msg` and `commit-msg` hooks can call the hidden `a agent attribution prepare-commit-msg <message-file>` and `a agent attribution commit-msg <message-file>` commands.
+
+The generated message contains `AI-Tool` and `AI-Model` trailers. Codex records the raw runtime model slug from its PreToolUse input. Claude Code records `message.model` only when the transcript contains the matching assistant `tool_use_id`, tool name, and original command. Neither provider falls back to a launch profile or an unrelated recent model. Use `--unknown-reason <reason>` only when an operator explicitly accepts an unknown model; the reason stays in the private local context and the trailer says `unknown`.
+
+The helper preserves the permission proxy's decision and final command. Codex requires `permissionDecision: allow` to accept `updatedInput`; this hook decision does not mark the rewritten command as approved. Codex builds its native exec approval requirement from that rewritten command and runs the normal approval flow ([hook runtime](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/hook_runtime.rs#L213-L215), [exec approval](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/unified_exec/process_manager.rs#L1450-L1504), [approval orchestrator](https://github.com/openai/codex/blob/83086188ae0614bd882818ff1aa23f3194962012/codex-rs/core/src/tools/orchestrator.rs#L135-L216)). Codex's existing `runok exec --ask` command wrapper remains intact. Claude Code's existing `allow`, `ask`, or no-decision result is retained.
+
+Each context is private, expires if it is not claimed within ten minutes, and can be claimed for one commit. Missing, stale, or mismatched context stops the commit. A direct human commit has no context marker, so both Git hooks leave its message unchanged. Existing author, committer, signature, and unrelated trailers are left alone.
+
+The helper supports one `git commit` (including `--amend` and a commit after `git merge --squash`) or a cherry-pick of one revision per provider operation. Compound commit commands, multi-commit cherry-picks, `git cherry-pick --continue`, rebase, merge commits, and `git commit-tree` are rejected because their hook behavior is outside this single-operation contract. The helper is inert until a provider proxy and Git hooks call it.
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. When `CODEX_THREAD_ID` differs from `CODEX_SESSION_ID`, the command succeeds without saving a status because Codex subagent threads share the root session record. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
 
