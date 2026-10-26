@@ -11,7 +11,7 @@ use super::{Provider, ProxyEnvelope, model_identity};
 pub(super) fn transform(
     provider: Provider,
     raw_envelope: &str,
-    unknown_reason: Option<&str>,
+    _unknown_reason: Option<&str>,
     context_dir: &Path,
 ) -> Result<Option<Value>> {
     let envelope: ProxyEnvelope = serde_json::from_str(raw_envelope)
@@ -103,7 +103,7 @@ pub(super) fn transform(
             })
         }
     };
-    let model = match model_identity(model, unknown_reason)
+    let model = match model_identity(model)
         .map_err(|error| anyhow::anyhow!("runtime model is unavailable: {error}"))
     {
         Ok(model) => model,
@@ -211,7 +211,7 @@ mod tests {
     use super::super::CONTEXT_ENV;
     use super::super::Provider;
     use super::transform;
-    use crate::commands::agent::attribution::context::{self, ModelIdentity};
+    use crate::commands::agent::attribution::context;
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
     use tempfile::TempDir;
@@ -290,16 +290,19 @@ mod tests {
         let path = context_path(&output);
         let record = context::read(&path).expect("read operation context");
         let actual = (
-            record.tool(),
-            record.model().trailer_value(),
+            record.model().raw_slug(),
+            record.coauthor_trailer(),
             normalize_output(output, &path),
         );
 
         assert_eq!(
             actual,
             (
-                "Codex",
-                "fixture-model-blue-2026",
+                Some("fixture-model-blue-2026"),
+                Some(
+                    "Co-authored-by: Codex (fixture-model-blue-2026) <noreply@openai.com>"
+                        .to_owned(),
+                ),
                 json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
@@ -399,14 +402,19 @@ mod tests {
         let path = context_path(&output);
         let record = context::read(&path).expect("read operation context");
         let actual = (
-            record.model().trailer_value(),
+            record.model().raw_slug(),
+            record.coauthor_trailer(),
             normalize_output(output, &path),
         );
 
         assert_eq!(
             actual,
             (
-                "fixture-claude-model-2026",
+                Some("fixture-claude-model-2026"),
+                Some(
+                    "Co-authored-by: Claude Code (fixture-claude-model-2026) <noreply@anthropic.com>"
+                        .to_owned(),
+                ),
                 json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
@@ -480,27 +488,28 @@ mod tests {
     }
 
     #[rstest]
-    fn explicit_unknown_reason_records_unknown_model(context_dir: TempDir) {
+    fn unknown_reason_does_not_invent_a_missing_model(context_dir: TempDir) {
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        });
         let output = transform(
             Provider::Codex,
             &envelope(
                 codex_input(COMMIT_COMMAND, None, "fixture-tool-use-unknown-model"),
-                None,
+                Some(proxy_output.clone()),
             ),
             Some("fixture runtime model unavailable"),
             context_dir.path(),
         )
-        .expect("record explicit unknown model")
-        .expect("Codex receives updated input");
-        let path = context_path(&output);
-        let record = context::read(&path).expect("read operation context");
+        .expect("missing model skips attribution");
+        let context_count = std::fs::read_dir(context_dir.path())
+            .expect("read context directory")
+            .count();
 
-        assert_eq!(
-            record.model(),
-            &ModelIdentity::Unknown {
-                reason: "fixture runtime model unavailable".to_owned(),
-            },
-        );
+        assert_eq!((output, context_count), (Some(proxy_output), 0));
     }
 
     #[rstest]
@@ -511,6 +520,9 @@ mod tests {
     #[case::unknown_alias("git ci -m 'Fixture subject'")]
     #[case::compound("git commit -m 'Fixture subject' && git status --short")]
     #[case::compound_read("git rev-parse --show-toplevel && git status --short")]
+    #[case::compound_read_with_shell_syntax_check(
+        "git status --short && git log --oneline -5 && git diff --check && bash -n /fixture/bin/review-hook && git branch -vv"
+    )]
     fn non_attribution_commands_preserve_permission_proxy_output(
         context_dir: TempDir,
         #[case] command: &str,

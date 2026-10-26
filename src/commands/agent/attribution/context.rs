@@ -26,26 +26,10 @@ impl ModelIdentity {
         Ok(Self::Known { raw_slug })
     }
 
-    pub(super) fn unknown(reason: Option<&str>) -> Result<Self> {
-        let reason = reason
-            .filter(|reason| !reason.trim().is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "runtime model is unavailable and no explicit unknown reason was supplied"
-                )
-            })?;
-        if reason.contains(['\n', '\r', '\0']) {
-            anyhow::bail!("unknown reason must be a single line");
-        }
-        Ok(Self::Unknown {
-            reason: reason.to_owned(),
-        })
-    }
-
-    pub(super) fn trailer_value(&self) -> &str {
+    pub(super) fn raw_slug(&self) -> Option<&str> {
         match self {
-            Self::Known { raw_slug } => raw_slug,
-            Self::Unknown { .. } => "unknown",
+            Self::Known { raw_slug } => Some(raw_slug),
+            Self::Unknown { .. } => None,
         }
     }
 }
@@ -79,12 +63,18 @@ impl OperationContext {
         })
     }
 
-    pub(super) fn tool(&self) -> &'static str {
-        self.provider.label()
-    }
-
+    #[cfg(test)]
     pub(super) fn model(&self) -> &ModelIdentity {
         &self.model
+    }
+
+    pub(super) fn coauthor_trailer(&self) -> Option<String> {
+        let model = self.model.raw_slug()?;
+        let (name, email) = match self.provider {
+            Provider::Codex => ("Codex", "noreply@openai.com"),
+            Provider::ClaudeCode => ("Claude Code", "noreply@anthropic.com"),
+        };
+        Some(format!("Co-authored-by: {name} ({model}) <{email}>"))
     }
 
     fn operation_id(&self) -> &str {

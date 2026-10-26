@@ -23,22 +23,13 @@ enum Provider {
     Codex,
 }
 
-impl Provider {
-    fn label(self) -> &'static str {
-        match self {
-            Self::ClaudeCode => "Claude Code",
-            Self::Codex => "Codex",
-        }
-    }
-}
-
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum AttributionCommands {
     /// Transform one provider PreToolUse request after the existing permission proxy
     #[command(name = "pre-tool-use")]
     PreToolUse(PreToolUseArgs),
 
-    /// Add machine-managed trailers to a commit message
+    /// Add provider coauthor metadata to a commit message
     #[command(name = "prepare-commit-msg", hide = true)]
     PrepareCommitMsg(GitHookArgs),
 
@@ -57,8 +48,8 @@ pub struct PreToolUseArgs {
     #[arg(value_enum)]
     provider: Provider,
 
-    /// Explicitly record an unknown model when runtime evidence is unavailable
-    #[arg(long)]
+    /// Compatibility option; model attribution still requires runtime evidence
+    #[arg(long, hide = true)]
     unknown_reason: Option<String>,
 
     /// Compatibility flag accepted from older provider registrations
@@ -212,14 +203,11 @@ fn run_reference_transaction(_args: &ReferenceTransactionArgs) -> Result<()> {
     Ok(())
 }
 
-fn model_identity(model: Option<String>, unknown_reason: Option<&str>) -> Result<ModelIdentity> {
-    match model {
-        Some(slug) => match ModelIdentity::known(slug) {
-            Ok(model) => Ok(model),
-            Err(_) => ModelIdentity::unknown(unknown_reason),
-        },
-        _ => ModelIdentity::unknown(unknown_reason),
-    }
+fn model_identity(model: Option<String>) -> Result<ModelIdentity> {
+    let Some(model) = model else {
+        anyhow::bail!("provider runtime model is unavailable");
+    };
+    ModelIdentity::known(model)
 }
 
 #[derive(Debug, Deserialize)]
@@ -309,8 +297,7 @@ mod tests {
                 indoc! {"
                     Fixture subject
 
-                    AI-Tool: Codex
-                    AI-Model: fixture-model-blue
+                    Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>
                 "}
                 .to_owned(),
             ),
@@ -442,6 +429,44 @@ mod tests {
                 },
             }),
         );
+    }
+
+    #[rstest]
+    fn legacy_unknown_reason_flag_does_not_change_proxy_output(hook_dir: TempDir) {
+        let parsed = TestCli::try_parse_from([
+            "a",
+            "pre-tool-use",
+            "codex",
+            "--unknown-reason",
+            "fixture model unavailable",
+        ])
+        .expect("parse compatibility option");
+        let args = match parsed.command {
+            AttributionCommands::PreToolUse(args) => args,
+            _ => panic!("expected PreToolUse command"),
+        };
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        });
+        let raw = json!({
+            "hook_input": {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "fixture-tool-use-unknown-model",
+                "tool_input": {"command": "git commit -m 'Fixture subject'"},
+            },
+            "hook_output": proxy_output,
+        })
+        .to_string();
+        let output = process_pre_tool_use(&args, &raw, hook_dir.path());
+        let context_count = std::fs::read_dir(hook_dir.path())
+            .expect("read context directory")
+            .count();
+
+        assert_eq!((output, context_count), (Some(proxy_output), 0),);
     }
 
     #[rstest]
