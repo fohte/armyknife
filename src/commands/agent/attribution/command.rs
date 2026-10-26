@@ -485,23 +485,14 @@ mod tests {
     }
 
     #[rstest]
-    fn command_context_or_hook_overrides_are_not_rewritten() {
-        assert_eq!(
-            (
-                classify_command(
-                    "GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/fixture/hooks git commit -m 'Fixture subject'"
-                )
-                .expect("classify hook override"),
-                classify_command(
-                    "ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT=/fixture/context git commit -m 'Fixture subject'"
-                )
-                .expect("classify context override"),
-                classify_command(
-                    "git -c core.hooksPath=/fixture/hooks cherry-pick fixture-revision"
-                )
-                .expect("classify Git configuration override"),
-            ),
-            (None, None, None),
-        );
+    #[case::git_config_environment(
+        "GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/fixture/hooks git commit -m 'Fixture subject'"
+    )]
+    #[case::attribution_context_environment(
+        "ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT=/fixture/context git commit -m 'Fixture subject'"
+    )]
+    #[case::git_config_option("git -c core.hooksPath=/fixture/hooks cherry-pick fixture-revision")]
+    fn command_overrides_skip_context_attribution(#[case] command: &str) {
+        assert_eq!(classify_command(command).expect("classify command"), None);
     }
 }

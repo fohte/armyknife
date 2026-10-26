@@ -4,7 +4,7 @@ mod hook;
 mod message;
 mod transcript;
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -161,12 +161,47 @@ fn try_prepare_commit_msg(args: &GitHookArgs, context_path: Option<&Path>) -> Re
         )
     })?;
     let updated = message::prepare(context_path, &message_text)?;
-    std::fs::write(&args.message_file, updated).with_context(|| {
-        format!(
-            "failed to update commit message file {}",
-            args.message_file.display()
-        )
-    })
+    write_message_atomically(&args.message_file, &updated)
+}
+
+fn write_message_atomically(path: &Path, message: &str) -> Result<()> {
+    write_message_atomically_with(path, message, |file, contents| file.write_all(contents))
+}
+
+fn write_message_atomically_with(
+    path: &Path,
+    message: &str,
+    write: impl FnOnce(&mut std::fs::File, &[u8]) -> std::io::Result<()>,
+) -> Result<()> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to inspect commit message file {}", path.display()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut temp_file = tempfile::Builder::new()
+        .prefix(".armyknife-attribution-")
+        .tempfile_in(parent)
+        .with_context(|| {
+            format!(
+                "failed to create temporary commit message in {}",
+                parent.display()
+            )
+        })?;
+    write(temp_file.as_file_mut(), message.as_bytes())
+        .context("failed to write updated commit message")?;
+    temp_file
+        .as_file()
+        .set_permissions(metadata.permissions())
+        .context("failed to preserve commit message permissions")?;
+    temp_file
+        .as_file()
+        .sync_all()
+        .context("failed to sync updated commit message")?;
+    temp_file
+        .persist(path)
+        .with_context(|| format!("failed to replace commit message file {}", path.display()))?;
+    Ok(())
 }
 
 fn run_commit_msg(_args: &GitHookArgs) -> Result<()> {
@@ -196,11 +231,12 @@ struct ProxyEnvelope {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
     use std::path::PathBuf;
 
     use super::{
         AttributionCommands, CONTEXT_ENV, GitHookArgs, PreToolUseArgs, Provider,
-        ReferenceTransactionArgs, process_pre_tool_use, run,
+        process_pre_tool_use, run,
     };
     use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
     use clap::Parser;
@@ -282,41 +318,78 @@ mod tests {
     }
 
     #[rstest]
-    fn unusable_context_leaves_the_commit_message_unchanged(hook_dir: TempDir) {
+    fn partial_temporary_write_keeps_the_original_message(hook_dir: TempDir) {
         let message_file = hook_dir.path().join("fixture-message.txt");
         let original = indoc! {"Fixture subject"};
-        let missing = hook_dir.path().join("fixture-missing-context.json");
-        let broken = hook_dir.path().join("fixture-broken-context.json");
-        std::fs::write(&broken, "not-json").expect("create broken context");
-        let expired = create_context(&hook_dir);
-        let mut expired_value: Value =
-            serde_json::from_slice(&std::fs::read(&expired).expect("read fixture context"))
-                .expect("parse fixture context");
-        expired_value["created_at"] = json!(context::unix_timestamp().expect("read clock") - 601);
-        std::fs::write(
-            &expired,
-            serde_json::to_vec(&expired_value).expect("serialize expired context"),
-        )
-        .expect("expire fixture context");
+        std::fs::write(&message_file, original).expect("create fixture commit message");
+        let result = super::write_message_atomically_with(
+            &message_file,
+            "replacement message",
+            |file, contents| {
+                file.write_all(&contents[..4])?;
+                Err(std::io::Error::other("fixture write failure"))
+            },
+        );
+        let actual = (
+            result.is_err(),
+            std::fs::read_to_string(&message_file).expect("read fixture commit message"),
+        );
 
-        let actual = [missing, broken, expired]
-            .into_iter()
-            .map(|context_path| {
-                std::fs::write(&message_file, original).expect("reset fixture commit message");
-                let result = super::run_prepare_commit_msg_with_context(
-                    &GitHookArgs {
-                        message_file: message_file.clone(),
-                    },
-                    Some(&context_path),
-                );
-                (
-                    result.is_ok(),
-                    std::fs::read_to_string(&message_file).expect("read fixture commit message"),
+        assert_eq!(actual, (true, original.to_owned()));
+    }
+
+    #[derive(Clone, Copy)]
+    enum ContextState {
+        Missing,
+        Broken,
+        Expired,
+    }
+
+    #[rstest]
+    #[case::missing_context(ContextState::Missing)]
+    #[case::broken_context(ContextState::Broken)]
+    #[case::expired_context(ContextState::Expired)]
+    fn unusable_context_leaves_the_commit_message_unchanged(
+        hook_dir: TempDir,
+        #[case] context_state: ContextState,
+    ) {
+        let message_file = hook_dir.path().join("fixture-message.txt");
+        let original = indoc! {"Fixture subject"};
+        let context_path = match context_state {
+            ContextState::Missing => hook_dir.path().join("fixture-missing-context.json"),
+            ContextState::Broken => {
+                let path = hook_dir.path().join("fixture-broken-context.json");
+                std::fs::write(&path, "not-json").expect("create broken context");
+                path
+            }
+            ContextState::Expired => {
+                let path = create_context(&hook_dir);
+                let mut value: Value =
+                    serde_json::from_slice(&std::fs::read(&path).expect("read fixture context"))
+                        .expect("parse fixture context");
+                value["created_at"] = json!(context::unix_timestamp().expect("read clock") - 601);
+                std::fs::write(
+                    &path,
+                    serde_json::to_vec(&value).expect("serialize expired context"),
                 )
-            })
-            .collect::<Vec<_>>();
+                .expect("expire fixture context");
+                path
+            }
+        };
+        std::fs::write(&message_file, original).expect("create fixture commit message");
 
-        assert_eq!(actual, vec![(true, original.to_owned()); 3]);
+        let result = super::run_prepare_commit_msg_with_context(
+            &GitHookArgs {
+                message_file: message_file.clone(),
+            },
+            Some(&context_path),
+        );
+        let actual = (
+            result.is_ok(),
+            std::fs::read_to_string(&message_file).expect("read fixture commit message"),
+        );
+
+        assert_eq!(actual, (true, original.to_owned()));
     }
 
     #[derive(clap::Parser)]
@@ -394,20 +467,23 @@ mod tests {
     }
 
     #[rstest]
-    fn legacy_validation_commands_are_no_ops(hook_dir: TempDir) {
-        let commands = [
-            AttributionCommands::CommitMsg(GitHookArgs {
-                message_file: hook_dir.path().join("fixture-missing-message.txt"),
-            }),
-            AttributionCommands::ReferenceTransaction(ReferenceTransactionArgs {
-                state: "prepared".to_owned(),
-            }),
-        ];
-        let actual = commands
-            .iter()
-            .map(|command| run(command).is_ok())
-            .collect::<Vec<_>>();
+    #[case::commit_msg("commit-msg")]
+    #[case::reference_transaction("reference-transaction")]
+    fn legacy_validation_commands_are_no_ops(hook_dir: TempDir, #[case] command: &str) {
+        let message_file = hook_dir.path().join("fixture-missing-message.txt");
+        let parsed = match command {
+            "commit-msg" => TestCli::try_parse_from([
+                "a",
+                "commit-msg",
+                message_file.to_str().expect("message path is UTF-8"),
+            ]),
+            "reference-transaction" => {
+                TestCli::try_parse_from(["a", "reference-transaction", "prepared"])
+            }
+            _ => panic!("unexpected legacy command"),
+        }
+        .expect("parse compatibility command");
 
-        assert_eq!(actual, vec![true, true]);
+        assert!(run(&parsed.command).is_ok());
     }
 }
