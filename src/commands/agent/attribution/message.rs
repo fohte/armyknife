@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::context::{self, CommitTarget, OperationContext, unix_timestamp};
+use super::context::{self, OperationContext, unix_timestamp};
 
 const TOOL_TRAILER: &str = "AI-Tool";
 const MODEL_TRAILER: &str = "AI-Model";
@@ -10,34 +10,6 @@ const MODEL_TRAILER: &str = "AI-Model";
 pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
     let context = context::claim(path, unix_timestamp()?)?;
     add_trailers(message, &context)
-}
-
-pub(super) fn prepare_for_final_object(
-    path: &Path,
-    message: &str,
-    target: CommitTarget,
-) -> Result<String> {
-    let context = context::claim_with_target(path, unix_timestamp()?, Some(target))?;
-    add_trailers(message, &context)
-}
-
-pub(super) fn verify_without_consuming(path: &Path, message: &str) -> Result<()> {
-    let context = context::claimed_context(path)?;
-    verify_trailers(message, &context)
-}
-
-pub(super) fn verify_and_consume(path: &Path, message: &str) -> Result<()> {
-    let check =
-        context::claimed_context(path).and_then(|context| verify_trailers(message, &context));
-    let cleanup = context::consume(path);
-    match (check, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(check_error), Ok(())) => Err(check_error),
-        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
-        (Err(check_error), Err(cleanup_error)) => Err(anyhow::anyhow!(
-            "{check_error:#}; failed to consume attribution context: {cleanup_error:#}"
-        )),
-    }
 }
 
 fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
@@ -83,34 +55,6 @@ fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
     output.push_str(context.model().trailer_value());
     output.push('\n');
     Ok(output)
-}
-
-pub(super) fn verify_trailers(message: &str, context: &OperationContext) -> Result<()> {
-    let lines = normalized_lines(message);
-    let Some(start) = trailer_block_start(&lines) else {
-        anyhow::bail!("commit message has no managed attribution trailer block");
-    };
-    let managed: Vec<&str> = lines[start..]
-        .iter()
-        .filter(|line| !is_continuation(line))
-        .filter(|line| is_managed_trailer(line))
-        .map(String::as_str)
-        .collect();
-    let expected_tool = format!("{TOOL_TRAILER}: {}", context.tool());
-    let expected_model = format!("{MODEL_TRAILER}: {}", context.model().trailer_value());
-    let footer_end = lines[start..]
-        .iter()
-        .rposition(|line| !line.is_empty())
-        .map(|offset| start + offset)
-        .ok_or_else(|| anyhow::anyhow!("commit message has an empty trailer block"))?;
-    if managed != [expected_tool.as_str(), expected_model.as_str()]
-        || footer_end < start + 1
-        || lines[footer_end - 1] != expected_tool
-        || lines[footer_end] != expected_model
-    {
-        anyhow::bail!("commit message attribution does not match its operation context");
-    }
-    Ok(())
 }
 
 fn normalized_lines(message: &str) -> Vec<String> {
@@ -170,10 +114,8 @@ fn is_managed_trailer(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
-    use super::{prepare, prepare_for_final_object, verify_and_consume, verify_without_consuming};
-    use crate::commands::agent::attribution::context::{
-        self, CommitTarget, ModelIdentity, OperationContext,
-    };
+    use super::prepare;
+    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -191,14 +133,6 @@ mod tests {
         let context = OperationContext::new(Provider::Codex, model, tool_use_id.to_owned())
             .expect("create fixture operation context");
         context::create(&context, directory.path()).expect("persist fixture operation context")
-    }
-
-    fn final_object_target() -> CommitTarget {
-        CommitTarget {
-            repository: "/fixture/repository".to_owned(),
-            reference: "refs/heads/fixture-branch".to_owned(),
-            old_oid: Some("1111111111111111111111111111111111111111".to_owned()),
-        }
     }
 
     #[rstest]
@@ -280,85 +214,6 @@ mod tests {
                 .to_owned()),
                 Err("attribution context was already claimed or could not be claimed: <context-file>"
                     .to_owned()),
-            ),
-        );
-    }
-
-    #[rstest]
-    fn verify_accepts_generated_trailers_and_consumes_context(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let message = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
-        let result = verify_and_consume(&path, &message).map_err(|error| error.to_string());
-
-        assert_eq!((result, path.exists()), (Ok(()), false));
-    }
-
-    #[rstest]
-    fn final_object_message_preflight_keeps_the_claim_for_reference_verification(
-        context_dir: TempDir,
-    ) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let message = prepare_for_final_object(&path, "Fixture subject", final_object_target())
-            .expect("prepare final-object message");
-        let verification =
-            verify_without_consuming(&path, &message).map_err(|error| error.to_string());
-        let claim_remains = matches!(
-            context::final_object_context_state(&path),
-            Ok(context::FinalObjectContextState::Active { .. })
-        );
-
-        assert_eq!((verification, claim_remains), (Ok(()), true));
-    }
-
-    #[rstest]
-    fn failed_final_object_message_preflight_keeps_the_claim(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        prepare_for_final_object(&path, "Fixture subject", final_object_target())
-            .expect("prepare final-object message");
-        let verification =
-            verify_without_consuming(&path, "Altered subject").map_err(|error| error.to_string());
-        let claim_remains = matches!(
-            context::final_object_context_state(&path),
-            Ok(context::FinalObjectContextState::Active { .. })
-        );
-
-        assert_eq!(
-            (verification, claim_remains),
-            (
-                Err("commit message has no managed attribution trailer block".to_owned()),
-                true,
-            ),
-        );
-    }
-
-    #[rstest]
-    fn verify_rejects_changed_model_trailer_and_consumes_context(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let prepared = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
-        let edited = prepared.replace("fixture-model-red", "fixture-model-blue");
-        let result = verify_and_consume(&path, &edited).map_err(|error| error.to_string());
-
-        assert_eq!(
-            (result, path.exists()),
-            (
-                Err("commit message attribution does not match its operation context".to_owned()),
-                false,
             ),
         );
     }
