@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.466](https://github.com/fohte/armyknife/compare/v0.1.465...v0.1.466) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** allow Git operations in attribution ([#1270](https://github.com/fohte/armyknife/issues/1270)) ([2f5c90a](https://github.com/fohte/armyknife/commit/2f5c90a2774cd1e9304505acbdd4281edd52f930))
+
 ## [0.1.465](https://github.com/fohte/armyknife/compare/v0.1.464...v0.1.465) (2026-10-25)
 
 
