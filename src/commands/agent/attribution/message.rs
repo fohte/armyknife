@@ -15,9 +15,40 @@ pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
 fn add_coauthor_trailer(message: &str, trailer: &str) -> Result<String> {
     let mut lines = normalized_lines(message);
     trim_trailing_blank_lines(&mut lines);
+    let mut removed_legacy_trailer = false;
+    if let Some(start) = trailer_block_start(&lines) {
+        let mut kept = Vec::with_capacity(lines.len());
+        let mut remove_continuation = false;
+        for (index, line) in lines.iter().enumerate() {
+            if index < start {
+                kept.push(line.clone());
+                continue;
+            }
+            if is_legacy_attribution_trailer(line) {
+                removed_legacy_trailer = true;
+                remove_continuation = true;
+                continue;
+            }
+            if is_continuation(line) && remove_continuation {
+                continue;
+            }
+            remove_continuation = false;
+            kept.push(line.clone());
+        }
+        lines = kept;
+        trim_trailing_blank_lines(&mut lines);
+    }
+
     let footer = trailer_block_start(&lines);
     if footer.is_some_and(|start| lines[start..].iter().any(|line| line == trailer)) {
-        return Ok(message.to_owned());
+        if !removed_legacy_trailer {
+            return Ok(message.to_owned());
+        }
+        let mut output = lines.join("\n");
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        return Ok(output);
     }
 
     let mut output = lines.join("\n");
@@ -79,6 +110,15 @@ fn is_continuation(line: &str) -> bool {
     line.starts_with(' ') || line.starts_with('\t')
 }
 
+fn is_legacy_attribution_trailer(line: &str) -> bool {
+    let Some((token, _)) = line.split_once(": ") else {
+        return false;
+    };
+    ["AI-Tool", "AI-Model", "AI-Model-Reason"]
+        .iter()
+        .any(|legacy| token.eq_ignore_ascii_case(legacy))
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
@@ -115,7 +155,7 @@ mod tests {
         "fixture-claude-model-blue",
         "Co-authored-by: Claude Code (fixture-claude-model-blue) <noreply@anthropic.com>"
     )]
-    fn prepare_appends_provider_coauthor_and_preserves_existing_trailers(
+    fn prepare_appends_provider_coauthor_and_cleans_legacy_trailers(
         context_dir: TempDir,
         #[case] provider: Provider,
         #[case] model: &str,
@@ -135,9 +175,23 @@ mod tests {
             Co-authored-by: Example Person <person@example.invalid>
             Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
             AI-Tool: Legacy Tool
+             Legacy continuation.
             AI-Model: fixture-model-green
+            AI-Model-Reason: legacy fixture
+            Signed-off-by: Example Maintainer <maintainer@example.invalid>
         "};
-        let expected = format!("{message}{trailer}\n");
+        let mut expected = indoc! {"
+            Fixture subject
+
+            Fixture body.
+
+            Co-authored-by: Example Person <person@example.invalid>
+            Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
+            Signed-off-by: Example Maintainer <maintainer@example.invalid>
+        "}
+        .to_owned();
+        expected.push_str(trailer);
+        expected.push('\n');
 
         assert_eq!(
             prepare(&path, message).expect("prepare attributed message"),

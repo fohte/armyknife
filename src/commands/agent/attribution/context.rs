@@ -20,8 +20,8 @@ pub(super) enum ModelIdentity {
 
 impl ModelIdentity {
     pub(super) fn known(raw_slug: String) -> Result<Self> {
-        if raw_slug.trim().is_empty() || raw_slug.contains(['\n', '\r', '\0']) {
-            anyhow::bail!("runtime model slug is empty or cannot fit in a trailer");
+        if raw_slug.trim().is_empty() || raw_slug.contains(['\n', '\r', '\0', '<', '>']) {
+            anyhow::bail!("runtime model slug is empty or cannot fit in a co-author trailer");
         }
         Ok(Self::Known { raw_slug })
     }

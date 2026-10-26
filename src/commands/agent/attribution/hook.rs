@@ -11,7 +11,6 @@ use super::{Provider, ProxyEnvelope, model_identity};
 pub(super) fn transform(
     provider: Provider,
     raw_envelope: &str,
-    _unknown_reason: Option<&str>,
     context_dir: &Path,
 ) -> Result<Option<Value>> {
     let envelope: ProxyEnvelope = serde_json::from_str(raw_envelope)
@@ -282,7 +281,6 @@ mod tests {
                 ),
                 None,
             ),
-            None,
             context_dir.path(),
         )
         .expect("transform provider input")
@@ -337,7 +335,6 @@ mod tests {
                 ),
                 Some(proxy_output),
             ),
-            None,
             context_dir.path(),
         )
         .expect("transform runok input")
@@ -394,7 +391,6 @@ mod tests {
         let output = transform(
             Provider::ClaudeCode,
             &envelope(input, Some(proxy_output)),
-            None,
             context_dir.path(),
         )
         .expect("transform Claude input")
@@ -451,7 +447,6 @@ mod tests {
                 ),
                 Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
         .expect("preserve denied request");
@@ -463,7 +458,12 @@ mod tests {
     }
 
     #[rstest]
-    fn missing_model_preserves_permission_proxy_output(context_dir: TempDir) {
+    #[case::missing_model(None)]
+    #[case::trailer_delimiter(Some("fixture-model <fixture@example.invalid>"))]
+    fn unusable_model_preserves_permission_proxy_output(
+        context_dir: TempDir,
+        #[case] model: Option<&str>,
+    ) {
         let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -473,10 +473,9 @@ mod tests {
         let result = transform(
             Provider::Codex,
             &envelope(
-                codex_input(COMMIT_COMMAND, None, "fixture-tool-use-missing-model"),
+                codex_input(COMMIT_COMMAND, model, "fixture-tool-use-missing-model"),
                 Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
         .expect("unavailable model skips attribution");
@@ -485,31 +484,6 @@ mod tests {
             .count();
 
         assert_eq!((result, context_count), (Some(proxy_output), 0));
-    }
-
-    #[rstest]
-    fn unknown_reason_does_not_invent_a_missing_model(context_dir: TempDir) {
-        let proxy_output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-            },
-        });
-        let output = transform(
-            Provider::Codex,
-            &envelope(
-                codex_input(COMMIT_COMMAND, None, "fixture-tool-use-unknown-model"),
-                Some(proxy_output.clone()),
-            ),
-            Some("fixture runtime model unavailable"),
-            context_dir.path(),
-        )
-        .expect("missing model skips attribution");
-        let context_count = std::fs::read_dir(context_dir.path())
-            .expect("read context directory")
-            .count();
-
-        assert_eq!((output, context_count), (Some(proxy_output), 0));
     }
 
     #[rstest]
@@ -544,7 +518,6 @@ mod tests {
                 ),
                 Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
         .expect("pass through command outside attribution handling");
@@ -574,7 +547,6 @@ mod tests {
                 ),
                 Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
         .expect("preserve Codex ask response");
@@ -603,7 +575,6 @@ mod tests {
                 ),
                 Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
         .expect("preserve proxy rewrite");
@@ -631,7 +602,6 @@ mod tests {
                 ),
                 Some(proxy_output.clone()),
             ),
-            None,
             &invalid_context_dir,
         )
         .expect("skip attribution on context write failure");
@@ -674,7 +644,6 @@ mod tests {
         let result = transform(
             Provider::ClaudeCode,
             &envelope(input, Some(proxy_output.clone())),
-            None,
             context_dir.path(),
         )
         .expect("skip attribution without matching transcript evidence");

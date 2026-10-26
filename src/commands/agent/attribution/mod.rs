@@ -49,8 +49,8 @@ pub struct PreToolUseArgs {
     provider: Provider,
 
     /// Compatibility option; model attribution still requires runtime evidence
-    #[arg(long, hide = true)]
-    unknown_reason: Option<String>,
+    #[arg(long = "unknown-reason", hide = true)]
+    _unknown_reason: Option<String>,
 
     /// Compatibility flag accepted from older provider registrations
     #[arg(long, hide = true)]
@@ -97,12 +97,7 @@ fn process_pre_tool_use(
     context_dir: &Path,
 ) -> Option<Value> {
     let _ = args.final_object;
-    match hook::transform(
-        args.provider,
-        raw_envelope,
-        args.unknown_reason.as_deref(),
-        context_dir,
-    ) {
+    match hook::transform(args.provider, raw_envelope, context_dir) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("agent attribution skipped: {error:#}");
@@ -481,7 +476,7 @@ mod tests {
         let raw = json!({"hook_output": permission_output}).to_string();
         let args = PreToolUseArgs {
             provider: Provider::Codex,
-            unknown_reason: None,
+            _unknown_reason: None,
             final_object: false,
         };
 
