@@ -72,6 +72,18 @@ struct ClaimRecord {
     operation_id: String,
     #[serde(default)]
     target: Option<CommitTarget>,
+    #[serde(default)]
+    consumed: bool,
+}
+
+pub(super) enum FinalObjectContextState {
+    Active {
+        operation: OperationContext,
+        target: CommitTarget,
+    },
+    Consumed {
+        target: CommitTarget,
+    },
 }
 
 impl OperationContext {
@@ -158,6 +170,7 @@ pub(super) fn claim_with_target(
         let record = ClaimRecord {
             operation_id: context.operation_id().to_owned(),
             target: Some(target),
+            consumed: false,
         };
         serde_json::to_writer(&mut claim_file, &record)
             .context("failed to mark attribution context as claimed")?;
@@ -176,19 +189,27 @@ pub(super) fn claimed_context(path: &Path) -> Result<OperationContext> {
     let context = read(path)?;
     let claim = read_claim(path)?;
     verify_claim_matches(&context, &claim)?;
+    if claim.consumed {
+        anyhow::bail!("attribution context was already consumed");
+    }
     Ok(context)
 }
 
-pub(super) fn claimed_final_object_context(
-    path: &Path,
-) -> Result<(OperationContext, CommitTarget)> {
+pub(super) fn final_object_context_state(path: &Path) -> Result<FinalObjectContextState> {
     let context = read(path)?;
     let claim = read_claim(path)?;
     verify_claim_matches(&context, &claim)?;
     let target = claim
         .target
         .ok_or_else(|| anyhow::anyhow!("attribution claim has no final-object target"))?;
-    Ok((context, target))
+    if claim.consumed {
+        Ok(FinalObjectContextState::Consumed { target })
+    } else {
+        Ok(FinalObjectContextState::Active {
+            operation: context,
+            target,
+        })
+    }
 }
 
 pub(super) fn is_expired(context: &OperationContext, now: i64) -> bool {
@@ -200,6 +221,36 @@ pub(super) fn consume(path: &Path) -> Result<()> {
     let claim = claim_path(path);
     remove_if_present(path).context("failed to remove attribution context")?;
     remove_if_present(&claim).context("failed to remove attribution claim")
+}
+
+pub(super) fn mark_final_object_consumed(path: &Path) -> Result<()> {
+    let context = read(path)?;
+    let mut claim = read_claim(path)?;
+    verify_claim_matches(&context, &claim)?;
+    if claim.target.is_none() {
+        anyhow::bail!("attribution claim has no final-object target");
+    }
+    if claim.consumed {
+        return Ok(());
+    }
+    claim.consumed = true;
+
+    let claim_path = claim_path(path);
+    let parent = claim_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("attribution claim path has no parent directory"))?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)
+        .context("failed to create temporary attribution claim")?;
+    serde_json::to_writer(&mut file, &claim)
+        .context("failed to serialize consumed attribution claim")?;
+    file.flush()
+        .context("failed to flush consumed attribution claim")?;
+    file.as_file()
+        .sync_all()
+        .context("failed to sync consumed attribution claim")?;
+    file.persist(&claim_path)
+        .context("failed to mark attribution claim as consumed")?;
+    Ok(())
 }
 
 pub(super) fn discard(path: &Path) -> Result<()> {
@@ -249,6 +300,7 @@ fn read_claim_if_present(path: &Path) -> Result<Option<ClaimRecord>> {
         Err(_) => Ok(Some(ClaimRecord {
             operation_id: raw,
             target: None,
+            consumed: false,
         })),
     }
 }
@@ -371,7 +423,8 @@ fn current_user_id() -> u32 {
 mod tests {
     use super::super::Provider;
     use super::{
-        CONTEXT_TTL, ModelIdentity, OperationContext, claim, create, read, unix_timestamp,
+        CONTEXT_TTL, CommitTarget, ModelIdentity, OperationContext, claim, claim_with_target,
+        create, mark_final_object_consumed, read, unix_timestamp,
     };
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -438,12 +491,29 @@ mod tests {
     }
 
     #[rstest]
-    fn creating_a_new_operation_removes_expired_context_and_claim(context_dir: TempDir) {
+    #[case::active_claim(false)]
+    #[case::consumed_final_object(true)]
+    fn creating_a_new_operation_removes_expired_context_and_claim(
+        #[case] consumed: bool,
+        context_dir: TempDir,
+    ) {
         let ttl = i64::try_from(CONTEXT_TTL.as_secs()).expect("ttl fits i64");
         let created_at = unix_timestamp().expect("read clock") - ttl - 1;
         let stale = fixture_context("fixture-model-red", "fixture-tool-red", created_at);
         let stale_path = create(&stale, context_dir.path()).expect("create expired context");
-        claim(&stale_path, created_at + ttl).expect("claim before expiration");
+        claim_with_target(
+            &stale_path,
+            created_at + ttl,
+            Some(CommitTarget {
+                repository: "/fixture/repository".to_owned(),
+                reference: "refs/heads/fixture-branch".to_owned(),
+                old_oid: Some("1111111111111111111111111111111111111111".to_owned()),
+            }),
+        )
+        .expect("claim before expiration");
+        if consumed {
+            mark_final_object_consumed(&stale_path).expect("mark expired claim as consumed");
+        }
         let mut claim_path = stale_path.as_os_str().to_os_string();
         claim_path.push(".claimed");
         let claim_path = std::path::PathBuf::from(claim_path);

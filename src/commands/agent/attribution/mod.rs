@@ -583,7 +583,10 @@ mod tests {
             Some(OsString::from("1")),
         )
         .map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&context_path).is_ok();
+        let claim_remains = matches!(
+            context::final_object_context_state(&context_path),
+            Ok(context::FinalObjectContextState::Active { .. })
+        );
 
         assert_eq!((result, claim_remains), (Ok(()), true));
     }

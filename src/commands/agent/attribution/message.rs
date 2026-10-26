@@ -310,7 +310,10 @@ mod tests {
             .expect("prepare final-object message");
         let verification =
             verify_without_consuming(&path, &message).map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&path).is_ok();
+        let claim_remains = matches!(
+            context::final_object_context_state(&path),
+            Ok(context::FinalObjectContextState::Active { .. })
+        );
 
         assert_eq!((verification, claim_remains), (Ok(()), true));
     }
@@ -326,7 +329,10 @@ mod tests {
             .expect("prepare final-object message");
         let verification =
             verify_without_consuming(&path, "Altered subject").map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&path).is_ok();
+        let claim_remains = matches!(
+            context::final_object_context_state(&path),
+            Ok(context::FinalObjectContextState::Active { .. })
+        );
 
         assert_eq!(
             (verification, claim_remains),

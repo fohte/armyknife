@@ -48,6 +48,25 @@ struct CommitObject {
 }
 
 pub(super) fn run(state: &str, input: &str, context_path: Option<&Path>) -> Result<()> {
+    run_with(
+        state,
+        input,
+        context_path,
+        || {
+            run_git(Path::new("."), ["rev-parse", "--show-toplevel"])
+                .context("failed to identify reference-transaction repository")
+        },
+        read_commit_object,
+    )
+}
+
+fn run_with(
+    state: &str,
+    input: &str,
+    context_path: Option<&Path>,
+    mut identify_repository: impl FnMut() -> Result<String>,
+    read_object: impl FnMut(&str) -> Result<CommitObject>,
+) -> Result<()> {
     match state {
         "prepared" => {}
         "preparing" | "committed" | "aborted" => return Ok(()),
@@ -56,19 +75,40 @@ pub(super) fn run(state: &str, input: &str, context_path: Option<&Path>) -> Resu
     let Some(path) = context_path else {
         return Ok(());
     };
-    let (operation, target) = context::claimed_final_object_context(path)?;
+    let context_state = context::final_object_context_state(path)?;
     let updates = parse_updates(input)?;
-    let repository = run_git(Path::new("."), ["rev-parse", "--show-toplevel"])
-        .context("failed to identify reference-transaction repository")?;
-    verify_prepared_transaction(
-        path,
-        &repository,
-        &target,
-        &operation,
-        &updates,
-        context::unix_timestamp()?,
-        read_commit_object,
-    )?;
+    let repository = identify_repository()?;
+    match context_state {
+        context::FinalObjectContextState::Active { operation, target } => {
+            verify_prepared_transaction(
+                path,
+                &repository,
+                &target,
+                &operation,
+                &updates,
+                context::unix_timestamp()?,
+                read_object,
+            )?;
+            Ok(())
+        }
+        context::FinalObjectContextState::Consumed { target } => {
+            reject_consumed_reference_reuse(&repository, &target, &updates)
+        }
+    }
+}
+
+fn reject_consumed_reference_reuse(
+    repository: &str,
+    target: &CommitTarget,
+    updates: &[ReferenceUpdate],
+) -> Result<()> {
+    if repository == target.repository
+        && updates
+            .iter()
+            .any(|update| update.reference == target.reference)
+    {
+        anyhow::bail!("attribution context was already consumed for this reference");
+    }
     Ok(())
 }
 
@@ -165,7 +205,7 @@ fn verify_commit_object(object: &CommitObject, operation: &OperationContext) -> 
 }
 
 fn consume_after_verification(context_path: &Path, verification: Result<()>) -> Result<()> {
-    let cleanup = context::consume(context_path);
+    let cleanup = context::mark_final_object_consumed(context_path);
     match (verification, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(verification_error), Ok(())) => Err(verification_error),
@@ -188,8 +228,8 @@ fn read_commit_object(oid: &str) -> Result<CommitObject> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommitObject, ReferenceUpdate, capture_target_with, parse_updates, verify_commit_object,
-        verify_prepared_transaction,
+        CommitObject, ReferenceUpdate, capture_target_with, parse_updates, run_with,
+        verify_commit_object, verify_prepared_transaction,
     };
     use crate::commands::agent::attribution::Provider;
     use crate::commands::agent::attribution::context::{
@@ -201,6 +241,7 @@ mod tests {
 
     const OLD_OID: &str = "1111111111111111111111111111111111111111";
     const NEW_OID: &str = "2222222222222222222222222222222222222222";
+    const NEXT_OID: &str = "3333333333333333333333333333333333333333";
     const ZERO_OID: &str = "0000000000000000000000000000000000000000";
 
     #[derive(Clone, Copy)]
@@ -237,6 +278,13 @@ mod tests {
             new_oid: new_oid.to_owned(),
             reference: reference.to_owned(),
         }
+    }
+
+    fn context_is_consumed(path: &std::path::Path) -> bool {
+        matches!(
+            context::final_object_context_state(path),
+            Ok(context::FinalObjectContextState::Consumed { .. })
+        )
     }
 
     fn attributed_object() -> CommitObject {
@@ -393,8 +441,13 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, read_oid, context::read(&path).is_err()),
-            (Ok(true), Some(NEW_OID.to_owned()), true),
+            (
+                result,
+                read_oid,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path),
+            ),
+            (Ok(true), Some(NEW_OID.to_owned()), true, true),
         );
     }
 
@@ -473,9 +526,14 @@ mod tests {
         .expect_err("duplicate updates are ambiguous");
 
         assert_eq!(
-            (error.to_string(), context::read(&path).is_err()),
+            (
+                error.to_string(),
+                context::read(&path).is_ok(),
+                context_is_consumed(&path),
+            ),
             (
                 "reference-transaction contains ambiguous attribution targets".to_owned(),
+                true,
                 true,
             ),
         );
@@ -534,7 +592,106 @@ mod tests {
         )
         .expect("verify final object");
 
-        assert_eq!((matched, context::read(&path).is_err()), (true, true));
+        assert_eq!(
+            (
+                matched,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path)
+            ),
+            (true, true, true),
+        );
+    }
+
+    #[rstest]
+    fn consumed_final_object_allows_unrelated_callback_and_rejects_reference_reuse(
+        context_dir: TempDir,
+    ) {
+        let operation = operation();
+        let path = context::create(&operation, context_dir.path()).expect("create context");
+        let target = target(
+            "/fixture/repository",
+            "refs/heads/fixture-branch",
+            Some(OLD_OID),
+        );
+        context::claim_with_target(
+            &path,
+            context::unix_timestamp().expect("read clock"),
+            Some(target.clone()),
+        )
+        .expect("claim context");
+        let mut read_oids = Vec::new();
+        let matching = run_with(
+            "prepared",
+            &format!("{OLD_OID} {NEW_OID} refs/heads/fixture-branch"),
+            Some(&path),
+            || Ok("/fixture/repository".to_owned()),
+            |oid| {
+                read_oids.push(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
+        let unrelated = run_with(
+            "prepared",
+            &format!("{ZERO_OID} {ZERO_OID} AUTO_MERGE"),
+            Some(&path),
+            || Ok("/fixture/repository".to_owned()),
+            |oid| {
+                read_oids.push(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
+        let different_repository = run_with(
+            "prepared",
+            &format!("{NEW_OID} {NEXT_OID} refs/heads/fixture-branch"),
+            Some(&path),
+            || Ok("/fixture/other".to_owned()),
+            |oid| {
+                read_oids.push(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
+        let reused_reference = run_with(
+            "prepared",
+            &format!("{NEW_OID} {NEXT_OID} refs/heads/fixture-branch"),
+            Some(&path),
+            || Ok("/fixture/repository".to_owned()),
+            |oid| {
+                read_oids.push(oid.to_owned());
+                Ok(attributed_object())
+            },
+        )
+        .map_err(|error| error.to_string());
+        let prepare_reuse =
+            super::message::prepare_for_final_object(&path, "Fixture subject", target).is_err();
+        let message_reuse =
+            super::message::verify_without_consuming(&path, &attributed_object().message)
+                .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                matching,
+                unrelated,
+                different_repository,
+                reused_reference,
+                read_oids,
+                prepare_reuse,
+                message_reuse,
+                context_is_consumed(&path),
+            ),
+            (
+                Ok(()),
+                Ok(()),
+                Ok(()),
+                Err("attribution context was already consumed for this reference".to_owned()),
+                vec![NEW_OID.to_owned()],
+                true,
+                Err("attribution context was already consumed".to_owned()),
+                true,
+            ),
+        );
     }
 
     #[rstest]
@@ -569,9 +726,14 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, context::read(&path).is_err()),
+            (
+                result,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path)
+            ),
             (
                 Err("commit message has no managed attribution trailer block".to_owned()),
+                true,
                 true,
             ),
         );
@@ -605,9 +767,14 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, context::read(&path).is_err()),
+            (
+                result,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path)
+            ),
             (
                 Err("reference-transaction contains ambiguous attribution targets".to_owned()),
+                true,
                 true,
             ),
         );
@@ -640,8 +807,12 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, context::read(&path).is_err()),
-            (Err("fixture object reader failure".to_owned()), true),
+            (
+                result,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path)
+            ),
+            (Err("fixture object reader failure".to_owned()), true, true),
         );
     }
 
@@ -676,8 +847,18 @@ mod tests {
         .map_err(|error| error.to_string());
 
         assert_eq!(
-            (result, context::read(&path).is_err(), read_object),
-            (Err("attribution context is stale".to_owned()), true, false),
+            (
+                result,
+                context::read(&path).is_ok(),
+                context_is_consumed(&path),
+                read_object,
+            ),
+            (
+                Err("attribution context is stale".to_owned()),
+                true,
+                true,
+                false,
+            ),
         );
     }
 
