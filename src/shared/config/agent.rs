@@ -174,6 +174,17 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    pub(super) fn selected_profile_value(&self, path: Option<&str>) -> Option<serde_json::Value> {
+        let active_profile = self.active_profile.as_deref()?;
+        let profile = self.profiles.get(active_profile)?;
+        let value = serde_json::to_value(profile).ok()?;
+
+        match path {
+            Some(path) => super::resolve_json_path(&value, path),
+            None => Some(value),
+        }
+    }
+
     /// Return the prompt when status inference is configured and usable.
     pub fn configured_status_inference_prompt(&self) -> Option<&str> {
         if self.statuses.is_empty() {
