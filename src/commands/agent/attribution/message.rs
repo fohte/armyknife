@@ -2,49 +2,21 @@ use std::path::Path;
 
 use anyhow::Result;
 
-use super::context::{self, CommitTarget, OperationContext, unix_timestamp};
-
-const TOOL_TRAILER: &str = "AI-Tool";
-const MODEL_TRAILER: &str = "AI-Model";
+use super::context::{self, unix_timestamp};
 
 pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
     let context = context::claim(path, unix_timestamp()?)?;
-    add_trailers(message, &context)
+    let Some(trailer) = context.coauthor_trailer() else {
+        return Ok(message.to_owned());
+    };
+    add_coauthor_trailer(message, &trailer)
 }
 
-pub(super) fn prepare_for_final_object(
-    path: &Path,
-    message: &str,
-    target: CommitTarget,
-) -> Result<String> {
-    let context = context::claim_with_target(path, unix_timestamp()?, Some(target))?;
-    add_trailers(message, &context)
-}
-
-pub(super) fn verify_without_consuming(path: &Path, message: &str) -> Result<()> {
-    let context = context::claimed_context(path)?;
-    verify_trailers(message, &context)
-}
-
-pub(super) fn verify_and_consume(path: &Path, message: &str) -> Result<()> {
-    let check =
-        context::claimed_context(path).and_then(|context| verify_trailers(message, &context));
-    let cleanup = context::consume(path);
-    match (check, cleanup) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(check_error), Ok(())) => Err(check_error),
-        (Ok(()), Err(cleanup_error)) => Err(cleanup_error),
-        (Err(check_error), Err(cleanup_error)) => Err(anyhow::anyhow!(
-            "{check_error:#}; failed to consume attribution context: {cleanup_error:#}"
-        )),
-    }
-}
-
-fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
+fn add_coauthor_trailer(message: &str, trailer: &str) -> Result<String> {
     let mut lines = normalized_lines(message);
     trim_trailing_blank_lines(&mut lines);
-    let footer = trailer_block_start(&lines);
-    if let Some(start) = footer {
+    let mut removed_legacy_trailer = false;
+    if let Some(start) = trailer_block_start(&lines) {
         let mut kept = Vec::with_capacity(lines.len());
         let mut remove_continuation = false;
         for (index, line) in lines.iter().enumerate() {
@@ -52,7 +24,8 @@ fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
                 kept.push(line.clone());
                 continue;
             }
-            if is_managed_trailer(line) {
+            if is_legacy_attribution_trailer(line) {
+                removed_legacy_trailer = true;
                 remove_continuation = true;
                 continue;
             }
@@ -63,54 +36,31 @@ fn add_trailers(message: &str, context: &OperationContext) -> Result<String> {
             kept.push(line.clone());
         }
         lines = kept;
+        trim_trailing_blank_lines(&mut lines);
     }
-    trim_trailing_blank_lines(&mut lines);
 
-    let has_retained_footer = trailer_block_start(&lines).is_some();
+    let footer = trailer_block_start(&lines);
+    if footer.is_some_and(|start| lines[start..].iter().any(|line| line == trailer)) {
+        if !removed_legacy_trailer {
+            return Ok(message.to_owned());
+        }
+        let mut output = lines.join("\n");
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        return Ok(output);
+    }
+
     let mut output = lines.join("\n");
     if !output.is_empty() {
         output.push('\n');
-        if !has_retained_footer {
+        if footer.is_none() {
             output.push('\n');
         }
     }
-    output.push_str(TOOL_TRAILER);
-    output.push_str(": ");
-    output.push_str(context.tool());
-    output.push('\n');
-    output.push_str(MODEL_TRAILER);
-    output.push_str(": ");
-    output.push_str(context.model().trailer_value());
+    output.push_str(trailer);
     output.push('\n');
     Ok(output)
-}
-
-pub(super) fn verify_trailers(message: &str, context: &OperationContext) -> Result<()> {
-    let lines = normalized_lines(message);
-    let Some(start) = trailer_block_start(&lines) else {
-        anyhow::bail!("commit message has no managed attribution trailer block");
-    };
-    let managed: Vec<&str> = lines[start..]
-        .iter()
-        .filter(|line| !is_continuation(line))
-        .filter(|line| is_managed_trailer(line))
-        .map(String::as_str)
-        .collect();
-    let expected_tool = format!("{TOOL_TRAILER}: {}", context.tool());
-    let expected_model = format!("{MODEL_TRAILER}: {}", context.model().trailer_value());
-    let footer_end = lines[start..]
-        .iter()
-        .rposition(|line| !line.is_empty())
-        .map(|offset| start + offset)
-        .ok_or_else(|| anyhow::anyhow!("commit message has an empty trailer block"))?;
-    if managed != [expected_tool.as_str(), expected_model.as_str()]
-        || footer_end < start + 1
-        || lines[footer_end - 1] != expected_tool
-        || lines[footer_end] != expected_model
-    {
-        anyhow::bail!("commit message attribution does not match its operation context");
-    }
-    Ok(())
 }
 
 fn normalized_lines(message: &str) -> Vec<String> {
@@ -160,20 +110,20 @@ fn is_continuation(line: &str) -> bool {
     line.starts_with(' ') || line.starts_with('\t')
 }
 
-fn is_managed_trailer(line: &str) -> bool {
+fn is_legacy_attribution_trailer(line: &str) -> bool {
     let Some((token, _)) = line.split_once(": ") else {
         return false;
     };
-    token.eq_ignore_ascii_case(TOOL_TRAILER) || token.eq_ignore_ascii_case(MODEL_TRAILER)
+    ["AI-Tool", "AI-Model", "AI-Model-Reason"]
+        .iter()
+        .any(|legacy| token.eq_ignore_ascii_case(legacy))
 }
 
 #[cfg(test)]
 mod tests {
     use super::super::Provider;
-    use super::{prepare, prepare_for_final_object, verify_and_consume, verify_without_consuming};
-    use crate::commands::agent::attribution::context::{
-        self, CommitTarget, ModelIdentity, OperationContext,
-    };
+    use super::prepare;
+    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -185,27 +135,36 @@ mod tests {
 
     fn create_context(
         directory: &TempDir,
+        provider: Provider,
         model: ModelIdentity,
         tool_use_id: &str,
     ) -> std::path::PathBuf {
-        let context = OperationContext::new(Provider::Codex, model, tool_use_id.to_owned())
+        let context = OperationContext::new(provider, model, tool_use_id.to_owned())
             .expect("create fixture operation context");
         context::create(&context, directory.path()).expect("persist fixture operation context")
     }
 
-    fn final_object_target() -> CommitTarget {
-        CommitTarget {
-            repository: "/fixture/repository".to_owned(),
-            reference: "refs/heads/fixture-branch".to_owned(),
-            old_oid: Some("1111111111111111111111111111111111111111".to_owned()),
-        }
-    }
-
     #[rstest]
-    fn prepare_replaces_managed_trailers_and_preserves_other_authors(context_dir: TempDir) {
+    #[case::codex(
+        Provider::Codex,
+        "fixture-model-blue",
+        "Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>"
+    )]
+    #[case::claude_code(
+        Provider::ClaudeCode,
+        "fixture-claude-model-blue",
+        "Co-authored-by: Claude Code (fixture-claude-model-blue) <noreply@anthropic.com>"
+    )]
+    fn prepare_appends_provider_coauthor_and_cleans_legacy_trailers(
+        context_dir: TempDir,
+        #[case] provider: Provider,
+        #[case] model: &str,
+        #[case] trailer: &str,
+    ) {
         let path = create_context(
             &context_dir,
-            ModelIdentity::known("fixture-model-blue".to_owned()).expect("valid model slug"),
+            provider,
+            ModelIdentity::known(model.to_owned()).expect("valid model slug"),
             "fixture-tool-use-blue",
         );
         let message = indoc! {"
@@ -214,42 +173,88 @@ mod tests {
             Fixture body.
 
             Co-authored-by: Example Person <person@example.invalid>
-            AI-Tool: Old Tool
-            AI-Model: fixture-model-red
+            Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
+            AI-Tool: Legacy Tool
+             Legacy continuation.
+            AI-Model: fixture-model-green
+            AI-Model-Reason: legacy fixture
+            Signed-off-by: Example Maintainer <maintainer@example.invalid>
         "};
+        let mut expected = indoc! {"
+            Fixture subject
+
+            Fixture body.
+
+            Co-authored-by: Example Person <person@example.invalid>
+            Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
+            Signed-off-by: Example Maintainer <maintainer@example.invalid>
+        "}
+        .to_owned();
+        expected.push_str(trailer);
+        expected.push('\n');
 
         assert_eq!(
             prepare(&path, message).expect("prepare attributed message"),
-            indoc! {"
-                Fixture subject
-
-                Fixture body.
-
-                Co-authored-by: Example Person <person@example.invalid>
-                AI-Tool: Codex
-                AI-Model: fixture-model-blue
-            "},
+            expected
         );
     }
 
     #[rstest]
-    fn explicit_unknown_reason_is_not_written_to_the_commit_message(context_dir: TempDir) {
+    #[case::codex(
+        Provider::Codex,
+        "fixture-model-blue",
+        "Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>"
+    )]
+    #[case::claude_code(
+        Provider::ClaudeCode,
+        "fixture-claude-model-blue",
+        "Co-authored-by: Claude Code (fixture-claude-model-blue) <noreply@anthropic.com>"
+    )]
+    fn existing_identical_coauthor_is_not_duplicated(
+        context_dir: TempDir,
+        #[case] provider: Provider,
+        #[case] model: &str,
+        #[case] trailer: &str,
+    ) {
         let path = create_context(
             &context_dir,
+            provider,
+            ModelIdentity::known(model.to_owned()).expect("valid model slug"),
+            "fixture-tool-use-existing-coauthor",
+        );
+        let mut message = indoc! {"
+            Fixture subject
+
+        "}
+        .to_owned();
+        message.push_str(trailer);
+        message.push('\n');
+
+        assert_eq!(
+            prepare(&path, &message).expect("prepare attributed message"),
+            message
+        );
+    }
+
+    #[rstest]
+    fn legacy_unknown_context_does_not_add_a_trailer(context_dir: TempDir) {
+        let path = create_context(
+            &context_dir,
+            Provider::Codex,
             ModelIdentity::Unknown {
-                reason: "fixture transcript delay".to_owned(),
+                reason: "fixture model was unavailable".to_owned(),
             },
             "fixture-tool-use-unknown",
         );
+        let message = indoc! {"
+            Fixture subject
+
+            Co-authored-by: Example Person <person@example.invalid>
+        "};
 
         assert_eq!(
-            prepare(&path, indoc! {"Fixture subject"}).expect("prepare unknown attribution"),
-            indoc! {"
-                Fixture subject
-
-                AI-Tool: Codex
-                AI-Model: unknown
-            "},
+            prepare(&path, message).expect("prepare message without model"),
+            message
         );
     }
 
@@ -257,6 +262,7 @@ mod tests {
     fn operation_context_can_be_claimed_for_only_one_commit(context_dir: TempDir) {
         let path = create_context(
             &context_dir,
+            Provider::Codex,
             ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
             "fixture-tool-use-red",
         );
@@ -274,85 +280,11 @@ mod tests {
                 Ok(indoc! {"
                     Fixture subject
 
-                    AI-Tool: Codex
-                    AI-Model: fixture-model-red
+                    Co-authored-by: Codex (fixture-model-red) <noreply@openai.com>
                 "}
                 .to_owned()),
                 Err("attribution context was already claimed or could not be claimed: <context-file>"
                     .to_owned()),
-            ),
-        );
-    }
-
-    #[rstest]
-    fn verify_accepts_generated_trailers_and_consumes_context(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let message = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
-        let result = verify_and_consume(&path, &message).map_err(|error| error.to_string());
-
-        assert_eq!((result, path.exists()), (Ok(()), false));
-    }
-
-    #[rstest]
-    fn final_object_message_preflight_keeps_the_claim_for_reference_verification(
-        context_dir: TempDir,
-    ) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let message = prepare_for_final_object(&path, "Fixture subject", final_object_target())
-            .expect("prepare final-object message");
-        let verification =
-            verify_without_consuming(&path, &message).map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&path).is_ok();
-
-        assert_eq!((verification, claim_remains), (Ok(()), true));
-    }
-
-    #[rstest]
-    fn failed_final_object_message_preflight_keeps_the_claim(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        prepare_for_final_object(&path, "Fixture subject", final_object_target())
-            .expect("prepare final-object message");
-        let verification =
-            verify_without_consuming(&path, "Altered subject").map_err(|error| error.to_string());
-        let claim_remains = context::claimed_final_object_context(&path).is_ok();
-
-        assert_eq!(
-            (verification, claim_remains),
-            (
-                Err("commit message has no managed attribution trailer block".to_owned()),
-                true,
-            ),
-        );
-    }
-
-    #[rstest]
-    fn verify_rejects_changed_model_trailer_and_consumes_context(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let prepared = prepare(&path, indoc! {"Fixture subject"}).expect("prepare commit message");
-        let edited = prepared.replace("fixture-model-red", "fixture-model-blue");
-        let result = verify_and_consume(&path, &edited).map_err(|error| error.to_string());
-
-        assert_eq!(
-            (result, path.exists()),
-            (
-                Err("commit message attribution does not match its operation context".to_owned()),
-                false,
             ),
         );
     }
