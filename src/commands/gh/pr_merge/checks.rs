@@ -14,8 +14,9 @@ pub(super) fn wait_for_required_checks(
     pr_number: u64,
 ) -> anyhow::Result<()> {
     println!("Waiting for required checks...");
+    let mut required_checks_configured = None;
     wait_until_complete(
-        || query_required_check_status(owner, repo, pr_number),
+        || query_required_check_status(owner, repo, pr_number, &mut required_checks_configured),
         || {
             println!("Required checks are still pending; retrying in 10 seconds...");
             thread::sleep(CHECK_POLL_INTERVAL);
@@ -39,6 +40,7 @@ fn query_required_check_status(
     owner: &str,
     repo: &str,
     pr_number: u64,
+    required_checks_configured: &mut Option<bool>,
 ) -> anyhow::Result<CheckWaitStatus> {
     let repository = format!("{owner}/{repo}");
     let args = [
@@ -60,11 +62,25 @@ fn query_required_check_status(
         Some(CheckOutcome::Failed) => {
             bail!("Required checks failed: {}", command_output_text(&output));
         }
-        None if !has_required_checks(owner, repo, pr_number)? => Ok(CheckWaitStatus::Complete),
-        None => bail!(
-            "gh pr checks returned no structured status for required checks: {}",
-            command_output_text(&output),
-        ),
+        None => {
+            let has_required_checks = match *required_checks_configured {
+                Some(has_required_checks) => has_required_checks,
+                None => {
+                    let has_required_checks = has_required_checks(owner, repo, pr_number)?;
+                    *required_checks_configured = Some(has_required_checks);
+                    has_required_checks
+                }
+            };
+            Ok(status_for_missing_check_output(has_required_checks))
+        }
+    }
+}
+
+fn status_for_missing_check_output(has_required_checks: bool) -> CheckWaitStatus {
+    if has_required_checks {
+        CheckWaitStatus::Pending
+    } else {
+        CheckWaitStatus::Complete
     }
 }
 
@@ -110,11 +126,15 @@ fn command_output_text(output: &std::process::Output) -> String {
 }
 
 fn has_required_checks(owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
-    has_required_checks_with(|| fetch_required_check_page(owner, repo, pr_number))
+    has_required_checks_with(
+        || fetch_required_check_page(owner, repo, pr_number),
+        |branch| fetch_required_status_check_rules(owner, repo, branch),
+    )
 }
 
 fn has_required_checks_with(
-    mut fetch_page: impl FnMut() -> anyhow::Result<RequiredCheckPage>,
+    fetch_page: impl FnOnce() -> anyhow::Result<RequiredCheckPage>,
+    fetch_rules: impl FnOnce(&str) -> anyhow::Result<bool>,
 ) -> anyhow::Result<bool> {
     let page = fetch_page()?;
     if page.has_required_check {
@@ -125,7 +145,8 @@ fn has_required_checks_with(
             "Cannot confirm that no required checks exist because GitHub returned additional check-context pages."
         );
     }
-    Ok(false)
+    // A missing status rollup can mean configured checks have not reported yet.
+    fetch_rules(&page.base_ref_name)
 }
 
 fn fetch_required_check_page(
@@ -159,6 +180,7 @@ const REQUIRED_CHECKS_QUERY: &str = r#"
     query($owner: String!, $name: String!, $number: Int!) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $number) {
+          baseRefName
           commits(last: 1) {
             nodes {
               commit {
@@ -182,21 +204,62 @@ const REQUIRED_CHECKS_QUERY: &str = r#"
 const REQUIRED_CHECKS_JQ: &str = r#"
     if (.errors // [] | length) > 0 then error("GitHub returned GraphQL errors")
     else
-      .data.repository.pullRequest.commits.nodes[0].commit as $commit
-      | if $commit == null then error("GitHub response did not include the pull request head commit")
-        elif $commit.statusCheckRollup == null then {hasRequiredCheck: false, hasNextPage: false}
+      .data.repository.pullRequest as $pr
+      | if $pr == null then error("GitHub response did not include the pull request")
         else
-          $commit.statusCheckRollup.contexts as $contexts
-          | {
-              hasRequiredCheck: any($contexts.nodes[]?; .isRequired),
-              hasNextPage: $contexts.pageInfo.hasNextPage
-            }
+          $pr.commits.nodes[0].commit as $commit
+          | if $commit == null then error("GitHub response did not include the pull request head commit")
+            elif $commit.statusCheckRollup == null then {baseRefName: $pr.baseRefName, hasRequiredCheck: false, hasNextPage: false}
+            else
+              $commit.statusCheckRollup.contexts as $contexts
+              | {
+                  baseRefName: $pr.baseRefName,
+                  hasRequiredCheck: any($contexts.nodes[]?; .isRequired),
+                  hasNextPage: $contexts.pageInfo.hasNextPage
+                }
+            end
         end
     end
 "#;
 
+const REQUIRED_STATUS_CHECK_RULES_JQ: &str =
+    r#"add | any(.[]; .type == "required_status_checks" or .type == "workflows")"#;
+
 fn parse_required_check_page(response: &[u8]) -> anyhow::Result<RequiredCheckPage> {
     serde_json::from_slice(response).context("Failed to parse required check query result")
+}
+
+fn fetch_required_status_check_rules(
+    owner: &str,
+    repo: &str,
+    branch: &str,
+) -> anyhow::Result<bool> {
+    let encoded_branch =
+        percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC);
+    let endpoint = format!("repos/{owner}/{repo}/rules/branches/{encoded_branch}");
+    let args = [
+        "api".to_string(),
+        endpoint,
+        "--paginate".to_string(),
+        "--slurp".to_string(),
+        "--jq".to_string(),
+        REQUIRED_STATUS_CHECK_RULES_JQ.to_string(),
+        "-F".to_string(),
+        "per_page=100".to_string(),
+    ];
+
+    let output = run_gh(&args).context("Failed to inspect required status check rules")?;
+    if !output.status.success() {
+        bail!(
+            "gh api failed to inspect branch rules: {}",
+            command_output_text(&output)
+        );
+    }
+    parse_required_status_check_rules(&output.stdout)
+}
+
+fn parse_required_status_check_rules(response: &[u8]) -> anyhow::Result<bool> {
+    serde_json::from_slice(response).context("Failed to parse required status check rule result")
 }
 
 fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
@@ -243,6 +306,7 @@ enum CheckBucket {
 struct RequiredCheckPage {
     has_required_check: bool,
     has_next_page: bool,
+    base_ref_name: String,
 }
 
 #[cfg(test)]
@@ -288,16 +352,28 @@ mod tests {
 
     #[rstest]
     #[case::no_required_check(
-        r#"{"hasRequiredCheck":false,"hasNextPage":false}"#,
-        RequiredCheckPage { has_required_check: false, has_next_page: false },
+        r#"{"hasRequiredCheck":false,"hasNextPage":false,"baseRefName":"target-branch"}"#,
+        RequiredCheckPage {
+            has_required_check: false,
+            has_next_page: false,
+            base_ref_name: "target-branch".to_string(),
+        },
     )]
     #[case::required_check(
-        r#"{"hasRequiredCheck":true,"hasNextPage":false}"#,
-        RequiredCheckPage { has_required_check: true, has_next_page: false },
+        r#"{"hasRequiredCheck":true,"hasNextPage":false,"baseRefName":"target-branch"}"#,
+        RequiredCheckPage {
+            has_required_check: true,
+            has_next_page: false,
+            base_ref_name: "target-branch".to_string(),
+        },
     )]
     #[case::more_context_pages(
-        r#"{"hasRequiredCheck":false,"hasNextPage":true}"#,
-        RequiredCheckPage { has_required_check: false, has_next_page: true },
+        r#"{"hasRequiredCheck":false,"hasNextPage":true,"baseRefName":"target-branch"}"#,
+        RequiredCheckPage {
+            has_required_check: false,
+            has_next_page: true,
+            base_ref_name: "target-branch".to_string(),
+        },
     )]
     fn parse_required_check_page_cases(
         #[case] response: &str,
@@ -309,27 +385,72 @@ mod tests {
     }
 
     #[rstest]
-    #[case::no_required_check_in_single_page(false, false, Ok(false))]
-    #[case::required_check_found(true, false, Ok(true))]
+    #[case::required_status_rules(b"true", true)]
+    #[case::no_required_status_rules(b"false", false)]
+    fn parse_required_status_check_rules_cases(#[case] response: &[u8], #[case] expected: bool) {
+        assert_eq!(
+            parse_required_status_check_rules(response).unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::no_required_check_in_rules(false, false, false, Ok(false), Some("target-branch"))]
+    #[case::required_rule_waits_for_first_status(
+        false,
+        false,
+        true,
+        Ok(true),
+        Some("target-branch")
+    )]
+    #[case::required_check_found(true, false, false, Ok(true), None)]
     #[case::uninspected_page_fails_closed(
         false,
         true,
+        false,
         Err("Cannot confirm that no required checks exist because GitHub returned additional check-context pages.".to_string()),
+        None,
     )]
     fn has_required_checks_cases(
         #[case] has_required_check: bool,
         #[case] has_next_page: bool,
-        #[case] expected: Result<bool, String>,
+        #[case] has_required_rule: bool,
+        #[case] expected_result: Result<bool, String>,
+        #[case] expected_branch: Option<&str>,
     ) {
-        let result = has_required_checks_with(|| {
-            Ok(RequiredCheckPage {
-                has_required_check,
-                has_next_page,
-            })
-        })
+        let mut queried_branch = None;
+        let result = has_required_checks_with(
+            || {
+                Ok(RequiredCheckPage {
+                    has_required_check,
+                    has_next_page,
+                    base_ref_name: "target-branch".to_string(),
+                })
+            },
+            |branch| {
+                queried_branch = Some(branch.to_string());
+                Ok(has_required_rule)
+            },
+        )
         .map_err(|error| error.to_string());
 
-        assert_eq!(result, expected);
+        assert_eq!(
+            (result, queried_branch),
+            (expected_result, expected_branch.map(str::to_string))
+        );
+    }
+
+    #[rstest]
+    #[case::configured_check_is_pending(true, CheckWaitStatus::Pending)]
+    #[case::no_configured_check_is_complete(false, CheckWaitStatus::Complete)]
+    fn missing_check_output_cases(
+        #[case] has_required_checks: bool,
+        #[case] expected: CheckWaitStatus,
+    ) {
+        assert_eq!(
+            status_for_missing_check_output(has_required_checks),
+            expected
+        );
     }
 
     #[rstest]
