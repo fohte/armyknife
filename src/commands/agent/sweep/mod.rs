@@ -194,7 +194,16 @@ where
     Fut: Future<Output = usize>,
 {
     let report = if pause_enabled {
-        pause_pass()?
+        match pause_pass() {
+            Ok(report) => report,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.sweep.auto_pause_failed",
+                    error = %error,
+                );
+                SweepReport::default()
+            }
+        }
     } else {
         SweepReport::default()
     };
@@ -794,6 +803,55 @@ mod tests {
                     2,
                 ),
                 0,
+                1,
+                1,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_pause_failure_still_runs_codex_and_merged_passes() {
+        let pause_calls = Cell::new(0);
+        let codex_status_calls = Cell::new(0);
+        let close_calls = Cell::new(0);
+        let result = run_sweep_passes(
+            true,
+            || {
+                pause_calls.set(pause_calls.get() + 1);
+                Err(anyhow::anyhow!("auto-pause failure"))
+            },
+            || {
+                codex_status_calls.set(codex_status_calls.get() + 1);
+                Ok(codex_turn_status::CodexTurnUpdates {
+                    failed: 3,
+                    interrupted: 0,
+                })
+            },
+            || async {
+                close_calls.set(close_calls.get() + 1);
+                2
+            },
+        )
+        .await
+        .expect("sweep passes");
+
+        assert_eq!(
+            (
+                result,
+                pause_calls.get(),
+                codex_status_calls.get(),
+                close_calls.get(),
+            ),
+            (
+                (
+                    SweepReport::default(),
+                    codex_turn_status::CodexTurnUpdates {
+                        failed: 3,
+                        interrupted: 0,
+                    },
+                    2,
+                ),
+                1,
                 1,
                 1,
             ),
