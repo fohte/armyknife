@@ -17,7 +17,8 @@ pub fn get_tmux_target() -> Option<String> {
 /// Opens the review as a floating pane that attaches to the shpool session
 /// `shpool_session`, so closing the pane detaches instead of ending the editor.
 /// In an agent pane the review joins the pane's review queue and only opens
-/// when no other editor is on screen; otherwise it starts detached.
+/// when no other editor is on screen; otherwise it starts detached. Returns the
+/// review pane ID, or `parent_pane_id` when the review starts detached.
 pub(super) fn open_review_pane(
     parent_pane_id: &str,
     title: &str,

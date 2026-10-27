@@ -200,7 +200,7 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
 
-When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. The editor runs in a `shpool` session, so closing the pane only detaches it and the editor keeps running; the review completes when the editor exits. This requires tmux 3.7 or later and `shpool` on `PATH`; otherwise, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. The editor runs in a `shpool` session, so closing the pane only detaches it and the editor keeps running; the review completes when the editor exits. This requires tmux 3.7 or later and `shpool` on `PATH`; otherwise, the review command fails. Run it outside tmux to use the configured `editor.terminal` window. A closed editor can be brought back with `a agent crit open` (see below); outside an agent pane the review is not queued and cannot be re-opened that way.
 
 ## Commands
 
@@ -550,7 +550,7 @@ a agent watch
 set -g pane-border-format '#{?#{@armyknife-review-queue},#{@armyknife-review-queue},#{?#{@armyknife-review-count},review #{@armyknife-review-count},#{pane_index}}}'
 ```
 
-After moving an agent pane to another tmux window, run `a agent crit open` again to reopen the Crit review beside the moved pane. If another agent's Crit pane uses the same port, the command exits with an error instead of taking over that connection.
+After moving an agent pane to another tmux window, run `a agent crit close` and then `a agent crit open` to bring the review beside the moved pane. If another agent's Crit pane uses the same port, the command exits with an error instead of taking over that connection.
 
 `a agent watch` shows the YOUR TURN/TASKS session list and the PROGRESS pane side by side. `Tab` switches focus between TASKS and PROGRESS, and `Esc` or `←` from PROGRESS returns to TASKS. On narrow terminals, the focused pane uses the full screen. In TASKS, `Esc` clears an active filter or quits. TASKS is focused at startup by default. When opened from a child session pane with a TASKS ancestor, watch selects the nearest such ancestor and focuses PROGRESS on its direct child row.
 
