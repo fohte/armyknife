@@ -757,19 +757,32 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::auto_pause_disabled(false, false, 0, 0)]
+    #[case::auto_pause_failed(true, true, 1, 0)]
+    #[case::auto_pause_succeeded(true, false, 1, 1)]
     #[tokio::test]
-    async fn disabling_auto_pause_still_runs_codex_and_merged_passes() {
+    async fn run_sweep_passes_continues_after_auto_pause_result(
+        #[case] pause_enabled: bool,
+        #[case] pause_fails: bool,
+        #[case] expected_pause_calls: usize,
+        #[case] expected_scanned: usize,
+    ) {
         let pause_calls = Cell::new(0);
         let codex_status_calls = Cell::new(0);
         let close_calls = Cell::new(0);
         let result = run_sweep_passes(
-            false,
+            pause_enabled,
             || {
                 pause_calls.set(pause_calls.get() + 1);
-                Ok(SweepReport {
-                    scanned: 1,
-                    ..SweepReport::default()
-                })
+                if pause_fails {
+                    Err(anyhow::anyhow!("auto-pause failure"))
+                } else {
+                    Ok(SweepReport {
+                        scanned: 1,
+                        ..SweepReport::default()
+                    })
+                }
             },
             || {
                 codex_status_calls.set(codex_status_calls.get() + 1);
@@ -795,63 +808,17 @@ mod tests {
             ),
             (
                 (
-                    SweepReport::default(),
+                    SweepReport {
+                        scanned: expected_scanned,
+                        ..SweepReport::default()
+                    },
                     codex_turn_status::CodexTurnUpdates {
                         failed: 3,
                         interrupted: 0,
                     },
                     2,
                 ),
-                0,
-                1,
-                1,
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn auto_pause_failure_still_runs_codex_and_merged_passes() {
-        let pause_calls = Cell::new(0);
-        let codex_status_calls = Cell::new(0);
-        let close_calls = Cell::new(0);
-        let result = run_sweep_passes(
-            true,
-            || {
-                pause_calls.set(pause_calls.get() + 1);
-                Err(anyhow::anyhow!("auto-pause failure"))
-            },
-            || {
-                codex_status_calls.set(codex_status_calls.get() + 1);
-                Ok(codex_turn_status::CodexTurnUpdates {
-                    failed: 3,
-                    interrupted: 0,
-                })
-            },
-            || async {
-                close_calls.set(close_calls.get() + 1);
-                2
-            },
-        )
-        .await
-        .expect("sweep passes");
-
-        assert_eq!(
-            (
-                result,
-                pause_calls.get(),
-                codex_status_calls.get(),
-                close_calls.get(),
-            ),
-            (
-                (
-                    SweepReport::default(),
-                    codex_turn_status::CodexTurnUpdates {
-                        failed: 3,
-                        interrupted: 0,
-                    },
-                    2,
-                ),
-                1,
+                expected_pause_calls,
                 1,
                 1,
             ),
