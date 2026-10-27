@@ -105,9 +105,18 @@ impl Config {
     /// Look up a config value by dot-separated key path.
     /// For `repo.*` keys, `repo_id` (e.g. "owner/repo") selects which repo entry to use.
     /// For `org.*` keys, `repo_id` 's owner segment selects the org entry.
+    /// `agent.profile` keys resolve against the selected agent profile.
     /// Returns the raw JSON value at the path, or None if the path is missing
     /// or resolves to null. Callers format scalars and collections as needed.
     pub fn get_value(&self, key: &str, repo_id: Option<&str>) -> Option<serde_json::Value> {
+        if key == "agent.profile" {
+            return self.agent.selected_profile_value(None);
+        }
+
+        if let Some(profile_path) = key.strip_prefix("agent.profile.") {
+            return self.agent.selected_profile_value(Some(profile_path));
+        }
+
         if key == "repo.vibe" {
             let (owner, repo) = repo_id?.split_once('/')?;
             return Some(serde_json::Value::Bool(
@@ -810,6 +819,14 @@ mod tests {
     use rstest::{fixture, rstest};
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn get_value_treats_null_as_missing() {
+        assert_eq!(
+            Config::default().get_value("agent.active_profile", None),
+            None,
+        );
+    }
 
     fn config_with_env_vars(dir: &Path, vars: &[(&str, &str)]) -> anyhow::Result<Config> {
         let yaml_merged = merged_yaml_from_dir(dir)?;

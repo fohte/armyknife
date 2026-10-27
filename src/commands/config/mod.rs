@@ -10,7 +10,7 @@ pub enum ConfigCommands {
     /// Get a configuration value by dot-separated key
     Get {
         /// Configuration key (e.g., "agent.worktree.branch_prefix", "repo.language",
-        /// "org.ai.review.reviewers")
+        /// "org.ai.review.reviewers", "agent.profile", "agent.profile.<path>")
         key: String,
     },
 }
@@ -72,7 +72,89 @@ mod tests {
     use crate::infra::github::{GitHubMockServer, RepoClient};
     use crate::shared::config::Config;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+
+    #[rstest]
+    fn get_value_agent_profile_renders_selected_profile_as_yaml(agent_profiles_config: Config) {
+        let value = agent_profiles_config
+            .get_value("agent.profile", None)
+            .expect("selected profile exists");
+
+        assert_eq!(
+            format_value(&value).unwrap(),
+            indoc! {"
+                review:
+                  engine: claude
+                  model: sample-model-alpha
+                  reasoning_effort: medium
+            "}
+        );
+    }
+
+    #[fixture]
+    fn agent_profiles_config() -> Config {
+        config_from_yaml(indoc! {"
+            agent:
+              active_profile: sample-alpha
+              profiles:
+                sample-alpha:
+                  review:
+                    engine: claude
+                    model: sample-model-alpha
+                    reasoning_effort: medium
+                sample-beta:
+                  review:
+                    engine: codex
+                    model: sample-model-beta
+                    reasoning_effort: high
+        "})
+    }
+
+    #[rstest]
+    #[case::first_profile("sample-alpha", "sample-model-alpha")]
+    #[case::second_profile("sample-beta", "sample-model-beta")]
+    fn get_value_agent_profile_path_uses_active_profile(
+        mut agent_profiles_config: Config,
+        #[case] active_profile: &str,
+        #[case] expected: &str,
+    ) {
+        agent_profiles_config.agent.active_profile = Some(active_profile.to_string());
+        let value = agent_profiles_config
+            .get_value("agent.profile.review.model", None)
+            .expect("selected profile model exists");
+
+        assert_eq!(format_value(&value).unwrap(), format!("{expected}\n"));
+    }
+
+    #[rstest]
+    #[case::profile_unselected(None, "agent.profile")]
+    #[case::profile_undefined(Some("sample-unconfigured"), "agent.profile")]
+    #[case::type_missing(Some("sample-alpha"), "agent.profile.unconfigured.model")]
+    #[case::path_missing(Some("sample-alpha"), "agent.profile.review.unconfigured")]
+    #[case::path_below_scalar(Some("sample-alpha"), "agent.profile.review.model.value")]
+    fn get_value_agent_profile_returns_none_without_a_value(
+        mut agent_profiles_config: Config,
+        #[case] active_profile: Option<&str>,
+        #[case] key: &str,
+    ) {
+        agent_profiles_config.agent.active_profile = active_profile.map(str::to_string);
+
+        assert_eq!(agent_profiles_config.get_value(key, None), None);
+    }
+
+    #[rstest]
+    #[case::active_profile("agent.active_profile", serde_json::json!("sample-alpha"))]
+    #[case::fixed_profile_path(
+        "agent.profiles.sample-alpha.review.model",
+        serde_json::json!("sample-model-alpha")
+    )]
+    fn get_value_keeps_existing_agent_profile_paths(
+        agent_profiles_config: Config,
+        #[case] key: &str,
+        #[case] expected: serde_json::Value,
+    ) {
+        assert_eq!(agent_profiles_config.get_value(key, None), Some(expected));
+    }
 
     fn config_from_yaml(yaml: &str) -> Config {
         serde_yaml::from_str(yaml).unwrap()

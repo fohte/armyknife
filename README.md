@@ -1028,6 +1028,13 @@ Get a configuration value by dot-separated key. Supports any config field (e.g.,
 
 For `repo.*` and `org.*` keys, the current directory's git remote is used to identify the repository. `repo.*` looks up `repos.<owner>/<repo>` and `org.*` looks up `orgs.<owner>`. `repo.language` falls back to `ja` for private repos and `en` for public repos when no explicit value is set.
 
+`agent.profile` returns the map for `agent.active_profile`. `agent.profile.<path>` reads a dot-separated path from that selected profile, using the same scalar and YAML output formats. If no profile is selected, the selected profile is undefined, or the path is missing, the key lookup fails without a fallback. The profile name is used as a key in `agent.profiles`; it is not part of the alias path.
+
+```sh
+$ a config get agent.profile.review.model
+sample-model-alpha
+```
+
 `a config get repo.vibe` prints the effective allowlist value for the current repository.
 
 ```sh
