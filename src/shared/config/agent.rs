@@ -104,7 +104,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub active_profile: Option<String>,
 
-    /// Named profiles containing exact settings for each arbitrary launch type.
+    /// Named profiles containing execution settings for each arbitrary type.
     #[serde(default)]
     pub profiles: HashMap<String, HashMap<String, AgentProfileTypeConfig>>,
 

@@ -76,11 +76,18 @@ fn format_profile(config: &Config) -> Result<String> {
     }
     for (type_name, settings) in types {
         output.push_str(&format!(
-            "  type: {type_name}\n    engine: {}\n    model: {}\n    reasoning effort: {}\n",
-            settings.engine.process_name(),
-            settings.model,
-            settings.reasoning_effort.as_str(),
+            "  type: {type_name}\n    engine: {}\n",
+            settings.engine.as_str(),
         ));
+        if let Some(model) = &settings.model {
+            output.push_str(&format!("    model: {model}\n"));
+        }
+        if let Some(reasoning_effort) = settings.reasoning_effort {
+            output.push_str(&format!(
+                "    reasoning effort: {}\n",
+                reasoning_effort.as_str(),
+            ));
+        }
     }
     Ok(output)
 }
@@ -200,10 +207,15 @@ mod tests {
                         engine: claude
                         model: model-raven
                         reasoning_effort: low
+                      code-review:
+                        engine: claude
                       \"review type\":
                         engine: codex
                         model: model-ember
                         reasoning_effort: high
+                      writing-review:
+                        engine: agy
+                        model: sample-review-model
                     profile-two:
                       inspect:
                         engine: claude
@@ -347,10 +359,15 @@ mod tests {
                     engine: claude
                     model: model-raven
                     reasoning effort: low
+                  type: code-review
+                    engine: claude
                   type: review type
                     engine: codex
                     model: model-ember
                     reasoning effort: high
+                  type: writing-review
+                    engine: agy
+                    model: sample-review-model
             "},
         );
     }
