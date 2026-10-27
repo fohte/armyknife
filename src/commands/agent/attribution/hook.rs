@@ -1,29 +1,16 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-use super::command::{classify_command, inject_context, inject_context_with_final_object};
+use super::command::{classify_command, inject_context};
 use super::context::{self, OperationContext};
-use super::origin;
 use super::transcript;
 use super::{Provider, ProxyEnvelope, model_identity};
 
-#[cfg(test)]
 pub(super) fn transform(
     provider: Provider,
     raw_envelope: &str,
-    unknown_reason: Option<&str>,
-    context_dir: &Path,
-) -> Result<Option<Value>> {
-    transform_with_final_object(provider, raw_envelope, unknown_reason, false, context_dir)
-}
-
-pub(super) fn transform_with_final_object(
-    provider: Provider,
-    raw_envelope: &str,
-    unknown_reason: Option<&str>,
-    final_object: bool,
     context_dir: &Path,
 ) -> Result<Option<Value>> {
     let envelope: ProxyEnvelope = serde_json::from_str(raw_envelope)
@@ -35,21 +22,26 @@ pub(super) fn transform_with_final_object(
     if decision(&envelope.hook_output) == Some("deny") {
         return Ok(envelope.hook_output);
     }
-    let tool_name = input
-        .get("tool_name")
-        .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("provider hook input has no tool name"))?;
+    let Some(tool_name) = input.get("tool_name").and_then(Value::as_str) else {
+        return Ok(skip_attribution(
+            &envelope.hook_output,
+            "provider hook input has no tool name",
+        ));
+    };
     if !is_shell_tool(tool_name) {
         return Ok(envelope.hook_output);
     }
-    let tool_input = input
+    let Some(original_command) = input
         .get("tool_input")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("provider hook input has no command object"))?;
-    let original_command = tool_input
-        .get("command")
+        .and_then(|tool_input| tool_input.get("command"))
         .and_then(Value::as_str)
-        .ok_or_else(|| anyhow::anyhow!("provider hook input has no command"))?;
+    else {
+        return Ok(skip_attribution(
+            &envelope.hook_output,
+            "provider hook input has no command",
+        ));
+    };
     let final_command = envelope
         .hook_output
         .as_ref()
@@ -57,31 +49,43 @@ pub(super) fn transform_with_final_object(
         .and_then(Value::as_str)
         .unwrap_or(original_command)
         .to_owned();
-    let Some(operation) = classify_command(original_command)? else {
-        if !origin::requires_marker(original_command)? && !origin::requires_marker(&final_command)?
-        {
-            return Ok(envelope.hook_output);
-        }
-        let marked_command = origin::inject_marker(&final_command)?;
-        return patch_hook_output(provider, input, envelope.hook_output, &marked_command).map(Some);
+    let operation = match classify_command(original_command) {
+        Ok(Some(operation)) => operation,
+        Ok(None) => return Ok(envelope.hook_output),
+        Err(error) => return Ok(skip_attribution(&envelope.hook_output, error)),
     };
-
-    if classify_command(&final_command)? != Some(operation) {
-        anyhow::bail!("permission proxy changed the commit operation; attribution was not applied");
+    let final_operation = match classify_command(&final_command) {
+        Ok(operation) => operation,
+        Err(error) => return Ok(skip_attribution(&envelope.hook_output, error)),
+    };
+    if final_operation != Some(operation) {
+        return Ok(skip_attribution(
+            &envelope.hook_output,
+            "permission proxy changed the commit operation",
+        ));
     }
-    let _ = inject_context(&final_command, Path::new("/context-placeholder"))?;
-    let _ = patch_hook_output(
+    if let Err(error) = inject_context(&final_command, Path::new("/context-placeholder")) {
+        return Ok(skip_attribution(&envelope.hook_output, error));
+    }
+    if let Err(error) = patch_hook_output(
         provider,
         input,
         envelope.hook_output.clone(),
         "context-placeholder",
-    )?;
+    ) {
+        return Ok(skip_attribution(&envelope.hook_output, error));
+    }
 
-    let tool_use_id = input
+    let Some(tool_use_id) = input
         .get("tool_use_id")
         .and_then(Value::as_str)
         .filter(|id| !id.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("provider hook input has no tool-use identifier"))?;
+    else {
+        return Ok(skip_attribution(
+            &envelope.hook_output,
+            "provider hook input has no tool-use identifier",
+        ));
+    };
     let model = match provider {
         Provider::Codex => input
             .get("model")
@@ -98,33 +102,38 @@ pub(super) fn transform_with_final_object(
             })
         }
     };
-    let model = model_identity(model, unknown_reason)
-        .map_err(|error| anyhow::anyhow!("runtime model is unavailable: {error}"))?;
-    let context = OperationContext::new(provider, model, tool_use_id.to_owned())?;
-    let context_path = context::create(&context, context_dir)?;
+    let model = match model_identity(model)
+        .map_err(|error| anyhow::anyhow!("runtime model is unavailable: {error}"))
+    {
+        Ok(model) => model,
+        Err(error) => return Ok(skip_attribution(&envelope.hook_output, error)),
+    };
+    let context = match OperationContext::new(provider, model, tool_use_id.to_owned()) {
+        Ok(context) => context,
+        Err(error) => return Ok(skip_attribution(&envelope.hook_output, error)),
+    };
+    let context_path = match context::create(&context, context_dir) {
+        Ok(path) => path,
+        Err(error) => return Ok(skip_attribution(&envelope.hook_output, error)),
+    };
     let transformed = (|| {
-        let command = if final_object {
-            inject_context_with_final_object(&final_command, &context_path, true)?
-        } else {
-            inject_context(&final_command, &context_path)?
-        };
-        patch_hook_output(provider, input, envelope.hook_output, &command)
+        let command = inject_context(&final_command, &context_path)?;
+        patch_hook_output(provider, input, envelope.hook_output.clone(), &command)
     })();
     match transformed {
         Ok(output) => Ok(Some(output)),
         Err(error) => {
-            context::discard(&context_path)?;
-            Err(error)
+            if let Err(discard_error) = context::discard(&context_path) {
+                eprintln!("failed to discard skipped attribution context: {discard_error:#}");
+            }
+            Ok(skip_attribution(&envelope.hook_output, error))
         }
     }
 }
 
-pub(super) fn blocked_output(_provider: Provider, reason: &str) -> Value {
-    let mut specific = Map::new();
-    specific.insert("hookEventName".to_owned(), json!("PreToolUse"));
-    specific.insert("permissionDecision".to_owned(), json!("deny"));
-    specific.insert("permissionDecisionReason".to_owned(), json!(reason));
-    json!({"hookSpecificOutput": specific})
+fn skip_attribution(output: &Option<Value>, reason: impl std::fmt::Display) -> Option<Value> {
+    eprintln!("agent attribution skipped: {reason}");
+    output.clone()
 }
 
 fn is_shell_tool(tool_name: &str) -> bool {
@@ -196,14 +205,14 @@ fn patch_hook_output(
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::path::{Path, PathBuf};
 
+    use super::super::CONTEXT_ENV;
     use super::super::Provider;
-    use super::super::{CONTEXT_ENV, FINAL_OBJECT_REQUIRED_ENV, REQUIRED_ENV};
-    use super::{blocked_output, transform, transform_with_final_object};
-    use crate::commands::agent::attribution::context::{self, ModelIdentity};
+    use super::transform;
+    use crate::commands::agent::attribution::context;
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
-    use std::path::{Path, PathBuf};
     use tempfile::TempDir;
 
     const COMMIT_COMMAND: &str = "git commit -m 'Fixture subject'";
@@ -214,11 +223,7 @@ mod tests {
     }
 
     fn envelope(input: Value, output: Option<Value>) -> String {
-        json!({
-            "hook_input": input,
-            "hook_output": output,
-        })
-        .to_string()
+        json!({"hook_input": input, "hook_output": output}).to_string()
     }
 
     fn codex_input(command: &str, model: Option<&str>, tool_use_id: &str) -> Value {
@@ -226,9 +231,7 @@ mod tests {
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
             "tool_use_id": tool_use_id,
-            "tool_input": {
-                "command": command,
-            },
+            "tool_input": {"command": command},
         });
         if let Some(model) = model {
             input["model"] = json!(model);
@@ -267,25 +270,8 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_canonical_bash_input_keeps_raw_model_and_separates_tool_operations(
-        context_dir: TempDir,
-    ) {
-        let first = transform(
-            Provider::Codex,
-            &envelope(
-                codex_input(
-                    COMMIT_COMMAND,
-                    Some("fixture-model-red-2026"),
-                    "fixture-tool-use-red",
-                ),
-                None,
-            ),
-            None,
-            context_dir.path(),
-        )
-        .expect("transform first request")
-        .expect("Codex must emit updated input");
-        let second = transform(
+    fn codex_commit_receives_runtime_model_context(context_dir: TempDir) {
+        let output = transform(
             Provider::Codex,
             &envelope(
                 codex_input(
@@ -295,41 +281,32 @@ mod tests {
                 ),
                 None,
             ),
-            None,
             context_dir.path(),
         )
-        .expect("transform second request")
-        .expect("Codex must emit updated input");
-        let first_path = context_path(&first);
-        let second_path = context_path(&second);
-        let first_context = context::read(&first_path).expect("read first operation context");
-        let second_context = context::read(&second_path).expect("read second operation context");
-
+        .expect("transform provider input")
+        .expect("Codex receives updated input");
+        let path = context_path(&output);
+        let record = context::read(&path).expect("read operation context");
         let actual = (
-            first_path != second_path,
-            [
-                (first_context.tool(), first_context.model().trailer_value()),
-                (
-                    second_context.tool(),
-                    second_context.model().trailer_value(),
-                ),
-            ],
-            normalize_output(first, &first_path),
+            record.model().raw_slug(),
+            record.coauthor_trailer(),
+            normalize_output(output, &path),
         );
+
         assert_eq!(
             actual,
             (
-                true,
-                [
-                    ("Codex", "fixture-model-red-2026"),
-                    ("Codex", "fixture-model-blue-2026"),
-                ],
+                Some("fixture-model-blue-2026"),
+                Some(
+                    "Co-authored-by: Codex (fixture-model-blue-2026) <noreply@openai.com>"
+                        .to_owned(),
+                ),
                 json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
                         "permissionDecision": "allow",
                         "updatedInput": {
-                            "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
+                            "command": format!("{CONTEXT_ENV}=<context-file> {COMMIT_COMMAND}"),
                         },
                     },
                 }),
@@ -338,23 +315,30 @@ mod tests {
     }
 
     #[rstest]
-    fn final_object_mode_is_scoped_to_the_git_child(context_dir: TempDir) {
-        let output = transform_with_final_object(
+    fn codex_keeps_the_existing_runok_ask_wrapper(context_dir: TempDir) {
+        let command =
+            r#"runok exec --ask --hook-origin fixture-token -- 'git commit -m "Fixture subject"'"#;
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {"command": command},
+            },
+        });
+        let output = transform(
             Provider::Codex,
             &envelope(
                 codex_input(
                     COMMIT_COMMAND,
-                    Some("fixture-model-red-2026"),
-                    "fixture-tool-use-red",
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-ask",
                 ),
-                None,
+                Some(proxy_output),
             ),
-            None,
-            true,
             context_dir.path(),
         )
-        .expect("transform final-object request")
-        .expect("Codex must emit updated input");
+        .expect("transform runok input")
+        .expect("Codex receives updated input");
         let path = context_path(&output);
 
         assert_eq!(
@@ -364,7 +348,7 @@ mod tests {
                     "hookEventName": "PreToolUse",
                     "permissionDecision": "allow",
                     "updatedInput": {
-                        "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {FINAL_OBJECT_REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
+                        "command": r#"runok exec --ask --hook-origin fixture-token -- 'ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT=<context-file> git commit -m "Fixture subject"'"#,
                     },
                 },
             }),
@@ -372,51 +356,7 @@ mod tests {
     }
 
     #[rstest]
-    fn codex_preserves_the_runok_ask_wrapper(context_dir: TempDir) {
-        let runok_command =
-            r#"runok exec --ask --hook-origin fixture-token -- 'git commit -m "Fixture subject"'"#;
-        let output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-                "updatedInput": {
-                    "command": runok_command,
-                },
-            },
-        });
-        let result = transform(
-            Provider::Codex,
-            &envelope(
-                codex_input(
-                    COMMIT_COMMAND,
-                    Some("fixture-model-red-2026"),
-                    "fixture-tool-use-ask",
-                ),
-                Some(output),
-            ),
-            None,
-            context_dir.path(),
-        )
-        .expect("transform runok ask")
-        .expect("Codex must emit updated input");
-        let path = context_path(&result);
-
-        assert_eq!(
-            normalize_output(result, &path),
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "updatedInput": {
-                        "command": r#"runok exec --ask --hook-origin fixture-token -- 'ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT=<context-file> ARMYKNIFE_AGENT_ATTRIBUTION_REQUIRED=1 git commit -m "Fixture subject"'"#,
-                    },
-                },
-            }),
-        );
-    }
-
-    #[rstest]
-    fn claude_preserves_ask_while_using_the_exact_transcript_message(context_dir: TempDir) {
+    fn claude_uses_the_model_for_the_matching_tool_use(context_dir: TempDir) {
         let transcript_path = context_dir.path().join("fixture-transcript.jsonl");
         let transcript_line = json!({
             "type": "assistant",
@@ -432,8 +372,8 @@ mod tests {
         })
         .to_string();
         let mut transcript_file =
-            std::fs::File::create(&transcript_path).expect("create fixture Claude transcript");
-        writeln!(transcript_file, "{transcript_line}").expect("write fixture Claude transcript");
+            std::fs::File::create(&transcript_path).expect("create fixture transcript");
+        writeln!(transcript_file, "{transcript_line}").expect("write fixture transcript");
         let input = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
@@ -441,7 +381,156 @@ mod tests {
             "transcript_path": transcript_path,
             "tool_input": {"command": COMMIT_COMMAND},
         });
-        let output = json!({
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "ask",
+                "permissionDecisionReason": "fixture rule",
+            },
+        });
+        let output = transform(
+            Provider::ClaudeCode,
+            &envelope(input, Some(proxy_output)),
+            context_dir.path(),
+        )
+        .expect("transform Claude input")
+        .expect("Claude receives updated input");
+        let path = context_path(&output);
+        let record = context::read(&path).expect("read operation context");
+        let actual = (
+            record.model().raw_slug(),
+            record.coauthor_trailer(),
+            normalize_output(output, &path),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                Some("fixture-claude-model-2026"),
+                Some(
+                    "Co-authored-by: Claude Code (fixture-claude-model-2026) <noreply@anthropic.com>"
+                        .to_owned(),
+                ),
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PreToolUse",
+                        "permissionDecision": "ask",
+                        "permissionDecisionReason": "fixture rule",
+                        "updatedInput": {
+                            "command": format!("{CONTEXT_ENV}=<context-file> {COMMIT_COMMAND}"),
+                        },
+                    },
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn deny_decision_is_preserved_without_creating_context(context_dir: TempDir) {
+        let command =
+            r#"runok exec --ask --hook-origin fixture-token -- 'git commit -m "Fixture subject"'"#;
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "fixture denied rule",
+                "updatedInput": {"command": command},
+            },
+        });
+        let result = transform(
+            Provider::Codex,
+            &envelope(
+                codex_input(
+                    command,
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-denied",
+                ),
+                Some(proxy_output.clone()),
+            ),
+            context_dir.path(),
+        )
+        .expect("preserve denied request");
+        let context_count = std::fs::read_dir(context_dir.path())
+            .expect("read context directory")
+            .count();
+
+        assert_eq!((result, context_count), (Some(proxy_output), 0));
+    }
+
+    #[rstest]
+    #[case::missing_model(None)]
+    #[case::trailer_delimiter(Some("fixture-model <fixture@example.invalid>"))]
+    fn unusable_model_preserves_permission_proxy_output(
+        context_dir: TempDir,
+        #[case] model: Option<&str>,
+    ) {
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        });
+        let result = transform(
+            Provider::Codex,
+            &envelope(
+                codex_input(COMMIT_COMMAND, model, "fixture-tool-use-missing-model"),
+                Some(proxy_output.clone()),
+            ),
+            context_dir.path(),
+        )
+        .expect("unavailable model skips attribution");
+        let context_count = std::fs::read_dir(context_dir.path())
+            .expect("read context directory")
+            .count();
+
+        assert_eq!((result, context_count), (Some(proxy_output), 0));
+    }
+
+    #[rstest]
+    #[case::status("git status --short")]
+    #[case::pull("git pull origin fixture-branch")]
+    #[case::merge("git merge fixture-branch")]
+    #[case::rebase("git rebase fixture-base")]
+    #[case::unknown_alias("git ci -m 'Fixture subject'")]
+    #[case::compound("git commit -m 'Fixture subject' && git status --short")]
+    #[case::compound_read("git rev-parse --show-toplevel && git status --short")]
+    #[case::compound_read_with_shell_syntax_check(
+        "git status --short && git log --oneline -5 && git diff --check && bash -n /fixture/bin/review-hook && git branch -vv"
+    )]
+    fn non_attribution_commands_preserve_permission_proxy_output(
+        context_dir: TempDir,
+        #[case] command: &str,
+    ) {
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+                "updatedInput": {"command": command},
+            },
+        });
+        let result = transform(
+            Provider::Codex,
+            &envelope(
+                codex_input(
+                    command,
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-other",
+                ),
+                Some(proxy_output.clone()),
+            ),
+            context_dir.path(),
+        )
+        .expect("pass through command outside attribution handling");
+        let context_count = std::fs::read_dir(context_dir.path())
+            .expect("read context directory")
+            .count();
+
+        assert_eq!((result, context_count), (Some(proxy_output), 0));
+    }
+
+    #[rstest]
+    fn codex_ask_decision_is_preserved(context_dir: TempDir) {
+        let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "ask",
@@ -449,119 +538,55 @@ mod tests {
             },
         });
         let result = transform(
-            Provider::ClaudeCode,
-            &envelope(input, Some(output)),
-            None,
+            Provider::Codex,
+            &envelope(
+                codex_input(
+                    COMMIT_COMMAND,
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-ask",
+                ),
+                Some(proxy_output.clone()),
+            ),
             context_dir.path(),
         )
-        .expect("transform Claude request")
-        .expect("Claude must receive updated input");
-        let path = context_path(&result);
-        let record = context::read(&path).expect("read Claude operation context");
+        .expect("preserve Codex ask response");
 
-        let actual = (
-            record.model().trailer_value(),
-            normalize_output(result, &path),
-        );
-        assert_eq!(
-            actual,
-            (
-                "fixture-claude-model-2026",
-                json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "ask",
-                        "permissionDecisionReason": "fixture rule",
-                        "updatedInput": {
-                            "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
-                        },
-                    },
-                }),
-            ),
-        );
+        assert_eq!(result, Some(proxy_output));
     }
 
     #[rstest]
-    fn deny_is_preserved_without_creating_a_context(context_dir: TempDir) {
-        let output = json!({
+    fn proxy_rewrite_to_unrecognized_command_is_preserved(context_dir: TempDir) {
+        let rewritten_command =
+            r#"runok exec --ask --hook-origin fixture-token -- 'git pull origin fixture-branch'"#;
+        let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": "fixture denied rule",
+                "permissionDecision": "allow",
+                "updatedInput": {"command": rewritten_command},
             },
         });
         let result = transform(
             Provider::Codex,
             &envelope(
-                codex_input(COMMIT_COMMAND, None, "fixture-tool-use-denied"),
-                Some(output.clone()),
+                codex_input(
+                    COMMIT_COMMAND,
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-rewrite",
+                ),
+                Some(proxy_output.clone()),
             ),
-            None,
             context_dir.path(),
         )
-        .expect("preserve denied request");
-        let file_count = std::fs::read_dir(context_dir.path())
-            .expect("read context directory")
-            .count();
+        .expect("preserve proxy rewrite");
 
-        assert_eq!((result, file_count), (Some(output), 0));
+        assert_eq!(result, Some(proxy_output));
     }
 
     #[rstest]
-    fn missing_codex_model_requires_an_explicit_unknown_reason(context_dir: TempDir) {
-        let raw = envelope(
-            codex_input(COMMIT_COMMAND, None, "fixture-tool-use-unknown"),
-            None,
-        );
-        let without_exception = transform(Provider::Codex, &raw, None, context_dir.path())
-            .expect_err("missing model must fail closed");
-        let with_exception = transform(
-            Provider::Codex,
-            &raw,
-            Some("fixture runtime model unavailable"),
-            context_dir.path(),
-        )
-        .expect("explicit unknown exception is accepted")
-        .expect("Codex must receive updated input");
-        let path = context_path(&with_exception);
-        let context = context::read(&path).expect("read explicit unknown context");
-
-        let actual = (
-            without_exception.to_string(),
-            context.model().clone(),
-            normalize_output(with_exception, &path),
-        );
-        assert_eq!(
-            actual,
-            (
-                "runtime model is unavailable: runtime model is unavailable and no explicit unknown reason was supplied".to_owned(),
-                ModelIdentity::Unknown {
-                    reason: "fixture runtime model unavailable".to_owned(),
-                },
-                json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
-                        "updatedInput": {
-                            "command": format!("{CONTEXT_ENV}=<context-file> {REQUIRED_ENV}=1 {COMMIT_COMMAND}"),
-                        },
-                    },
-                }),
-            ),
-        );
-    }
-
-    #[rstest]
-    #[case::status("git status --short")]
-    #[case::single_rev_parse("git rev-parse --show-toplevel")]
-    #[case::compound_rev_parse("git rev-parse --show-toplevel && git status --short")]
-    fn non_commit_commands_pass_through_unchanged(context_dir: TempDir, #[case] command: &str) {
-        let input = codex_input(
-            command,
-            Some("fixture-model-red-2026"),
-            "fixture-tool-use-read",
-        );
-        let output = json!({
+    fn context_write_failure_does_not_deny_the_operation(context_dir: TempDir) {
+        let invalid_context_dir = context_dir.path().join("fixture-not-a-directory");
+        std::fs::write(&invalid_context_dir, "fixture").expect("create non-directory context path");
+        let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "allow",
@@ -569,79 +594,28 @@ mod tests {
         });
         let result = transform(
             Provider::Codex,
-            &envelope(input, Some(output.clone())),
-            None,
-            context_dir.path(),
+            &envelope(
+                codex_input(
+                    COMMIT_COMMAND,
+                    Some("fixture-model-blue"),
+                    "fixture-tool-use-context-error",
+                ),
+                Some(proxy_output.clone()),
+            ),
+            &invalid_context_dir,
         )
-        .expect("pass through non-commit request");
-        let file_count = std::fs::read_dir(context_dir.path())
-            .expect("read context directory")
-            .count();
+        .expect("skip attribution on context write failure");
 
-        assert_eq!((result, file_count), (Some(output), 0));
+        assert_eq!(result, Some(proxy_output));
     }
 
     #[rstest]
-    #[case::lowercase("bash")]
-    #[case::function_name("exec_command")]
-    fn codex_noncanonical_shell_tool_names_are_ignored(
-        #[case] tool_name: &str,
-        context_dir: TempDir,
-    ) {
-        let mut input = codex_input(
-            COMMIT_COMMAND,
-            Some("fixture-model-red-2026"),
-            "fixture-tool-use-legacy-name",
-        );
-        input["tool_name"] = json!(tool_name);
-        let output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-            },
-        });
-        let result = transform(
-            Provider::Codex,
-            &envelope(input, Some(output.clone())),
-            None,
-            context_dir.path(),
-        )
-        .expect("non-canonical tool input passes through unchanged");
-        let file_count = std::fs::read_dir(context_dir.path())
-            .expect("read context directory")
-            .count();
-
-        assert_eq!((result, file_count), (Some(output), 0));
-    }
-
-    #[rstest]
-    fn unsupported_history_rewrites_are_rejected(context_dir: TempDir) {
-        let input = codex_input(
-            "git rebase fixture-base",
-            Some("fixture-model-red-2026"),
-            "fixture-tool-use-rebase",
-        );
-        let error = transform(
-            Provider::Codex,
-            &envelope(input, None),
-            None,
-            context_dir.path(),
-        )
-        .expect_err("rebase must not bypass attribution hooks");
-
-        assert_eq!(
-            error.to_string(),
-            "git rebase may create commits outside the supported single-commit hook path",
-        );
-    }
-
-    #[rstest]
-    fn claude_does_not_use_an_unrelated_transcript_model_as_fallback(context_dir: TempDir) {
+    fn unrelated_claude_transcript_model_is_not_used(context_dir: TempDir) {
         let transcript_path = context_dir.path().join("fixture-transcript.jsonl");
-        let unrelated_message = json!({
+        let line = json!({
             "type": "assistant",
             "message": {
-                "model": "fixture-latest-model",
+                "model": "fixture-recent-model",
                 "content": [{
                     "type": "tool_use",
                     "id": "fixture-other-tool-use",
@@ -652,8 +626,14 @@ mod tests {
         })
         .to_string();
         let mut transcript_file =
-            std::fs::File::create(&transcript_path).expect("create fixture Claude transcript");
-        writeln!(transcript_file, "{unrelated_message}").expect("write fixture Claude transcript");
+            std::fs::File::create(&transcript_path).expect("create fixture transcript");
+        writeln!(transcript_file, "{line}").expect("write fixture transcript");
+        let proxy_output = json!({
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "allow",
+            },
+        });
         let input = json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
@@ -661,55 +641,13 @@ mod tests {
             "transcript_path": transcript_path,
             "tool_input": {"command": COMMIT_COMMAND},
         });
-        let error = transform(
+        let result = transform(
             Provider::ClaudeCode,
-            &envelope(input, None),
-            None,
+            &envelope(input, Some(proxy_output.clone())),
             context_dir.path(),
         )
-        .expect_err("an unrelated transcript model cannot identify the operation");
+        .expect("skip attribution without matching transcript evidence");
 
-        assert_eq!(
-            error.to_string(),
-            "runtime model is unavailable: runtime model is unavailable and no explicit unknown reason was supplied",
-        );
-    }
-
-    #[rstest]
-    #[case::long_skip_hooks("git commit --no-verify -m 'Fixture subject'")]
-    #[case::short_skip_hooks("git commit -n -m 'Fixture subject'")]
-    #[case::git_config_override("git -c CORE.HOOKSPATH=/fixture/hooks commit -m 'Fixture subject'")]
-    fn hook_bypass_options_are_rejected(context_dir: TempDir, #[case] command: &str) {
-        let input = codex_input(
-            command,
-            Some("fixture-model-red-2026"),
-            "fixture-tool-use-no-verify",
-        );
-        let error = transform(
-            Provider::Codex,
-            &envelope(input, None),
-            None,
-            context_dir.path(),
-        )
-        .expect_err("commit-msg bypass must fail closed");
-
-        assert_eq!(
-            error.to_string(),
-            "commit command bypasses the attribution integrity hook",
-        );
-    }
-
-    #[rstest]
-    fn invalid_hook_output_is_a_deny_response() {
-        assert_eq!(
-            blocked_output(Provider::Codex, "fixture context missing"),
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": "fixture context missing",
-                },
-            }),
-        );
+        assert_eq!(result, Some(proxy_output));
     }
 }

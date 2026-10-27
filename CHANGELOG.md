@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.468](https://github.com/fohte/armyknife/compare/v0.1.467...v0.1.468) (2026-10-27)
+
+
+### Features
+
+* **agent:** allow agy and optional type settings ([#1275](https://github.com/fohte/armyknife/issues/1275)) ([27535aa](https://github.com/fohte/armyknife/commit/27535aa6210dcb09008c435108bbd2c39f578907))
+
+## [0.1.467](https://github.com/fohte/armyknife/compare/v0.1.466...v0.1.467) (2026-10-27)
+
+
+### Features
+
+* **config:** allow active profile lookups ([#1272](https://github.com/fohte/armyknife/issues/1272)) ([99a1402](https://github.com/fohte/armyknife/commit/99a1402dd984190db70acde753805a2b86f8f86f))
+
+## [0.1.466](https://github.com/fohte/armyknife/compare/v0.1.465...v0.1.466) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** allow Git operations in attribution ([#1270](https://github.com/fohte/armyknife/issues/1270)) ([2f5c90a](https://github.com/fohte/armyknife/commit/2f5c90a2774cd1e9304505acbdd4281edd52f930))
+
 ## [0.1.465](https://github.com/fohte/armyknife/compare/v0.1.464...v0.1.465) (2026-10-25)
 
 
