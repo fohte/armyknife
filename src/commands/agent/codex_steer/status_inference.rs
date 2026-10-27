@@ -3,7 +3,7 @@ mod relay;
 
 use anyhow::{Result, ensure};
 
-use super::Client;
+use super::{Client, history};
 use crate::commands::agent::types::{AgentStatus, Session};
 
 pub(crate) struct Request<'a> {
@@ -16,16 +16,14 @@ pub(crate) struct Request<'a> {
 }
 
 pub(crate) fn infer_status(request: &Request<'_>) -> Result<AgentStatus> {
+    let turn_id = history::require_turn_id(request.turn_id)?;
     ensure!(
         !request.last_assistant_message.trim().is_empty(),
         "Codex Stop snapshot has no final assistant message"
     );
     let mut client = Client::connect()?;
-    let thread = client.read_complete_thread(
-        request.thread_id,
-        request.turn_id,
-        request.last_assistant_message,
-    )?;
+    let thread =
+        client.read_complete_thread(request.thread_id, turn_id, request.last_assistant_message)?;
 
     ensure!(
         thread.model_provider == "openai",

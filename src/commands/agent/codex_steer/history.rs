@@ -82,7 +82,7 @@ impl Client {
     pub(super) fn read_complete_thread(
         &mut self,
         thread_id: &str,
-        turn_id: Option<&str>,
+        turn_id: &str,
         last_assistant_message: &str,
     ) -> Result<CodexThreadMetadata> {
         let mut request =
@@ -100,7 +100,7 @@ impl Client {
 
 fn read_complete_thread_with<Rpc, Sleep>(
     thread_id: &str,
-    turn_id: Option<&str>,
+    turn_id: &str,
     last_assistant_message: &str,
     rpc: &mut Rpc,
     sleep: &mut Sleep,
@@ -111,9 +111,6 @@ where
     Sleep: FnMut(Duration),
 {
     ensure!(!thread_id.is_empty(), "Codex thread ID is empty");
-    let turn_id = turn_id
-        .filter(|turn_id| !turn_id.is_empty())
-        .context("Codex Stop snapshot has no turn_id")?;
     ensure!(
         !last_assistant_message.trim().is_empty(),
         "Codex final assistant message is empty"
@@ -329,6 +326,12 @@ where
     Ok(())
 }
 
+pub(super) fn require_turn_id(turn_id: Option<&str>) -> Result<&str> {
+    turn_id
+        .filter(|turn_id| !turn_id.is_empty())
+        .context("Codex Stop snapshot has no turn_id")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -338,7 +341,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
-    use super::{CodexThreadMetadata, HistoryTimeouts, read_complete_thread_with};
+    use super::{CodexThreadMetadata, HistoryTimeouts, read_complete_thread_with, require_turn_id};
 
     const THREAD_ID: &str = "fixture-thread";
     const TURN_ID: &str = "fixture-turn";
@@ -383,34 +386,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::missing(None)]
-    #[case::empty(Some(""))]
-    fn rejects_missing_or_empty_turn_id_before_reading_history(#[case] turn_id: Option<&str>) {
-        let mut calls = Vec::new();
-        let mut rpc = |method, params, _timeout| {
-            calls.push(json!({ "method": method, "params": params }));
-            Ok(json!({}))
-        };
-        let mut sleeps = Vec::new();
-        let mut sleep = |duration| sleeps.push(duration);
-
-        let actual = result_text(read_complete_thread_with(
-            THREAD_ID,
-            turn_id,
-            FINAL_MESSAGE,
-            &mut rpc,
-            &mut sleep,
-            history_timeouts(Duration::from_secs(1)),
-        ));
-
-        assert_eq!(
-            (actual, calls, sleeps),
-            (
-                Err("Codex Stop snapshot has no turn_id".to_string()),
-                Vec::<Value>::new(),
-                Vec::<Duration>::new(),
-            ),
-        );
+    #[case::missing(None, Err("Codex Stop snapshot has no turn_id".to_string()))]
+    #[case::empty(Some(""), Err("Codex Stop snapshot has no turn_id".to_string()))]
+    #[case::valid(Some(TURN_ID), Ok(TURN_ID.to_string()))]
+    fn requires_non_empty_turn_id(
+        #[case] turn_id: Option<&str>,
+        #[case] expected: std::result::Result<String, String>,
+    ) {
+        let actual = require_turn_id(turn_id)
+            .map(ToOwned::to_owned)
+            .map_err(|error| format!("{error:#}"));
+        assert_eq!(actual, expected,);
     }
 
     #[rstest]
@@ -450,7 +436,7 @@ mod tests {
 
         let actual = result_text(read_complete_thread_with(
             THREAD_ID,
-            Some(TURN_ID),
+            TURN_ID,
             FINAL_MESSAGE,
             &mut rpc,
             &mut sleep,
@@ -541,7 +527,7 @@ mod tests {
 
         let actual = result_text(read_complete_thread_with(
             THREAD_ID,
-            Some(TURN_ID),
+            TURN_ID,
             FINAL_MESSAGE,
             &mut rpc,
             &mut sleep,
