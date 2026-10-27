@@ -83,10 +83,15 @@ mod tests {
         assert_eq!(
             format_value(&value).unwrap(),
             indoc! {"
+                code-review:
+                  engine: claude
                 review:
                   engine: claude
                   model: sample-model-alpha
                   reasoning_effort: medium
+                writing-review:
+                  engine: agy
+                  model: sample-review-model
             "}
         );
     }
@@ -98,6 +103,11 @@ mod tests {
               active_profile: sample-alpha
               profiles:
                 sample-alpha:
+                  code-review:
+                    engine: claude
+                  writing-review:
+                    engine: agy
+                    model: sample-review-model
                   review:
                     engine: claude
                     model: sample-model-alpha
@@ -130,6 +140,8 @@ mod tests {
     #[case::profile_unselected(None, "agent.profile")]
     #[case::profile_undefined(Some("sample-unconfigured"), "agent.profile")]
     #[case::type_missing(Some("sample-alpha"), "agent.profile.unconfigured.model")]
+    #[case::omitted_model(Some("sample-alpha"), "agent.profile.code-review.model")]
+    #[case::omitted_effort(Some("sample-alpha"), "agent.profile.code-review.reasoning_effort")]
     #[case::path_missing(Some("sample-alpha"), "agent.profile.review.unconfigured")]
     #[case::path_below_scalar(Some("sample-alpha"), "agent.profile.review.model.value")]
     fn get_value_agent_profile_returns_none_without_a_value(

@@ -175,7 +175,7 @@
           "default": null
         },
         "profiles": {
-          "description": "Named profiles containing exact settings for each arbitrary launch type.",
+          "description": "Named profiles containing execution settings for each arbitrary type.",
           "type": "object",
           "additionalProperties": {
             "type": "object",
@@ -335,28 +335,45 @@
       "additionalProperties": false
     },
     "AgentProfileTypeConfig": {
-      "description": "Model settings for one type in an agent profile.",
+      "description": "Execution settings for one type in an agent profile.",
       "type": "object",
       "properties": {
         "engine": {
-          "description": "Coding agent CLI used for this type.",
-          "$ref": "#/$defs/Engine"
+          "description": "Coding agent CLI configured for this type.",
+          "$ref": "#/$defs/AgentProfileTypeEngine"
         },
         "model": {
-          "description": "Model passed to the selected engine.",
-          "type": "string",
+          "description": "Model passed to the selected engine; omitted to use its CLI default.",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1
         },
         "reasoning_effort": {
-          "description": "Reasoning effort used for this type.",
-          "$ref": "#/$defs/ReasoningEffort"
+          "description": "Reasoning effort used for this type; unavailable for the agy engine.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReasoningEffort"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
       "required": [
-        "engine",
-        "model",
-        "reasoning_effort"
+        "engine"
+      ]
+    },
+    "AgentProfileTypeEngine": {
+      "description": "Engines accepted in profiles, including values that cannot launch agent sessions.",
+      "type": "string",
+      "enum": [
+        "claude",
+        "codex",
+        "agy"
       ]
     },
     "AgentStatusConfig": {

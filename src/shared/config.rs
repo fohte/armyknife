@@ -60,7 +60,7 @@ pub use codex::CodexConfig;
 use env_overlay::env_overlay;
 pub use launch_profile::{
     AgentLaunchEngineConfig, AgentLaunchProfileConfig, AgentProfileTypeConfig,
-    ResolvedAgentProfileType, ResolvedLaunchOptions,
+    AgentProfileTypeEngine, ResolvedAgentProfileType, ResolvedLaunchOptions,
 };
 #[cfg(feature = "schema-gen")]
 pub use schema::generate_schema;
@@ -2085,9 +2085,9 @@ mod tests {
                 profile_name: "selected-profile".to_string(),
                 type_name: "review-type".to_string(),
                 settings: AgentProfileTypeConfig {
-                    engine: Engine::Codex,
-                    model: "model-ember".to_string(),
-                    reasoning_effort: ReasoningEffort::High,
+                    engine: AgentProfileTypeEngine::Codex,
+                    model: Some("model-ember".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::High),
                 },
             },
         );

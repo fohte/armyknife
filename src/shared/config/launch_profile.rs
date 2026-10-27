@@ -5,29 +5,80 @@ use crate::commands::agent::types::{Engine, ReasoningEffort};
 
 use super::{AgentConfig, format_sorted_names};
 
-/// Model settings for one type in an agent profile.
+/// Engines accepted in profiles, including values that cannot launch agent sessions.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-#[serde(deny_unknown_fields)]
-pub struct AgentProfileTypeConfig {
-    /// Coding agent CLI used for this type.
-    pub engine: Engine,
-
-    /// Model passed to the selected engine.
-    #[serde(deserialize_with = "deserialize_non_empty_model")]
-    #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
-    pub model: String,
-
-    /// Reasoning effort used for this type.
-    pub reasoning_effort: ReasoningEffort,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentProfileTypeEngine {
+    Claude,
+    Codex,
+    Agy,
 }
 
-fn deserialize_non_empty_model<'de, D>(deserializer: D) -> Result<String, D::Error>
+impl AgentProfileTypeEngine {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Agy => "agy",
+        }
+    }
+}
+
+/// Execution settings for one type in an agent profile.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentProfileTypeConfig {
+    /// Coding agent CLI configured for this type.
+    pub engine: AgentProfileTypeEngine,
+
+    /// Model passed to the selected engine; omitted to use its CLI default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
+    pub model: Option<String>,
+
+    /// Reasoning effort used for this type; unavailable for the agy engine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawAgentProfileTypeConfig {
+    engine: AgentProfileTypeEngine,
+    #[serde(default, deserialize_with = "deserialize_optional_non_empty_model")]
+    model: Option<String>,
+    #[serde(default)]
+    reasoning_effort: Option<ReasoningEffort>,
+}
+
+impl<'de> Deserialize<'de> for AgentProfileTypeConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawAgentProfileTypeConfig::deserialize(deserializer)?;
+        if raw.engine == AgentProfileTypeEngine::Agy && raw.reasoning_effort.is_some() {
+            return Err(serde::de::Error::custom(
+                "reasoning_effort is not supported for the agy engine",
+            ));
+        }
+
+        Ok(Self {
+            engine: raw.engine,
+            model: raw.model,
+            reasoning_effort: raw.reasoning_effort,
+        })
+    }
+}
+
+fn deserialize_optional_non_empty_model<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let model = String::deserialize(deserializer)?;
-    if model.is_empty() {
+    let model = Option::<String>::deserialize(deserializer)?;
+    if model.as_deref() == Some("") {
         return Err(<D::Error as serde::de::Error>::custom(
             "model must be a non-empty string",
         ));
@@ -373,11 +424,37 @@ mod tests {
                 profile_name: "profile one".to_string(),
                 type_name: "review type".to_string(),
                 settings: AgentProfileTypeConfig {
-                    engine: Engine::Codex,
-                    model: "model-ember".to_string(),
-                    reasoning_effort: ReasoningEffort::High,
+                    engine: AgentProfileTypeEngine::Codex,
+                    model: Some("model-ember".to_string()),
+                    reasoning_effort: Some(ReasoningEffort::High),
                 },
             },
+        );
+    }
+
+    #[rstest]
+    #[case::cli_defaults(indoc! {"
+        engine: claude
+    "}, AgentProfileTypeConfig {
+        engine: AgentProfileTypeEngine::Claude,
+        model: None,
+        reasoning_effort: None,
+    })]
+    #[case::agy_model_only(indoc! {"
+        engine: agy
+        model: sample-review-model
+    "}, AgentProfileTypeConfig {
+        engine: AgentProfileTypeEngine::Agy,
+        model: Some("sample-review-model".to_string()),
+        reasoning_effort: None,
+    })]
+    fn parses_optional_profile_type_settings(
+        #[case] yaml: &str,
+        #[case] expected: AgentProfileTypeConfig,
+    ) {
+        assert_eq!(
+            serde_yaml::from_str::<AgentProfileTypeConfig>(yaml).unwrap(),
+            expected
         );
     }
 
@@ -386,18 +463,17 @@ mod tests {
         model: model-ember
         reasoning_effort: high
     "})]
-    #[case::missing_model(indoc! {"
-        engine: codex
-        reasoning_effort: high
-    "})]
     #[case::empty_model(indoc! {"
         engine: codex
         model: \"\"
         reasoning_effort: high
     "})]
-    #[case::missing_reasoning_effort(indoc! {"
-        engine: codex
-        model: model-ember
+    #[case::agy_reasoning_effort(indoc! {"
+        engine: agy
+        reasoning_effort: low
+    "})]
+    #[case::unknown_engine(indoc! {"
+        engine: unknown
     "})]
     #[case::unknown_field(indoc! {"
         engine: codex
@@ -406,7 +482,11 @@ mod tests {
         extra: true
     "})]
     fn rejects_invalid_profile_type_settings(#[case] yaml: &str) {
-        assert!(serde_yaml::from_str::<AgentProfileTypeConfig>(yaml).is_err());
+        let result = serde_yaml::from_str::<AgentProfileTypeConfig>(yaml)
+            .map(|_| ())
+            .map_err(|_| ());
+
+        assert_eq!(result, Err(()));
     }
 
     #[rstest]
@@ -433,9 +513,9 @@ mod tests {
                 HashMap::from([(
                     "review type".to_string(),
                     AgentProfileTypeConfig {
-                        engine: Engine::Claude,
-                        model: "model-raven".to_string(),
-                        reasoning_effort: ReasoningEffort::Low,
+                        engine: AgentProfileTypeEngine::Claude,
+                        model: Some("model-raven".to_string()),
+                        reasoning_effort: Some(ReasoningEffort::Low),
                     },
                 )]),
             )]),
