@@ -9,7 +9,11 @@ pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
     let Some(trailer) = context.coauthor_trailer() else {
         return Ok(message.to_owned());
     };
-    add_coauthor_trailer(message, &trailer)
+    prepare_with_trailer(message, &trailer)
+}
+
+pub(super) fn prepare_with_trailer(message: &str, trailer: &str) -> Result<String> {
+    add_coauthor_trailer(message, trailer)
 }
 
 fn add_coauthor_trailer(message: &str, trailer: &str) -> Result<String> {
