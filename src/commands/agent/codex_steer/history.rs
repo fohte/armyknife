@@ -37,6 +37,8 @@ pub(super) struct CodexThreadMetadata {
     pub(super) model_provider: String,
     pub(super) model: String,
     pub(super) session_id: String,
+    pub(super) turn_id: String,
+    pub(super) last_assistant_message: String,
 }
 
 impl Client {
@@ -149,6 +151,8 @@ where
             .filter(|value| !value.is_empty())
             .context("Codex app-server thread/read response has no session ID")?
             .to_string(),
+        turn_id: turn_id.to_string(),
+        last_assistant_message: last_assistant_message.to_string(),
     };
 
     let completion_deadline = deadline_after(timeouts.turn_completion)?;
@@ -454,6 +458,8 @@ mod tests {
                     model_provider: "openai".to_string(),
                     model: "fixture-model".to_string(),
                     session_id: "fixture-session".to_string(),
+                    turn_id: TURN_ID.to_string(),
+                    last_assistant_message: FINAL_MESSAGE.to_string(),
                 }),
                 expected_calls,
                 Vec::<Duration>::new(),
@@ -528,6 +534,8 @@ mod tests {
                     model_provider: "openai".to_string(),
                     model: "fixture-model".to_string(),
                     session_id: "fixture-session".to_string(),
+                    turn_id: TURN_ID.to_string(),
+                    last_assistant_message: FINAL_MESSAGE.to_string(),
                 }),
                 expected_calls,
                 vec![Duration::from_millis(250), Duration::from_millis(250)],

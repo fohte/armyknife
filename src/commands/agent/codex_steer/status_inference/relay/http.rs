@@ -67,6 +67,9 @@ pub(super) fn handle(stream: &mut TcpStream, state: &RelayState) -> Result<()> {
                 write_rejection(stream, 502, "tool call rejected");
                 bail!("Codex status response requested a tool call");
             }
+            if let Some(usage) = super::usage::from_http_body(&body) {
+                usage.log();
+            }
             write_upstream_response(stream, status.as_u16(), &headers, &body)?;
         }
         Err(_) => write_rejection(stream, 502, "official Codex request failed"),

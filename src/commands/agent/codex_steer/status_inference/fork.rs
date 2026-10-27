@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 
-use self::command::codex_fork_command;
+use self::command::{ForkCommandOptions, codex_fork_command};
 use self::sandbox::write_srt_settings;
 use super::super::history::CodexThreadMetadata;
 use super::relay;
@@ -12,6 +12,7 @@ use crate::commands::agent::types::{AgentStatus, Session};
 use crate::infra::process;
 
 mod command;
+mod home;
 mod sandbox;
 
 const FORK_TIMEOUT: Duration = Duration::from_secs(120);
@@ -33,18 +34,20 @@ pub(super) fn infer_status(
         .context("create Codex status inference directory")?;
     let inference_path = std::fs::canonicalize(inference_dir.path())
         .context("resolve Codex status inference directory")?;
+    let private_home = home::prepare_private_codex_home(&inference_path, session, thread)?;
     let relay = relay::Relay::start(&thread.session_id)?;
     let settings_path = write_srt_settings(&inference_path, relay.port())?;
     let result_path = inference_path.join("result.json");
-    let command = codex_fork_command(
+    let command = codex_fork_command(ForkCommandOptions {
         session,
         thread,
         prompt,
-        &result_path,
-        &settings_path,
-        &relay.base_url(),
-        &inference_path,
-    )?;
+        result_path: &result_path,
+        settings_path: &settings_path,
+        base_url: &relay.base_url(),
+        inference_dir: &inference_path,
+        private_home: &private_home,
+    })?;
     let status = process::run_in_process_group_with_timeout(command, FORK_TIMEOUT)
         .context("Codex status fork process failed")?;
     ensure!(

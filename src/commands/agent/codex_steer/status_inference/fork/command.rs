@@ -5,19 +5,33 @@ use anyhow::{Context, Result, ensure};
 use serde_json::to_string;
 
 use super::super::super::history::CodexThreadMetadata;
+use super::home::PrivateCodexHome;
 use super::path_to_string;
 use crate::commands::agent::types::Session;
 use crate::infra::external_tool::ExternalTool;
 
-pub(super) fn codex_fork_command(
-    session: &Session,
-    thread: &CodexThreadMetadata,
-    prompt: &str,
-    result_path: &Path,
-    settings_path: &Path,
-    base_url: &str,
-    inference_dir: &Path,
-) -> Result<Command> {
+pub(super) struct ForkCommandOptions<'a> {
+    pub(super) session: &'a Session,
+    pub(super) thread: &'a CodexThreadMetadata,
+    pub(super) prompt: &'a str,
+    pub(super) result_path: &'a Path,
+    pub(super) settings_path: &'a Path,
+    pub(super) base_url: &'a str,
+    pub(super) inference_dir: &'a Path,
+    pub(super) private_home: &'a PrivateCodexHome,
+}
+
+pub(super) fn codex_fork_command(options: ForkCommandOptions<'_>) -> Result<Command> {
+    let ForkCommandOptions {
+        session,
+        thread,
+        prompt,
+        result_path,
+        settings_path,
+        base_url,
+        inference_dir,
+        private_home,
+    } = options;
     let codex_path = ExternalTool::Codex
         .resolve_path()
         .context("Codex CLI is not available on PATH")?;
@@ -32,15 +46,39 @@ pub(super) fn codex_fork_command(
             prompt,
             result_path,
             base_url,
+            &private_home.sqlite_home,
+            &private_home.log_dir,
         )?)
-        .current_dir(&session.cwd)
+        .current_dir(&session.cwd);
+    configure_isolated_environment(&mut command, inference_dir, private_home);
+    Ok(command)
+}
+
+fn configure_isolated_environment(
+    command: &mut Command,
+    inference_dir: &Path,
+    private_home: &PrivateCodexHome,
+) {
+    command
         .env("ARMYKNIFE_SKIP_HOOKS", "1")
         .env("CLAUDE_CODE_TMPDIR", inference_dir)
         .env("CLAUDE_TMPDIR", inference_dir)
+        .env("CODEX_HOME", &private_home.codex_home)
+        .env("CODEX_SQLITE_HOME", &private_home.sqlite_home)
+        .env("TMPDIR", &private_home.temp_dir)
+        .env("TMP", &private_home.temp_dir)
+        .env("TEMP", &private_home.temp_dir)
+        .env_remove("ARMYKNIFE_SESSION_ID")
+        .env_remove("ARMYKNIFE_ANCESTOR_SESSION_IDS")
+        .env_remove("TQ_SESSION_ID")
+        .env_remove("TQ_PARENT_SESSION_ID")
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .env_remove("CODEX_SESSION_ID")
+        .env_remove("CODEX_THREAD_ID")
         .env_remove("OPENAI_API_KEY")
+        .env_remove("OPENAI_BASE_URL")
         .env_remove("CODEX_API_KEY")
         .env_remove("CODEX_ACCESS_TOKEN");
-    Ok(command)
 }
 
 fn codex_fork_args(
@@ -49,6 +87,8 @@ fn codex_fork_args(
     prompt: &str,
     result_path: &Path,
     base_url: &str,
+    sqlite_home: &Path,
+    log_dir: &Path,
 ) -> Result<Vec<String>> {
     ensure!(!session_id.is_empty(), "Codex parent session ID is empty");
     ensure!(!model.is_empty(), "Codex parent model is empty");
@@ -60,6 +100,20 @@ fn codex_fork_args(
         model.to_string(),
         "--config".to_string(),
         "model_provider=\"openai\"".to_string(),
+        "--config".to_string(),
+        format!(
+            "sqlite_home={}",
+            serde_json::to_string(&path_to_string(sqlite_home)?)?
+        ),
+        "--config".to_string(),
+        format!(
+            "log_dir={}",
+            serde_json::to_string(&path_to_string(log_dir)?)?
+        ),
+        "--config".to_string(),
+        "cli_auth_credentials_store=\"file\"".to_string(),
+        "--config".to_string(),
+        "mcp_oauth_credentials_store=\"file\"".to_string(),
         "--config".to_string(),
         format!("openai_base_url={}", to_string(base_url)?),
         "--config".to_string(),
@@ -76,9 +130,12 @@ fn codex_fork_args(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
+    use std::process::Command;
 
-    use super::codex_fork_args;
+    use super::{codex_fork_args, configure_isolated_environment};
+    use crate::commands::agent::codex_steer::status_inference::fork::home::PrivateCodexHome;
 
     #[test]
     fn codex_fork_uses_parent_model_ephemeral_history_and_relay_overrides() {
@@ -88,6 +145,8 @@ mod tests {
             "classify this stopped task",
             Path::new("/private/tmp/status-worker-fixture/result.json"),
             "http://localhost:43817/fixture-token/backend-api/codex",
+            Path::new("/private/tmp/status-worker-fixture/codex-home/state"),
+            Path::new("/private/tmp/status-worker-fixture/codex-home/logs"),
         );
         let actual = actual.expect("fixture fork arguments should be valid");
         assert_eq!(
@@ -100,6 +159,14 @@ mod tests {
                 "fixture-model",
                 "--config",
                 "model_provider=\"openai\"",
+                "--config",
+                "sqlite_home=\"/private/tmp/status-worker-fixture/codex-home/state\"",
+                "--config",
+                "log_dir=\"/private/tmp/status-worker-fixture/codex-home/logs\"",
+                "--config",
+                "cli_auth_credentials_store=\"file\"",
+                "--config",
+                "mcp_oauth_credentials_store=\"file\"",
                 "--config",
                 "openai_base_url=\"http://localhost:43817/fixture-token/backend-api/codex\"",
                 "--config",
@@ -115,6 +182,78 @@ mod tests {
             .into_iter()
             .map(str::to_string)
             .collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn command_environment_uses_private_codex_and_temporary_paths() {
+        let private_home = PrivateCodexHome {
+            codex_home: Path::new("/private/tmp/status-worker-fixture/codex-home").to_path_buf(),
+            sqlite_home: Path::new("/private/tmp/status-worker-fixture/codex-home/state")
+                .to_path_buf(),
+            log_dir: Path::new("/private/tmp/status-worker-fixture/codex-home/logs").to_path_buf(),
+            temp_dir: Path::new("/private/tmp/status-worker-fixture/codex-home/tmp").to_path_buf(),
+        };
+        let mut command = Command::new("fixture-codex");
+        configure_isolated_environment(
+            &mut command,
+            Path::new("/private/tmp/status-worker-fixture"),
+            &private_home,
+        );
+        let actual: BTreeMap<_, _> = command
+            .get_envs()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            actual,
+            BTreeMap::from([
+                ("ARMYKNIFE_SKIP_HOOKS".to_string(), Some("1".to_string())),
+                (
+                    "CLAUDE_CODE_TMPDIR".to_string(),
+                    Some("/private/tmp/status-worker-fixture".to_string()),
+                ),
+                (
+                    "CLAUDE_TMPDIR".to_string(),
+                    Some("/private/tmp/status-worker-fixture".to_string()),
+                ),
+                (
+                    "CODEX_HOME".to_string(),
+                    Some("/private/tmp/status-worker-fixture/codex-home".to_string()),
+                ),
+                (
+                    "CODEX_SQLITE_HOME".to_string(),
+                    Some("/private/tmp/status-worker-fixture/codex-home/state".to_string()),
+                ),
+                (
+                    "TMPDIR".to_string(),
+                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                ),
+                (
+                    "TMP".to_string(),
+                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                ),
+                (
+                    "TEMP".to_string(),
+                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                ),
+                ("ARMYKNIFE_SESSION_ID".to_string(), None),
+                ("ARMYKNIFE_ANCESTOR_SESSION_IDS".to_string(), None),
+                ("TQ_SESSION_ID".to_string(), None),
+                ("TQ_PARENT_SESSION_ID".to_string(), None),
+                ("CLAUDE_CODE_SESSION_ID".to_string(), None),
+                ("CODEX_SESSION_ID".to_string(), None),
+                ("CODEX_THREAD_ID".to_string(), None),
+                ("OPENAI_API_KEY".to_string(), None),
+                ("OPENAI_BASE_URL".to_string(), None),
+                ("CODEX_API_KEY".to_string(), None),
+                ("CODEX_ACCESS_TOKEN".to_string(), None),
+            ]),
         );
     }
 }

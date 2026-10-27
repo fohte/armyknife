@@ -302,6 +302,9 @@ where
                         !value_contains_tool_call(&event),
                         "official Codex WebSocket response requested a tool call"
                     );
+                    if let Some(usage) = super::usage::from_response_value(&event) {
+                        usage.log();
+                    }
                     let event_type = event
                         .get("type")
                         .and_then(Value::as_str)

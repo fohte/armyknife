@@ -9,6 +9,7 @@ use reqwest::redirect::Policy;
 use tokio::runtime::Handle;
 
 mod http;
+mod usage;
 mod websocket;
 
 const ACCEPT_POLL_INTERVAL: Duration = Duration::from_millis(20);
