@@ -8,6 +8,7 @@ use super::super::transcript::claude_assistant_model;
 use super::super::types::{Engine, HookEvent, HookInput};
 
 const TRANSCRIPT_CHUNK_SIZE: usize = 16 * 1024;
+const MAX_CODEX_EFFORT_SCAN_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Default)]
 pub(super) struct Update {
@@ -92,7 +93,7 @@ fn latest_claude_model(path: &Path) -> Option<String> {
 }
 
 fn latest_codex_effort(path: &Path) -> Option<String> {
-    last_record(path, "turn_context")?
+    last_record_with_limit(path, "turn_context", Some(MAX_CODEX_EFFORT_SCAN_BYTES))?
         .get("payload")?
         .get("effort")
         .and_then(Value::as_str)
@@ -101,12 +102,23 @@ fn latest_codex_effort(path: &Path) -> Option<String> {
 }
 
 fn last_record(path: &Path, expected_type: &str) -> Option<Value> {
+    last_record_with_limit(path, expected_type, None)
+}
+
+fn last_record_with_limit(
+    path: &Path,
+    expected_type: &str,
+    max_scan_bytes: Option<u64>,
+) -> Option<Value> {
     let mut file = File::open(path).ok()?;
     let mut remaining = file.seek(SeekFrom::End(0)).ok()?;
+    let scan_start = max_scan_bytes.map_or(0, |limit| remaining.saturating_sub(limit));
     let mut carry = Vec::new();
 
-    while remaining > 0 {
-        let start = remaining.saturating_sub(TRANSCRIPT_CHUNK_SIZE as u64);
+    while remaining > scan_start {
+        let start = remaining
+            .saturating_sub(TRANSCRIPT_CHUNK_SIZE as u64)
+            .max(scan_start);
         let mut chunk = vec![0; usize::try_from(remaining - start).ok()?];
         file.seek(SeekFrom::Start(start)).ok()?;
         file.read_exact(&mut chunk).ok()?;
@@ -114,8 +126,15 @@ fn last_record(path: &Path, expected_type: &str) -> Option<Value> {
 
         let mut lines = chunk.split(|byte| *byte == b'\n').collect::<Vec<_>>();
         if start > 0 {
-            carry = lines.first()?.to_vec();
-            lines.remove(0);
+            if start > scan_start {
+                carry = lines.first()?.to_vec();
+                lines.remove(0);
+            } else {
+                carry.clear();
+                if scan_start > 0 {
+                    lines.remove(0);
+                }
+            }
         } else {
             carry.clear();
         }
@@ -324,5 +343,25 @@ mod tests {
             latest_codex_effort(transcript.path()).as_deref(),
             Some("high")
         );
+    }
+
+    #[test]
+    fn codex_effort_lookup_does_not_scan_before_the_size_limit() {
+        let mut transcript = tempfile::NamedTempFile::new().expect("transcript should be created");
+        writeln!(
+            transcript,
+            "{{\"type\":\"turn_context\",\"payload\":{{\"effort\":\"high\"}}}}"
+        )
+        .expect("context should be written");
+        let payload = "x".repeat(
+            usize::try_from(MAX_CODEX_EFFORT_SCAN_BYTES).expect("scan limit should fit usize"),
+        );
+        writeln!(
+            transcript,
+            "{{\"type\":\"user\",\"content\":\"{payload}\"}}"
+        )
+        .expect("large user event should be written");
+
+        assert_eq!(latest_codex_effort(transcript.path()), None);
     }
 }
