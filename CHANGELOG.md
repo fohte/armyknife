@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.469](https://github.com/fohte/armyknife/compare/v0.1.468...v0.1.469) (2026-10-27)
+
+
+### Features
+
+* **ai:** add PR series plan sync ([#1279](https://github.com/fohte/armyknife/issues/1279)) ([1d0c976](https://github.com/fohte/armyknife/commit/1d0c976a588bcf049d7031746f6f4e3796f1b218))
+
 ## [0.1.468](https://github.com/fohte/armyknife/compare/v0.1.467...v0.1.468) (2026-10-27)
 
 
