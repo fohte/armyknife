@@ -492,7 +492,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `codex [<args>...]`                                        |         | Start Codex and bind its thread ID to the current tmux pane                                 |
 | `close [target] [--child] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                              |
 | `clean [--dry-run] [--all] [--force]`                      |         | Delete merged or closed worktrees                                                           |
-| `hook <event>`                                             |         | Record session events (called from Claude Code hooks)                                       |
+| `hook <event>`                                             |         | Record coding agent hook events                                                             |
 | `attribution pre-tool-use <provider>`                      |         | Add operation context to a provider's commit command after its permission proxy             |
 | `list`                                                     | `ls`    | List all Claude Code sessions with status                                                   |
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
@@ -712,6 +712,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         ]
       }
     ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook post-model-switch" }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -758,6 +765,8 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
+
+Claude Code records the model from `SessionStart.model` or `PostModelSwitch.to_model`; if no model has been recorded, the last assistant message in the transcript supplies it. Hook events that include `effort.level` record that effort. Codex sessions also record model and effort metadata when available.
 
 The pane is normally found by walking the hook process's ancestry up to it. A Codex session running through the shared `codex app-server` daemon breaks that link: the daemon runs the agent loop, hooks included, outside any pane's process tree, so armyknife falls back to the launcher-written session ID option. It binds only when exactly one pane has that session ID and is currently running the Codex CLI. The lookup accepts both `@armyknife-last-agent-session-id` and the pre-rename `@armyknife-last-claude-code-session-id` option; if there is no unique match, the session remains unbound.
 
