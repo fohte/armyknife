@@ -91,12 +91,14 @@ fn run_pre_tool_use(_args: &PreToolUseArgs) -> Result<()> {
 }
 
 fn process_pre_tool_use(raw_envelope: &str) -> Option<Value> {
-    permission_output(raw_envelope)
-}
-
-fn permission_output(raw_envelope: &str) -> Option<Value> {
-    serde_json::from_str::<Value>(raw_envelope)
-        .ok()?
+    let envelope = match serde_json::from_str::<Value>(raw_envelope) {
+        Ok(envelope) => envelope,
+        Err(error) => {
+            eprintln!("agent attribution skipped: invalid provider proxy envelope: {error}");
+            return None;
+        }
+    };
+    envelope
         .get("hook_output")
         .filter(|output| !output.is_null())
         .cloned()
@@ -365,19 +367,36 @@ mod tests {
     }
 
     #[rstest]
-    #[case::missing_session_id(None, false, None)]
-    #[case::missing_session_record(Some("fixture-session-id"), false, Some("fixture-session-id"))]
-    #[case::missing_model(Some("fixture-session-id"), true, Some("fixture-session-id"))]
+    #[case::missing_session_id(None, false, None, None)]
+    #[case::missing_session_record(
+        Some("fixture-session-id"),
+        false,
+        Some("fixture-session-id"),
+        None
+    )]
+    #[case::missing_model(Some("fixture-session-id"), true, Some("fixture-session-id"), None)]
+    #[case::unsafe_model(
+        Some("fixture-session-id"),
+        true,
+        Some("fixture-session-id"),
+        Some(indoc! {"
+            fixture-model-violet
+            Co-authored-by: Example Attacker <attacker@example.invalid>
+        "})
+    )]
     fn prepare_commit_msg_leaves_unattributed_sessions_unchanged(
         hook_dir: TempDir,
         #[case] session_id: Option<&str>,
         #[case] record_exists: bool,
         #[case] expected_loaded_session_id: Option<&str>,
+        #[case] model: Option<&str>,
     ) {
         let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = "Fixture subject\n";
+        let original = indoc! {"
+            Fixture subject
+        "};
         std::fs::write(&message_file, original).expect("create fixture message");
-        let session = session(Engine::Codex, None, Some("high"));
+        let session = session(Engine::Codex, model, Some("high"));
         let mut loaded_session_id = None;
 
         let result = run_prepare_commit_msg_with_sources(
@@ -483,7 +502,8 @@ mod tests {
     #[rstest]
     #[case::missing_proxy_result(r#"{"hook_input":{}}"#)]
     #[case::null_proxy_result(r#"{"hook_input":{},"hook_output":null}"#)]
-    fn pre_tool_use_emits_nothing_for_null_output(#[case] raw_envelope: &str) {
+    #[case::malformed_envelope("not-json")]
+    fn pre_tool_use_emits_nothing_without_proxy_result(#[case] raw_envelope: &str) {
         assert_eq!(process_pre_tool_use(raw_envelope), None);
     }
 
