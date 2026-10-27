@@ -6,37 +6,60 @@ use anyhow::{Context, Result, bail, ensure};
 use serde_json::Value;
 use toml_edit::DocumentMut;
 
+#[derive(Debug, PartialEq, Eq)]
 pub(super) struct SourcePaths {
     pub(super) codex_home: PathBuf,
     pub(super) sqlite_home: PathBuf,
 }
 
+#[derive(Debug, Clone)]
+struct SourceEnvironment {
+    user_home: Option<PathBuf>,
+    codex_home: Option<PathBuf>,
+    sqlite_home: Option<PathBuf>,
+}
+
 pub(super) fn resolve_source(cwd: &Path) -> Result<SourcePaths> {
-    let user_home = std::env::var_os("HOME")
-        .map(PathBuf::from)
+    let environment = SourceEnvironment {
+        user_home: std::env::var_os("HOME").map(PathBuf::from),
+        codex_home: std::env::var_os("CODEX_HOME")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+        sqlite_home: std::env::var("CODEX_SQLITE_HOME")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from),
+    };
+    resolve_source_with_environment(cwd, &environment)
+}
+
+fn resolve_source_with_environment(
+    cwd: &Path,
+    environment: &SourceEnvironment,
+) -> Result<SourcePaths> {
+    let user_home = environment
+        .user_home
+        .as_ref()
         .context("HOME is unavailable for Codex status inference")?;
-    let codex_home = std::env::var_os("CODEX_HOME")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+    let codex_home = environment
+        .codex_home
+        .clone()
         .unwrap_or_else(|| user_home.join(".codex"));
-    let codex_home = resolve_path(&codex_home, cwd, &user_home)
+    let codex_home = resolve_path(&codex_home, cwd, user_home)
         .context("resolve source Codex home")?
         .canonicalize()
         .context("resolve source Codex home")?;
     ensure!(codex_home.is_dir(), "source Codex home is not a directory");
 
-    let sqlite_env = std::env::var("CODEX_SQLITE_HOME")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from);
+    let sqlite_env = environment.sqlite_home.clone();
     let configured_sqlite_home = read_configured_sqlite_home(&codex_home)?;
     let sqlite_home = resolve_sqlite_home(
         configured_sqlite_home,
         sqlite_env,
         &codex_home,
         cwd,
-        &user_home,
+        user_home,
     )?
     .canonicalize()
     .context("resolve source Codex SQLite home")?;
@@ -172,7 +195,48 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{resolve_path, resolve_sqlite_home};
+    use std::fs;
+
+    use tempfile::TempDir;
+
+    use super::{
+        SourceEnvironment, SourcePaths, resolve_path, resolve_source_with_environment,
+        resolve_sqlite_home,
+    };
+
+    #[test]
+    fn resolves_custom_codex_home_and_configured_sqlite_home_from_injected_environment()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let root_path = root.path().canonicalize()?;
+        let user_home = root_path.join("user-home");
+        let codex_home = root_path.join("custom-codex-home");
+        let configured_sqlite_home = codex_home.join("configured-state");
+        let environment_sqlite_home = root_path.join("environment-state");
+        fs::create_dir_all(&user_home)?;
+        fs::create_dir_all(&configured_sqlite_home)?;
+        fs::create_dir_all(&environment_sqlite_home)?;
+        fs::write(
+            codex_home.join("config.toml"),
+            "sqlite_home = \"configured-state\"\n",
+        )?;
+
+        let environment = SourceEnvironment {
+            user_home: Some(user_home),
+            codex_home: Some(codex_home.clone()),
+            sqlite_home: Some(environment_sqlite_home),
+        };
+        let actual = resolve_source_with_environment(&root_path, &environment)?;
+
+        assert_eq!(
+            actual,
+            SourcePaths {
+                codex_home: codex_home.canonicalize()?,
+                sqlite_home: configured_sqlite_home.canonicalize()?,
+            },
+        );
+        Ok(())
+    }
 
     #[rstest]
     #[case::absolute_path(

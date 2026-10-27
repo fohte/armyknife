@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 
@@ -8,6 +9,8 @@ use crate::commands::agent::types::Session;
 mod config;
 mod database;
 mod history;
+
+pub(super) const MAX_SNAPSHOT_DURATION: Duration = Duration::from_secs(60);
 
 pub(super) struct PrivateCodexHome {
     pub(super) codex_home: PathBuf,
@@ -21,15 +24,18 @@ pub(super) fn prepare_private_codex_home(
     session: &Session,
     thread: &CodexThreadMetadata,
 ) -> Result<PrivateCodexHome> {
+    let deadline = Instant::now() + MAX_SNAPSHOT_DURATION;
     let source = config::resolve_source(&session.cwd)?;
-    prepare_from_source(inference_dir, &source, thread)
+    prepare_from_source(inference_dir, &source, thread, deadline)
 }
 
 fn prepare_from_source(
     inference_dir: &Path,
     source: &config::SourcePaths,
     thread: &CodexThreadMetadata,
+    deadline: Instant,
 ) -> Result<PrivateCodexHome> {
+    ensure_snapshot_time(deadline)?;
     let codex_home = inference_dir.join("codex-home");
     let sqlite_home = codex_home.join("state");
     let log_dir = codex_home.join("logs");
@@ -38,18 +44,24 @@ fn prepare_from_source(
     std::fs::create_dir_all(&log_dir).context("create private Codex log directory")?;
     std::fs::create_dir_all(&temp_dir).context("create private Codex temporary directory")?;
 
+    ensure_snapshot_time(deadline)?;
     config::copy_startup_files(&source.codex_home, &codex_home)?;
-    database::backup_databases(&source.sqlite_home, &sqlite_home)?;
+    ensure_snapshot_time(deadline)?;
+    database::backup_databases(&source.sqlite_home, &sqlite_home, deadline)?;
+    ensure_snapshot_time(deadline)?;
     history::copy_lineage_and_rewrite(
         &source.codex_home,
         &codex_home,
         &sqlite_home.join(database::STATE_DB_FILENAME),
         thread,
+        deadline,
     )?;
+    ensure_snapshot_time(deadline)?;
     database::validate_target_history(
         &sqlite_home.join(database::THREAD_HISTORY_DB_FILENAME),
         thread,
     )?;
+    ensure_snapshot_time(deadline)?;
 
     Ok(PrivateCodexHome {
         codex_home,
@@ -57,6 +69,14 @@ fn prepare_from_source(
         log_dir,
         temp_dir,
     })
+}
+
+fn ensure_snapshot_time(deadline: Instant) -> Result<()> {
+    anyhow::ensure!(
+        Instant::now() < deadline,
+        "Codex private home snapshot exceeded its time limit"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -70,7 +90,7 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
-    use super::{config::SourcePaths, prepare_from_source};
+    use super::{MAX_SNAPSHOT_DURATION, config::SourcePaths, prepare_from_source};
     use crate::commands::agent::codex_steer::history::CodexThreadMetadata;
 
     const THREAD_ID: &str = "fixture-thread";
@@ -259,7 +279,12 @@ mod tests {
         let inference_dir = fixture._root.path().join("inference");
         std::fs::create_dir_all(&inference_dir)?;
         let inference_dir = inference_dir.canonicalize()?;
-        let private_home = prepare_from_source(&inference_dir, &fixture.source, &thread())?;
+        let private_home = prepare_from_source(
+            &inference_dir,
+            &fixture.source,
+            &thread(),
+            std::time::Instant::now() + MAX_SNAPSHOT_DURATION,
+        )?;
         let private_target = private_home.codex_home.join(
             fixture
                 .target_rollout
@@ -407,9 +432,14 @@ mod tests {
             }
         }
 
-        let actual = prepare_from_source(&inference_dir, &fixture.source, &thread)
-            .map(|_| ())
-            .map_err(|error| format!("{error:#}"));
+        let actual = prepare_from_source(
+            &inference_dir,
+            &fixture.source,
+            &thread,
+            std::time::Instant::now() + MAX_SNAPSHOT_DURATION,
+        )
+        .map(|_| ())
+        .map_err(|error| format!("{error:#}"));
         assert_eq!(actual, Err(expected_error.to_string()),);
         Ok(())
     }

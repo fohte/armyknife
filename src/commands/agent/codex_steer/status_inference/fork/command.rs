@@ -1,17 +1,15 @@
 use std::path::Path;
 use std::process::Command;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde_json::to_string;
 
 use super::super::super::history::CodexThreadMetadata;
 use super::home::PrivateCodexHome;
 use super::path_to_string;
-use crate::commands::agent::types::Session;
-use crate::infra::external_tool::ExternalTool;
 
 pub(super) struct ForkCommandOptions<'a> {
-    pub(super) session: &'a Session,
+    pub(super) cwd: &'a Path,
     pub(super) thread: &'a CodexThreadMetadata,
     pub(super) prompt: &'a str,
     pub(super) result_path: &'a Path,
@@ -21,9 +19,13 @@ pub(super) struct ForkCommandOptions<'a> {
     pub(super) private_home: &'a PrivateCodexHome,
 }
 
-pub(super) fn codex_fork_command(options: ForkCommandOptions<'_>) -> Result<Command> {
+pub(super) fn codex_fork_command(
+    options: ForkCommandOptions<'_>,
+    codex_path: &Path,
+    mut command: Command,
+) -> Result<Command> {
     let ForkCommandOptions {
-        session,
+        cwd,
         thread,
         prompt,
         result_path,
@@ -32,10 +34,6 @@ pub(super) fn codex_fork_command(options: ForkCommandOptions<'_>) -> Result<Comm
         inference_dir,
         private_home,
     } = options;
-    let codex_path = ExternalTool::Codex
-        .resolve_path()
-        .context("Codex CLI is not available on PATH")?;
-    let mut command = ExternalTool::SandboxRuntime.command();
     command
         .arg("--settings")
         .arg(settings_path)
@@ -49,7 +47,7 @@ pub(super) fn codex_fork_command(options: ForkCommandOptions<'_>) -> Result<Comm
             &private_home.sqlite_home,
             &private_home.log_dir,
         )?)
-        .current_dir(&session.cwd);
+        .current_dir(cwd);
     configure_isolated_environment(&mut command, inference_dir, private_home);
     Ok(command)
 }
@@ -134,7 +132,7 @@ mod tests {
     use std::path::Path;
     use std::process::Command;
 
-    use super::{codex_fork_args, configure_isolated_environment};
+    use super::{ForkCommandOptions, codex_fork_args, codex_fork_command};
     use crate::commands::agent::codex_steer::status_inference::fork::home::PrivateCodexHome;
 
     #[test]
@@ -186,7 +184,7 @@ mod tests {
     }
 
     #[test]
-    fn command_environment_uses_private_codex_and_temporary_paths() {
+    fn assembled_command_uses_private_paths_and_clears_inherited_identity() -> anyhow::Result<()> {
         let private_home = PrivateCodexHome {
             codex_home: Path::new("/private/tmp/status-worker-fixture/codex-home").to_path_buf(),
             sqlite_home: Path::new("/private/tmp/status-worker-fixture/codex-home/state")
@@ -194,66 +192,137 @@ mod tests {
             log_dir: Path::new("/private/tmp/status-worker-fixture/codex-home/logs").to_path_buf(),
             temp_dir: Path::new("/private/tmp/status-worker-fixture/codex-home/tmp").to_path_buf(),
         };
-        let mut command = Command::new("fixture-codex");
-        configure_isolated_environment(
-            &mut command,
-            Path::new("/private/tmp/status-worker-fixture"),
-            &private_home,
-        );
-        let actual: BTreeMap<_, _> = command
-            .get_envs()
-            .map(|(name, value)| {
-                (
-                    name.to_string_lossy().into_owned(),
-                    value.map(|value| value.to_string_lossy().into_owned()),
-                )
-            })
-            .collect();
+        let command = codex_fork_command(
+            ForkCommandOptions {
+                cwd: Path::new("/work/fixture-project"),
+                thread: &super::super::super::super::history::CodexThreadMetadata {
+                    model_provider: "openai".to_string(),
+                    model: "fixture-model".to_string(),
+                    session_id: "fixture-parent-session".to_string(),
+                    turn_id: "fixture-turn".to_string(),
+                    last_assistant_message: "fixture final response".to_string(),
+                },
+                prompt: "classify this stopped task",
+                result_path: Path::new("/private/tmp/status-worker-fixture/result.json"),
+                settings_path: Path::new("/private/tmp/status-worker-fixture/srt-settings.json"),
+                base_url: "http://localhost:43817/fixture-token/backend-api/codex",
+                inference_dir: Path::new("/private/tmp/status-worker-fixture"),
+                private_home: &private_home,
+            },
+            Path::new("/tools/codex-fixture"),
+            Command::new("fixture-sandbox-runtime"),
+        )?;
+        let actual = CommandObservation {
+            program: command.get_program().to_string_lossy().into_owned(),
+            args: command
+                .get_args()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect(),
+            current_dir: command
+                .get_current_dir()
+                .map(|path| path.to_string_lossy().into_owned()),
+            env: command
+                .get_envs()
+                .map(|(name, value)| {
+                    (
+                        name.to_string_lossy().into_owned(),
+                        value.map(|value| value.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect(),
+        };
 
         assert_eq!(
             actual,
-            BTreeMap::from([
-                ("ARMYKNIFE_SKIP_HOOKS".to_string(), Some("1".to_string())),
-                (
-                    "CLAUDE_CODE_TMPDIR".to_string(),
-                    Some("/private/tmp/status-worker-fixture".to_string()),
-                ),
-                (
-                    "CLAUDE_TMPDIR".to_string(),
-                    Some("/private/tmp/status-worker-fixture".to_string()),
-                ),
-                (
-                    "CODEX_HOME".to_string(),
-                    Some("/private/tmp/status-worker-fixture/codex-home".to_string()),
-                ),
-                (
-                    "CODEX_SQLITE_HOME".to_string(),
-                    Some("/private/tmp/status-worker-fixture/codex-home/state".to_string()),
-                ),
-                (
-                    "TMPDIR".to_string(),
-                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
-                ),
-                (
-                    "TMP".to_string(),
-                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
-                ),
-                (
-                    "TEMP".to_string(),
-                    Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
-                ),
-                ("ARMYKNIFE_SESSION_ID".to_string(), None),
-                ("ARMYKNIFE_ANCESTOR_SESSION_IDS".to_string(), None),
-                ("TQ_SESSION_ID".to_string(), None),
-                ("TQ_PARENT_SESSION_ID".to_string(), None),
-                ("CLAUDE_CODE_SESSION_ID".to_string(), None),
-                ("CODEX_SESSION_ID".to_string(), None),
-                ("CODEX_THREAD_ID".to_string(), None),
-                ("OPENAI_API_KEY".to_string(), None),
-                ("OPENAI_BASE_URL".to_string(), None),
-                ("CODEX_API_KEY".to_string(), None),
-                ("CODEX_ACCESS_TOKEN".to_string(), None),
-            ]),
+            CommandObservation {
+                program: "fixture-sandbox-runtime".to_string(),
+                args: vec![
+                    "--settings",
+                    "/private/tmp/status-worker-fixture/srt-settings.json",
+                    "/tools/codex-fixture",
+                    "exec",
+                    "fork",
+                    "--ephemeral",
+                    "--model",
+                    "fixture-model",
+                    "--config",
+                    "model_provider=\"openai\"",
+                    "--config",
+                    "sqlite_home=\"/private/tmp/status-worker-fixture/codex-home/state\"",
+                    "--config",
+                    "log_dir=\"/private/tmp/status-worker-fixture/codex-home/logs\"",
+                    "--config",
+                    "cli_auth_credentials_store=\"file\"",
+                    "--config",
+                    "mcp_oauth_credentials_store=\"file\"",
+                    "--config",
+                    "openai_base_url=\"http://localhost:43817/fixture-token/backend-api/codex\"",
+                    "--config",
+                    "features.hooks=false",
+                    "--config",
+                    "features.enable_request_compression=false",
+                    "--output-last-message",
+                    "/private/tmp/status-worker-fixture/result.json",
+                    "--",
+                    "fixture-parent-session",
+                    "classify this stopped task",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+                current_dir: Some("/work/fixture-project".to_string()),
+                env: BTreeMap::from([
+                    ("ARMYKNIFE_SKIP_HOOKS".to_string(), Some("1".to_string())),
+                    (
+                        "CLAUDE_CODE_TMPDIR".to_string(),
+                        Some("/private/tmp/status-worker-fixture".to_string()),
+                    ),
+                    (
+                        "CLAUDE_TMPDIR".to_string(),
+                        Some("/private/tmp/status-worker-fixture".to_string()),
+                    ),
+                    (
+                        "CODEX_HOME".to_string(),
+                        Some("/private/tmp/status-worker-fixture/codex-home".to_string()),
+                    ),
+                    (
+                        "CODEX_SQLITE_HOME".to_string(),
+                        Some("/private/tmp/status-worker-fixture/codex-home/state".to_string()),
+                    ),
+                    (
+                        "TMPDIR".to_string(),
+                        Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                    ),
+                    (
+                        "TMP".to_string(),
+                        Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                    ),
+                    (
+                        "TEMP".to_string(),
+                        Some("/private/tmp/status-worker-fixture/codex-home/tmp".to_string()),
+                    ),
+                    ("ARMYKNIFE_SESSION_ID".to_string(), None),
+                    ("ARMYKNIFE_ANCESTOR_SESSION_IDS".to_string(), None),
+                    ("TQ_SESSION_ID".to_string(), None),
+                    ("TQ_PARENT_SESSION_ID".to_string(), None),
+                    ("CLAUDE_CODE_SESSION_ID".to_string(), None),
+                    ("CODEX_SESSION_ID".to_string(), None),
+                    ("CODEX_THREAD_ID".to_string(), None),
+                    ("OPENAI_API_KEY".to_string(), None),
+                    ("OPENAI_BASE_URL".to_string(), None),
+                    ("CODEX_API_KEY".to_string(), None),
+                    ("CODEX_ACCESS_TOKEN".to_string(), None),
+                ]),
+            },
         );
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct CommandObservation {
+        program: String,
+        args: Vec<String>,
+        current_dir: Option<String>,
+        env: BTreeMap<String, Option<String>>,
     }
 }

@@ -1,9 +1,14 @@
 use std::fs;
 use std::path::Path;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
-use rusqlite::{Connection, OpenFlags, OptionalExtension, backup::Backup, params};
+use anyhow::{Context, Result, bail, ensure};
+use rusqlite::{
+    Connection, OpenFlags, OptionalExtension,
+    backup::{Backup, StepResult},
+    params,
+};
 use serde_json::Value;
 
 use super::super::super::super::history::CodexThreadMetadata;
@@ -16,7 +21,11 @@ pub(super) struct ThreadRecord {
     pub(super) history_mode: String,
 }
 
-pub(super) fn backup_databases(source_home: &Path, private_home: &Path) -> Result<()> {
+pub(super) fn backup_databases(
+    source_home: &Path,
+    private_home: &Path,
+    deadline: Instant,
+) -> Result<()> {
     for filename in [STATE_DB_FILENAME, THREAD_HISTORY_DB_FILENAME] {
         let source_path = source_home.join(filename);
         let destination_path = private_home.join(filename);
@@ -41,9 +50,22 @@ pub(super) fn backup_databases(source_home: &Path, private_home: &Path) -> Resul
         {
             let backup = Backup::new(&source, &mut destination)
                 .with_context(|| format!("start online backup of Codex {filename}"))?;
-            backup
-                .run_to_completion(128, Duration::from_millis(25), None)
-                .with_context(|| format!("complete online backup of Codex {filename}"))?;
+            loop {
+                ensure!(
+                    Instant::now() < deadline,
+                    "Codex private home snapshot exceeded its time limit"
+                );
+                match backup
+                    .step(128)
+                    .with_context(|| format!("complete online backup of Codex {filename}"))?
+                {
+                    StepResult::Done => break,
+                    StepResult::More | StepResult::Busy | StepResult::Locked => {
+                        thread::sleep(Duration::from_millis(25));
+                    }
+                    _ => bail!("Codex SQLite online backup returned an unsupported state"),
+                }
+            }
         }
         destination
             .close()
@@ -177,7 +199,11 @@ mod tests {
         Connection::open(source_home.join(super::THREAD_HISTORY_DB_FILENAME))?
             .execute_batch("CREATE TABLE fixture_history (id TEXT)")?;
 
-        backup_databases(&source_home, &private_home)?;
+        backup_databases(
+            &source_home,
+            &private_home,
+            std::time::Instant::now() + Duration::from_secs(10),
+        )?;
         let copied = Connection::open_with_flags(
             private_home.join(STATE_DB_FILENAME),
             OpenFlags::SQLITE_OPEN_READ_ONLY,

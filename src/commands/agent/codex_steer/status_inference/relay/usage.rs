@@ -8,9 +8,10 @@ pub(super) struct TokenUsage {
 }
 
 impl TokenUsage {
-    pub(super) fn log(self) {
+    pub(super) fn log(self, session_id: &str) {
         tracing::info!(
             event = "agent.status_inference.usage",
+            session = %session_id,
             input_tokens = self.input_tokens,
             cached_input_tokens = self.cached_input_tokens,
             output_tokens = self.output_tokens,
@@ -51,22 +52,12 @@ pub(super) fn from_response_value(response: &Value) -> Option<TokenUsage> {
 }
 
 fn parse_sse_data_line(line: &[u8]) -> Option<Value> {
-    let line = trim_ascii(line).strip_prefix(b"data:")?;
-    let data = trim_ascii(line);
+    let line = super::trim_ascii(line).strip_prefix(b"data:")?;
+    let data = super::trim_ascii(line);
     if data == b"[DONE]" {
         return None;
     }
     serde_json::from_slice(data).ok()
-}
-
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
 }
 
 #[cfg(test)]

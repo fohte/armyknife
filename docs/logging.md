@@ -85,9 +85,9 @@ tail -F "$LOG" | jq -c .
 
 ### `agent status inference`
 
-| event                          | meaning                                                                                                                                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `agent.status_inference.usage` | Numeric input, cached-input, and output token counts from one Responses usage record; no response body or fork-process cumulative counters |
+| event                          | meaning                                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent.status_inference.usage` | Session correlation and numeric input, cached-input, and output token counts from one Responses usage record; no response body or fork-process cumulative counters |
 
 ### `agent auto-compact`
 

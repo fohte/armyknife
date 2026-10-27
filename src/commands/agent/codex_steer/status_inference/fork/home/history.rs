@@ -1,7 +1,8 @@
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail, ensure};
 use rusqlite::Connection;
@@ -11,6 +12,9 @@ use super::super::super::super::history::CodexThreadMetadata;
 use super::database;
 
 const MAX_LINEAGE_DEPTH: usize = 128;
+const MAX_LINEAGE_THREADS: usize = 128;
+const MAX_TOTAL_ROLLOUT_BYTES: u64 = 128 * 1024 * 1024;
+const COPY_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_SESSION_META_BYTES: usize = 1024 * 1024;
 
 pub(super) fn copy_lineage_and_rewrite(
@@ -18,6 +22,7 @@ pub(super) fn copy_lineage_and_rewrite(
     private_home: &Path,
     state_database_path: &Path,
     thread: &CodexThreadMetadata,
+    deadline: Instant,
 ) -> Result<()> {
     let source_home = source_home
         .canonicalize()
@@ -29,7 +34,8 @@ pub(super) fn copy_lineage_and_rewrite(
         .context("open private Codex state backup for rollout history")?;
     let mut visiting = HashSet::new();
     let mut complete = HashSet::new();
-    let mut copied_paths = HashSet::new();
+    let mut budget =
+        SnapshotBudget::with_limits(MAX_LINEAGE_THREADS, MAX_TOTAL_ROLLOUT_BYTES, deadline);
     copy_thread_lineage(
         &connection,
         &source_home,
@@ -39,7 +45,7 @@ pub(super) fn copy_lineage_and_rewrite(
         0,
         &mut visiting,
         &mut complete,
-        &mut copied_paths,
+        &mut budget,
     )
 }
 
@@ -56,8 +62,9 @@ fn copy_thread_lineage(
     depth: usize,
     visiting: &mut HashSet<String>,
     complete: &mut HashSet<String>,
-    copied_paths: &mut HashSet<PathBuf>,
+    budget: &mut SnapshotBudget,
 ) -> Result<()> {
+    budget.ensure_within_limits()?;
     ensure!(
         depth <= MAX_LINEAGE_DEPTH,
         "Codex rollout history lineage exceeds the supported depth"
@@ -69,6 +76,7 @@ fn copy_thread_lineage(
         visiting.insert(thread_id.to_string()),
         "Codex rollout history lineage contains a cycle"
     );
+    budget.record_thread()?;
 
     let record = database::read_thread_record(state, thread_id)?;
     ensure!(
@@ -82,7 +90,7 @@ fn copy_thread_lineage(
         );
     }
     let logical_path = PathBuf::from(&record.rollout_path);
-    let materialized = copy_rollout_file(source_home, private_home, &logical_path, copied_paths)?;
+    let materialized = copy_rollout_file(source_home, private_home, &logical_path, budget)?;
     let metadata = read_rollout_metadata(&materialized.metadata_path, materialized.compressed)?;
     let payload = metadata
         .get("payload")
@@ -113,7 +121,7 @@ fn copy_thread_lineage(
             depth + 1,
             visiting,
             complete,
-            copied_paths,
+            budget,
         )?;
     }
 
@@ -129,11 +137,72 @@ struct MaterializedRollout {
     compressed: bool,
 }
 
+struct SnapshotBudget {
+    deadline: Instant,
+    thread_count: usize,
+    copied_bytes: u64,
+    copied_paths: HashSet<PathBuf>,
+    max_threads: usize,
+    max_bytes: u64,
+}
+
+impl SnapshotBudget {
+    fn with_limits(max_threads: usize, max_bytes: u64, deadline: Instant) -> Self {
+        Self {
+            deadline,
+            thread_count: 0,
+            copied_bytes: 0,
+            copied_paths: HashSet::new(),
+            max_threads,
+            max_bytes,
+        }
+    }
+
+    fn ensure_within_limits(&self) -> Result<()> {
+        ensure!(
+            Instant::now() < self.deadline,
+            "Codex private home snapshot exceeded its time limit"
+        );
+        Ok(())
+    }
+
+    fn record_thread(&mut self) -> Result<()> {
+        self.thread_count = self
+            .thread_count
+            .checked_add(1)
+            .context("Codex rollout history thread count overflowed")?;
+        ensure!(
+            self.thread_count <= self.max_threads,
+            "Codex rollout history lineage exceeds the supported thread count"
+        );
+        Ok(())
+    }
+
+    fn remaining_bytes(&self) -> Result<u64> {
+        self.ensure_within_limits()?;
+        self.max_bytes
+            .checked_sub(self.copied_bytes)
+            .context("Codex rollout history snapshot exceeded its byte limit")
+    }
+
+    fn record_copied_bytes(&mut self, bytes: u64) -> Result<()> {
+        self.copied_bytes = self
+            .copied_bytes
+            .checked_add(bytes)
+            .context("Codex rollout history byte count overflowed")?;
+        ensure!(
+            self.copied_bytes <= self.max_bytes,
+            "Codex rollout history snapshot exceeded its byte limit"
+        );
+        self.ensure_within_limits()
+    }
+}
+
 fn copy_rollout_file(
     source_home: &Path,
     private_home: &Path,
     logical_path: &Path,
-    copied_paths: &mut HashSet<PathBuf>,
+    budget: &mut SnapshotBudget,
 ) -> Result<MaterializedRollout> {
     ensure!(
         logical_path.is_absolute(),
@@ -189,13 +258,13 @@ fn copy_rollout_file(
         "private Codex rollout directory escaped its home"
     );
 
-    if copied_paths.insert(private_rollout_path.clone()) {
+    if budget.copied_paths.insert(private_rollout_path.clone()) {
         if let Some(plain) = plain {
-            copy_file(&plain.path, &private_rollout_path)?;
+            copy_file(&plain.path, &private_rollout_path, budget)?;
         }
         if let Some(compressed) = compressed {
             let destination = private_rollout_path.with_extension("jsonl.zst");
-            copy_file(&compressed.path, &destination)?;
+            copy_file(&compressed.path, &destination, budget)?;
         }
     }
 
@@ -263,12 +332,46 @@ fn validate_rollout_relative_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn copy_file(source: &Path, destination: &Path) -> Result<()> {
+fn copy_file(source: &Path, destination: &Path, budget: &mut SnapshotBudget) -> Result<()> {
     ensure!(
         !destination.exists(),
         "private Codex rollout destination already exists"
     );
-    fs::copy(source, destination).context("copy Codex rollout history into private home")?;
+    let remaining = budget.remaining_bytes()?;
+    let metadata = fs::metadata(source).context("inspect source Codex rollout history size")?;
+    ensure!(
+        metadata.len() <= remaining,
+        "Codex rollout history snapshot exceeded its byte limit"
+    );
+    let mut input = File::open(source).context("open source Codex rollout history")?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .context("create private Codex rollout history")?;
+    let mut buffer = [0u8; COPY_BUFFER_BYTES];
+    let mut copied = 0u64;
+    loop {
+        budget.ensure_within_limits()?;
+        let read = input
+            .read(&mut buffer)
+            .context("read source Codex rollout history")?;
+        if read == 0 {
+            break;
+        }
+        let next_total = copied
+            .checked_add(read as u64)
+            .context("Codex rollout history byte count overflowed")?;
+        ensure!(
+            next_total <= remaining,
+            "Codex rollout history snapshot exceeded its byte limit"
+        );
+        output
+            .write_all(&buffer[..read])
+            .context("write private Codex rollout history")?;
+        copied = next_total;
+    }
+    budget.record_copied_bytes(copied)?;
     Ok(())
 }
 
@@ -309,9 +412,13 @@ fn optional_metadata_id(
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::fs;
+    use std::time::{Duration, Instant};
 
-    use super::validate_rollout_relative_path;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    use super::{SnapshotBudget, copy_file, validate_rollout_relative_path};
 
     #[test]
     fn accepts_only_managed_rollout_directories() {
@@ -322,5 +429,36 @@ mod tests {
         ]
         .map(|path| validate_rollout_relative_path(path).is_ok());
         assert_eq!(actual, [true, true, false]);
+    }
+
+    #[test]
+    fn bounds_lineage_threads_and_copied_bytes() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source = root.path().join("source-rollout.jsonl");
+        let destination = root.path().join("private-rollout.jsonl");
+        fs::write(&source, b"two bytes")?;
+
+        let mut budget = SnapshotBudget::with_limits(1, 1, Instant::now() + Duration::from_secs(5));
+        let first_thread = budget.record_thread().map(|_| ());
+        let second_thread = budget.record_thread().map(|_| ());
+        let copy_error = copy_file(&source, &destination, &mut budget)
+            .expect_err("oversized history should fail closed")
+            .to_string();
+
+        assert_eq!(
+            (
+                first_thread.is_ok(),
+                second_thread.unwrap_err().to_string(),
+                copy_error,
+                destination.exists()
+            ),
+            (
+                true,
+                "Codex rollout history lineage exceeds the supported thread count".to_string(),
+                "Codex rollout history snapshot exceeded its byte limit".to_string(),
+                false,
+            ),
+        );
+        Ok(())
     }
 }

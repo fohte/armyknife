@@ -17,6 +17,16 @@ const CONNECTION_PROTOCOL_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_ACTIVE_CONNECTIONS: usize = 4;
 const UPSTREAM_TIMEOUT: Duration = Duration::from_secs(90);
 
+pub(super) fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
+    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
+        bytes = &bytes[1..];
+    }
+    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
+        bytes = &bytes[..bytes.len() - 1];
+    }
+    bytes
+}
+
 #[derive(Clone)]
 struct RelayState {
     path: String,

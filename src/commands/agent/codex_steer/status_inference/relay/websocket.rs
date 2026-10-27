@@ -303,7 +303,7 @@ where
                         "official Codex WebSocket response requested a tool call"
                     );
                     if let Some(usage) = super::usage::from_response_value(&event) {
-                        usage.log();
+                        usage.log(parent_session_id);
                     }
                     let event_type = event
                         .get("type")
