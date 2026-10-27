@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.473](https://github.com/fohte/armyknife/compare/v0.1.472...v0.1.473) (2026-10-27)
+
+
+### Features
+
+* **config:** support standalone fork metadata ([#1288](https://github.com/fohte/armyknife/issues/1288)) ([83ca893](https://github.com/fohte/armyknife/commit/83ca893e4200cee675ebd4d9ca856e5e5e3fcac1))
+
 ## [0.1.472](https://github.com/fohte/armyknife/compare/v0.1.471...v0.1.472) (2026-10-27)
 
 
