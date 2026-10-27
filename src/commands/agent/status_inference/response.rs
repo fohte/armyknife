@@ -39,20 +39,11 @@ pub(in crate::commands::agent) fn parse_configured_status_response(
         configured_kinds.iter().any(|kind| kind == &status.kind),
         "inferred status kind is not configured"
     );
-    ensure!(
-        !status.note.trim().is_empty(),
-        "inferred status note is empty"
-    );
-    ensure!(
-        is_single_line(&status.note),
-        "inferred status note is not a single line"
-    );
     Ok(status)
 }
 
 pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     struct Response {
         kind: String,
         note: String,
@@ -66,10 +57,19 @@ pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
         .map(str::trim)
         .unwrap_or(text);
     let response: Response = serde_json::from_str(text).context("parse inferred status JSON")?;
-    Ok(AgentStatus {
+    let status = AgentStatus {
         kind: response.kind,
         note: response.note,
-    })
+    };
+    ensure!(
+        !status.note.trim().is_empty(),
+        "inferred status note is empty"
+    );
+    ensure!(
+        is_single_line(&status.note),
+        "inferred status note is not a single line"
+    );
+    Ok(status)
 }
 
 fn is_single_line(note: &str) -> bool {
@@ -117,8 +117,9 @@ mod tests {
         Ok(("needs_user".to_string(), "review the proposal".to_string())),
     )]
     #[case::unknown_kind(r#"{"kind":"unknown","note":"review the proposal"}"#, Ok(("unknown".to_string(), "review the proposal".to_string())))]
-    #[case::multiline_note(r#"{"kind":"needs_user","note":"first line\nsecond line"}"#, Ok(("needs_user".to_string(), "first line\nsecond line".to_string())))]
-    #[case::extra_field(r#"{"kind":"needs_user","note":"review the proposal","extra":true}"#, Err("parse inferred status JSON: unknown field `extra`, expected `kind` or `note` at line 1 column 57".to_string()))]
+    #[case::empty_note(r#"{"kind":"needs_user","note":"  "}"#, Err("inferred status note is empty".to_string()))]
+    #[case::multiline_note(r#"{"kind":"needs_user","note":"first line\nsecond line"}"#, Err("inferred status note is not a single line".to_string()))]
+    #[case::extra_field(r#"{"kind":"needs_user","note":"review the proposal","extra":true}"#, Ok(("needs_user".to_string(), "review the proposal".to_string())))]
     fn status_response_is_deserialized(
         #[case] text: &str,
         #[case] expected: std::result::Result<(String, String), String>,
@@ -138,13 +139,9 @@ mod tests {
         r#"{"kind":"unknown","note":"review the proposal"}"#,
         Err("inferred status kind is not configured".to_string()),
     )]
-    #[case::empty_note(
-        r#"{"kind":"needs_user","note":"  "}"#,
-        Err("inferred status note is empty".to_string()),
-    )]
-    #[case::multiline_note(
-        r#"{"kind":"needs_user","note":"first line\nsecond line"}"#,
-        Err("inferred status note is not a single line".to_string()),
+    #[case::extra_field(
+        r#"{"kind":"needs_user","note":"review the proposal","extra":true}"#,
+        Ok(AgentStatus { kind: "needs_user".to_string(), note: "review the proposal".to_string() }),
     )]
     fn configured_status_response_is_validated(
         #[case] text: &str,

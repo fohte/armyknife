@@ -151,11 +151,6 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
         codex_snapshot,
         infer_claude_status,
         |session, snapshot, prompt, configured_kinds| {
-            let turn_id = snapshot
-                .turn_id
-                .as_deref()
-                .filter(|turn_id| !turn_id.is_empty())
-                .context("Codex Stop snapshot has no turn_id")?;
             let last_assistant_message = snapshot
                 .last_assistant_message
                 .as_deref()
@@ -164,7 +159,7 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
             let request = codex_steer::status_inference::Request {
                 session,
                 thread_id: &snapshot.thread_id,
-                turn_id,
+                turn_id: snapshot.turn_id.as_deref(),
                 last_assistant_message,
                 prompt,
                 configured_kinds,
@@ -254,11 +249,6 @@ where
             configured_kinds.sort();
             let inference_result = (|| {
                 let snapshot = codex_snapshot?.context("Codex Stop snapshot is missing")?;
-                let _turn_id = snapshot
-                    .turn_id
-                    .as_deref()
-                    .filter(|turn_id| !turn_id.is_empty())
-                    .context("Codex Stop snapshot has no turn_id")?;
                 let _last_assistant_message = snapshot
                     .last_assistant_message
                     .as_deref()

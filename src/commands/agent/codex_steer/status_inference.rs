@@ -9,17 +9,13 @@ use crate::commands::agent::types::{AgentStatus, Session};
 pub(crate) struct Request<'a> {
     pub session: &'a Session,
     pub thread_id: &'a str,
-    pub turn_id: &'a str,
+    pub turn_id: Option<&'a str>,
     pub last_assistant_message: &'a str,
     pub prompt: &'a str,
     pub configured_kinds: &'a [String],
 }
 
 pub(crate) fn infer_status(request: &Request<'_>) -> Result<AgentStatus> {
-    ensure!(
-        !request.turn_id.is_empty(),
-        "Codex Stop snapshot has no turn ID"
-    );
     ensure!(
         !request.last_assistant_message.trim().is_empty(),
         "Codex Stop snapshot has no final assistant message"

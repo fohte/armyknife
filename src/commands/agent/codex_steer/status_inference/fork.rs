@@ -21,10 +21,6 @@ pub(super) fn infer_status(
     prompt: &str,
     configured_kinds: &[String],
 ) -> Result<AgentStatus> {
-    ensure!(
-        thread.model_provider == "openai",
-        "Codex status fork requires the built-in OpenAI provider"
-    );
     let inference_dir = tempfile::Builder::new()
         .prefix("armyknife-codex-status-")
         .tempdir()

@@ -82,7 +82,7 @@ impl Client {
     pub(super) fn read_complete_thread(
         &mut self,
         thread_id: &str,
-        turn_id: &str,
+        turn_id: Option<&str>,
         last_assistant_message: &str,
     ) -> Result<CodexThreadMetadata> {
         let mut request =
@@ -100,7 +100,7 @@ impl Client {
 
 fn read_complete_thread_with<Rpc, Sleep>(
     thread_id: &str,
-    turn_id: &str,
+    turn_id: Option<&str>,
     last_assistant_message: &str,
     rpc: &mut Rpc,
     sleep: &mut Sleep,
@@ -111,7 +111,9 @@ where
     Sleep: FnMut(Duration),
 {
     ensure!(!thread_id.is_empty(), "Codex thread ID is empty");
-    ensure!(!turn_id.is_empty(), "Codex turn ID is empty");
+    let turn_id = turn_id
+        .filter(|turn_id| !turn_id.is_empty())
+        .context("Codex Stop snapshot has no turn_id")?;
     ensure!(
         !last_assistant_message.trim().is_empty(),
         "Codex final assistant message is empty"
@@ -381,6 +383,37 @@ mod tests {
     }
 
     #[rstest]
+    #[case::missing(None)]
+    #[case::empty(Some(""))]
+    fn rejects_missing_or_empty_turn_id_before_reading_history(#[case] turn_id: Option<&str>) {
+        let mut calls = Vec::new();
+        let mut rpc = |method, params, _timeout| {
+            calls.push(json!({ "method": method, "params": params }));
+            Ok(json!({}))
+        };
+        let mut sleeps = Vec::new();
+        let mut sleep = |duration| sleeps.push(duration);
+
+        let actual = result_text(read_complete_thread_with(
+            THREAD_ID,
+            turn_id,
+            FINAL_MESSAGE,
+            &mut rpc,
+            &mut sleep,
+            history_timeouts(Duration::from_secs(1)),
+        ));
+
+        assert_eq!(
+            (actual, calls, sleeps),
+            (
+                Err("Codex Stop snapshot has no turn_id".to_string()),
+                Vec::<Value>::new(),
+                Vec::<Duration>::new(),
+            ),
+        );
+    }
+
+    #[rstest]
     fn reads_only_thread_metadata_and_the_target_turn(metadata_response: Value) {
         let responses = VecDeque::from([
             ("thread/read", metadata_response),
@@ -417,7 +450,7 @@ mod tests {
 
         let actual = result_text(read_complete_thread_with(
             THREAD_ID,
-            TURN_ID,
+            Some(TURN_ID),
             FINAL_MESSAGE,
             &mut rpc,
             &mut sleep,
@@ -508,7 +541,7 @@ mod tests {
 
         let actual = result_text(read_complete_thread_with(
             THREAD_ID,
-            TURN_ID,
+            Some(TURN_ID),
             FINAL_MESSAGE,
             &mut rpc,
             &mut sleep,

@@ -109,11 +109,6 @@ pub(super) fn set_inferred_status_if_unchanged(
         status.kind,
         configured_kind_names(agent_config),
     );
-    ensure!(
-        !status.note.trim().is_empty(),
-        "status note must not be empty"
-    );
-    ensure_single_line(&status.note)?;
 
     with_unchanged_inference_session(
         sessions_dir,
@@ -439,24 +434,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unknown_kind(
-        "removed_name",
-        "valid note",
-        "unknown agent status kind `removed_name`; configured kinds: awaiting_build, finished_work, needs_attention"
-    )]
-    #[case::empty_note("needs_attention", "  ", "status note must not be empty")]
-    #[case::multiline_note(
-        "needs_attention",
-        indoc! {"
-            first
-            second
-        "},
-        "status note must be a single line"
-    )]
-    fn inferred_status_write_rejects_invalid_output(
-        #[case] kind: &str,
-        #[case] note: &str,
-        #[case] expected_error: &str,
+    fn inferred_status_write_rejects_unconfigured_kind(
         inference_session_store: InferenceSessionStore,
     ) {
         let sessions_dir = &inference_session_store.sessions_dir;
@@ -469,8 +447,8 @@ mod tests {
             original_updated_at,
             &crate::shared::config::test_support::agent_config(),
             AgentStatus {
-                kind: kind.to_string(),
-                note: note.to_string(),
+                kind: "removed_name".to_string(),
+                note: "valid note".to_string(),
             },
         )
         .expect_err("invalid inference should be rejected");
@@ -484,7 +462,7 @@ mod tests {
                 serde_json::to_value(&actual).expect("session should serialize"),
             ),
             (
-                expected_error.to_string(),
+                "unknown agent status kind `removed_name`; configured kinds: awaiting_build, finished_work, needs_attention".to_string(),
                 serde_json::to_value(&original).expect("session should serialize"),
             ),
         );
