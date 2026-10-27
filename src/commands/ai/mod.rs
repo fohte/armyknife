@@ -1,5 +1,6 @@
 pub mod draft;
 pub mod pr_draft;
+pub mod pr_series;
 pub mod review;
 
 use clap::Subcommand;
@@ -13,6 +14,10 @@ pub enum AiCommands {
     #[command(subcommand)]
     PrDraft(pr_draft::PrDraftCommands),
 
+    /// Register and synchronize PR series diagrams
+    #[command(subcommand)]
+    PrSeries(pr_series::PrSeriesCommands),
+
     /// Request or wait for bot reviews on a PR
     #[command(subcommand)]
     Review(review::ReviewCommands),
@@ -23,6 +28,7 @@ impl AiCommands {
         match self {
             Self::Draft(args) => draft::run(args),
             Self::PrDraft(cmd) => cmd.run().await,
+            Self::PrSeries(cmd) => cmd.run().await,
             Self::Review(cmd) => cmd.run().await,
         }
     }

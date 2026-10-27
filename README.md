@@ -265,6 +265,42 @@ Manage PR body drafts with human-in-the-loop review.
 | `--draft`      | Create as draft PR                                                               |
 | `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
 
+#### `a ai pr-series`
+
+Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+
+```sh
+a ai pr-series set <task-id> --file plan.json
+a ai pr-series sync <task-id>
+```
+
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. Each `summary` must fit in one line below Mermaid's 200px label width. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`:
+
+```json
+{
+  "name": "Notification preferences",
+  "purpose": "Let users choose which notifications they receive.",
+  "pullRequests": [
+    {
+      "id": "schema",
+      "summary": "Add preference tables",
+      "dependsOn": [],
+      "repository": "acme/notify-api",
+      "tqLeafId": "<schema-leaf-id>"
+    },
+    {
+      "id": "settings",
+      "summary": "Add the settings page",
+      "dependsOn": ["schema"],
+      "repository": "acme/notify-web",
+      "tqLeafId": "<settings-leaf-id>"
+    }
+  ]
+}
+```
+
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
+
 #### `a ai review`
 
 Request or wait for bot reviews on a PR.
