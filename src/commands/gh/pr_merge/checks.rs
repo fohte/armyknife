@@ -16,7 +16,10 @@ pub(super) fn wait_for_required_checks(
     println!("Waiting for required checks...");
     wait_until_complete(
         || query_required_check_status(owner, repo, pr_number),
-        || thread::sleep(CHECK_POLL_INTERVAL),
+        || {
+            println!("Required checks are still pending; retrying in 10 seconds...");
+            thread::sleep(CHECK_POLL_INTERVAL);
+        },
     )
 }
 
@@ -126,9 +129,15 @@ fn command_output_text(output: &std::process::Output) -> String {
 }
 
 fn has_required_checks(owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
+    has_required_checks_with(|cursor| fetch_required_check_page(owner, repo, pr_number, cursor))
+}
+
+fn has_required_checks_with(
+    mut fetch_page: impl FnMut(Option<&str>) -> anyhow::Result<RequiredCheckPage>,
+) -> anyhow::Result<bool> {
     let mut cursor = None;
     loop {
-        let page = fetch_required_check_page(owner, repo, pr_number, cursor.as_deref())?;
+        let page = fetch_page(cursor.as_deref())?;
         if page.has_required_check {
             return Ok(true);
         }
@@ -458,6 +467,33 @@ mod tests {
         assert_eq!(
             (page.has_required_check, page.next_cursor.as_deref()),
             (expected_has_required_check, expected_next_cursor),
+        );
+    }
+
+    #[rstest]
+    fn has_required_checks_follows_pagination_until_a_required_check_is_found() {
+        let mut pages = VecDeque::from([
+            RequiredCheckPage {
+                has_required_check: false,
+                next_cursor: Some("opaque-cursor".to_string()),
+            },
+            RequiredCheckPage {
+                has_required_check: true,
+                next_cursor: None,
+            },
+        ]);
+        let mut cursors = Vec::new();
+
+        let result = has_required_checks_with(|cursor| {
+            cursors.push(cursor.map(str::to_string));
+            pages
+                .pop_front()
+                .context("No fake required-check page remains")
+        });
+
+        assert_eq!(
+            (result.unwrap(), cursors),
+            (true, vec![None, Some("opaque-cursor".to_string())]),
         );
     }
 
