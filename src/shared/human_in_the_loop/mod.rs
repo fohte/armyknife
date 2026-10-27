@@ -756,6 +756,36 @@ mod tests {
     }
 
     #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_resets_failures_after_a_successful_check(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let checks = Cell::new(0);
+        let writer_path = fifo_reader.fifo_path.clone();
+        let result = wait_for_fifo_signal_or_pane_exit_with_interval(
+            fifo_reader.reader,
+            "%review",
+            Duration::ZERO,
+            |_| {
+                let check_count = checks.get() + 1;
+                checks.set(check_count);
+                match check_count {
+                    1 | 3 | 4 => Err(HumanInTheLoopError::CommandFailed(
+                        "tmux is unavailable".into(),
+                    )),
+                    5 => {
+                        signal_fifo(&writer_path);
+                        Ok(true)
+                    }
+                    _ => Ok(true),
+                }
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, checks.get()), (Ok(()), 5));
+    }
+
+    #[rstest]
     fn wait_for_fifo_signal_or_pane_exit_stops_after_consecutive_pane_query_failures(
         fifo_reader: FifoReaderFixture,
     ) {
