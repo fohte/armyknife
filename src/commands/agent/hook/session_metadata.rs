@@ -4,6 +4,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
+use super::super::transcript::claude_assistant_model;
 use super::super::types::{Engine, HookEvent, HookInput};
 
 const TRANSCRIPT_CHUNK_SIZE: usize = 16 * 1024;
@@ -87,11 +88,7 @@ pub(super) fn collect(
 }
 
 fn latest_claude_model(path: &Path) -> Option<String> {
-    last_record(path, "assistant")?
-        .pointer("/message/model")
-        .and_then(Value::as_str)
-        .filter(|model| !model.is_empty())
-        .map(str::to_owned)
+    claude_assistant_model(&last_record(path, "assistant")?).map(str::to_owned)
 }
 
 fn latest_codex_effort(path: &Path) -> Option<String> {

@@ -4225,12 +4225,21 @@ mod tests {
 
     mod session_start_tests {
         use super::*;
-        use rstest::rstest;
+        use rstest::{fixture, rstest};
         use tempfile::TempDir;
 
         /// Creates a temporary directory for session storage.
         fn create_temp_sessions_dir() -> TempDir {
             TempDir::new().expect("temp dir creation should succeed")
+        }
+
+        #[fixture]
+        fn stopped_session_store() -> TempDir {
+            let temp_dir = create_temp_sessions_dir();
+            let mut session = create_test_session(None);
+            session.status = SessionStatus::Stopped;
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+            temp_dir
         }
 
         #[test]
@@ -4370,22 +4379,18 @@ mod tests {
             #[case] source: Option<&str>,
             #[case] expected_result: ProcessResult,
             #[case] expected_status: SessionStatus,
+            stopped_session_store: TempDir,
         ) {
-            let temp_dir = create_temp_sessions_dir();
-            let mut session = create_test_session(None);
-            session.status = SessionStatus::Stopped;
-            store::save_session_to(temp_dir.path(), &session).expect("session should save");
-
             let mut input = create_test_input_with_source(None, source);
             input.model = Some("fixture-model-amber".to_string());
             let result = process_hook_event_impl(
                 HookEvent::SessionStart,
                 input,
-                temp_dir.path(),
+                stopped_session_store.path(),
                 &SideEffects::none(),
             )
             .expect("session-start should succeed");
-            let reloaded = store::load_session_from(temp_dir.path(), "test-123")
+            let reloaded = store::load_session_from(stopped_session_store.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
 
@@ -4399,23 +4404,20 @@ mod tests {
             );
         }
 
-        #[test]
-        fn post_model_switch_persists_model_without_changing_status() {
-            let temp_dir = create_temp_sessions_dir();
-            let mut session = create_test_session(None);
-            session.status = SessionStatus::Stopped;
-            store::save_session_to(temp_dir.path(), &session).expect("session should save");
-
+        #[rstest]
+        fn post_model_switch_persists_model_without_changing_status(
+            stopped_session_store: TempDir,
+        ) {
             let mut input = create_test_input(None);
             input.to_model = Some("fixture-model-cobalt".to_string());
             let result = process_hook_event_impl(
                 HookEvent::PostModelSwitch,
                 input,
-                temp_dir.path(),
+                stopped_session_store.path(),
                 &SideEffects::none(),
             )
             .expect("post-model-switch should succeed");
-            let reloaded = store::load_session_from(temp_dir.path(), "test-123")
+            let reloaded = store::load_session_from(stopped_session_store.path(), "test-123")
                 .expect("session should load")
                 .expect("session should exist");
 
