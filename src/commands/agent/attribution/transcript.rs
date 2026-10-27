@@ -13,6 +13,7 @@ pub(super) fn model_for_tool_use(
     let file =
         std::fs::File::open(transcript_path).with_context(|| "Claude transcript is unavailable")?;
     let mut found: Option<String> = None;
+    let mut last_model: Option<String> = None;
     for line in BufReader::new(file).lines() {
         let line = line.context("failed to read Claude transcript")?;
         let Ok(entry) = serde_json::from_str::<Value>(&line) else {
@@ -24,6 +25,16 @@ pub(super) fn model_for_tool_use(
         let Some(message) = entry.get("message") else {
             continue;
         };
+        // Claude Code has not written the in-flight tool use to the transcript yet when
+        // PreToolUse runs, so the preceding assistant entry is the only evidence of the model.
+        // "<synthetic>" marks client-generated entries (e.g. interrupt notices), not a model.
+        if let Some(model) = message
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty() && *model != "<synthetic>")
+        {
+            last_model = Some(model.to_owned());
+        }
         let Some(content) = message.get("content").and_then(Value::as_array) else {
             continue;
         };
@@ -48,5 +59,7 @@ pub(super) fn model_for_tool_use(
             }
         }
     }
-    found.ok_or_else(|| anyhow::anyhow!("Claude transcript has no matching tool use"))
+    found
+        .or(last_model)
+        .ok_or_else(|| anyhow::anyhow!("Claude transcript has no assistant model"))
 }
