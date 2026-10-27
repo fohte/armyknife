@@ -96,7 +96,7 @@ jobs:
         run: exit 1
 
   unit-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
 
     env:
