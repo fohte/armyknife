@@ -131,6 +131,9 @@ jobs:
       - name: Install srt dependencies
         run: sudo apt-get update && sudo apt-get install -y bubblewrap socat ripgrep
 
+      # Ubuntu 26.04's apparmor package loads this profile by default. Its
+      # unpriv_bwrap child denies CAP_SYS_ADMIN needed by apply-seccomp in a
+      # nested user namespace; the sysctl below cannot override that denial.
       - name: Unload Bubblewrap AppArmor profile
         run: sudo apparmor_parser -R /etc/apparmor.d/bwrap-userns-restrict
 
