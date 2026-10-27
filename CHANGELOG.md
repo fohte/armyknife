@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.468](https://github.com/fohte/armyknife/compare/v0.1.467...v0.1.468) (2026-10-27)
+
+
+### Features
+
+* **agent:** allow agy and optional type settings ([#1275](https://github.com/fohte/armyknife/issues/1275)) ([27535aa](https://github.com/fohte/armyknife/commit/27535aa6210dcb09008c435108bbd2c39f578907))
+
 ## [0.1.467](https://github.com/fohte/armyknife/compare/v0.1.466...v0.1.467) (2026-10-27)
 
 
