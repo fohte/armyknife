@@ -71,21 +71,7 @@ fn add(args: &AddArgs) -> Result<()> {
         if let Some(pane_id) = caller_pane::resolve_caller_pane_id() {
             return add_without_agent_session(args, &pane_id);
         }
-
-        let mut opener = if cfg!(target_os = "macos") {
-            ExternalTool::Open.command()
-        } else {
-            ExternalTool::XdgOpen.command()
-        };
-        let status = opener
-            .arg(&args.url)
-            .status()
-            .context("failed to open crit URL in the default browser")?;
-        anyhow::ensure!(
-            status.success(),
-            "default browser opener exited with {status}"
-        );
-        return Ok(());
+        return open_url_in_default_browser(&args.url);
     };
 
     let port = parse_port(&args.url)?;
@@ -96,17 +82,54 @@ fn add(args: &AddArgs) -> Result<()> {
         port,
     );
     let _guard = span.enter();
+    let result = record_session_url(&session_id, &args.url);
+    continue_after_session_recording(&session_id, result, |session| {
+        if session.is_some() {
+            tracing::info!(event = "agent.crit.add.registered");
+        }
+        continue_add(args, &session_id, port, session);
+    });
+
+    Ok(())
+}
+
+fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
     let sessions_dir = store::sessions_dir()?;
-    let lock = store::lock_session_for_update(&sessions_dir, &session_id)?;
+    let lock = store::lock_session_for_update(&sessions_dir, session_id)?;
     let Some(mut session) = lock.load()? else {
         bail!("Agent session not found: {session_id}");
     };
-    add_url(&mut session, &args.url);
+    add_url(&mut session, url);
     lock.save(&session)?;
     drop(lock);
-    tracing::info!(event = "agent.crit.add.registered");
+    Ok(session)
+}
 
-    if let Some(pane_id) = caller_pane::pane_id_for_session(&session)
+fn continue_after_session_recording(
+    session_id: &str,
+    result: Result<Session>,
+    continue_review: impl FnOnce(Option<Session>),
+) {
+    let session = match result {
+        Ok(session) => Some(session),
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.crit.add.session_record_failed",
+                session = %session_id,
+                error = %error,
+            );
+            eprintln!(
+                "[armyknife] warning: failed to record crit review for the agent session: {error:#}"
+            );
+            None
+        }
+    };
+    continue_review(session);
+}
+
+fn continue_add(args: &AddArgs, session_id: &str, port: u16, session: Option<Session>) {
+    if let Some(session) = session.as_ref()
+        && let Some(pane_id) = caller_pane::pane_id_for_session(session)
         && let Err(error) = pane::set_crit_url(&pane_id, &args.url)
     {
         tracing::warn!(
@@ -116,7 +139,8 @@ fn add(args: &AddArgs) -> Result<()> {
         );
         eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");
     }
-    if let Err(error) = monitor::ensure_started(port, Some(&session)) {
+
+    if let Err(error) = monitor::ensure_started(port, session.as_ref()) {
         tracing::warn!(
             event = "agent.crit.monitor.start_failed",
             session = %session_id,
@@ -126,7 +150,18 @@ fn add(args: &AddArgs) -> Result<()> {
         eprintln!("[armyknife] warning: failed to monitor crit review shutdown: {error:#}");
     }
 
-    if let Err(error) = send_notification(&session, port) {
+    if session.is_none()
+        && let Err(error) = display_unrecorded_review(args, port)
+    {
+        tracing::warn!(event = "agent.crit.add.review_display_failed", error = %error);
+        eprintln!("[armyknife] warning: failed to display crit review: {error:#}");
+    }
+
+    let notification_result = session.as_ref().map_or_else(
+        || send_unrecorded_notification(session_id, port),
+        |session| send_notification(session, port),
+    );
+    if let Err(error) = notification_result {
         tracing::warn!(
             event = "agent.crit.notification.failed",
             session = %session_id,
@@ -135,8 +170,43 @@ fn add(args: &AddArgs) -> Result<()> {
         );
         eprintln!("[armyknife] warning: failed to send crit notification: {error:#}");
     }
+}
 
+fn display_unrecorded_review(args: &AddArgs, port: u16) -> Result<()> {
+    if let Some(pane_id) = caller_pane::resolve_caller_pane_id() {
+        return tmux::open_crit_pane(tmux::CritPaneSpec {
+            parent_pane_id: &pane_id,
+            url: &args.url,
+            port,
+            title: " crit · review ",
+            force_shpool_attach: false,
+        });
+    }
+    open_url_in_default_browser(&args.url)
+}
+
+fn open_url_in_default_browser(url: &str) -> Result<()> {
+    let mut opener = if cfg!(target_os = "macos") {
+        ExternalTool::Open.command()
+    } else {
+        ExternalTool::XdgOpen.command()
+    };
+    let status = opener
+        .arg(url)
+        .status()
+        .context("failed to open crit URL in the default browser")?;
+    anyhow::ensure!(
+        status.success(),
+        "default browser opener exited with {status}"
+    );
     Ok(())
+}
+
+fn send_unrecorded_notification(session_id: &str, port: u16) -> Result<()> {
+    let notification = Notification::new(CRIT_TITLE, "Crit review requested")
+        .with_subtitle(display_label(None, session_id))
+        .with_content_image_url(format!("http://127.0.0.1:{port}/apple-touch-icon.png"));
+    crate::infra::notification::send(&notification)
 }
 
 fn add_without_agent_session(args: &AddArgs, pane_id: &str) -> Result<()> {
@@ -321,4 +391,29 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
     ];
     process::spawn_detached(&executable, args, None, &[])
         .context("failed to start the crit pane after agent watch")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn continues_review_flow_when_session_recording_fails() {
+        let mut actions = Vec::new();
+        let mut session_id_seen = None;
+
+        continue_after_session_recording(
+            "fixture-session",
+            Err(anyhow::anyhow!("fixture record failure")),
+            |session| {
+                session_id_seen = session.map(|session| session.session_id);
+                actions.extend(["display", "notification"]);
+            },
+        );
+
+        assert_eq!(
+            (session_id_seen, actions),
+            (None, vec!["display", "notification"]),
+        );
+    }
 }
