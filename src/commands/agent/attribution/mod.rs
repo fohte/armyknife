@@ -323,6 +323,11 @@ mod tests {
     #[rstest]
     #[case::claude_session(Some("fixture-claude-session"), None, Some("fixture-claude-session"))]
     #[case::codex_session(None, Some("fixture-codex-session"), Some("fixture-codex-session"))]
+    #[case::claude_session_takes_precedence(
+        Some("fixture-claude-session"),
+        Some("fixture-codex-session"),
+        Some("fixture-claude-session")
+    )]
     #[case::empty_claude_id_falls_back(
         Some(""),
         Some("fixture-codex-session"),
