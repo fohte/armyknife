@@ -343,7 +343,7 @@
           "$ref": "#/$defs/AgentProfileTypeEngine"
         },
         "model": {
-          "description": "Model passed to the selected engine when set; `a agent new --type` requires this field or `--model`.",
+          "description": "Model passed to the selected engine when set; `a agent new --type` requires a non-empty value or `--model`.",
           "type": [
             "string",
             "null"
