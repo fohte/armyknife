@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use chrono::Utc;
 use clap::Args;
 
 mod child;
@@ -13,6 +14,7 @@ mod session_close;
 #[cfg(test)]
 mod test_support;
 
+use super::auto_pause;
 use super::graceful_quit::GracefulQuitRequester;
 use super::resume;
 use super::signal::{LibcSignalSender, SignalSender};
@@ -20,12 +22,14 @@ use super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
-use crate::shared::config::load_config;
+use crate::shared::active_session::{NoDraftProbe, is_session_active};
+use crate::shared::config::{load_config, load_config_or_default};
 use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
+const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
@@ -126,8 +130,8 @@ async fn close_worktree(
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
     let sessions = super::store::list_sessions()?;
-    let session = select_worktree_session(&sessions, worktree_root)?;
-    let caller_pane_id = if session.is_some() {
+    let matching_sessions = select_worktree_sessions(&sessions, worktree_root);
+    let caller_pane_id = if !matching_sessions.is_empty() {
         crate::shared::caller_pane::resolve_caller_pane_id()
     } else {
         None
@@ -139,7 +143,7 @@ async fn close_worktree(
     };
     let context = WorktreeCloseContext {
         args,
-        session,
+        sessions: &matching_sessions,
         child_parent_session_id,
         caller_session_id: caller_session_id.as_deref(),
         caller_pane_id: caller_pane_id.as_deref(),
@@ -162,7 +166,7 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
 
 struct WorktreeCloseContext<'a> {
     args: &'a CloseArgs,
-    session: Option<&'a Session>,
+    sessions: &'a [&'a Session],
     child_parent_session_id: Option<&'a str>,
     caller_session_id: Option<&'a str>,
     caller_pane_id: Option<&'a str>,
@@ -172,17 +176,17 @@ async fn close_worktree_with<P, F>(
     context: WorktreeCloseContext<'_>,
     refuse_current_session: bool,
     prepare: impl Future<Output = Result<P>>,
-    close_session: impl FnOnce(&Session, bool, Option<&str>) -> Result<()>,
+    mut close_session: impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
     remove_worktree: impl FnOnce(P) -> F,
 ) -> Result<()>
 where
     F: Future<Output = Result<()>>,
 {
-    child::ensure_target_session(context.session, context.child_parent_session_id)?;
+    child::ensure_target_sessions(context.sessions, context.child_parent_session_id)?;
 
     if refuse_current_session {
         ensure_not_closing_current_session(
-            context.session,
+            context.sessions,
             context.caller_session_id,
             context.caller_pane_id,
         )?;
@@ -190,7 +194,7 @@ where
     close_with_worktree_plan(
         prepare,
         || {
-            if let Some(session) = context.session {
+            for session in context.sessions {
                 close_session(session, context.args.force, context.caller_pane_id)?;
             }
             Ok(())
@@ -201,11 +205,11 @@ where
 }
 
 fn ensure_not_closing_current_session(
-    session: Option<&Session>,
+    sessions: &[&Session],
     caller_session_id: Option<&str>,
     current_pane_id: Option<&str>,
 ) -> Result<()> {
-    if session.is_some_and(|session| {
+    if sessions.iter().any(|session| {
         caller_session_id == Some(session.session_id.as_str())
             || is_caller_pane_session(session, current_pane_id)
     }) {
@@ -271,23 +275,11 @@ fn path_is_within_worktree(path: &Path, worktree_root: &Path) -> bool {
     path.starts_with(worktree_root)
 }
 
-fn select_worktree_session<'a>(
-    sessions: &'a [Session],
-    worktree_root: &Path,
-) -> Result<Option<&'a Session>> {
-    let mut matching = sessions
+fn select_worktree_sessions<'a>(sessions: &'a [Session], worktree_root: &Path) -> Vec<&'a Session> {
+    sessions
         .iter()
-        .filter(|session| path_is_within_worktree(&session.cwd, worktree_root));
-    let Some(session) = matching.next() else {
-        return Ok(None);
-    };
-    if matching.next().is_some() {
-        bail!(
-            "Multiple agent sessions are associated with worktree `{}`; pass a session ID to select one",
-            worktree_root.display()
-        );
-    }
-    Ok(Some(session))
+        .filter(|session| path_is_within_worktree(&session.cwd, worktree_root))
+        .collect()
 }
 
 trait CloseRuntime {
@@ -301,6 +293,10 @@ trait CloseRuntime {
     fn wait_for_exit(&self, pid: u32) -> bool;
     fn end_codex_session(&self, session_id: &str) -> Result<()>;
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()>;
+
+    fn unknown_draft_timeout(&self) -> Duration {
+        DEFAULT_AUTO_PAUSE_TIMEOUT
+    }
 }
 
 struct LiveCloseRuntime;
@@ -372,6 +368,21 @@ impl CloseRuntime for LiveCloseRuntime {
             &tmux_info.pane_id,
         )?)
     }
+
+    fn unknown_draft_timeout(&self) -> Duration {
+        let config = load_config_or_default();
+        match auto_pause::parse_duration(&config.agent.auto_pause.timeout) {
+            Ok(timeout) => timeout,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.close.auto_pause_timeout_invalid",
+                    error = %error,
+                    "Using the default timeout when draft state is unavailable"
+                );
+                DEFAULT_AUTO_PAUSE_TIMEOUT
+            }
+        }
+    }
 }
 
 fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -> Result<()> {
@@ -408,7 +419,7 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         ensure_session_is_idle(session, effective_status)?;
     }
 
-    match runtime.resolve_agent_pid(tmux_info, session.engine)? {
+    let should_end_codex_session = match runtime.resolve_agent_pid(tmux_info, session.engine)? {
         Some(pid) => {
             if !force {
                 ensure_no_unsent_draft(runtime, tmux_info, session)?;
@@ -456,19 +467,24 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
                     );
                 }
             }
+            true
         }
+        None if force => false,
         None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
             bail!(
                 "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
             );
         }
-        None => {}
-    }
+        None => true,
+    };
 
     if runtime.pane_exists(tmux_info)? {
         ensure_pane_session(runtime, tmux_info, &session.session_id)?;
-        if session.engine == Engine::Codex && session.status != SessionStatus::Ended {
+        if should_end_codex_session
+            && session.engine == Engine::Codex
+            && session.status != SessionStatus::Ended
+        {
             runtime.end_codex_session(&session.session_id)?;
         }
         runtime.kill_pane(tmux_info)?;
@@ -520,10 +536,19 @@ fn ensure_no_unsent_draft<R: CloseRuntime>(
             "Agent session `{}` has an unsent draft; pass --force to close it",
             session.session_id
         ),
-        None => bail!(
-            "Could not check for an unsent draft in agent session `{}`; pass --force to close it",
-            session.session_id
-        ),
+        None if is_session_active(
+            session,
+            &NoDraftProbe,
+            Utc::now(),
+            runtime.unknown_draft_timeout(),
+        ) =>
+        {
+            bail!(
+                "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
+                session.session_id
+            )
+        }
+        None => Ok(()),
     }
 }
 
@@ -877,12 +902,12 @@ mod tests {
     #[case::claude_draft_unknown(
         Engine::Claude,
         None,
-        "Could not check for an unsent draft in agent session `session-1`; pass --force to close it"
+        "Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it"
     )]
     #[case::codex_draft_unknown(
         Engine::Codex,
         None,
-        "Could not check for an unsent draft in agent session `session-1`; pass --force to close it"
+        "Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it"
     )]
     fn close_rejects_unsent_or_uninspectable_drafts(
         mut session: Session,
@@ -907,6 +932,35 @@ mod tests {
                     pane_session_call(),
                     resolve_pid_call(engine),
                     draft_call(engine),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_allows_unknown_draft_when_session_update_is_stale() {
+        let mut session = session();
+        session.updated_at = Utc::now() - chrono::TimeDelta::hours(1);
+        let runtime = FakeRuntime {
+            draft: None,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (
+                true,
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    draft_call(Engine::Claude),
+                    graceful_quit_call(42),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
                 ],
             ),
         );
@@ -1120,14 +1174,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn close_refuses_to_kill_a_reused_pane() {
+    #[rstest]
+    #[case::normal(false)]
+    #[case::forced(true)]
+    fn close_refuses_to_kill_a_reused_pane(#[case] force: bool) {
         let runtime = FakeRuntime {
             pane_session_id: Some("different-session".to_string()),
             ..FakeRuntime::default()
         };
 
-        let result = close_session(&session(), false, &runtime);
+        let result = close_session(&session(), force, &runtime);
 
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
@@ -1166,20 +1222,15 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::normal(false)]
-    #[case::forced(true)]
-    fn close_refuses_to_remove_a_stopped_session_without_a_resolved_agent(
-        session: Session,
-        #[case] force: bool,
-    ) {
+    #[test]
+    fn close_refuses_to_remove_a_stopped_session_without_a_resolved_agent() {
         let runtime = FakeRuntime {
             draft: None,
             pid: None,
             ..FakeRuntime::default()
         };
 
-        let result = close_session(&session, force, &runtime);
+        let result = close_session(&session(), false, &runtime);
 
         assert_eq!(
             (result.unwrap_err().to_string(), runtime.calls.into_inner()),
@@ -1190,6 +1241,38 @@ mod tests {
                     pane_exists_call(),
                     pane_session_call(),
                     resolve_pid_call(Engine::Claude),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude)]
+    #[case::codex(Engine::Codex)]
+    fn close_force_closes_a_matching_pane_when_agent_process_is_missing(
+        mut session: Session,
+        #[case] engine: Engine,
+    ) {
+        session.engine = engine;
+        session.status = SessionStatus::Running;
+        let runtime = FakeRuntime {
+            pid: None,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, true, &runtime);
+
+        assert_eq!(
+            (result.is_ok(), runtime.calls.into_inner()),
+            (
+                true,
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(engine),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
                 ],
             ),
         );
@@ -1233,16 +1316,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::root(vec!["/tmp/worktrees/feature"], Ok(Some("session-0".to_string())))]
-    #[case::nested(vec!["/tmp/worktrees/feature/src"], Ok(Some("session-0".to_string())))]
-    #[case::sibling(vec!["/tmp/worktrees/feature-extra"], Ok(None))]
+    #[case::root(vec!["/tmp/worktrees/feature"], vec!["session-0"])]
+    #[case::nested(vec!["/tmp/worktrees/feature/src"], vec!["session-0"])]
+    #[case::sibling(vec!["/tmp/worktrees/feature-extra"], vec![])]
     #[case::multiple(
         vec!["/tmp/worktrees/feature", "/tmp/worktrees/feature/src"],
-        Err("Multiple agent sessions are associated with worktree `/tmp/worktrees/feature`; pass a session ID to select one".to_string())
+        vec!["session-0", "session-1"]
     )]
-    fn selects_a_unique_session_for_the_target_worktree(
+    fn selects_all_sessions_for_the_target_worktree(
         #[case] session_cwds: Vec<&str>,
-        #[case] expected: std::result::Result<Option<String>, String>,
+        #[case] expected: Vec<&str>,
     ) {
         let sessions = session_cwds
             .into_iter()
@@ -1254,9 +1337,10 @@ mod tests {
                 session
             })
             .collect::<Vec<_>>();
-        let actual = select_worktree_session(&sessions, Path::new("/tmp/worktrees/feature"))
-            .map(|session| session.map(|session| session.session_id.clone()))
-            .map_err(|error| error.to_string());
+        let actual = select_worktree_sessions(&sessions, Path::new("/tmp/worktrees/feature"))
+            .into_iter()
+            .map(|session| session.session_id.as_str())
+            .collect::<Vec<_>>();
 
         assert_eq!(actual, expected);
     }
@@ -1298,7 +1382,7 @@ mod tests {
             session.tmux_info = None;
         }
         assert_eq!(
-            ensure_not_closing_current_session(Some(&session), caller_session_id, current_pane_id,)
+            ensure_not_closing_current_session(&[&session], caller_session_id, current_pane_id,)
                 .map_err(|error| error.to_string()),
             expected,
         );
@@ -1307,11 +1391,12 @@ mod tests {
     #[tokio::test]
     async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
         let target_session = session();
+        let sessions = [&target_session];
         let args = CloseArgs::default();
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
-            session: Some(&target_session),
+            sessions: &sessions,
             child_parent_session_id: None,
             caller_session_id: Some("session-1"),
             caller_pane_id: None,
@@ -1349,9 +1434,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn child_close_rejects_non_children_before_prepare_even_with_force() {
+    async fn child_close_rejects_any_non_child_before_prepare_even_with_force() {
         let mut target_session = session();
         target_session.ancestor_session_ids = vec!["other-parent".to_string()];
+        let mut child_session = session();
+        child_session.session_id = "child-session".to_string();
+        child_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let sessions = [&child_session, &target_session];
         let args = CloseArgs {
             target: Some("session-1".to_string()),
             child: true,
@@ -1361,7 +1450,7 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
-            session: Some(&target_session),
+            sessions: &sessions,
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -1371,15 +1460,15 @@ mod tests {
             context,
             false,
             async {
-                calls.borrow_mut().push("prepare");
+                calls.borrow_mut().push("prepare".to_string());
                 Ok::<(), anyhow::Error>(())
             },
             |_, _, _| {
-                calls.borrow_mut().push("close session");
+                calls.borrow_mut().push("close session".to_string());
                 Ok(())
             },
             |_| async {
-                calls.borrow_mut().push("remove worktree");
+                calls.borrow_mut().push("remove worktree".to_string());
                 Ok(())
             },
         )
@@ -1411,7 +1500,7 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
-            session: None,
+            sessions: &[],
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -1454,6 +1543,7 @@ mod tests {
     async fn child_close_allows_a_direct_child_with_force() {
         let mut target_session = session();
         target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let sessions = [&target_session];
         let args = CloseArgs {
             target: Some("session-1".to_string()),
             child: true,
@@ -1463,7 +1553,7 @@ mod tests {
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
-            session: Some(&target_session),
+            sessions: &sessions,
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -1501,13 +1591,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn worktree_close_closes_all_matching_sessions_before_removing_worktree() {
+        let first_session = session();
+        let mut second_session = session();
+        second_session.session_id = "session-2".to_string();
+        second_session.cwd = PathBuf::from("/tmp/worktrees/feature/src");
+        let sessions = [&first_session, &second_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                Ok::<(), anyhow::Error>(())
+            },
+            |session, _, _| {
+                calls.borrow_mut().push(session.session_id.clone());
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (
+                Ok(()),
+                vec![
+                    "prepare".to_string(),
+                    "session-1".to_string(),
+                    "session-2".to_string(),
+                    "remove worktree".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn pr_merge_close_refuses_to_close_other_sessions_without_force() {
         let target_session = session();
+        let sessions = [&target_session];
         let args = CloseArgs::default();
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
-            session: Some(&target_session),
+            sessions: &sessions,
             child_parent_session_id: None,
             caller_session_id: Some("caller-session"),
             caller_pane_id: None,
