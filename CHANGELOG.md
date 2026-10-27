@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.471](https://github.com/fohte/armyknife/compare/v0.1.470...v0.1.471) (2026-10-27)
+
+
+### Features
+
+* **agent:** store model and effort from hooks ([#1283](https://github.com/fohte/armyknife/issues/1283)) ([aac8ca0](https://github.com/fohte/armyknife/commit/aac8ca0e049d1d0c2439d49b01bc7d3388973fb5))
+
 ## [0.1.470](https://github.com/fohte/armyknife/compare/v0.1.469...v0.1.470) (2026-10-27)
 
 
