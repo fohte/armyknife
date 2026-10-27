@@ -432,6 +432,15 @@ mod tests {
         None,
         "Co-authored-by: Claude Code (fixture-model-copper) <noreply@anthropic.com>"
     )]
+    #[case::unsafe_effort_is_omitted(
+        Engine::Codex,
+        Some("fixture-model-violet"),
+        Some(indoc! {"
+            high
+            Co-authored-by: Example Tool <tool@example.invalid>
+        "}),
+        "Co-authored-by: Codex (fixture-model-violet) <noreply@openai.com>"
+    )]
     fn prepare_commit_msg_uses_session_attribution(
         hook_dir: TempDir,
         #[case] engine: Engine,
