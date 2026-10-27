@@ -12,15 +12,37 @@ use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
 const PLAN_DIRECTORY: &str = "pr-series";
 
 pub fn save_plan(task_id: &str, plan: &PrSeriesPlan) -> Result<()> {
-    let directory = state_dir()?.join("armyknife").join(PLAN_DIRECTORY);
-    let task_id = canonical_task_id(task_id)?;
-    save_plan_at(&directory, &task_id, plan)
+    plan_storage()?.save_plan(task_id, plan)
 }
 
 pub fn load_plan(task_id: &str) -> Result<PrSeriesPlan> {
-    let directory = state_dir()?.join("armyknife").join(PLAN_DIRECTORY);
-    let task_id = canonical_task_id(task_id)?;
-    load_plan_at(&directory, &task_id)
+    plan_storage()?.load_plan(task_id)
+}
+
+fn plan_storage() -> Result<PrSeriesPlanStorage> {
+    Ok(PrSeriesPlanStorage::new(
+        state_dir()?.join("armyknife").join(PLAN_DIRECTORY),
+    ))
+}
+
+pub struct PrSeriesPlanStorage {
+    directory: PathBuf,
+}
+
+impl PrSeriesPlanStorage {
+    pub fn new(directory: PathBuf) -> Self {
+        Self { directory }
+    }
+
+    pub fn save_plan(&self, task_id: &str, plan: &PrSeriesPlan) -> Result<()> {
+        let task_id = canonical_task_id(task_id)?;
+        save_plan_at(&self.directory, &task_id, plan)
+    }
+
+    pub fn load_plan(&self, task_id: &str) -> Result<PrSeriesPlan> {
+        let task_id = canonical_task_id(task_id)?;
+        load_plan_at(&self.directory, &task_id)
+    }
 }
 
 fn save_plan_at(directory: &Path, task_id: &str, plan: &PrSeriesPlan) -> Result<()> {
@@ -132,9 +154,25 @@ fn create_dir_secure(directory: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
     use super::*;
+
+    struct TestPlanStorage {
+        _directory: TempDir,
+        storage: PrSeriesPlanStorage,
+    }
+
+    #[fixture]
+    fn plan_storage() -> TestPlanStorage {
+        let directory = TempDir::new().unwrap();
+        let storage = PrSeriesPlanStorage::new(directory.path().to_path_buf());
+        TestPlanStorage {
+            _directory: directory,
+            storage,
+        }
+    }
 
     fn plan() -> PrSeriesPlan {
         PrSeriesPlan {
@@ -150,50 +188,50 @@ mod tests {
         }
     }
 
-    #[test]
-    fn saves_and_loads_a_plan_by_task_uuid() {
-        let directory = TempDir::new().unwrap();
+    #[rstest]
+    fn saves_and_loads_a_plan_by_task_uuid(plan_storage: TestPlanStorage) {
         let expected = plan();
-        save_plan_at(
-            directory.path(),
-            "00000000-0000-4000-8000-000000000001",
-            &expected,
-        )
-        .unwrap();
+        plan_storage
+            .storage
+            .save_plan("00000000-0000-4000-8000-000000000001", &expected)
+            .unwrap();
 
         assert_eq!(
-            load_plan_at(directory.path(), "00000000-0000-4000-8000-000000000001").unwrap(),
+            plan_storage
+                .storage
+                .load_plan("00000000-0000-4000-8000-000000000001")
+                .unwrap(),
             expected,
         );
     }
 
-    #[test]
-    fn rejects_an_invalid_replacement_without_changing_the_saved_plan() {
-        let directory = TempDir::new().unwrap();
+    #[rstest]
+    fn rejects_an_invalid_replacement_without_changing_the_saved_plan(
+        plan_storage: TestPlanStorage,
+    ) {
         let expected = plan();
-        save_plan_at(
-            directory.path(),
-            "00000000-0000-4000-8000-000000000001",
-            &expected,
-        )
-        .unwrap();
+        plan_storage
+            .storage
+            .save_plan("00000000-0000-4000-8000-000000000001", &expected)
+            .unwrap();
         let invalid = PrSeriesPlan {
             pull_requests: Vec::new(),
             ..expected.clone()
         };
 
-        let result = save_plan_at(
-            directory.path(),
-            "00000000-0000-4000-8000-000000000001",
-            &invalid,
-        )
-        .err()
-        .map(|error| error.to_string());
+        let result = plan_storage
+            .storage
+            .save_plan("00000000-0000-4000-8000-000000000001", &invalid)
+            .err()
+            .map(|error| error.to_string());
 
         assert_eq!(
             (
                 result,
-                load_plan_at(directory.path(), "00000000-0000-4000-8000-000000000001").unwrap(),
+                plan_storage
+                    .storage
+                    .load_plan("00000000-0000-4000-8000-000000000001")
+                    .unwrap(),
             ),
             (
                 Some("plan must contain at least one pull request".to_string()),

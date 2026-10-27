@@ -3,10 +3,7 @@ use std::collections::{BTreeMap, HashMap};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use super::model::{
-    CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests,
-    validate_checklist_leaf_ids,
-};
+use super::model::{CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests};
 use super::render::{render_section, replace_managed_section};
 use super::storage;
 use crate::infra::github::{GitHubClient, PrBodyClient, RepoClient, UpdatePrBodyParams};
@@ -27,6 +24,7 @@ struct SyncReport {
 
 struct PendingUpdate {
     pull_request: CreatedPullRequest,
+    original_body: String,
     body: String,
 }
 
@@ -35,7 +33,6 @@ pub async fn run(args: &SyncArgs) -> Result<()> {
     let task = tq_client.task_details(&args.task_id).await?;
     let plan = storage::load_plan(&task.id)?;
     let checklists = tq_client.list_checklists(&task.id).await?;
-    validate_checklist_leaf_ids(&plan, &checklists)?;
     let created_pull_requests =
         resolve_created_pull_requests(&plan, &checklists, &task.github_links)?;
     if created_pull_requests.is_empty() {
@@ -105,22 +102,13 @@ async fn sync_created_pull_requests(
                 continue;
             }
         };
-        let section = match render_section(
+        let updated_body = match synchronized_body(
             plan,
             &pull_request.entry_id,
             &body,
             &repository_privacy,
             created_pull_requests,
         ) {
-            Ok(section) => section,
-            Err(error) => {
-                report
-                    .failed
-                    .push((pull_request.url.clone(), error.to_string()));
-                continue;
-            }
-        };
-        let updated_body = match replace_managed_section(&body, &section) {
             Ok(body) => body,
             Err(error) => {
                 report
@@ -134,18 +122,58 @@ async fn sync_created_pull_requests(
         } else {
             pending_updates.push(PendingUpdate {
                 pull_request: pull_request.clone(),
+                original_body: body,
                 body: updated_body,
             });
         }
     }
 
     for pending in pending_updates {
+        let latest_body = match github
+            .get_pull_request_body(
+                &pending.pull_request.repository.owner,
+                &pending.pull_request.repository.name,
+                pending.pull_request.number,
+            )
+            .await
+        {
+            Ok(body) => body,
+            Err(error) => {
+                report
+                    .failed
+                    .push((pending.pull_request.url.clone(), error.to_string()));
+                continue;
+            }
+        };
+        let body = if latest_body == pending.original_body {
+            pending.body
+        } else {
+            match synchronized_body(
+                plan,
+                &pending.pull_request.entry_id,
+                &latest_body,
+                &repository_privacy,
+                created_pull_requests,
+            ) {
+                Ok(body) => body,
+                Err(error) => {
+                    report
+                        .failed
+                        .push((pending.pull_request.url.clone(), error.to_string()));
+                    continue;
+                }
+            }
+        };
+        if body == latest_body {
+            report.unchanged.push(pending.pull_request.url.clone());
+            continue;
+        }
         match github
             .update_pull_request_body(UpdatePrBodyParams {
                 owner: pending.pull_request.repository.owner,
                 repo: pending.pull_request.repository.name,
                 number: pending.pull_request.number,
-                body: pending.body,
+                body,
             })
             .await
         {
@@ -156,6 +184,23 @@ async fn sync_created_pull_requests(
         }
     }
     Ok(report)
+}
+
+fn synchronized_body(
+    plan: &PrSeriesPlan,
+    entry_id: &str,
+    body: &str,
+    repository_privacy: &HashMap<String, bool>,
+    created_pull_requests: &[CreatedPullRequest],
+) -> Result<String> {
+    let section = render_section(
+        plan,
+        entry_id,
+        body,
+        repository_privacy,
+        created_pull_requests,
+    )?;
+    replace_managed_section(body, &section)
 }
 
 fn print_report(report: &SyncReport) {
@@ -176,6 +221,7 @@ mod tests {
     use std::sync::Mutex;
 
     use anyhow::{Result, bail};
+    use indoc::indoc;
 
     use super::*;
     use crate::commands::ai::pr_series::model::PrSeriesEntry;
@@ -186,6 +232,8 @@ mod tests {
         private_repositories: HashMap<String, bool>,
         visibility_errors: HashSet<String>,
         bodies: Mutex<HashMap<(String, u64), String>>,
+        body_reads: Mutex<HashMap<(String, u64), usize>>,
+        body_edits_after_first_read: Mutex<HashMap<(String, u64), String>>,
         failed_updates_once: Mutex<HashSet<(String, u64)>>,
     }
 
@@ -202,6 +250,13 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert((repository.to_string(), number));
+        }
+
+        fn edit_body_after_first_read(&self, repository: &str, number: u64, body: &str) {
+            self.body_edits_after_first_read
+                .lock()
+                .unwrap()
+                .insert((repository.to_string(), number), body.to_string());
         }
 
         fn bodies(&self) -> HashMap<(String, u64), String> {
@@ -257,10 +312,26 @@ mod tests {
             repo: &str,
             number: u64,
         ) -> Result<String> {
+            let key = (format!("{owner}/{repo}"), number);
+            let second_read = {
+                let mut reads = self.body_reads.lock().unwrap();
+                let count = reads.entry(key.clone()).or_default();
+                *count += 1;
+                *count == 2
+            };
+            if second_read
+                && let Some(body) = self
+                    .body_edits_after_first_read
+                    .lock()
+                    .unwrap()
+                    .remove(&key)
+            {
+                self.bodies.lock().unwrap().insert(key.clone(), body);
+            }
             self.bodies
                 .lock()
                 .unwrap()
-                .get(&(format!("{owner}/{repo}"), number))
+                .get(&key)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("body was not found"))
         }
@@ -396,6 +467,59 @@ mod tests {
                     (
                         ("acme/notify-web".to_string(), 31),
                         "Settings details".to_string()
+                    ),
+                ]),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn preserves_body_edits_seen_before_patch() {
+        let github = fake_github();
+        github.edit_body_after_first_read("acme/notify-api", 12, "API details\nConcurrent edit");
+        let mut plan = sample_plan();
+        plan.pull_requests.truncate(1);
+        let pull_requests = vec![created_pull_requests()[0].clone()];
+
+        let report = sync_created_pull_requests(&plan, &pull_requests, &github)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (report, github.bodies()),
+            (
+                SyncReport {
+                    updated: vec!["https://github.com/acme/notify-api/pull/12".to_string()],
+                    unchanged: Vec::new(),
+                    failed: Vec::new(),
+                },
+                HashMap::from([
+                    (
+                        ("acme/notify-api".to_string(), 12),
+                        indoc! {"
+                            API details
+                            Concurrent edit
+
+                            <!-- pr-series:start -->
+                            ### Notification preferences
+
+                            Let users choose which notifications they receive.
+
+                            ```mermaid
+                            flowchart LR
+                              P1(\"Add preference tables<br/>This PR\")
+                              click P1 href \"https://github.com/acme/notify-api/pull/12\" _blank
+                              classDef current stroke:#3fb950,stroke-width:3px
+                              class P1 current
+                            ```
+                            <!-- pr-series:end -->
+                        "}
+                        .trim_end_matches('\n')
+                        .to_string(),
+                    ),
+                    (
+                        ("acme/notify-web".to_string(), 31),
+                        "Settings details".to_string(),
                     ),
                 ]),
             ),

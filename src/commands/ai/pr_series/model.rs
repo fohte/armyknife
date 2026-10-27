@@ -514,4 +514,40 @@ mod tests {
             }],
         );
     }
+
+    #[test]
+    fn rejects_a_checklist_link_to_a_different_repository() {
+        let plan = plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")]);
+        let checklists = vec![TqChecklist {
+            id: "checklist-1".to_string(),
+            name: "Implementation".to_string(),
+            items: vec![TqChecklistItem {
+                id: "leaf-schema".to_string(),
+                content: "Add preference tables".to_string(),
+                checked_at: None,
+                github_link_id: Some("link-schema".to_string()),
+                children: Vec::new(),
+            }],
+        }];
+        let github_links = vec![TqGithubLink {
+            id: "link-schema".to_string(),
+            kind: Some("pull_request".to_string()),
+            owner: Some("acme".to_string()),
+            repo: Some("notify-other".to_string()),
+            number: Some(23),
+            title: Some("Add preference tables".to_string()),
+            url: Some("https://github.com/acme/notify-other/pull/23".to_string()),
+            state: Some("open".to_string()),
+        }];
+
+        assert_eq!(
+            resolve_created_pull_requests(&plan, &checklists, &github_links)
+                .err()
+                .map(|error| error.to_string()),
+            Some(
+                "tq pull request link `link-schema` points to `acme/notify-other`, expected `acme/notify-api`"
+                    .to_string(),
+            ),
+        );
+    }
 }

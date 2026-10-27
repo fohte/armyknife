@@ -268,6 +268,7 @@ Manage PR body drafts with human-in-the-loop review.
 #### `a ai pr-series`
 
 Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 ```sh
 a ai pr-series set <task-id> --file plan.json
