@@ -24,6 +24,46 @@ use self::url::parse_port;
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
+trait CritAddRuntime {
+    fn sync_pane(&mut self, pane_id: &str, url: &str) -> Result<()>;
+    fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()>;
+    fn display_review(&mut self, args: &AddArgs, port: u16) -> Result<()>;
+    fn send_notification(
+        &mut self,
+        session: Option<&Session>,
+        session_id: &str,
+        port: u16,
+    ) -> Result<()>;
+}
+
+struct LiveCritAddRuntime;
+
+impl CritAddRuntime for LiveCritAddRuntime {
+    fn sync_pane(&mut self, pane_id: &str, url: &str) -> Result<()> {
+        pane::set_crit_url(pane_id, url).map_err(Into::into)
+    }
+
+    fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()> {
+        monitor::ensure_started(port, session)
+    }
+
+    fn display_review(&mut self, args: &AddArgs, port: u16) -> Result<()> {
+        display_unrecorded_review(args, port)
+    }
+
+    fn send_notification(
+        &mut self,
+        session: Option<&Session>,
+        session_id: &str,
+        port: u16,
+    ) -> Result<()> {
+        match session {
+            Some(session) => send_notification(session, port),
+            None => send_unrecorded_notification(session_id, port),
+        }
+    }
+}
+
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum CritCommands {
     /// Associate a crit review URL with the current agent session.
@@ -83,11 +123,12 @@ fn add(args: &AddArgs) -> Result<()> {
     );
     let _guard = span.enter();
     let result = record_session_url(&session_id, &args.url);
+    let mut runtime = LiveCritAddRuntime;
     continue_after_session_recording(&session_id, result, |session| {
         if session.is_some() {
             tracing::info!(event = "agent.crit.add.registered");
         }
-        continue_add(args, &session_id, port, session);
+        continue_add(args, &session_id, port, session, &mut runtime);
     });
 
     Ok(())
@@ -127,10 +168,16 @@ fn continue_after_session_recording(
     continue_review(session);
 }
 
-fn continue_add(args: &AddArgs, session_id: &str, port: u16, session: Option<Session>) {
+fn continue_add(
+    args: &AddArgs,
+    session_id: &str,
+    port: u16,
+    session: Option<Session>,
+    runtime: &mut impl CritAddRuntime,
+) {
     if let Some(session) = session.as_ref()
         && let Some(pane_id) = caller_pane::pane_id_for_session(session)
-        && let Err(error) = pane::set_crit_url(&pane_id, &args.url)
+        && let Err(error) = runtime.sync_pane(&pane_id, &args.url)
     {
         tracing::warn!(
             event = "agent.crit.add.pane_sync_failed",
@@ -140,7 +187,7 @@ fn continue_add(args: &AddArgs, session_id: &str, port: u16, session: Option<Ses
         eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");
     }
 
-    if let Err(error) = monitor::ensure_started(port, session.as_ref()) {
+    if let Err(error) = runtime.start_monitor(port, session.as_ref()) {
         tracing::warn!(
             event = "agent.crit.monitor.start_failed",
             session = %session_id,
@@ -151,17 +198,13 @@ fn continue_add(args: &AddArgs, session_id: &str, port: u16, session: Option<Ses
     }
 
     if session.is_none()
-        && let Err(error) = display_unrecorded_review(args, port)
+        && let Err(error) = runtime.display_review(args, port)
     {
         tracing::warn!(event = "agent.crit.add.review_display_failed", error = %error);
         eprintln!("[armyknife] warning: failed to display crit review: {error:#}");
     }
 
-    let notification_result = session.as_ref().map_or_else(
-        || send_unrecorded_notification(session_id, port),
-        |session| send_notification(session, port),
-    );
-    if let Err(error) = notification_result {
+    if let Err(error) = runtime.send_notification(session.as_ref(), session_id, port) {
         tracing::warn!(
             event = "agent.crit.notification.failed",
             session = %session_id,
@@ -397,23 +440,102 @@ pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[derive(Debug, PartialEq, Eq)]
+    enum CritAddAction {
+        SyncPane {
+            pane_id: String,
+            url: String,
+        },
+        StartMonitor {
+            port: u16,
+            session_id: Option<String>,
+        },
+        DisplayReview {
+            url: String,
+            port: u16,
+        },
+        SendNotification {
+            session_id: String,
+            session_recorded: bool,
+            port: u16,
+        },
+    }
+
+    #[derive(Default)]
+    struct FakeCritAddRuntime {
+        actions: Vec<CritAddAction>,
+    }
+
+    impl CritAddRuntime for FakeCritAddRuntime {
+        fn sync_pane(&mut self, pane_id: &str, url: &str) -> Result<()> {
+            self.actions.push(CritAddAction::SyncPane {
+                pane_id: pane_id.to_string(),
+                url: url.to_string(),
+            });
+            Ok(())
+        }
+
+        fn start_monitor(&mut self, port: u16, session: Option<&Session>) -> Result<()> {
+            self.actions.push(CritAddAction::StartMonitor {
+                port,
+                session_id: session.map(|session| session.session_id.clone()),
+            });
+            Ok(())
+        }
+
+        fn display_review(&mut self, args: &AddArgs, port: u16) -> Result<()> {
+            self.actions.push(CritAddAction::DisplayReview {
+                url: args.url.clone(),
+                port,
+            });
+            Ok(())
+        }
+
+        fn send_notification(
+            &mut self,
+            session: Option<&Session>,
+            session_id: &str,
+            port: u16,
+        ) -> Result<()> {
+            self.actions.push(CritAddAction::SendNotification {
+                session_id: session_id.to_string(),
+                session_recorded: session.is_some(),
+                port,
+            });
+            Ok(())
+        }
+    }
+
     #[test]
-    fn continues_review_flow_when_session_recording_fails() {
-        let mut actions = Vec::new();
-        let mut session_id_seen = None;
+    fn displays_and_notifies_when_session_recording_fails() {
+        let args = AddArgs {
+            url: "http://review.example.test:43210/review".to_string(),
+        };
+        let mut runtime = FakeCritAddRuntime::default();
 
         continue_after_session_recording(
             "fixture-session",
             Err(anyhow::anyhow!("fixture record failure")),
-            |session| {
-                session_id_seen = session.map(|session| session.session_id);
-                actions.extend(["display", "notification"]);
-            },
+            |session| continue_add(&args, "fixture-session", 43210, session, &mut runtime),
         );
 
         assert_eq!(
-            (session_id_seen, actions),
-            (None, vec!["display", "notification"]),
+            runtime.actions,
+            vec![
+                CritAddAction::StartMonitor {
+                    port: 43210,
+                    session_id: None,
+                },
+                CritAddAction::DisplayReview {
+                    url: args.url.clone(),
+                    port: 43210,
+                },
+                CritAddAction::SendNotification {
+                    session_id: "fixture-session".to_string(),
+                    session_recorded: false,
+                    port: 43210,
+                },
+            ],
         );
     }
 }
