@@ -93,12 +93,19 @@ pub(super) fn transform(
             .filter(|slug| !slug.is_empty())
             .map(str::to_owned),
         Provider::ClaudeCode => {
+            // A subagent's transcript_path still points at the main session, whose models are
+            // not the subagent's.
+            let is_subagent = input
+                .get("agent_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| !id.is_empty());
             let transcript_path = input
                 .get("transcript_path")
                 .and_then(Value::as_str)
+                .filter(|_| !is_subagent)
                 .map(Path::new);
             transcript_path.and_then(|path| {
-                transcript::model_for_tool_use(path, tool_use_id, tool_name, original_command).ok()
+                transcript::model_for_hook(path, tool_use_id, tool_name, original_command).ok()
             })
         }
     };
@@ -204,7 +211,6 @@ fn patch_hook_output(
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
     use std::path::{Path, PathBuf};
 
     use super::super::CONTEXT_ENV;
@@ -216,6 +222,7 @@ mod tests {
     use tempfile::TempDir;
 
     const COMMIT_COMMAND: &str = "git commit -m 'Fixture subject'";
+    const REQUESTED_TOOL_USE: &str = "fixture-requested-tool-use";
 
     #[fixture]
     fn context_dir() -> TempDir {
@@ -356,31 +363,35 @@ mod tests {
     }
 
     #[rstest]
-    fn claude_uses_the_model_for_the_matching_tool_use(context_dir: TempDir) {
-        let transcript_path = context_dir.path().join("fixture-transcript.jsonl");
-        let transcript_line = json!({
-            "type": "assistant",
-            "message": {
-                "model": "fixture-claude-model-2026",
-                "content": [{
-                    "type": "tool_use",
-                    "id": "fixture-tool-use-claude",
-                    "name": "Bash",
-                    "input": {"command": COMMIT_COMMAND},
-                }],
-            },
-        })
-        .to_string();
-        let mut transcript_file =
-            std::fs::File::create(&transcript_path).expect("create fixture transcript");
-        writeln!(transcript_file, "{transcript_line}").expect("write fixture transcript");
-        let input = json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Bash",
-            "tool_use_id": "fixture-tool-use-claude",
-            "transcript_path": transcript_path,
-            "tool_input": {"command": COMMIT_COMMAND},
-        });
+    #[case::matching_tool_use(
+        vec![assistant_entry(
+            "fixture-claude-model-2026",
+            REQUESTED_TOOL_USE,
+            COMMIT_COMMAND,
+        )],
+        "fixture-claude-model-2026",
+    )]
+    #[case::matching_tool_use_wins_over_a_later_entry(
+        vec![
+            assistant_entry("fixture-claude-model-2026", REQUESTED_TOOL_USE, COMMIT_COMMAND),
+            assistant_entry("fixture-later-model", "fixture-tool-use-2", "git diff"),
+        ],
+        "fixture-claude-model-2026",
+    )]
+    #[case::last_assistant_model_when_the_tool_use_is_not_recorded_yet(
+        vec![
+            assistant_entry("fixture-older-model", "fixture-tool-use-1", "git status"),
+            assistant_entry("fixture-recent-model", "fixture-tool-use-2", "git diff"),
+            assistant_entry("<synthetic>", "fixture-tool-use-3", "git log"),
+        ],
+        "fixture-recent-model",
+    )]
+    fn claude_records_the_expected_model(
+        context_dir: TempDir,
+        #[case] entries: Vec<Value>,
+        #[case] expected_model: &str,
+    ) {
+        let input = claude_input_with_transcript(context_dir.path(), &entries);
         let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -397,20 +408,14 @@ mod tests {
         .expect("Claude receives updated input");
         let path = context_path(&output);
         let record = context::read(&path).expect("read operation context");
-        let actual = (
-            record.model().raw_slug(),
-            record.coauthor_trailer(),
-            normalize_output(output, &path),
-        );
+        let actual = (record.coauthor_trailer(), normalize_output(output, &path));
 
         assert_eq!(
             actual,
             (
-                Some("fixture-claude-model-2026"),
-                Some(
-                    "Co-authored-by: Claude Code (fixture-claude-model-2026) <noreply@anthropic.com>"
-                        .to_owned(),
-                ),
+                Some(format!(
+                    "Co-authored-by: Claude Code ({expected_model}) <noreply@anthropic.com>"
+                )),
                 json!({
                     "hookSpecificOutput": {
                         "hookEventName": "PreToolUse",
@@ -631,76 +636,38 @@ mod tests {
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Bash",
-            "tool_use_id": "fixture-requested-tool-use",
+            "tool_use_id": REQUESTED_TOOL_USE,
             "transcript_path": transcript_path,
             "tool_input": {"command": COMMIT_COMMAND},
         })
     }
 
     #[rstest]
-    fn claude_falls_back_to_the_last_assistant_model_when_the_tool_use_is_not_recorded_yet(
-        context_dir: TempDir,
-    ) {
-        let input = claude_input_with_transcript(
-            context_dir.path(),
-            &[
-                assistant_entry("fixture-older-model", "fixture-tool-use-1", "git status"),
-                assistant_entry("fixture-recent-model", "fixture-tool-use-2", "git diff"),
-                assistant_entry("<synthetic>", "fixture-tool-use-3", "git log"),
-            ],
-        );
-        let proxy_output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-            },
-        });
-        let output = transform(
-            Provider::ClaudeCode,
-            &envelope(input, Some(proxy_output)),
-            context_dir.path(),
-        )
-        .expect("transform Claude input")
-        .expect("Claude receives updated input");
-        let path = context_path(&output);
-        let record = context::read(&path).expect("read operation context");
-
-        assert_eq!(
-            (record.coauthor_trailer(), normalize_output(output, &path)),
-            (
-                Some(
-                    "Co-authored-by: Claude Code (fixture-recent-model) <noreply@anthropic.com>"
-                        .to_owned(),
-                ),
-                json!({
-                    "hookSpecificOutput": {
-                        "hookEventName": "PreToolUse",
-                        "permissionDecision": "allow",
-                        "updatedInput": {
-                            "command": format!("{CONTEXT_ENV}=<context-file> {COMMIT_COMMAND}"),
-                        },
-                    },
-                }),
-            ),
-        );
-    }
-
-    #[rstest]
-    #[case::same_id_different_command(vec![assistant_entry(
-        "fixture-recent-model",
-        "fixture-requested-tool-use",
-        "git status",
-    )])]
-    #[case::no_assistant_entry(vec![json!({"type": "user", "message": {"content": "fixture"}})])]
-    #[case::only_synthetic_entry(vec![assistant_entry(
-        "<synthetic>",
-        "fixture-tool-use-1",
-        "git status",
-    )])]
-    fn claude_without_usable_model_evidence_preserves_permission_proxy_output(
+    #[case::same_id_different_command(
+        vec![assistant_entry("fixture-recent-model", REQUESTED_TOOL_USE, "git status")],
+        None,
+    )]
+    #[case::no_assistant_entry(
+        vec![json!({"type": "user", "message": {"content": "fixture"}})],
+        None,
+    )]
+    #[case::only_synthetic_entry(
+        vec![assistant_entry("<synthetic>", "fixture-tool-use-1", "git status")],
+        None,
+    )]
+    #[case::subagent_hook_does_not_use_the_main_session_model(
+        vec![assistant_entry("fixture-recent-model", "fixture-tool-use-1", "git status")],
+        Some("fixture-agent"),
+    )]
+    fn claude_without_attributable_model_preserves_permission_proxy_output(
         context_dir: TempDir,
         #[case] entries: Vec<Value>,
+        #[case] agent_id: Option<&str>,
     ) {
+        let mut input = claude_input_with_transcript(context_dir.path(), &entries);
+        if let Some(agent_id) = agent_id {
+            input["agent_id"] = json!(agent_id);
+        }
         let proxy_output = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
@@ -709,13 +676,10 @@ mod tests {
         });
         let result = transform(
             Provider::ClaudeCode,
-            &envelope(
-                claude_input_with_transcript(context_dir.path(), &entries),
-                Some(proxy_output.clone()),
-            ),
+            &envelope(input, Some(proxy_output.clone())),
             context_dir.path(),
         )
-        .expect("skip attribution without usable transcript evidence");
+        .expect("skip attribution without attributable transcript evidence");
 
         assert_eq!(result, Some(proxy_output));
     }

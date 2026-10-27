@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-pub(super) fn model_for_tool_use(
+pub(super) fn model_for_hook(
     transcript_path: &Path,
     tool_use_id: &str,
     tool_name: &str,
@@ -25,8 +25,8 @@ pub(super) fn model_for_tool_use(
         let Some(message) = entry.get("message") else {
             continue;
         };
-        // Claude Code has not written the in-flight tool use to the transcript yet when
-        // PreToolUse runs, so the preceding assistant entry is the only evidence of the model.
+        // Claude Code usually has not written the in-flight tool use to the transcript yet when
+        // PreToolUse runs, so the last assistant entry is the fallback when no entry matches.
         // "<synthetic>" marks client-generated entries (e.g. interrupt notices), not a model.
         if let Some(model) = message
             .get("model")
