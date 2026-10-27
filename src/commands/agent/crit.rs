@@ -122,14 +122,25 @@ fn add(args: &AddArgs) -> Result<()> {
         port,
     );
     let _guard = span.enter();
-    let result = record_session_url(&session_id, &args.url);
-    let mut runtime = LiveCritAddRuntime;
-    continue_after_session_recording(&session_id, result, |session| {
-        if session.is_some() {
+    let session = match record_session_url(&session_id, &args.url) {
+        Ok(session) => {
             tracing::info!(event = "agent.crit.add.registered");
+            Some(session)
         }
-        continue_add(args, &session_id, port, session, &mut runtime);
-    });
+        Err(error) => {
+            tracing::warn!(
+                event = "agent.crit.add.session_record_failed",
+                session = %session_id,
+                error = %error,
+            );
+            eprintln!(
+                "[armyknife] warning: failed to record crit review for the agent session: {error:#}"
+            );
+            None
+        }
+    };
+    let mut runtime = LiveCritAddRuntime;
+    continue_add(args, &session_id, port, session, &mut runtime);
 
     Ok(())
 }
@@ -144,28 +155,6 @@ fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
     lock.save(&session)?;
     drop(lock);
     Ok(session)
-}
-
-fn continue_after_session_recording(
-    session_id: &str,
-    result: Result<Session>,
-    continue_review: impl FnOnce(Option<Session>),
-) {
-    let session = match result {
-        Ok(session) => Some(session),
-        Err(error) => {
-            tracing::warn!(
-                event = "agent.crit.add.session_record_failed",
-                session = %session_id,
-                error = %error,
-            );
-            eprintln!(
-                "[armyknife] warning: failed to record crit review for the agent session: {error:#}"
-            );
-            None
-        }
-    };
-    continue_review(session);
 }
 
 fn continue_add(
@@ -217,15 +206,19 @@ fn continue_add(
 
 fn display_unrecorded_review(args: &AddArgs, port: u16) -> Result<()> {
     if let Some(pane_id) = caller_pane::resolve_caller_pane_id() {
-        return tmux::open_crit_pane(tmux::CritPaneSpec {
-            parent_pane_id: &pane_id,
-            url: &args.url,
-            port,
-            title: " crit · review ",
-            force_shpool_attach: false,
-        });
+        return open_crit_review_pane(&pane_id, &args.url, port);
     }
     open_url_in_default_browser(&args.url)
+}
+
+fn open_crit_review_pane(parent_pane_id: &str, url: &str, port: u16) -> Result<()> {
+    tmux::open_crit_pane(tmux::CritPaneSpec {
+        parent_pane_id,
+        url,
+        port,
+        title: " crit · review ",
+        force_shpool_attach: false,
+    })
 }
 
 fn open_url_in_default_browser(url: &str) -> Result<()> {
@@ -271,13 +264,7 @@ fn add_without_agent_session(args: &AddArgs, pane_id: &str) -> Result<()> {
         eprintln!("[armyknife] warning: failed to monitor crit review shutdown: {error:#}");
     }
 
-    let result = tmux::open_crit_pane(tmux::CritPaneSpec {
-        parent_pane_id: pane_id,
-        url: &args.url,
-        port,
-        title: " crit · review ",
-        force_shpool_attach: false,
-    });
+    let result = open_crit_review_pane(pane_id, &args.url, port);
     if let Err(error) = &result {
         tracing::warn!(event = "agent.crit.add.pane_open_failed", error = %error);
         return result;
@@ -513,11 +500,7 @@ mod tests {
         };
         let mut runtime = FakeCritAddRuntime::default();
 
-        continue_after_session_recording(
-            "fixture-session",
-            Err(anyhow::anyhow!("fixture record failure")),
-            |session| continue_add(&args, "fixture-session", 43210, session, &mut runtime),
-        );
+        continue_add(&args, "fixture-session", 43210, None, &mut runtime);
 
         assert_eq!(
             runtime.actions,
