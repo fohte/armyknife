@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.472](https://github.com/fohte/armyknife/compare/v0.1.471...v0.1.472) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** use session IDs for commit trailers ([#1285](https://github.com/fohte/armyknife/issues/1285)) ([04bc3bc](https://github.com/fohte/armyknife/commit/04bc3bced0560475de9590d7791410106bf4a985))
+
 ## [0.1.471](https://github.com/fohte/armyknife/compare/v0.1.470...v0.1.471) (2026-10-27)
 
 
