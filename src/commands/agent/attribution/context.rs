@@ -69,14 +69,31 @@ impl OperationContext {
     }
 
     pub(super) fn coauthor_trailer(&self) -> Option<String> {
-        let model = self.model.raw_slug()?;
-        let (name, email) = match self.provider {
-            Provider::Codex => ("Codex", "noreply@openai.com"),
-            Provider::ClaudeCode => ("Claude Code", "noreply@anthropic.com"),
-        };
-        Some(format!("Co-authored-by: {name} ({model}) <{email}>"))
+        coauthor_trailer(self.provider, &self.model, None)
     }
+}
 
+pub(super) fn coauthor_trailer(
+    provider: Provider,
+    model: &ModelIdentity,
+    effort: Option<&str>,
+) -> Option<String> {
+    let model = model.raw_slug()?;
+    let effort = effort.filter(|effort| {
+        !effort.trim().is_empty() && !effort.contains(['\n', '\r', '\0', '<', '>'])
+    });
+    let model = match effort {
+        Some(effort) => format!("{model}, {effort}"),
+        None => model.to_owned(),
+    };
+    let (name, email) = match provider {
+        Provider::Codex => ("Codex", "noreply@openai.com"),
+        Provider::ClaudeCode => ("Claude Code", "noreply@anthropic.com"),
+    };
+    Some(format!("Co-authored-by: {name} ({model}) <{email}>"))
+}
+
+impl OperationContext {
     fn operation_id(&self) -> &str {
         &self.operation_id
     }
