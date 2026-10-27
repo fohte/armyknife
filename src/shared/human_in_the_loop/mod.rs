@@ -44,6 +44,7 @@ pub(crate) const PR_DRAFT_REVIEW_MARKER: &str = "pr-draft-review:";
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const REVIEW_PANE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_CONSECUTIVE_PANE_CHECK_FAILURES: usize = 3;
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -387,21 +388,53 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
 fn wait_for_fifo_signal_or_pane_exit(
     file: std::fs::File,
     pane_id: &str,
+    is_pane_alive: impl FnMut(&str) -> Result<bool>,
+) -> Result<()> {
+    wait_for_fifo_signal_or_pane_exit_with_interval(
+        file,
+        pane_id,
+        REVIEW_PANE_CHECK_INTERVAL,
+        is_pane_alive,
+    )
+}
+
+fn wait_for_fifo_signal_or_pane_exit_with_interval(
+    file: std::fs::File,
+    pane_id: &str,
+    check_interval: Duration,
     mut is_pane_alive: impl FnMut(&str) -> Result<bool>,
 ) -> Result<()> {
     use std::time::Instant;
 
     let mut next_pane_check = Instant::now();
+    let mut consecutive_check_failures = 0;
     poll_fifo_signal(file, |file| {
         if Instant::now() >= next_pane_check {
-            if !is_pane_alive(pane_id)? {
-                return Ok(if try_read_fifo_signal(file)? {
-                    FifoPollAction::Signaled
-                } else {
-                    FifoPollAction::Abort(HumanInTheLoopError::ReviewPaneClosed)
-                });
+            match is_pane_alive(pane_id) {
+                Ok(true) => consecutive_check_failures = 0,
+                Ok(false) => {
+                    consecutive_check_failures = 0;
+                    return Ok(if try_read_fifo_signal(file)? {
+                        FifoPollAction::Signaled
+                    } else {
+                        FifoPollAction::Abort(HumanInTheLoopError::ReviewPaneClosed)
+                    });
+                }
+                Err(error) => {
+                    consecutive_check_failures += 1;
+                    tracing::warn!(
+                        pane_id,
+                        consecutive_check_failures,
+                        max_consecutive_failures = MAX_CONSECUTIVE_PANE_CHECK_FAILURES,
+                        error = %error,
+                        "Review pane liveness check failed"
+                    );
+                    if consecutive_check_failures >= MAX_CONSECUTIVE_PANE_CHECK_FAILURES {
+                        return Err(error);
+                    }
+                }
             }
-            next_pane_check = Instant::now() + REVIEW_PANE_CHECK_INTERVAL;
+            next_pane_check = Instant::now() + check_interval;
         }
         Ok(FifoPollAction::Continue)
     })
@@ -560,6 +593,8 @@ fn signal_fifo(fifo_path: &Path) {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use rstest::{fixture, rstest};
     use serde::{Deserialize, Serialize};
@@ -693,17 +728,58 @@ mod tests {
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_pane_exit_propagates_pane_query_failure(
+    fn wait_for_fifo_signal_or_pane_exit_retries_a_transient_pane_query_failure(
         fifo_reader: FifoReaderFixture,
     ) {
-        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| {
-            Err(HumanInTheLoopError::CommandFailed(
-                "tmux is unavailable".into(),
-            ))
-        })
+        let checks = Cell::new(0);
+        let writer_path = fifo_reader.fifo_path.clone();
+        let result = wait_for_fifo_signal_or_pane_exit_with_interval(
+            fifo_reader.reader,
+            "%review",
+            Duration::ZERO,
+            |_| {
+                let check_count = checks.get() + 1;
+                checks.set(check_count);
+                if check_count == 1 {
+                    return Err(HumanInTheLoopError::CommandFailed(
+                        "tmux is unavailable".into(),
+                    ));
+                }
+
+                signal_fifo(&writer_path);
+                Ok(true)
+            },
+        )
         .map_err(|error| error.to_string());
 
-        assert_eq!(result, Err("Command failed: tmux is unavailable".into()));
+        assert_eq!((result, checks.get()), (Ok(()), 2));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_pane_exit_stops_after_consecutive_pane_query_failures(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let checks = Cell::new(0);
+        let result = wait_for_fifo_signal_or_pane_exit_with_interval(
+            fifo_reader.reader,
+            "%review",
+            Duration::ZERO,
+            |_| {
+                checks.set(checks.get() + 1);
+                Err(HumanInTheLoopError::CommandFailed(
+                    "tmux is unavailable".into(),
+                ))
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, checks.get()),
+            (
+                Err("Command failed: tmux is unavailable".into()),
+                MAX_CONSECUTIVE_PANE_CHECK_FAILURES,
+            ),
+        );
     }
 
     #[rstest]
