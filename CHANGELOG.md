@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.467](https://github.com/fohte/armyknife/compare/v0.1.466...v0.1.467) (2026-10-27)
+
+
+### Features
+
+* **config:** allow active profile lookups ([#1272](https://github.com/fohte/armyknife/issues/1272)) ([99a1402](https://github.com/fohte/armyknife/commit/99a1402dd984190db70acde753805a2b86f8f86f))
+
 ## [0.1.466](https://github.com/fohte/armyknife/compare/v0.1.465...v0.1.466) (2026-10-26)
 
 
