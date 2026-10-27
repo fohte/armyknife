@@ -513,6 +513,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         }
     }
 
@@ -2315,6 +2317,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             }
         }
 

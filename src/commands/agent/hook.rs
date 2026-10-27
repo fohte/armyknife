@@ -37,6 +37,7 @@ mod pane_binding;
 pub(super) mod permission_notification;
 mod prompt_skill;
 mod session_lifecycle;
+mod session_metadata;
 mod side_effects;
 mod stop;
 mod vibe;
@@ -354,6 +355,27 @@ fn process_hook_event_impl_with_settings(
 
         // Skip "startup" events before setting pane option to avoid setting wrong session_id
         if input.source.as_deref() == Some("startup") {
+            if let Some(existing_session) =
+                store::load_session_from(sessions_dir, &input.session_id)?
+            {
+                let transcript_path = input
+                    .transcript_path
+                    .as_deref()
+                    .or(existing_session.transcript_path.as_deref());
+                let metadata_update = session_metadata::collect(
+                    event,
+                    &input,
+                    existing_session.model.as_deref(),
+                    transcript_path,
+                );
+                store::update_session_in(sessions_dir, &input.session_id, |session| {
+                    let changed = metadata_update.apply(&mut session.model, &mut session.effort);
+                    if changed {
+                        session.updated_at = Utc::now();
+                    }
+                    changed
+                })?;
+            }
             return Ok(ProcessResult::Skipped);
         }
 
@@ -414,6 +436,16 @@ fn process_hook_event_impl_with_settings(
     // saved separately, after this lock is released -- see the comment at
     // its update below.
     let now = Utc::now();
+    let stored_session = store::load_session_from(sessions_dir, &input.session_id)?;
+    let current_model = stored_session
+        .as_ref()
+        .and_then(|session| session.model.as_deref());
+    let transcript_path = input.transcript_path.as_deref().or_else(|| {
+        stored_session
+            .as_ref()
+            .and_then(|session| session.transcript_path.as_deref())
+    });
+    let metadata_update = session_metadata::collect(event, &input, current_model, transcript_path);
     let initialized =
         session_init::load_or_capture(sessions_dir, &input.session_id, &input.cwd, |cwd| {
             let pr_context = side_effects
@@ -475,6 +507,8 @@ fn process_hook_event_impl_with_settings(
             agent_status: None,
             agent_status_clear_pending: false,
             engine: input.engine,
+            model: None,
+            effort: None,
         }
     });
     session.restore_from_archive();
@@ -670,6 +704,7 @@ fn process_hook_event_impl_with_settings(
     if input.transcript_path.is_some() {
         session.transcript_path.clone_from(&input.transcript_path);
     }
+    metadata_update.apply(&mut session.model, &mut session.effort);
 
     session.current_tool = match event {
         HookEvent::PreToolUse => format_current_tool(&input),
@@ -1198,6 +1233,7 @@ fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus
         HookEvent::SessionStart if input.source.as_deref() == Some("resume") => {
             Some(SessionStatus::Stopped)
         }
+        HookEvent::PostModelSwitch => None,
         HookEvent::SessionStart
         | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
@@ -1503,6 +1539,7 @@ mod tests {
     )]
     #[case::pre_tool_use(HookEvent::PreToolUse, None, None, Some(SessionStatus::Running))]
     #[case::post_tool_use(HookEvent::PostToolUse, None, None, Some(SessionStatus::Running))]
+    #[case::post_model_switch(HookEvent::PostModelSwitch, None, None, None)]
     #[case::permission_request(
         HookEvent::PermissionRequest,
         None,
@@ -1677,6 +1714,7 @@ mod tests {
     #[case::notification("notification", HookEvent::Notification)]
     #[case::stop("stop", HookEvent::Stop)]
     #[case::stop_failure("stop-failure", HookEvent::StopFailure)]
+    #[case::post_model_switch("post-model-switch", HookEvent::PostModelSwitch)]
     #[case::session_end("session-end", HookEvent::SessionEnd)]
     fn test_hook_event_parsing(#[case] event: &str, #[case] expected: HookEvent) {
         assert_eq!(HookEvent::from_str(event).expect("valid event"), expected);
@@ -2090,6 +2128,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -2561,6 +2601,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine,
+            model: None,
+            effort: None,
         };
         store::save_session_to(sessions_dir, &session).expect("save");
 
@@ -3221,6 +3263,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         }
     }
 
@@ -4318,6 +4362,107 @@ mod tests {
             );
         }
 
+        #[rstest]
+        #[case::startup_existing(Some("startup"), ProcessResult::Skipped, SessionStatus::Stopped)]
+        #[case::resume(Some("resume"), ProcessResult::SessionSaved, SessionStatus::Stopped)]
+        #[case::source_missing(None, ProcessResult::SessionSaved, SessionStatus::Running)]
+        fn session_start_persists_model(
+            #[case] source: Option<&str>,
+            #[case] expected_result: ProcessResult,
+            #[case] expected_status: SessionStatus,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let mut session = create_test_session(None);
+            session.status = SessionStatus::Stopped;
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+
+            let mut input = create_test_input_with_source(None, source);
+            input.model = Some("fixture-model-amber".to_string());
+            let result = process_hook_event_impl(
+                HookEvent::SessionStart,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("session-start should succeed");
+            let reloaded = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (result, reloaded.model.as_deref(), reloaded.status),
+                (
+                    expected_result,
+                    Some("fixture-model-amber"),
+                    expected_status
+                ),
+            );
+        }
+
+        #[test]
+        fn post_model_switch_persists_model_without_changing_status() {
+            let temp_dir = create_temp_sessions_dir();
+            let mut session = create_test_session(None);
+            session.status = SessionStatus::Stopped;
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+
+            let mut input = create_test_input(None);
+            input.to_model = Some("fixture-model-cobalt".to_string());
+            let result = process_hook_event_impl(
+                HookEvent::PostModelSwitch,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("post-model-switch should succeed");
+            let reloaded = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (result, reloaded.model.as_deref(), reloaded.status),
+                (
+                    ProcessResult::SessionSaved,
+                    Some("fixture-model-cobalt"),
+                    SessionStatus::Stopped,
+                ),
+            );
+        }
+
+        #[test]
+        fn codex_hook_persists_model_and_latest_transcript_effort() {
+            let temp_dir = create_temp_sessions_dir();
+            let transcript = tempfile::NamedTempFile::new().expect("transcript should be created");
+            std::fs::write(
+                transcript.path(),
+                indoc::indoc! {r#"
+                    {"type":"turn_context","payload":{"model":"fixture-model-amber","effort":"low"}}
+                    {"type":"turn_context","payload":{"model":"fixture-model-cobalt","effort":"high"}}
+                "#},
+            )
+            .expect("transcript should be written");
+
+            let mut input = create_test_input(None);
+            input.engine = Engine::Codex;
+            input.model = Some("fixture-model-cobalt".to_string());
+            input.transcript_path = Some(transcript.path().to_path_buf());
+            process_hook_event_impl(
+                HookEvent::PreToolUse,
+                input,
+                temp_dir.path(),
+                &SideEffects::none(),
+            )
+            .expect("Codex hook should save the session");
+            let reloaded = store::load_session_from(temp_dir.path(), "test-123")
+                .expect("session should load")
+                .expect("session should exist");
+
+            assert_eq!(
+                (reloaded.model.as_deref(), reloaded.effort.as_deref()),
+                (Some("fixture-model-cobalt"), Some("high")),
+            );
+        }
+
         #[test]
         fn claude_c_resume_scenario() {
             let temp_dir = create_temp_sessions_dir();
@@ -5150,6 +5295,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             }
         }
 
