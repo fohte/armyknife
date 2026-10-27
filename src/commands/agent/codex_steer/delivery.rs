@@ -61,18 +61,22 @@ where
     R: FnMut(&mut WebSocket<UnixStream>) -> tungstenite::Result<Message>,
 {
     // History is only used as a comparison baseline; a rejected read must not block delivery.
-    let snapshot_thread = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
-        Ok((response, _)) => response.get("thread").cloned().ok_or_else(|| {
-            DeliveryError::NotDelivered(anyhow!(
-                "Codex app-server thread/read response did not contain a thread before turn/start"
-            ))
-        })?,
+    let snapshot = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
+        Ok((response, _)) => {
+            let thread = response.get("thread").cloned().ok_or_else(|| {
+                DeliveryError::NotDelivered(anyhow!(
+                    "Codex app-server thread/read response did not contain a thread before turn/start"
+                ))
+            })?;
+            matching_user_message_snapshot(&thread, content)
+        }
         Err(RequestError::Rejected(error)) => {
             tracing::warn!(
                 event = "agent.codex_steer.pre_turn_read_rejected",
+                session = %thread_id,
                 error = %error,
             );
-            json!({"turns": []})
+            MatchingItemSnapshot::default()
         }
         Err(error) => {
             return Err(DeliveryError::NotDelivered(
@@ -81,7 +85,6 @@ where
             ));
         }
     };
-    let snapshot = matching_user_message_snapshot(&snapshot_thread, content);
 
     let (turn_start_response, next_thread_read_request_id) =
         start_turn_with_recovery(socket, thread_id, content, effort, client_user_message_id)?;
@@ -333,7 +336,13 @@ fn confirm_after_turn_end(
     ) {
         return Ok(());
     }
-    Err(not_delivered())
+    if delivery.snapshot.baseline_available() {
+        Err(not_delivered())
+    } else {
+        Err(DeliveryError::Unconfirmed(anyhow!(
+            "Codex app-server turn ended without a matching client user message ID in thread history"
+        )))
+    }
 }
 
 fn read_thread(
@@ -667,7 +676,7 @@ mod tests {
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, _server_socket) = connected_sockets?;
-        let snapshot = MatchingItemSnapshot::default();
+        let snapshot = matching_user_message_snapshot(&json!({"turns": []}), "hello there");
         let delivery = DeliveryContext {
             thread_id: THREAD_ID,
             turn_id: TURN_ID,
@@ -734,7 +743,11 @@ mod tests {
             send_response(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
-                thread_response("inProgress", None, Some("hello there")),
+                thread_response(
+                    "inProgress",
+                    Some(CLIENT_USER_MESSAGE_ID),
+                    Some("hello there"),
+                ),
             )?;
             Ok(vec![snapshot_request, turn_request, resume_request])
         });
@@ -1460,8 +1473,19 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn ignores_same_body_message_that_existed_before_the_turn() -> anyhow::Result<()> {
+    #[rstest]
+    #[case::snapshot_available(
+        false,
+        "Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history"
+    )]
+    #[case::snapshot_rejected(
+        true,
+        "Codex app-server delivery is unconfirmed: Codex app-server turn ended without a matching client user message ID in thread history"
+    )]
+    fn ignores_same_body_message_without_a_new_client_id(
+        #[case] reject_snapshot: bool,
+        #[case] expected_result: &str,
+    ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets()?;
         let prior_message = json!({
             "thread": {"turns": [{
@@ -1476,7 +1500,17 @@ mod tests {
         });
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            let snapshot_request = read_snapshot(&mut socket, prior_message)?;
+            let snapshot_request = read_request(&mut socket)?;
+            if reject_snapshot {
+                send_error(
+                    &mut socket,
+                    PRE_TURN_READ_REQUEST_ID,
+                    -32000,
+                    "thread history is temporarily unavailable",
+                )?;
+            } else {
+                send_response(&mut socket, PRE_TURN_READ_REQUEST_ID, prior_message)?;
+            }
             let turn_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
@@ -1484,10 +1518,21 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let resume_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": THREAD_ID,
+                        "turn": {"id": TURN_ID, "status": "interrupted", "items": []},
+                    },
+                })
+                .to_string()
+                .into(),
+            ))?;
             send_response(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
-                thread_response("inProgress", None, Some("hello there")),
+                thread_response("interrupted", None, Some("hello there")),
             )?;
             let history_request = read_request(&mut socket)?;
             send_response(
@@ -1528,10 +1573,7 @@ mod tests {
 
         assert_eq!(
             (result, requests),
-            (
-                Err("Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
-                expected_requests,
-            ),
+            (Err(expected_result.to_string()), expected_requests,),
         );
         Ok(())
     }
