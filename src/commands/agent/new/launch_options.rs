@@ -213,7 +213,7 @@ mod tests {
         if omit_reasoning_effort {
             settings.reasoning_effort = None;
         }
-        let cli = TestCli::try_parse_from(["a", "--type", "review"]).unwrap();
+        let cli = TestCli::try_parse_from(["a", "--kind", "review", "--type", "review"]).unwrap();
 
         let result =
             resolve_launch_options(&cli.common, &config).map_err(|error| error.to_string());
