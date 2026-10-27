@@ -24,6 +24,7 @@ pub fn render_section(
     let current_is_private = *repository_privacy
         .get(&current_repository.key())
         .with_context(|| format!("privacy is unknown for {}", current_repository.full_name()))?;
+    let body_language_source = body_without_managed_section(current_body)?;
     let mut visible_entries = Vec::new();
     for entry in &plan.pull_requests {
         let repository = Repository::parse(&entry.repository)?;
@@ -78,7 +79,7 @@ pub fn render_section(
                     .filter(|(_, candidate)| candidate.key() == *repository_key),
                 &node_ids,
                 current_entry_id,
-                current_body,
+                &body_language_source,
                 "    ",
             );
             diagram.push_str("  end\n");
@@ -89,7 +90,7 @@ pub fn render_section(
             visible_entries.iter(),
             &node_ids,
             current_entry_id,
-            current_body,
+            &body_language_source,
             "  ",
         );
     }
@@ -159,9 +160,7 @@ pub fn render_section(
 }
 
 pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
-    let starts = body.match_indices(START_MARKER).collect::<Vec<_>>();
-    let ends = body.match_indices(END_MARKER).collect::<Vec<_>>();
-    if starts.is_empty() && ends.is_empty() {
+    let Some(section_range) = managed_section_range(body)? else {
         if body.is_empty() {
             return Ok(section.to_string());
         }
@@ -171,6 +170,32 @@ pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
             concat!("\n", "\n")
         };
         return Ok(format!("{body}{separator}{section}"));
+    };
+
+    Ok(format!(
+        "{}{}{}",
+        &body[..section_range.start],
+        section,
+        &body[section_range.end..]
+    ))
+}
+
+fn body_without_managed_section(body: &str) -> Result<String> {
+    let Some(section_range) = managed_section_range(body)? else {
+        return Ok(body.to_string());
+    };
+    Ok(format!(
+        "{}{}",
+        &body[..section_range.start],
+        &body[section_range.end..]
+    ))
+}
+
+fn managed_section_range(body: &str) -> Result<Option<std::ops::Range<usize>>> {
+    let starts = body.match_indices(START_MARKER).collect::<Vec<_>>();
+    let ends = body.match_indices(END_MARKER).collect::<Vec<_>>();
+    if starts.is_empty() && ends.is_empty() {
+        return Ok(None);
     }
     ensure!(
         starts.len() == 1 && ends.len() == 1,
@@ -188,12 +213,7 @@ pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
             && marker_is_on_its_own_line(body, end_index, END_MARKER),
         "PR series markers must be on their own lines"
     );
-    Ok(format!(
-        "{}{}{}",
-        &body[..start_index],
-        section,
-        &body[end_index + END_MARKER.len()..]
-    ))
+    Ok(Some(start_index..end_index + END_MARKER.len()))
 }
 
 fn append_nodes<'a>(
@@ -201,7 +221,7 @@ fn append_nodes<'a>(
     entries: impl Iterator<Item = &'a (&'a super::model::PrSeriesEntry, Repository)>,
     node_ids: &HashMap<&str, String>,
     current_entry_id: &str,
-    current_body: &str,
+    body_language_source: &str,
     indent: &str,
 ) {
     for (entry, _) in entries {
@@ -209,7 +229,7 @@ fn append_nodes<'a>(
             continue;
         };
         let current_label = if entry.id == current_entry_id {
-            if contains_japanese(current_body) {
+            if contains_japanese(body_language_source) {
                 "<br/>今回の PR"
             } else {
                 "<br/>This PR"
@@ -355,6 +375,49 @@ mod tests {
             .unwrap(),
             expected,
         );
+    }
+
+    #[test]
+    fn language_detection_ignores_the_managed_section_on_reruns() {
+        let mut plan = plan();
+        plan.name = "通知設定".to_string();
+        let privacy = privacy();
+        let created = created_docs();
+        let initial_body = "Existing English body";
+        let first_section =
+            render_section(&plan, "docs", initial_body, &privacy, &created).unwrap();
+        let first_body = replace_managed_section(initial_body, &first_section).unwrap();
+        let second_section =
+            render_section(&plan, "docs", &first_body, &privacy, &created).unwrap();
+        let second_body = replace_managed_section(&first_body, &second_section).unwrap();
+        let expected = indoc! {"
+            Existing English body
+
+            <!-- pr-series:start -->
+            ### 通知設定
+
+            Let users choose which notifications they receive.
+
+            ```mermaid
+            flowchart LR
+              subgraph repo0[\"acme/notify-api\"]
+                P1(\"Add preference tables\")
+              end
+              subgraph repo1[\"acme/notify-docs\"]
+                P2(\"Document the settings<br/>This PR\")
+              end
+              click P2 href \"https://github.com/acme/notify-docs/pull/31\" _blank
+              classDef current stroke:#3fb950,stroke-width:3px
+              classDef planned stroke-dasharray:5 5
+              class P2 current
+              class P1 planned
+            ```
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+
+        assert_eq!((first_body, second_body), (expected.clone(), expected));
     }
 
     #[test]
