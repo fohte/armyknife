@@ -795,6 +795,11 @@
           ],
           "default": null
         },
+        "standalone_fork": {
+          "description": "Whether this fork is maintained independently without contributing upstream.\nConsumed by external tools; armyknife only stores and exposes the value.",
+          "type": "boolean",
+          "default": false
+        },
         "vibe": {
           "description": "Whether vibe mode is allowed for this repository. When omitted, the org setting applies.",
           "type": [

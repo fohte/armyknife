@@ -159,6 +159,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
   example-org/example-repo:
     vibe: false # override the org vibe setting (default: inherit)
+  example-org/standalone-tool:
+    standalone_fork: true # independently maintained fork; consumed externally, only stored and exposed by armyknife
 ```
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
@@ -1095,6 +1097,14 @@ ja
 $ cd ~/ghq/github.com/fohte/dotfiles
 $ a config get repo.direct_commit
 true
+
+$ cd ~/ghq/github.com/example-org/standalone-tool
+$ a config get repo.standalone_fork
+true
+
+$ cd ~/ghq/github.com/example-org/unconfigured-fork
+$ a config get repo.standalone_fork
+false
 ```
 
 ## Release
