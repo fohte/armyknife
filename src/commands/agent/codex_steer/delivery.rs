@@ -60,15 +60,18 @@ fn send_and_confirm_with_reader<R>(
 where
     R: FnMut(&mut WebSocket<UnixStream>) -> tungstenite::Result<Message>,
 {
-    // A thread without a user message yet has no history to read, so the app-server
-    // rejects `includeTurns`; treat it as having no turns.
+    // History is only used as a comparison baseline; a rejected read must not block delivery.
     let snapshot_thread = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
         Ok((response, _)) => response.get("thread").cloned().ok_or_else(|| {
             DeliveryError::NotDelivered(anyhow!(
                 "Codex app-server thread/read response did not contain a thread before turn/start"
             ))
         })?,
-        Err(RequestError::Rejected(error)) if error.is_thread_without_turns_error() => {
+        Err(RequestError::Rejected(error)) => {
+            tracing::warn!(
+                event = "agent.codex_steer.pre_turn_read_rejected",
+                error = %error,
+            );
             json!({"turns": []})
         }
         Err(error) => {
@@ -704,7 +707,11 @@ mod tests {
         "code": -32600,
         "message": "thread thread-a is not materialized yet; includeTurns is unavailable before first user message",
     }))]
-    fn proceeds_when_pre_turn_read_is_rejected_for_new_thread(
+    #[case::changed_message(json!({
+        "code": -32000,
+        "message": "thread history is temporarily unavailable",
+    }))]
+    fn proceeds_when_pre_turn_read_is_rejected(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
         #[case] error: Value,
     ) -> anyhow::Result<()> {
@@ -1155,19 +1162,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_not_delivered_when_pre_turn_read_fails_for_other_reasons() -> anyhow::Result<()> {
+    fn reports_not_delivered_when_pre_turn_read_response_has_no_thread() -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets()?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            let snapshot_request = read_request(&mut socket)?;
-            socket.send(Message::Text(
-                json!({
-                    "id": PRE_TURN_READ_REQUEST_ID,
-                    "error": {"code": -32600, "message": "thread not found"},
-                })
-                .to_string()
-                .into(),
-            ))?;
+            let snapshot_request = read_snapshot(&mut socket, json!({"unavailable": true}))?;
             Ok(vec![snapshot_request])
         });
 
@@ -1183,7 +1182,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("Codex app-server did not deliver the message: could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server thread/read response did not contain a thread before turn/start".to_string()),
                 vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
             ),
         );

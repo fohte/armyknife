@@ -78,14 +78,6 @@ impl RpcRejection {
             display_message: rpc_error(error),
         }
     }
-
-    fn is_thread_without_turns_error(&self) -> bool {
-        let Some(message) = &self.message else {
-            return false;
-        };
-        message.contains("list_turns is not supported yet")
-            || message.contains("is not materialized yet; includeTurns is unavailable")
-    }
 }
 
 impl std::fmt::Display for RpcRejection {
