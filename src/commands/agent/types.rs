@@ -100,9 +100,6 @@ pub const TMUX_WINDOW_STATUS_OPTION: &str = "@armyknife-cc-window-status";
 /// `window-status-format` is expected to fall back to `#W` in that case.
 pub const TMUX_WINDOW_TITLE_OPTION: &str = "@armyknife-cc-window-title";
 
-/// Tmux pane user option mirroring the latest crit review URL for a session.
-pub const TMUX_CRIT_OPTION: &str = "@crit";
-
 /// Key used in `Session::pending_permission_agent_ids` for hook events fired
 /// on the main thread (i.e. `HookInput::agent_id` is absent). Claude Code
 /// never emits a real `agent_id` equal to this value: per

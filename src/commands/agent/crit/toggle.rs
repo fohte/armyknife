@@ -6,7 +6,6 @@ use crate::infra::tmux;
 use super::url::parse_port;
 
 pub(crate) trait CritPaneRuntime {
-    fn is_crit_pane(&self, pane_id: &str) -> bool;
     fn find_crit_panes_for_parent(&self, parent_pane_id: &str) -> Result<Vec<String>>;
     fn parent_pane_id_for_crit_pane(&self, pane_id: &str) -> Option<String>;
     fn port_for_crit_pane(&self, pane_id: &str) -> Option<u16>;
@@ -20,10 +19,6 @@ pub(crate) trait CritPaneRuntime {
 pub(crate) struct LiveCritPaneRuntime;
 
 impl CritPaneRuntime for LiveCritPaneRuntime {
-    fn is_crit_pane(&self, pane_id: &str) -> bool {
-        tmux::is_crit_pane(pane_id)
-    }
-
     fn find_crit_panes_for_parent(&self, parent_pane_id: &str) -> Result<Vec<String>> {
         Ok(tmux::find_crit_panes_for_parent(parent_pane_id)?)
     }
@@ -57,16 +52,7 @@ impl CritPaneRuntime for LiveCritPaneRuntime {
     }
 }
 
-pub(crate) fn close_if_crit_pane(pane_id: &str, runtime: &impl CritPaneRuntime) -> Result<bool> {
-    if !runtime.is_crit_pane(pane_id) {
-        return Ok(false);
-    }
-
-    runtime.close_crit_pane(pane_id)?;
-    Ok(true)
-}
-
-pub(crate) fn toggle_review_pane(
+pub(crate) fn show_review_pane(
     parent_pane_id: &str,
     latest_url: Option<&str>,
     title: &str,
@@ -110,11 +96,10 @@ pub(crate) fn toggle_review_pane(
         crit_panes.push((crit_pane_id, crit_window_id));
     }
 
-    if let Some((crit_pane_id, _)) = crit_panes
+    if crit_panes
         .iter()
-        .find(|(_, window_id)| window_id == &parent_window_id)
+        .any(|(_, window_id)| window_id == &parent_window_id)
     {
-        runtime.close_crit_pane(crit_pane_id)?;
         return Ok(());
     }
 
@@ -270,11 +255,6 @@ mod tests {
     }
 
     impl CritPaneRuntime for FakeRuntime {
-        fn is_crit_pane(&self, pane_id: &str) -> bool {
-            self.record(format!("is_crit:{pane_id}"));
-            self.pane(pane_id).is_some()
-        }
-
         fn find_crit_panes_for_parent(&self, parent_pane_id: &str) -> Result<Vec<String>> {
             self.record(format!("find_parent:{parent_pane_id}"));
             if self.find_error {
@@ -481,7 +461,6 @@ mod tests {
                 "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
-                "close:%old-crit",
             ]
             .into_iter()
             .map(str::to_string)
@@ -576,7 +555,6 @@ mod tests {
                 "get_window:%test-parent",
                 "get_window:%current-crit",
                 "get_window:%old-crit",
-                "close:%current-crit",
             ]
             .into_iter()
             .map(str::to_string)
@@ -823,7 +801,7 @@ mod tests {
     )]
     #[case::keeps_the_old_pane_when_the_moved_review_url_is_missing(moved_missing_url_case())]
     #[case::opens_without_an_existing_review(ordinary_open_case())]
-    #[case::closes_a_review_in_the_same_window(same_window_case())]
+    #[case::keeps_a_review_in_the_same_window(same_window_case())]
     #[case::prioritizes_the_current_window_pane_when_old_and_current_panes_are_listed_in_order(
         current_and_old_case(false)
     )]
@@ -857,8 +835,8 @@ mod tests {
     #[case::stops_when_the_old_port_is_unknown(missing_port_case())]
     #[case::stops_when_the_old_parent_id_is_unknown(missing_parent_case())]
     #[case::rejects_another_parents_same_port_on_a_fresh_open(ordinary_open_conflict_case())]
-    fn toggle_review_pane_runs_expected_operations(#[case] case: ToggleCase) {
-        let result = toggle_review_pane(
+    fn show_review_pane_runs_expected_operations(#[case] case: ToggleCase) {
+        let result = show_review_pane(
             case.target_pane_id,
             case.latest_url,
             "Review title",
@@ -869,39 +847,6 @@ mod tests {
         assert_eq!(
             (result, case.runtime.operations()),
             (case.expected_result, case.expected_operations),
-        );
-    }
-
-    #[rstest]
-    #[case::leaves_non_crit_panes_open(false, false)]
-    #[case::closes_crit_panes(true, true)]
-    fn close_if_crit_pane_only_closes_crit_panes(
-        #[case] is_crit: bool,
-        #[case] expected_closed: bool,
-    ) {
-        let runtime = FakeRuntime::new(
-            if is_crit {
-                vec![pane("%direct-crit", Some(PARENT), Some(58321))]
-            } else {
-                Vec::new()
-            },
-            &[],
-        );
-        let result = close_if_crit_pane("%direct-crit", &runtime);
-        let operations = runtime.operations();
-        assert_eq!(
-            (result.map_err(|error| error.to_string()), operations),
-            (
-                Ok(expected_closed),
-                if expected_closed {
-                    vec![
-                        "is_crit:%direct-crit".to_string(),
-                        "close:%direct-crit".to_string(),
-                    ]
-                } else {
-                    vec!["is_crit:%direct-crit".to_string()]
-                },
-            ),
         );
     }
 }

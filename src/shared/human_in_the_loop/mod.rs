@@ -15,6 +15,7 @@ mod launch;
 mod lock;
 mod notification;
 mod pending_review;
+mod queue_entry;
 mod session_watch;
 mod tmux;
 
@@ -122,11 +123,13 @@ where
     };
 
     let mut session_watch = session_watch::SessionWatch::new();
+    // Held until the review ends, then shows the next queued review.
+    let mut queue_entry = None;
     start_review_with_marker::<S, _, _>(
         &document_path,
         <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
         |document_path, done_fifo_path| {
-            launch::launch_review::<S, H>(
+            let (session, entry) = launch::launch_review::<S, H>(
                 tmux_pane_id.as_deref(),
                 document_path,
                 done_fifo_path,
@@ -134,7 +137,9 @@ where
                 handler,
                 editor_config,
                 notifications_enabled,
-            )
+            )?;
+            queue_entry = entry;
+            Ok(session)
         },
         |session| {
             session_watch.is_running(std::time::Instant::now(), || {

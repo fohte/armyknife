@@ -16,7 +16,8 @@ pub(super) struct ReviewLabels<'a> {
 }
 
 /// Returns the shpool session running the editor when launched in tmux. The
-/// caller watches it to notice the editor ending without a completion signal.
+/// caller watches it to notice the editor ending without a completion signal,
+/// and holds the queue entry until the review ends.
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
@@ -25,7 +26,7 @@ pub(super) fn launch_review<S, H>(
     handler: &H,
     editor_config: &EditorConfig,
     notifications_enabled: bool,
-) -> Result<Option<String>>
+) -> Result<(Option<String>, Option<super::queue_entry::QueueEntry>)>
 where
     S: super::DocumentSchema,
     H: ReviewHandler<S>,
@@ -36,6 +37,7 @@ where
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
 
+    let mut queue_entry = None;
     if let Some(parent_pane_id) = tmux_pane_id {
         let env_vars = EnvVars::load();
         let session_id = env_vars.own_session_id();
@@ -49,6 +51,7 @@ where
                     exe_path.as_os_str(),
                     &review_args,
                     done_fifo_path,
+                    &mut queue_entry,
                 )
             },
             session_id.as_deref(),
@@ -65,7 +68,7 @@ where
                 )
             },
         )?;
-        return Ok(Some(shpool_session));
+        return Ok((Some(shpool_session), queue_entry));
     }
 
     launch_in_terminal(
@@ -75,7 +78,7 @@ where
         labels.window_title,
         editor_config,
     )?;
-    Ok(None)
+    Ok((None, None))
 }
 
 fn launch_tmux_review(

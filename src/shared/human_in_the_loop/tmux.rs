@@ -14,8 +14,10 @@ pub fn get_tmux_target() -> Option<String> {
     crate::infra::tmux::current_pane_id_from_env()
 }
 
-/// Opens the review in a floating pane that attaches to the shpool session
+/// Opens the review as a floating pane that attaches to the shpool session
 /// `shpool_session`, so closing the pane detaches instead of ending the editor.
+/// In an agent pane the review joins the pane's review queue and only opens
+/// when no other editor is on screen; otherwise it starts detached.
 pub(super) fn open_review_pane(
     parent_pane_id: &str,
     title: &str,
@@ -23,24 +25,42 @@ pub(super) fn open_review_pane(
     executable: &OsStr,
     args: &[OsString],
     done_fifo_path: &Path,
+    queue_entry: &mut Option<super::queue_entry::QueueEntry>,
 ) -> super::Result<String> {
     let environment = review_pane_environment();
     let script = review_pane_command(executable, args, done_fifo_path, &environment);
     let script_path = write_review_script(&std::env::temp_dir(), &script)?;
+    let entry = super::queue_entry::QueueEntry::enter(parent_pane_id, shpool_session, title);
+    let visible = entry.as_ref().is_none_or(|entry| entry.is_visible());
     let result = shpool_session_command(&script_path).and_then(|session_command| {
-        crate::infra::tmux::open_editor_pane(crate::infra::tmux::EditorPaneSpec {
-            parent_pane_id,
-            title,
-            shpool_session,
-            command: Some(&session_command),
-            force_shpool_attach: false,
-        })
-        .map_err(|error| super::HumanInTheLoopError::CommandFailed(format!("{error:#}")))
+        let started = if visible {
+            crate::infra::tmux::open_editor_pane(crate::infra::tmux::EditorPaneSpec {
+                parent_pane_id,
+                title,
+                shpool_session,
+                command: Some(&session_command),
+                force_shpool_attach: false,
+            })
+        } else {
+            crate::infra::tmux::start_hidden_editor_session(shpool_session, &session_command)
+                // The notification focuses the agent pane when no pane shows the review.
+                .map(|()| parent_pane_id.to_string())
+        };
+        started.map_err(|error| super::HumanInTheLoopError::CommandFailed(format!("{error:#}")))
     });
-    if result.is_err() {
-        let _ = std::fs::remove_file(&script_path);
+    match result {
+        Ok(pane_id) => {
+            if let Some(entry) = &entry {
+                entry.refresh();
+            }
+            *queue_entry = entry;
+            Ok(pane_id)
+        }
+        Err(error) => {
+            let _ = std::fs::remove_file(&script_path);
+            Err(error)
+        }
     }
-    result
 }
 
 /// shpool parses its `-c` string as a template in which every `{` must open a

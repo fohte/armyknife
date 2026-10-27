@@ -31,6 +31,7 @@ pub(crate) mod peer;
 mod profile;
 mod resume;
 mod resurrect;
+pub(crate) mod review_queue;
 mod session_init;
 mod session_pr_context;
 pub(crate) mod session_status;

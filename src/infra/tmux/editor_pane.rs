@@ -2,6 +2,9 @@ use anyhow::{Context, Result};
 
 use crate::infra::external_tool::ExternalTool;
 
+/// Marks a floating pane as a review editor and holds its agent pane ID.
+const EDITOR_PANE_OPTION: &str = "@armyknife-editor-pane";
+
 pub(crate) struct EditorPaneSpec<'a> {
     pub(crate) parent_pane_id: &'a str,
     pub(crate) title: &'a str,
@@ -27,11 +30,47 @@ pub(crate) fn open_editor_pane(spec: EditorPaneSpec<'_>) -> Result<String> {
     // shpool does not restore modifyOtherKeys across session attaches.
     let command = format!("printf '\\033[>4;2m' && exec {shpool_command}");
 
-    Ok(super::open_floating_pane(super::FloatingPaneSpec {
+    let pane_id = super::open_floating_pane(super::FloatingPaneSpec {
         parent_pane_id: spec.parent_pane_id,
         title: spec.title,
         command: command.as_ref(),
-    })?)
+    })?;
+    if let Err(error) = super::set_pane_option(&pane_id, EDITOR_PANE_OPTION, spec.parent_pane_id) {
+        let _ = super::kill_pane(&pane_id);
+        return Err(error.into());
+    }
+    Ok(pane_id)
+}
+
+pub(crate) fn find_editor_panes_for_parent(parent_pane_id: &str) -> super::Result<Vec<String>> {
+    let filter = format!("#{{==:#{{{EDITOR_PANE_OPTION}}},{parent_pane_id}}}");
+    let output = super::run_tmux_output(&["list-panes", "-a", "-f", &filter, "-F", "#{pane_id}"])?;
+    Ok(output
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
+pub(crate) fn get_editor_pane_parent_id(pane_id: &str) -> Option<String> {
+    super::get_pane_option(pane_id, EDITOR_PANE_OPTION)
+}
+
+/// Creates the session without showing it, for a review that has to wait
+/// behind another editor.
+pub(crate) fn start_hidden_editor_session(session: &str, command: &str) -> Result<()> {
+    let output = ExternalTool::Shpool
+        .command()
+        .args(["attach", "--background", "-c", command, session])
+        .output()
+        .context("failed to run shpool attach")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "shpool attach --background exited with {}: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr).trim()
+    );
+    Ok(())
 }
 
 fn shpool_attach_command(shpool: &str, spec: &EditorPaneSpec<'_>) -> Result<String> {

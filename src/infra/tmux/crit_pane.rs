@@ -13,10 +13,6 @@ pub(crate) struct CritPaneSpec<'a> {
     pub(crate) force_shpool_attach: bool,
 }
 
-pub(crate) fn is_crit_pane(pane_id: &str) -> bool {
-    super::get_pane_option(pane_id, CRIT_PANE_OPTION).is_some()
-}
-
 pub(crate) fn get_crit_pane_parent_id(pane_id: &str) -> Option<String> {
     super::get_pane_option(pane_id, CRIT_PANE_OPTION)
 }

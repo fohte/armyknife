@@ -1,16 +1,16 @@
 //! Link crit reviews to agent sessions and open them in tmux floating panes.
 
 mod monitor;
-mod pane;
-mod toggle;
+pub(super) mod toggle;
 mod url;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 use std::time::Duration;
 
+use super::review_queue::{self, LiveQueueRuntime};
 use super::store;
-use super::types::{Session, resolve_session_option};
+use super::types::Session;
 use super::{display_label, repo_name};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::notification::{Notification, NotificationAction};
@@ -29,8 +29,11 @@ pub enum CritCommands {
     /// Associate a crit review URL with the current agent session.
     Add(AddArgs),
 
-    /// Toggle the latest crit review for a session or pane in a tmux floating pane.
+    /// Show the next review (editor reviews, then crit) of an agent pane in a tmux floating pane.
     Open(OpenArgs),
+
+    /// Close the displayed review of an agent pane. The review keeps running.
+    Close(CloseArgs),
 
     /// Wait for a crit daemon to stop, then clear its session link.
     #[command(name = "monitor", hide = true)]
@@ -58,10 +61,18 @@ pub struct OpenArgs {
     pub parent_pid: Option<u32>,
 }
 
+#[derive(Args, Clone, PartialEq, Eq)]
+pub struct CloseArgs {
+    /// Tmux pane ID whose displayed review should be closed.
+    #[arg(long)]
+    pub pane: Option<String>,
+}
+
 pub fn run(command: &CritCommands) -> Result<()> {
     match command {
         CritCommands::Add(args) => add(args),
         CritCommands::Open(args) => open(args),
+        CritCommands::Close(args) => close(args),
         CritCommands::Monitor(args) => monitor::run(args),
     }
 }
@@ -107,14 +118,15 @@ fn add(args: &AddArgs) -> Result<()> {
     tracing::info!(event = "agent.crit.add.registered");
 
     if let Some(pane_id) = caller_pane::pane_id_for_session(&session)
-        && let Err(error) = pane::set_crit_url(&pane_id, &args.url)
+        && let Err(error) =
+            review_queue::refresh(&LiveQueueRuntime::for_session(&session), &pane_id)
     {
         tracing::warn!(
             event = "agent.crit.add.pane_sync_failed",
             pane = %pane_id,
             error = %error,
         );
-        eprintln!("[armyknife] warning: failed to update the tmux crit pane option: {error}");
+        eprintln!("[armyknife] warning: failed to update the review queue: {error:#}");
     }
     if let Err(error) = monitor::ensure_started(port, Some(&session)) {
         tracing::warn!(
@@ -207,61 +219,51 @@ fn open_inner(args: &OpenArgs) -> Result<()> {
         bail!("Timed out waiting for agent watch to exit");
     }
 
-    let pane_id = args.pane.clone().or_else(tmux::current_pane_id_from_env);
-    if args.session.is_none()
-        && let Some(pane_id) = pane_id.as_deref()
-        && toggle::close_if_crit_pane(pane_id, &toggle::LiveCritPaneRuntime)?
-    {
-        return Ok(());
+    if let Some(session_id) = &args.session {
+        tracing::Span::current().record("session", tracing::field::display(session_id));
+        let session = store::load_session(session_id)?
+            .with_context(|| format!("Agent session not found: {session_id}"))?;
+        let tmux_info = session
+            .tmux_info
+            .as_ref()
+            .context("Agent session has no tmux pane")?;
+        return review_queue::show_crit(
+            &LiveQueueRuntime::for_session(&session),
+            &tmux_info.pane_id,
+        );
     }
 
-    let session_id = resolve_session_id(args)?;
-    tracing::Span::current().record("session", tracing::field::display(&session_id));
-    let session = store::load_session(&session_id)?
-        .with_context(|| format!("Agent session not found: {session_id}"))?;
-    let tmux_info = session
-        .tmux_info
-        .as_ref()
-        .context("Agent session has no tmux pane")?;
-    let target_pane_id = if args.session.is_some() {
-        tmux_info.pane_id.as_str()
-    } else {
-        pane_id
-            .as_deref()
-            .context("Provide --session or --pane outside an agent tmux pane")?
-    };
+    let parent_pane_id = resolve_parent_pane_id(args.pane.as_deref())?;
+    let runtime = queue_runtime_for_pane(&parent_pane_id)?;
+    review_queue::cycle(&runtime, &parent_pane_id)
+}
 
-    let title = format!(
-        " crit · {} · {} ",
-        display_label(Some(&session), &session.session_id),
-        repo_name(&session.cwd)
-    );
-    toggle::toggle_review_pane(
-        target_pane_id,
-        session.crit_urls.last().map(String::as_str),
-        &title,
-        &toggle::LiveCritPaneRuntime,
-    )
+fn close(args: &CloseArgs) -> Result<()> {
+    let parent_pane_id = resolve_parent_pane_id(args.pane.as_deref())?;
+    review_queue::hide(&queue_runtime_for_pane(&parent_pane_id)?, &parent_pane_id)
+}
+
+fn queue_runtime_for_pane(parent_pane_id: &str) -> Result<LiveQueueRuntime> {
+    LiveQueueRuntime::for_pane(parent_pane_id)
+        .with_context(|| format!("No agent session is bound to pane {parent_pane_id}"))
+}
+
+/// The key bindings run in whichever pane has focus, which may be a review
+/// pane floating over the agent pane.
+fn resolve_parent_pane_id(pane: Option<&str>) -> Result<String> {
+    let pane_id = pane
+        .map(str::to_string)
+        .or_else(tmux::current_pane_id_from_env)
+        .context("Provide --session or --pane outside an agent tmux pane")?;
+    Ok(tmux::get_crit_pane_parent_id(&pane_id)
+        .or_else(|| tmux::get_editor_pane_parent_id(&pane_id))
+        .unwrap_or(pane_id))
 }
 
 fn close_crit_pane(pane_id: &str) -> Result<()> {
     tmux::close_crit_pane(pane_id)?;
     tracing::info!(event = "agent.crit.open.floating_pane_closed", pane = %pane_id);
     Ok(())
-}
-
-fn resolve_session_id(args: &OpenArgs) -> Result<String> {
-    if let Some(session_id) = &args.session {
-        return Ok(session_id.clone());
-    }
-
-    let pane_id = args.pane.clone().or_else(tmux::current_pane_id_from_env);
-    let Some(pane_id) = pane_id else {
-        bail!("Provide --session or --pane outside an agent tmux pane");
-    };
-
-    resolve_session_option(|option| tmux::get_pane_option(&pane_id, option))
-        .with_context(|| format!("No agent session is bound to pane {pane_id}"))
 }
 
 fn send_notification(session: &Session, port: u16) -> Result<()> {
