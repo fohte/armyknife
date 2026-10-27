@@ -24,14 +24,13 @@ pub(super) fn wait_for_required_checks(
 }
 
 fn wait_until_complete(
-    mut poll: impl FnMut() -> anyhow::Result<CheckStatus>,
+    mut poll: impl FnMut() -> anyhow::Result<CheckWaitStatus>,
     mut wait: impl FnMut(),
 ) -> anyhow::Result<()> {
     loop {
         match poll()? {
-            CheckStatus::Complete => return Ok(()),
-            CheckStatus::Pending => wait(),
-            CheckStatus::Failed => bail!("Required checks failed."),
+            CheckWaitStatus::Complete => return Ok(()),
+            CheckWaitStatus::Pending => wait(),
         }
     }
 }
@@ -40,7 +39,7 @@ fn query_required_check_status(
     owner: &str,
     repo: &str,
     pr_number: u64,
-) -> anyhow::Result<CheckStatus> {
+) -> anyhow::Result<CheckWaitStatus> {
     let repository = format!("{owner}/{repo}");
     let args = [
         "pr".to_string(),
@@ -52,19 +51,16 @@ fn query_required_check_status(
         "--json".to_string(),
         "bucket".to_string(),
     ];
+    // With --json, gh skips status exit codes; no required checks fail before JSON output.
     let output = run_gh(&args).context("Failed to query required checks")?;
 
-    match classify_check_result(
-        output.status.success(),
-        output.status.code(),
-        &output.stdout,
-    )? {
-        Some(CheckStatus::Complete) => Ok(CheckStatus::Complete),
-        Some(CheckStatus::Pending) => Ok(CheckStatus::Pending),
-        Some(CheckStatus::Failed) => {
+    match classify_check_result(output.status.success(), &output.stdout)? {
+        Some(CheckOutcome::Complete) => Ok(CheckWaitStatus::Complete),
+        Some(CheckOutcome::Pending) => Ok(CheckWaitStatus::Pending),
+        Some(CheckOutcome::Failed) => {
             bail!("Required checks failed: {}", command_output_text(&output));
         }
-        None if !has_required_checks(owner, repo, pr_number)? => Ok(CheckStatus::Complete),
+        None if !has_required_checks(owner, repo, pr_number)? => Ok(CheckWaitStatus::Complete),
         None => bail!(
             "gh pr checks returned no structured status for required checks: {}",
             command_output_text(&output),
@@ -74,48 +70,33 @@ fn query_required_check_status(
 
 fn classify_check_result(
     status_success: bool,
-    status_code: Option<i32>,
     stdout: &[u8],
-) -> anyhow::Result<Option<CheckStatus>> {
-    let checks = match serde_json::from_slice::<Vec<GhCheck>>(stdout) {
-        Ok(checks) => checks,
-        Err(_) if stdout.is_empty() => {
-            return Ok((status_code == Some(8)).then_some(CheckStatus::Pending));
-        }
-        Err(error) => return Err(error).context("Failed to parse gh pr checks JSON response"),
-    };
+) -> anyhow::Result<Option<CheckOutcome>> {
+    if !status_success {
+        return Ok((!stdout.is_empty()).then_some(CheckOutcome::Failed));
+    }
+
+    let checks = serde_json::from_slice::<Vec<GhCheck>>(stdout)
+        .context("Failed to parse gh pr checks JSON response")?;
 
     if checks.is_empty() {
-        return Ok(if status_success {
-            Some(CheckStatus::Complete)
-        } else if status_code == Some(8) {
-            Some(CheckStatus::Pending)
-        } else {
-            None
-        });
+        bail!("gh pr checks returned an empty JSON result");
     }
 
     if checks
         .iter()
         .any(|check| matches!(check.bucket, CheckBucket::Fail | CheckBucket::Cancel))
     {
-        return Ok(Some(CheckStatus::Failed));
+        return Ok(Some(CheckOutcome::Failed));
     }
     if checks
         .iter()
         .any(|check| check.bucket == CheckBucket::Pending)
     {
-        return Ok(Some(CheckStatus::Pending));
-    }
-    if status_code == Some(8) {
-        return Ok(Some(CheckStatus::Failed));
+        return Ok(Some(CheckOutcome::Pending));
     }
 
-    Ok(Some(if status_success {
-        CheckStatus::Complete
-    } else {
-        CheckStatus::Failed
-    }))
+    Ok(Some(CheckOutcome::Complete))
 }
 
 fn command_output_text(output: &std::process::Output) -> String {
@@ -129,34 +110,34 @@ fn command_output_text(output: &std::process::Output) -> String {
 }
 
 fn has_required_checks(owner: &str, repo: &str, pr_number: u64) -> anyhow::Result<bool> {
-    has_required_checks_with(|cursor| fetch_required_check_page(owner, repo, pr_number, cursor))
+    has_required_checks_with(|| fetch_required_check_page(owner, repo, pr_number))
 }
 
 fn has_required_checks_with(
-    mut fetch_page: impl FnMut(Option<&str>) -> anyhow::Result<RequiredCheckPage>,
+    mut fetch_page: impl FnMut() -> anyhow::Result<RequiredCheckPage>,
 ) -> anyhow::Result<bool> {
-    let mut cursor = None;
-    loop {
-        let page = fetch_page(cursor.as_deref())?;
-        if page.has_required_check {
-            return Ok(true);
-        }
-        let Some(next_cursor) = page.next_cursor else {
-            return Ok(false);
-        };
-        cursor = Some(next_cursor);
+    let page = fetch_page()?;
+    if page.has_required_check {
+        return Ok(true);
     }
+    if page.has_next_page {
+        bail!(
+            "Cannot confirm that no required checks exist because GitHub returned additional check-context pages."
+        );
+    }
+    Ok(false)
 }
 
 fn fetch_required_check_page(
     owner: &str,
     repo: &str,
     pr_number: u64,
-    cursor: Option<&str>,
 ) -> anyhow::Result<RequiredCheckPage> {
-    let mut args = vec![
+    let args = [
         "api".to_string(),
         "graphql".to_string(),
+        "--jq".to_string(),
+        REQUIRED_CHECKS_JQ.to_string(),
         "-f".to_string(),
         format!("query={REQUIRED_CHECKS_QUERY}"),
         "-f".to_string(),
@@ -166,9 +147,6 @@ fn fetch_required_check_page(
         "-F".to_string(),
         format!("number={pr_number}"),
     ];
-    if let Some(cursor) = cursor {
-        args.extend(["-f".to_string(), format!("endCursor={cursor}")]);
-    }
 
     let output = run_gh(&args).context("Failed to inspect required check configuration")?;
     if !output.status.success() {
@@ -178,19 +156,19 @@ fn fetch_required_check_page(
 }
 
 const REQUIRED_CHECKS_QUERY: &str = r#"
-    query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+    query($owner: String!, $name: String!, $number: Int!) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $number) {
           commits(last: 1) {
             nodes {
               commit {
                 statusCheckRollup {
-                  contexts(first: 100, after: $endCursor) {
+                  contexts(first: 100) {
                     nodes {
                       ... on CheckRun { isRequired(pullRequestNumber: $number) }
                       ... on StatusContext { isRequired(pullRequestNumber: $number) }
                     }
-                    pageInfo { hasNextPage endCursor }
+                    pageInfo { hasNextPage }
                   }
                 }
               }
@@ -201,44 +179,24 @@ const REQUIRED_CHECKS_QUERY: &str = r#"
     }
 "#;
 
-fn parse_required_check_page(response: &[u8]) -> anyhow::Result<RequiredCheckPage> {
-    let response: GhGraphQlResponse = serde_json::from_slice(response)
-        .context("Failed to parse required check query response")?;
-    let repository = response
-        .data
-        .repository
-        .context("GitHub GraphQL response did not include the repository")?;
-    let pull_request = repository
-        .pull_request
-        .context("GitHub GraphQL response did not include the pull request")?;
-    let commit = pull_request
-        .commits
-        .nodes
-        .into_iter()
-        .next()
-        .context("GitHub GraphQL response did not include the pull request head commit")?;
-    let Some(rollup) = commit.commit.status_check_rollup else {
-        return Ok(RequiredCheckPage {
-            has_required_check: false,
-            next_cursor: None,
-        });
-    };
-    let contexts = rollup.contexts;
-    let next_cursor = if contexts.page_info.has_next_page {
-        Some(
-            contexts
-                .page_info
-                .end_cursor
-                .context("GitHub GraphQL response omitted the next check cursor")?,
-        )
-    } else {
-        None
-    };
+const REQUIRED_CHECKS_JQ: &str = r#"
+    if (.errors // [] | length) > 0 then error("GitHub returned GraphQL errors")
+    else
+      .data.repository.pullRequest.commits.nodes[0].commit as $commit
+      | if $commit == null then error("GitHub response did not include the pull request head commit")
+        elif $commit.statusCheckRollup == null then {hasRequiredCheck: false, hasNextPage: false}
+        else
+          $commit.statusCheckRollup.contexts as $contexts
+          | {
+              hasRequiredCheck: any($contexts.nodes[]?; .isRequired),
+              hasNextPage: $contexts.pageInfo.hasNextPage
+            }
+        end
+    end
+"#;
 
-    Ok(RequiredCheckPage {
-        has_required_check: contexts.nodes.iter().any(|check| check.is_required),
-        next_cursor,
-    })
+fn parse_required_check_page(response: &[u8]) -> anyhow::Result<RequiredCheckPage> {
+    serde_json::from_slice(response).context("Failed to parse required check query result")
 }
 
 fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
@@ -249,10 +207,16 @@ fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-enum CheckStatus {
+enum CheckOutcome {
     Complete,
     Pending,
     Failed,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CheckWaitStatus {
+    Complete,
+    Pending,
 }
 
 #[derive(Deserialize)]
@@ -274,235 +238,106 @@ enum CheckBucket {
     Cancel,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 struct RequiredCheckPage {
     has_required_check: bool,
-    next_cursor: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlResponse {
-    data: GhGraphQlData,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlData {
-    repository: Option<GhGraphQlRepository>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhGraphQlRepository {
-    pull_request: Option<GhGraphQlPullRequest>,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlPullRequest {
-    commits: GhGraphQlCommitConnection,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlCommitConnection {
-    nodes: Vec<GhGraphQlCommitNode>,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlCommitNode {
-    commit: GhGraphQlCommit,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhGraphQlCommit {
-    status_check_rollup: Option<GhGraphQlStatusCheckRollup>,
-}
-
-#[derive(Deserialize)]
-struct GhGraphQlStatusCheckRollup {
-    contexts: GhGraphQlCheckContexts,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhGraphQlCheckContexts {
-    nodes: Vec<GhGraphQlCheckContext>,
-    page_info: GhGraphQlPageInfo,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhGraphQlCheckContext {
-    is_required: bool,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct GhGraphQlPageInfo {
     has_next_page: bool,
-    end_cursor: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
 
-    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
 
     #[rstest]
-    #[case::all_pass(true, Some(0), r#"[{"bucket":"pass"}]"#, Some(CheckStatus::Complete))]
-    #[case::skipped_check_passes(
+    #[case::all_pass(true, r#"[{"bucket":"pass"}]"#, Some(CheckOutcome::Complete))]
+    #[case::skipped_check_passes(true, r#"[{"bucket":"skipping"}]"#, Some(CheckOutcome::Complete))]
+    #[case::pending_check_waits(true, r#"[{"bucket":"pending"}]"#, Some(CheckOutcome::Pending))]
+    #[case::failed_check_fails(true, r#"[{"bucket":"fail"}]"#, Some(CheckOutcome::Failed))]
+    #[case::cancelled_check_fails(true, r#"[{"bucket":"cancel"}]"#, Some(CheckOutcome::Failed))]
+    #[case::pass_and_pending_wait(
         true,
-        Some(0),
-        r#"[{"bucket":"skipping"}]"#,
-        Some(CheckStatus::Complete)
+        r#"[{"bucket":"pass"},{"bucket":"pending"}]"#,
+        Some(CheckOutcome::Pending)
     )]
-    #[case::pending_bucket_waits(
-        false,
-        Some(8),
-        r#"[{"bucket":"pending"}]"#,
-        Some(CheckStatus::Pending)
-    )]
-    #[case::pending_json_does_not_need_failure_exit_code(
+    #[case::pending_and_fail_fails(
         true,
-        Some(0),
-        r#"[{"bucket":"pending"}]"#,
-        Some(CheckStatus::Pending)
+        r#"[{"bucket":"pending"},{"bucket":"fail"}]"#,
+        Some(CheckOutcome::Failed)
     )]
-    #[case::pending_exit_code_waits(false, Some(8), "", Some(CheckStatus::Pending))]
-    #[case::failed_bucket_fails(
-        false,
-        Some(1),
-        r#"[{"bucket":"fail"}]"#,
-        Some(CheckStatus::Failed)
-    )]
-    #[case::failed_json_does_not_need_failure_exit_code(
+    #[case::pass_and_cancel_fails(
         true,
-        Some(0),
-        r#"[{"bucket":"fail"}]"#,
-        Some(CheckStatus::Failed)
+        r#"[{"bucket":"pass"},{"bucket":"cancel"}]"#,
+        Some(CheckOutcome::Failed)
     )]
-    #[case::cancelled_check_fails(
-        true,
-        Some(0),
-        r#"[{"bucket":"cancel"}]"#,
-        Some(CheckStatus::Failed)
-    )]
-    #[case::empty_success_is_no_required_checks(true, Some(0), "[]", Some(CheckStatus::Complete))]
-    #[case::empty_error_needs_required_check_lookup(false, Some(1), "", None)]
+    #[case::empty_error_needs_required_check_lookup(false, "", None)]
     fn classify_check_result_cases(
         #[case] status_success: bool,
-        #[case] status_code: Option<i32>,
         #[case] stdout: &str,
-        #[case] expected: Option<CheckStatus>,
+        #[case] expected: Option<CheckOutcome>,
     ) {
         assert_eq!(
-            classify_check_result(status_success, status_code, stdout.as_bytes()).unwrap(),
+            classify_check_result(status_success, stdout.as_bytes()).unwrap(),
             expected,
         );
     }
 
     #[rstest]
-    #[case::no_required_checks(
-        indoc! {r#"
-            {
-              "data": {
-                "repository": {
-                  "pullRequest": {
-                    "commits": {
-                      "nodes": [{
-                        "commit": {
-                          "statusCheckRollup": {
-                            "contexts": {
-                              "nodes": [{"isRequired": false}],
-                              "pageInfo": {"hasNextPage": false, "endCursor": null}
-                            }
-                          }
-                        }
-                      }]
-                    }
-                  }
-                }
-              }
-            }
-        "#},
-        false,
-        None,
+    #[case::no_required_check(
+        r#"{"hasRequiredCheck":false,"hasNextPage":false}"#,
+        RequiredCheckPage { has_required_check: false, has_next_page: false },
     )]
-    #[case::required_checks(
-        indoc! {r#"
-            {
-              "data": {
-                "repository": {
-                  "pullRequest": {
-                    "commits": {
-                      "nodes": [{
-                        "commit": {
-                          "statusCheckRollup": {
-                            "contexts": {
-                              "nodes": [{"isRequired": true}],
-                              "pageInfo": {"hasNextPage": true, "endCursor": "opaque-cursor"}
-                            }
-                          }
-                        }
-                      }]
-                    }
-                  }
-                }
-              }
-            }
-        "#},
-        true,
-        Some("opaque-cursor"),
+    #[case::required_check(
+        r#"{"hasRequiredCheck":true,"hasNextPage":false}"#,
+        RequiredCheckPage { has_required_check: true, has_next_page: false },
+    )]
+    #[case::more_context_pages(
+        r#"{"hasRequiredCheck":false,"hasNextPage":true}"#,
+        RequiredCheckPage { has_required_check: false, has_next_page: true },
     )]
     fn parse_required_check_page_cases(
         #[case] response: &str,
-        #[case] expected_has_required_check: bool,
-        #[case] expected_next_cursor: Option<&str>,
+        #[case] expected: RequiredCheckPage,
     ) {
         let page = parse_required_check_page(response.as_bytes()).unwrap();
 
-        assert_eq!(
-            (page.has_required_check, page.next_cursor.as_deref()),
-            (expected_has_required_check, expected_next_cursor),
-        );
+        assert_eq!(page, expected);
     }
 
     #[rstest]
-    fn has_required_checks_follows_pagination_until_a_required_check_is_found() {
-        let mut pages = VecDeque::from([
-            RequiredCheckPage {
-                has_required_check: false,
-                next_cursor: Some("opaque-cursor".to_string()),
-            },
-            RequiredCheckPage {
-                has_required_check: true,
-                next_cursor: None,
-            },
-        ]);
-        let mut cursors = Vec::new();
+    #[case::no_required_check_in_single_page(false, false, Ok(false))]
+    #[case::required_check_found(true, false, Ok(true))]
+    #[case::uninspected_page_fails_closed(
+        false,
+        true,
+        Err("Cannot confirm that no required checks exist because GitHub returned additional check-context pages.".to_string()),
+    )]
+    fn has_required_checks_cases(
+        #[case] has_required_check: bool,
+        #[case] has_next_page: bool,
+        #[case] expected: Result<bool, String>,
+    ) {
+        let result = has_required_checks_with(|| {
+            Ok(RequiredCheckPage {
+                has_required_check,
+                has_next_page,
+            })
+        })
+        .map_err(|error| error.to_string());
 
-        let result = has_required_checks_with(|cursor| {
-            cursors.push(cursor.map(str::to_string));
-            pages
-                .pop_front()
-                .context("No fake required-check page remains")
-        });
-
-        assert_eq!(
-            (result.unwrap(), cursors),
-            (true, vec![None, Some("opaque-cursor".to_string())]),
-        );
+        assert_eq!(result, expected);
     }
 
     #[rstest]
     fn wait_repeats_pending_queries_until_checks_finish() {
         let mut statuses = VecDeque::from([
-            CheckStatus::Pending,
-            CheckStatus::Pending,
-            CheckStatus::Complete,
+            CheckWaitStatus::Pending,
+            CheckWaitStatus::Pending,
+            CheckWaitStatus::Complete,
         ]);
         let mut waits = 0;
 
