@@ -1,4 +1,11 @@
-use crate::commands::agent::review_queue::{self, LiveQueueRuntime, Placement, Review};
+use std::time::Duration;
+
+use crate::commands::agent::review_queue::{
+    self, LiveQueueRuntime, Placement, QueueRuntime, Review,
+};
+
+const SESSION_WAIT_ATTEMPTS: u32 = 50;
+const SESSION_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
 /// An editor review queued behind the agent pane that started it. Dropping it
 /// removes the review from the queue and shows the next one.
@@ -41,8 +48,16 @@ impl QueueEntry {
         self.placement == Placement::Visible
     }
 
-    /// Updates the queue labels once the session exists.
+    /// Updates the queue labels once the session exists. A visible pane's
+    /// shpool client creates the session asynchronously, and the queue drops
+    /// reviews whose session is not alive, so wait for it first.
     pub(super) fn refresh(&self) {
+        for _ in 0..SESSION_WAIT_ATTEMPTS {
+            if self.runtime.editor_alive(&self.key).unwrap_or(false) {
+                break;
+            }
+            std::thread::sleep(SESSION_WAIT_INTERVAL);
+        }
         if let Err(error) = review_queue::refresh(&self.runtime, &self.parent_pane_id) {
             tracing::warn!(
                 event = "hitl.review_queue.refresh_failed",
