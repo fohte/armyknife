@@ -343,7 +343,7 @@
           "$ref": "#/$defs/AgentProfileTypeEngine"
         },
         "model": {
-          "description": "Model passed to the selected engine; omitted to use its CLI default.",
+          "description": "Model passed to the selected engine when set; `a agent new --type` requires this field or `--model`.",
           "type": [
             "string",
             "null"
@@ -351,7 +351,7 @@
           "minLength": 1
         },
         "reasoning_effort": {
-          "description": "Reasoning effort used for this type; unavailable for the agy engine.",
+          "description": "Reasoning effort used for this type when set; `a agent new --type` requires this field or `--reasoning-effort`, and agy does not support it.",
           "anyOf": [
             {
               "$ref": "#/$defs/ReasoningEffort"
@@ -363,6 +363,27 @@
         }
       },
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "engine": {
+                "const": "agy"
+              }
+            },
+            "required": [
+              "engine"
+            ]
+          },
+          "then": {
+            "properties": {
+              "reasoning_effort": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ],
       "required": [
         "engine"
       ]

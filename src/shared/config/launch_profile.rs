@@ -27,18 +27,30 @@ impl AgentProfileTypeEngine {
 
 /// Execution settings for one type in an agent profile.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[cfg_attr(
+    feature = "schema-gen",
+    schemars(extend("allOf" = [{
+        "if": {
+            "properties": { "engine": { "const": "agy" } },
+            "required": ["engine"]
+        },
+        "then": {
+            "properties": { "reasoning_effort": { "type": "null" } }
+        }
+    }]))
+)]
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentProfileTypeConfig {
     /// Coding agent CLI configured for this type.
     pub engine: AgentProfileTypeEngine,
 
-    /// Model passed to the selected engine; omitted to use its CLI default.
+    /// Model passed to the selected engine when set; `a agent new --type` requires this field or `--model`.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
     pub model: Option<String>,
 
-    /// Reasoning effort used for this type; unavailable for the agy engine.
+    /// Reasoning effort used for this type when set; `a agent new --type` requires this field or `--reasoning-effort`, and agy does not support it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
 }
