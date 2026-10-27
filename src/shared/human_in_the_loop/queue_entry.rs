@@ -7,6 +7,23 @@ use crate::commands::agent::review_queue::{
 const SESSION_WAIT_ATTEMPTS: u32 = 50;
 const SESSION_WAIT_INTERVAL: Duration = Duration::from_millis(100);
 
+/// Polls `check` until it returns true. An error gives up at once, since
+/// retrying a failing `shpool list` only delays the launch.
+fn wait_until(
+    attempts: u32,
+    interval: Duration,
+    mut check: impl FnMut() -> anyhow::Result<bool>,
+) -> bool {
+    for attempt in 0..attempts {
+        match check() {
+            Ok(true) => return true,
+            Ok(false) if attempt + 1 < attempts => std::thread::sleep(interval),
+            Ok(false) | Err(_) => return false,
+        }
+    }
+    false
+}
+
 /// An editor review queued behind the agent pane that started it. Dropping it
 /// removes the review from the queue and shows the next one.
 pub(super) struct QueueEntry {
@@ -52,11 +69,15 @@ impl QueueEntry {
     /// shpool client creates the session asynchronously, and the queue drops
     /// reviews whose session is not alive, so wait for it first.
     pub(super) fn refresh(&self) {
-        for _ in 0..SESSION_WAIT_ATTEMPTS {
-            if self.runtime.editor_alive(&self.key).unwrap_or(false) {
-                break;
-            }
-            std::thread::sleep(SESSION_WAIT_INTERVAL);
+        let alive = wait_until(SESSION_WAIT_ATTEMPTS, SESSION_WAIT_INTERVAL, || {
+            self.runtime.editor_alive(&self.key)
+        });
+        if !alive {
+            tracing::warn!(
+                event = "hitl.review_queue.session_not_alive",
+                pane = %self.parent_pane_id,
+                session = %self.key,
+            );
         }
         if let Err(error) = review_queue::refresh(&self.runtime, &self.parent_pane_id) {
             tracing::warn!(
@@ -79,5 +100,36 @@ impl Drop for QueueEntry {
                 error = %error,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    /// Returns each result in turn and records how many times it was polled.
+    fn polled(results: Vec<anyhow::Result<bool>>, attempts: u32) -> (bool, usize) {
+        let mut results = results.into_iter();
+        let mut calls = 0;
+        let alive = wait_until(attempts, Duration::ZERO, || {
+            calls += 1;
+            results.next().unwrap_or(Ok(false))
+        });
+        (alive, calls)
+    }
+
+    #[rstest]
+    #[case::alive_at_once(vec![Ok(true)], 3, (true, 1))]
+    #[case::alive_after_retries(vec![Ok(false), Ok(false), Ok(true)], 3, (true, 3))]
+    #[case::times_out(vec![], 3, (false, 3))]
+    #[case::gives_up_on_error(vec![Ok(false), Err(anyhow::anyhow!("shpool list failed"))], 3, (false, 2))]
+    fn wait_until_polls_until_alive(
+        #[case] results: Vec<anyhow::Result<bool>>,
+        #[case] attempts: u32,
+        #[case] expected: (bool, usize),
+    ) {
+        assert_eq!(polled(results, attempts), expected);
     }
 }
