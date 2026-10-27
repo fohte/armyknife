@@ -821,9 +821,9 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn resolve_json_path_treats_null_as_missing() {
+    fn get_value_treats_null_as_missing() {
         assert_eq!(
-            resolve_json_path(&serde_json::json!({"path": null}), "path"),
+            Config::default().get_value("agent.active_profile", None),
             None,
         );
     }
