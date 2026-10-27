@@ -200,7 +200,7 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
 
-When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later; on older versions, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. The editor runs in a `shpool` session, so closing the pane only detaches it and the editor keeps running; the review completes when the editor exits. This requires tmux 3.7 or later and `shpool` on `PATH`; otherwise, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
 
 ## Commands
 
@@ -242,11 +242,11 @@ Open a file in editor for review (no approval flow). After the editor exits, a u
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                                                                                                                                        |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `new`    | Create a new PR body draft file                                                                                                                                                                                    |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                 |
+| Action   | Description                                                                                                                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`    | Create a new PR body draft file                                                                                                                                                                                   |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                |
 
 `new` options:
 
@@ -301,14 +301,14 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command  | Description                                                                                                                                                                              |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                      |
-| `pull`   | Fetch issue and save locally                                                                                                                                                             |
-| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                         |
-| `diff`   | Show colored diff between local changes and remote                                                                                                                                       |
-| `init`   | Create boilerplate files for new issues or comments                                                                                                                                      |
+| Command  | Description                                                                                                                                                                             |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                     |
+| `pull`   | Fetch issue and save locally                                                                                                                                                            |
+| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                        |
+| `diff`   | Show colored diff between local changes and remote                                                                                                                                      |
+| `init`   | Create boilerplate files for new issues or comments                                                                                                                                     |
 
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed snapshot, and `comments/` for issue comments.
@@ -421,7 +421,7 @@ a gh pr-review reply push <pr-number> [options]
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
 
 Requires `reply pull` to have been run first.
 

@@ -15,6 +15,7 @@ mod launch;
 mod lock;
 mod notification;
 mod pending_review;
+mod session_watch;
 mod tmux;
 
 pub use approval::{ApprovalManager, TEST_APPROVAL_DIR_OVERRIDE};
@@ -43,7 +44,7 @@ pub(crate) const PR_DRAFT_REVIEW_MARKER: &str = "pr-draft-review:";
 /// call succeeds but the terminal window never initializes.
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
-const REVIEW_PANE_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const REVIEW_SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(2);
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -120,6 +121,7 @@ where
         command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
     };
 
+    let mut session_watch = session_watch::SessionWatch::new();
     start_review_with_marker::<S, _, _>(
         &document_path,
         <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
@@ -134,10 +136,11 @@ where
                 notifications_enabled,
             )
         },
-        |pane_id| {
-            crate::infra::tmux::list_all_pane_ids()
-                .map(|pane_ids| pane_ids.contains(pane_id))
-                .map_err(|error| HumanInTheLoopError::CommandFailed(error.to_string()))
+        |session| {
+            session_watch.is_running(std::time::Instant::now(), || {
+                crate::infra::shpool::session_is_alive(session)
+                    .map_err(|error| HumanInTheLoopError::CommandFailed(format!("{error:#}")))
+            })
         },
     )
 }
@@ -146,21 +149,21 @@ where
 fn start_review_with_launcher<S, L, P>(
     document_path: &Path,
     launch_review: L,
-    is_pane_alive: P,
+    is_session_alive: P,
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
     L: FnOnce(&Path, &Path) -> Result<Option<String>>,
     P: FnMut(&str) -> Result<bool>,
 {
-    start_review_with_marker(document_path, None, launch_review, is_pane_alive)
+    start_review_with_marker(document_path, None, launch_review, is_session_alive)
 }
 
 fn start_review_with_marker<S, L, P>(
     document_path: &Path,
     pending_review_marker: Option<&str>,
     launch_review: L,
-    is_pane_alive: P,
+    is_session_alive: P,
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
@@ -194,13 +197,13 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let review_pane_id = launch_review(document_path, &done_fifo_path)?;
+    let review_session = launch_review(document_path, &done_fifo_path)?;
 
     {
         let _pending_review =
             pending_review::PendingReviewGuard::for_current_session(pending_review_marker);
-        if let Some(pane_id) = review_pane_id.as_deref() {
-            wait_for_fifo_signal_or_pane_exit(done_fifo_reader, pane_id, is_pane_alive)?;
+        if let Some(session) = review_session.as_deref() {
+            wait_for_fifo_signal_or_session_exit(done_fifo_reader, session, is_session_alive)?;
         } else {
             // GUI terminal launches have no tmux pane to monitor.
             wait_for_fifo_signal(done_fifo_reader, &done_fifo_path)?;
@@ -382,26 +385,26 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Wait for the completion signal while periodically checking the review pane.
+/// Wait for the completion signal while periodically checking the editor session.
 #[cfg(unix)]
-fn wait_for_fifo_signal_or_pane_exit(
+fn wait_for_fifo_signal_or_session_exit(
     file: std::fs::File,
-    pane_id: &str,
-    mut is_pane_alive: impl FnMut(&str) -> Result<bool>,
+    session: &str,
+    mut is_session_alive: impl FnMut(&str) -> Result<bool>,
 ) -> Result<()> {
     use std::time::Instant;
 
-    let mut next_pane_check = Instant::now();
+    let mut next_session_check = Instant::now();
     poll_fifo_signal(file, |file| {
-        if Instant::now() >= next_pane_check {
-            if !is_pane_alive(pane_id)? {
+        if Instant::now() >= next_session_check {
+            if !is_session_alive(session)? {
                 return Ok(if try_read_fifo_signal(file)? {
                     FifoPollAction::Signaled
                 } else {
-                    FifoPollAction::Abort(HumanInTheLoopError::ReviewPaneClosed)
+                    FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
                 });
             }
-            next_pane_check = Instant::now() + REVIEW_PANE_CHECK_INTERVAL;
+            next_session_check = Instant::now() + REVIEW_SESSION_CHECK_INTERVAL;
         }
         Ok(FifoPollAction::Continue)
     })
@@ -649,34 +652,37 @@ mod tests {
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_pane_exit_prefers_a_completion_signal(
+    fn wait_for_fifo_signal_or_session_exit_prefers_a_completion_signal(
         fifo_reader: FifoReaderFixture,
     ) {
         signal_fifo(&fifo_reader.fifo_path);
 
         let result =
-            wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| Ok(false))
-                .map_err(|error| error.to_string());
+            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
+                Ok(false)
+            })
+            .map_err(|error| error.to_string());
 
         assert_eq!(result, Ok(()));
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_pane_exit_reads_signal_written_before_pane_closes(
+    fn wait_for_fifo_signal_or_session_exit_reads_signal_written_before_session_ends(
         fifo_reader: FifoReaderFixture,
     ) {
         let writer_path = fifo_reader.fifo_path.clone();
-        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", move |_| {
-            signal_fifo(&writer_path);
-            Ok(false)
-        })
-        .map_err(|error| error.to_string());
+        let result =
+            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", move |_| {
+                signal_fifo(&writer_path);
+                Ok(false)
+            })
+            .map_err(|error| error.to_string());
 
         assert_eq!(result, Ok(()));
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_pane_exit_completes_while_pane_is_alive(
+    fn wait_for_fifo_signal_or_session_exit_completes_while_session_is_alive(
         fifo_reader: FifoReaderFixture,
     ) {
         let writer_path = fifo_reader.fifo_path.clone();
@@ -685,7 +691,10 @@ mod tests {
             signal_fifo(&writer_path);
         });
 
-        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| Ok(true))
+        let result =
+            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
+                Ok(true)
+            })
             .map_err(|error| error.to_string());
         writer.join().expect("writer thread");
 
@@ -693,15 +702,16 @@ mod tests {
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_pane_exit_propagates_pane_query_failure(
+    fn wait_for_fifo_signal_or_session_exit_propagates_session_query_failure(
         fifo_reader: FifoReaderFixture,
     ) {
-        let result = wait_for_fifo_signal_or_pane_exit(fifo_reader.reader, "%review", |_| {
-            Err(HumanInTheLoopError::CommandFailed(
-                "tmux is unavailable".into(),
-            ))
-        })
-        .map_err(|error| error.to_string());
+        let result =
+            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
+                Err(HumanInTheLoopError::CommandFailed(
+                    "tmux is unavailable".into(),
+                ))
+            })
+            .map_err(|error| error.to_string());
 
         assert_eq!(result, Err("Command failed: tmux is unavailable".into()));
     }
@@ -830,7 +840,7 @@ mod tests {
     }
 
     #[rstest]
-    fn start_review_cleans_lock_and_done_fifo_when_review_pane_disappears(
+    fn start_review_cleans_lock_and_done_fifo_when_review_session_disappears(
         review_document: ReviewDocumentFixture,
     ) {
         let document_path = review_document.path;
@@ -840,7 +850,7 @@ mod tests {
             &document_path,
             |_, fifo_path| {
                 done_fifo_path = Some(fifo_path.to_path_buf());
-                Ok(Some("%review".to_string()))
+                Ok(Some("review-session".to_string()))
             },
             |_| Ok(false),
         )
@@ -853,10 +863,10 @@ mod tests {
                 result,
                 LockGuard::is_locked(&document_path),
                 done_fifo_path.exists(),
-                exit_code::REVIEW_PANE_CLOSED,
+                exit_code::REVIEW_SESSION_CLOSED,
             ),
             (
-                Err("Review pane disappeared before review completed".into()),
+                Err("Review editor session ended before the review completed".into()),
                 false,
                 false,
                 4,

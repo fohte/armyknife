@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Get the tmux pane ID where this process is running.
 ///
@@ -14,21 +14,76 @@ pub fn get_tmux_target() -> Option<String> {
     crate::infra::tmux::current_pane_id_from_env()
 }
 
+/// Opens the review in a floating pane that attaches to the shpool session
+/// `shpool_session`, so closing the pane detaches instead of ending the editor.
 pub(super) fn open_review_pane(
     parent_pane_id: &str,
     title: &str,
+    shpool_session: &str,
     executable: &OsStr,
     args: &[OsString],
     done_fifo_path: &Path,
 ) -> super::Result<String> {
     let environment = review_pane_environment();
-    let command = review_pane_command(executable, args, done_fifo_path, &environment);
-    crate::infra::tmux::open_floating_pane(crate::infra::tmux::FloatingPaneSpec {
-        parent_pane_id,
-        title,
-        command: &command,
-    })
-    .map_err(|error| super::HumanInTheLoopError::CommandFailed(error.to_string()))
+    let script = review_pane_command(executable, args, done_fifo_path, &environment);
+    let script_path = write_review_script(&std::env::temp_dir(), &script)?;
+    let result = shpool_session_command(&script_path).and_then(|session_command| {
+        crate::infra::tmux::open_editor_pane(crate::infra::tmux::EditorPaneSpec {
+            parent_pane_id,
+            title,
+            shpool_session,
+            command: Some(&session_command),
+            force_shpool_attach: false,
+        })
+        .map_err(|error| super::HumanInTheLoopError::CommandFailed(format!("{error:#}")))
+    });
+    if result.is_err() {
+        let _ = std::fs::remove_file(&script_path);
+    }
+    result
+}
+
+/// shpool parses its `-c` string as a template in which every `{` must open a
+/// `{variable}` and cannot be escaped, so the script (with its `{ ...; }`
+/// trap and arbitrary titles) is passed as a file instead. The script removes
+/// itself on start.
+fn write_review_script(dir: &Path, script: &OsStr) -> super::Result<PathBuf> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let path = dir.join(format!(
+        "armyknife-review-{}.sh",
+        uuid::Uuid::new_v4().simple()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    file.write_all(b"rm -f -- \"$0\"\n")?;
+    file.write_all(script.as_bytes())?;
+    file.write_all(b"\n")?;
+    Ok(path)
+}
+
+/// shpool splits its command string with shell-words, which reads only single
+/// quotes the way a POSIX shell does, so the path is quoted by hand.
+fn shpool_session_command(script_path: &Path) -> super::Result<String> {
+    let mut command = OsString::from("/bin/sh ");
+    command.push(shell_quote(script_path.as_os_str()));
+    let command = command.into_string().map_err(|_| {
+        super::HumanInTheLoopError::CommandFailed(format!(
+            "review script path is not valid UTF-8: {}",
+            script_path.display()
+        ))
+    })?;
+    if command.contains(['{', '}']) {
+        return Err(super::HumanInTheLoopError::CommandFailed(format!(
+            "review script path contains braces, which shpool treats as template variables: {}",
+            script_path.display()
+        )));
+    }
+    Ok(command)
 }
 
 fn review_pane_command(
@@ -70,7 +125,9 @@ fn select_review_pane_environment(
         .filter(|(name, _)| {
             let name = name.as_bytes();
             valid_environment_name(name)
-                && (matches!(name, b"HOME" | b"PATH")
+                // The shpool daemon's environment has no TMUX, which the editor
+                // needs to reach the same tmux server as the floating pane.
+                && (matches!(name, b"HOME" | b"PATH" | b"TMUX")
                     || name.starts_with(b"XDG_")
                     || (name.starts_with(b"ARMYKNIFE_")
                         && name.windows(2).any(|pair| pair == b"__")))
@@ -106,6 +163,8 @@ fn shell_quote(value: &OsStr) -> OsString {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -158,11 +217,65 @@ mod tests {
                 ),
                 (OsString::from("HOME"), OsString::from("/tmp/home")),
                 (OsString::from("PATH"), OsString::from("/tmp/bin")),
+                (OsString::from("TMUX"), OsString::from("/tmp/tmux")),
                 (
                     OsString::from("XDG_CONFIG_HOME"),
                     OsString::from("/tmp/config")
                 ),
             ],
+        );
+    }
+
+    #[rstest]
+    #[case::plain_path(
+        PathBuf::from("/tmp/review script.sh"),
+        Ok("/bin/sh '/tmp/review script.sh'".to_string())
+    )]
+    #[case::path_with_quote(
+        PathBuf::from("/tmp/it's.sh"),
+        Ok("/bin/sh '/tmp/it'\\''s.sh'".to_string())
+    )]
+    #[case::path_with_braces(
+        PathBuf::from("/tmp/{dir}/review.sh"),
+        Err("Command failed: review script path contains braces, which shpool treats as template variables: /tmp/{dir}/review.sh".to_string())
+    )]
+    #[case::non_utf8_path(
+        PathBuf::from(OsString::from_vec(b"/tmp/\xff.sh".to_vec())),
+        Err("Command failed: review script path is not valid UTF-8: /tmp/\u{fffd}.sh".to_string())
+    )]
+    fn shpool_session_command_quotes_the_script_path(
+        #[case] script_path: PathBuf,
+        #[case] expected: Result<String, String>,
+    ) {
+        assert_eq!(
+            shpool_session_command(&script_path).map_err(|error| error.to_string()),
+            expected,
+        );
+    }
+
+    #[test]
+    fn write_review_script_prepends_self_removal_and_keeps_script_bytes() {
+        let dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let script = OsString::from_vec(b"trap '{ :; }' EXIT; run \xff".to_vec());
+
+        let path = write_review_script(dir.path(), &script).expect("script should be written");
+        let metadata = std::fs::metadata(&path).expect("script should exist");
+        let expected_script = [
+            indoc::indoc! {r#"
+                rm -f -- "$0"
+                trap '{ :; }' EXIT; run "#}
+            .as_bytes(),
+            b"\xff\n",
+        ]
+        .concat();
+
+        assert_eq!(
+            (
+                std::fs::read(&path).expect("script should be readable"),
+                std::os::unix::fs::PermissionsExt::mode(&metadata.permissions()) & 0o777,
+                path.parent().map(Path::to_path_buf),
+            ),
+            (expected_script, 0o600, Some(dir.path().to_path_buf()),),
         );
     }
 }

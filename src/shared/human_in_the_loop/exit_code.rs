@@ -12,11 +12,11 @@ pub const ALREADY_OPEN: i32 = 2;
 /// initialization error). Callers can retry once the system wakes.
 pub const TERMINAL_LAUNCH_FAILED: i32 = 3;
 
-/// The tmux review pane disappeared before it signaled completion.
-pub const REVIEW_PANE_CLOSED: i32 = 4;
+/// The review editor session ended before it signaled completion.
+pub const REVIEW_SESSION_CLOSED: i32 = 4;
 
 /// Convert errors from `start_review` into dedicated process exit codes where
-/// callers need to distinguish a failed terminal launch or a closed review pane.
+/// callers need to distinguish a failed terminal launch or an editor session that ended early.
 ///
 /// This keeps the mapping in one place so each review command handler can
 /// share the same behavior.
@@ -39,7 +39,7 @@ where
 fn review_error_exit_code(error: &HumanInTheLoopError) -> Option<i32> {
     match error {
         HumanInTheLoopError::TerminalLaunchFailed { .. } => Some(TERMINAL_LAUNCH_FAILED),
-        HumanInTheLoopError::ReviewPaneClosed => Some(REVIEW_PANE_CLOSED),
+        HumanInTheLoopError::ReviewSessionClosed => Some(REVIEW_SESSION_CLOSED),
         _ => None,
     }
 }
@@ -71,7 +71,10 @@ mod tests {
         HumanInTheLoopError::TerminalLaunchFailed { timeout_secs: 10 },
         Some(TERMINAL_LAUNCH_FAILED),
     )]
-    #[case::review_pane_closed(HumanInTheLoopError::ReviewPaneClosed, Some(REVIEW_PANE_CLOSED))]
+    #[case::review_session_closed(
+        HumanInTheLoopError::ReviewSessionClosed,
+        Some(REVIEW_SESSION_CLOSED)
+    )]
     #[case::other_errors_propagate(HumanInTheLoopError::NotApproved, None)]
     fn maps_only_expected_review_failures_to_exit_codes(
         #[case] error: HumanInTheLoopError,

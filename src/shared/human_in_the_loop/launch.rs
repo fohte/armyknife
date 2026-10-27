@@ -15,6 +15,8 @@ pub(super) struct ReviewLabels<'a> {
     pub(super) command_name: &'a str,
 }
 
+/// Returns the shpool session running the editor when launched in tmux. The
+/// caller watches it to notice the editor ending without a completion signal.
 pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
@@ -37,11 +39,13 @@ where
     if let Some(parent_pane_id) = tmux_pane_id {
         let env_vars = EnvVars::load();
         let session_id = env_vars.own_session_id();
-        let review_pane_id = launch_tmux_review(
+        let shpool_session = crate::infra::tmux::new_editor_session_name(parent_pane_id);
+        launch_tmux_review(
             || {
                 super::tmux::open_review_pane(
                     parent_pane_id,
                     labels.window_title,
+                    &shpool_session,
                     exe_path.as_os_str(),
                     &review_args,
                     done_fifo_path,
@@ -61,7 +65,7 @@ where
                 )
             },
         )?;
-        return Ok(Some(review_pane_id));
+        return Ok(Some(shpool_session));
     }
 
     launch_in_terminal(

@@ -105,7 +105,7 @@ fn shpool_attach_command(
     shlex::try_join(args).context("failed to quote shpool command")
 }
 
-fn tool_path(tool: ExternalTool) -> Result<String> {
+pub(super) fn tool_path(tool: ExternalTool) -> Result<String> {
     tool.resolve_path()
         .with_context(|| format!("{} executable not found on PATH", tool.name()))?
         .to_str()
