@@ -225,8 +225,21 @@ impl AgentConfig {
 
     /// Return the Codex inference settings only when the complete opt-in config is valid.
     pub fn configured_codex_status_inference(&self) -> Option<&CodexStatusInferenceConfig> {
-        (self.codex_status_inference.enabled && self.validate().is_ok())
-            .then_some(&self.codex_status_inference)
+        if !self.codex_status_inference.enabled {
+            return None;
+        }
+
+        match self.validate() {
+            Ok(()) => Some(&self.codex_status_inference),
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.status_inference.config_invalid",
+                    error = %error,
+                    "Codex status inference is disabled because its configuration is invalid",
+                );
+                None
+            }
+        }
     }
 
     /// Look up the display configuration for a skill name.
