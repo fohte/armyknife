@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.470](https://github.com/fohte/armyknife/compare/v0.1.469...v0.1.470) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** tolerate transient tmux query failures ([#1281](https://github.com/fohte/armyknife/issues/1281)) ([6d9f0fc](https://github.com/fohte/armyknife/commit/6d9f0fc53209336c3c1a415d40282dd714a4f000))
+
 ## [0.1.469](https://github.com/fohte/armyknife/compare/v0.1.468...v0.1.469) (2026-10-27)
 
 
