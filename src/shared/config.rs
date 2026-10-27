@@ -483,6 +483,9 @@ pub struct AutoPauseConfig {
     pub timeout: String,
 }
 
+pub(crate) const DEFAULT_AUTO_PAUSE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(30 * 60);
+
 impl Default for AutoPauseConfig {
     fn default() -> Self {
         Self {
@@ -493,7 +496,7 @@ impl Default for AutoPauseConfig {
 }
 
 fn default_auto_pause_timeout() -> String {
-    "30m".to_string()
+    format!("{}m", DEFAULT_AUTO_PAUSE_TIMEOUT.as_secs() / 60)
 }
 
 /// Configuration for automatically running `/compact` against sessions that

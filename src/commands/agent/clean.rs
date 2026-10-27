@@ -19,7 +19,7 @@ use crate::infra::git::get_merge_status_for_repo;
 use crate::infra::git::{github_owner_and_repo, merge_status_from_git, merge_status_from_pr};
 use crate::infra::github::{BranchPrQuery, GitHubClient};
 use crate::shared::active_session::{DraftProbe, TmuxDraftProbe, contains_active_session};
-use crate::shared::config::load_config;
+use crate::shared::config::{DEFAULT_AUTO_PAUSE_TIMEOUT, load_config};
 use crate::shared::hooks;
 use crate::shared::merge_notify::notify_delegator_of_merge;
 use crate::shared::repos_root::{discover_repos_with_worktrees, resolve_repos_root};
@@ -304,7 +304,7 @@ fn apply_active_session_protection(
     let timeout = load_config()
         .ok()
         .and_then(|c| parse_duration(&c.agent.auto_pause.timeout).ok())
-        .unwrap_or(Duration::from_secs(30 * 60));
+        .unwrap_or(DEFAULT_AUTO_PAUSE_TIMEOUT);
 
     protect_active_worktrees(to_delete, to_keep, &sessions, timeout, &TmuxDraftProbe);
 }

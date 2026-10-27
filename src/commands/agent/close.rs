@@ -23,13 +23,12 @@ use crate::infra::git::GitRepo;
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
 use crate::shared::active_session::{NoDraftProbe, is_session_active};
-use crate::shared::config::{load_config, load_config_or_default};
+use crate::shared::config::{DEFAULT_AUTO_PAUSE_TIMEOUT, load_config, load_config_or_default};
 use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
-const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
@@ -153,6 +152,9 @@ async fn close_worktree(
         context,
         refuse_current_session,
         worktree_delete::prepare(worktree_root, args.force),
+        |session, force, current_pane_id| {
+            validate_worktree_session(session, force, current_pane_id, &LiveCloseRuntime)
+        },
         close_worktree_session,
         |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
     )
@@ -176,6 +178,7 @@ async fn close_worktree_with<P, F>(
     context: WorktreeCloseContext<'_>,
     refuse_current_session: bool,
     prepare: impl Future<Output = Result<P>>,
+    mut validate_session: impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
     mut close_session: impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
     remove_worktree: impl FnOnce(P) -> F,
 ) -> Result<()>
@@ -191,11 +194,34 @@ where
             context.caller_pane_id,
         )?;
     }
+    for session in context.sessions {
+        if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
+            validate_session(session, context.args.force, context.caller_pane_id)?;
+        }
+    }
     close_with_worktree_plan(
         prepare,
         || {
+            let mut closed_session_ids = Vec::new();
             for session in context.sessions {
-                close_session(session, context.args.force, context.caller_pane_id)?;
+                if !should_gracefully_close_worktree_session(session, context.caller_pane_id) {
+                    continue;
+                }
+                if let Err(error) =
+                    close_session(session, context.args.force, context.caller_pane_id)
+                {
+                    if closed_session_ids.is_empty() {
+                        return Err(error);
+                    }
+                    return Err(error).with_context(|| {
+                        format!(
+                            "Failed to close agent session `{}`; already closed sessions: {}",
+                            session.session_id,
+                            closed_session_ids.join(", ")
+                        )
+                    });
+                }
+                closed_session_ids.push(session.session_id.clone());
             }
             Ok(())
         },
@@ -246,6 +272,20 @@ fn close_worktree_session(
         return Ok(());
     }
     close_tracked_session(session, force)
+}
+
+fn validate_worktree_session(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+    runtime: &LiveCloseRuntime,
+) -> Result<()> {
+    if !should_gracefully_close_worktree_session(session, current_pane_id) {
+        return Ok(());
+    }
+    let mut session = session.clone();
+    super::session_status::include_pending_status(&mut session);
+    prepare_close_session(&session, force, runtime).map(|_| ())
 }
 
 fn should_gracefully_close_worktree_session(
@@ -385,15 +425,23 @@ impl CloseRuntime for LiveCloseRuntime {
     }
 }
 
-fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -> Result<()> {
+struct SessionClosePlan<'a> {
+    tmux_info: &'a TmuxInfo,
+    agent_pid: Option<u32>,
+    should_end_codex_session: bool,
+}
+
+fn prepare_close_session<'a, R: CloseRuntime>(
+    session: &'a Session,
+    force: bool,
+    runtime: &R,
+) -> Result<Option<SessionClosePlan<'a>>> {
     let tmux_info = session
         .tmux_info
         .as_ref()
         .context("Agent session has no tmux pane")?;
-    let pane_id = tmux_info.pane_id.as_str();
-
     if !runtime.pane_exists(tmux_info)? {
-        return Ok(());
+        return Ok(None);
     }
     ensure_pane_session(runtime, tmux_info, &session.session_id)?;
 
@@ -419,69 +467,87 @@ fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -
         ensure_session_is_idle(session, effective_status)?;
     }
 
-    let should_end_codex_session = match runtime.resolve_agent_pid(tmux_info, session.engine)? {
+    let (agent_pid, should_end_codex_session) = match runtime
+        .resolve_agent_pid(tmux_info, session.engine)?
+    {
         Some(pid) => {
             if !force {
                 ensure_no_unsent_draft(runtime, tmux_info, session)?;
             }
-
-            let exited = match runtime.request_graceful_quit(tmux_info, pid) {
-                Ok(true) => true,
-                Ok(false) => {
-                    tracing::warn!(
-                        event = "agent.close.ctrl_d_timeout",
-                        session = %session.session_id,
-                        pane_id,
-                        pid,
-                    );
-                    false
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        event = "agent.close.ctrl_d_failed",
-                        session = %session.session_id,
-                        pane_id,
-                        error = %error,
-                    );
-                    false
-                }
-            };
-
-            if !exited {
-                match runtime.send_sigterm(pid) {
-                    Ok(()) => {}
-                    Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
-                    Err(error) => {
-                        return Err(error).with_context(|| {
-                            format!(
-                                "Could not send SIGTERM to agent session `{}`",
-                                session.session_id
-                            )
-                        });
-                    }
-                }
-                if !runtime.wait_for_exit(pid) {
-                    bail!(
-                        "Agent session `{}` did not exit after SIGTERM; its pane was left open",
-                        session.session_id
-                    );
-                }
-            }
-            true
+            (Some(pid), true)
         }
-        None if force => false,
+        None if force => (None, false),
         None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
             bail!(
                 "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
             );
         }
-        None => true,
+        None => (None, true),
     };
+
+    Ok(Some(SessionClosePlan {
+        tmux_info,
+        agent_pid,
+        should_end_codex_session,
+    }))
+}
+
+fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -> Result<()> {
+    let Some(plan) = prepare_close_session(session, force, runtime)? else {
+        return Ok(());
+    };
+    let tmux_info = plan.tmux_info;
+    let pane_id = tmux_info.pane_id.as_str();
+
+    if let Some(pid) = plan.agent_pid {
+        let exited = match runtime.request_graceful_quit(tmux_info, pid) {
+            Ok(true) => true,
+            Ok(false) => {
+                tracing::warn!(
+                    event = "agent.close.ctrl_d_timeout",
+                    session = %session.session_id,
+                    pane_id,
+                    pid,
+                );
+                false
+            }
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.close.ctrl_d_failed",
+                    session = %session.session_id,
+                    pane_id,
+                    error = %error,
+                );
+                false
+            }
+        };
+
+        if !exited {
+            match runtime.send_sigterm(pid) {
+                Ok(()) => {}
+                Err(error) if error.raw_os_error() == Some(libc::ESRCH) => {}
+                Err(error) => {
+                    return Err(error).with_context(|| {
+                        format!(
+                            "Could not send SIGTERM to agent session `{}`",
+                            session.session_id
+                        )
+                    });
+                }
+            }
+            if !runtime.wait_for_exit(pid) {
+                bail!(
+                    "Agent session `{}` did not exit after SIGTERM; its pane was left open",
+                    session.session_id
+                );
+            }
+        }
+    }
 
     if runtime.pane_exists(tmux_info)? {
         ensure_pane_session(runtime, tmux_info, &session.session_id)?;
-        if should_end_codex_session
+        if plan.should_end_codex_session
             && session.engine == Engine::Codex
             && session.status != SessionStatus::Ended
         {
@@ -536,19 +602,23 @@ fn ensure_no_unsent_draft<R: CloseRuntime>(
             "Agent session `{}` has an unsent draft; pass --force to close it",
             session.session_id
         ),
-        None if is_session_active(
-            session,
-            &NoDraftProbe,
-            Utc::now(),
-            runtime.unknown_draft_timeout(),
-        ) =>
-        {
-            bail!(
-                "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
-                session.session_id
-            )
+        None => {
+            let timeout = runtime.unknown_draft_timeout();
+            let active = is_session_active(session, &NoDraftProbe, Utc::now(), timeout);
+            tracing::debug!(
+                event = "agent.close.draft_state_unavailable",
+                session = %session.session_id,
+                timeout = ?timeout,
+                decision = if active { "blocked_recent_activity" } else { "proceed_after_timeout" },
+            );
+            if active {
+                bail!(
+                    "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
+                    session.session_id
+                );
+            }
+            Ok(())
         }
-        None => Ok(()),
     }
 }
 
@@ -1389,16 +1459,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_merge_path_refuses_the_callers_session_before_prepare() {
-        let target_session = session();
-        let sessions = [&target_session];
+    async fn pr_merge_path_refuses_the_callers_later_session_before_prepare() {
+        let first_session = session();
+        let mut caller_session = session();
+        caller_session.session_id = "session-2".to_string();
+        let sessions = [&first_session, &caller_session];
         let args = CloseArgs::default();
         let calls = RefCell::new(Vec::new());
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
             child_parent_session_id: None,
-            caller_session_id: Some("session-1"),
+            caller_session_id: Some("session-2"),
             caller_pane_id: None,
         };
         let result = close_worktree_with(
@@ -1407,6 +1479,10 @@ mod tests {
             async {
                 calls.borrow_mut().push("prepare");
                 Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("validate session");
+                Ok(())
             },
             |_, _, _| {
                 calls.borrow_mut().push("close session");
@@ -1464,6 +1540,10 @@ mod tests {
                 Ok::<(), anyhow::Error>(())
             },
             |_, _, _| {
+                calls.borrow_mut().push("validate session".to_string());
+                Ok(())
+            },
+            |_, _, _| {
                 calls.borrow_mut().push("close session".to_string());
                 Ok(())
             },
@@ -1512,6 +1592,10 @@ mod tests {
             async {
                 calls.borrow_mut().push("prepare");
                 Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("validate session");
+                Ok(())
             },
             |_, _, _| {
                 calls.borrow_mut().push("close session");
@@ -1566,6 +1650,10 @@ mod tests {
                 calls.borrow_mut().push("prepare");
                 Ok::<(), anyhow::Error>(())
             },
+            |_, _, _| {
+                calls.borrow_mut().push("validate session");
+                Ok(())
+            },
             |_, force, _| {
                 calls.borrow_mut().push(if force {
                     "close session with force"
@@ -1585,7 +1673,12 @@ mod tests {
             (result.is_ok(), calls.into_inner()),
             (
                 true,
-                vec!["prepare", "close session with force", "remove worktree"],
+                vec![
+                    "validate session",
+                    "prepare",
+                    "close session with force",
+                    "remove worktree",
+                ],
             ),
         );
     }
@@ -1615,6 +1708,12 @@ mod tests {
                 Ok::<(), anyhow::Error>(())
             },
             |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("validate {}", session.session_id));
+                Ok(())
+            },
+            |session, _, _| {
                 calls.borrow_mut().push(session.session_id.clone());
                 Ok(())
             },
@@ -1633,6 +1732,8 @@ mod tests {
             (
                 Ok(()),
                 vec![
+                    "validate session-1".to_string(),
+                    "validate session-2".to_string(),
                     "prepare".to_string(),
                     "session-1".to_string(),
                     "session-2".to_string(),
@@ -1643,35 +1744,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pr_merge_close_refuses_to_close_other_sessions_without_force() {
-        let target_session = session();
-        let sessions = [&target_session];
+    async fn worktree_close_preflights_every_session_before_closing_any() {
+        let first_session = session();
+        let mut second_session = session();
+        second_session.session_id = "session-2".to_string();
+        let sessions = [&first_session, &second_session];
         let args = CloseArgs::default();
-        let calls = RefCell::new(Vec::new());
+        let calls = RefCell::new(Vec::<String>::new());
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
             child_parent_session_id: None,
-            caller_session_id: Some("caller-session"),
+            caller_session_id: None,
             caller_pane_id: None,
         };
         let result = close_worktree_with(
             context,
-            true,
+            false,
             async {
-                calls.borrow_mut().push("prepare");
+                calls.borrow_mut().push("prepare".to_string());
                 Ok::<(), anyhow::Error>(())
             },
-            |_, force, _| {
-                calls.borrow_mut().push(if force {
-                    "close session with force"
-                } else {
-                    "close session safely"
-                });
-                anyhow::bail!("running session refused to close")
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("validate {}", session.session_id));
+                if session.session_id == "session-2" {
+                    anyhow::bail!("running session refused to close");
+                }
+                Ok(())
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("close {}", session.session_id));
+                Ok(())
             },
             |_| async {
-                calls.borrow_mut().push("remove worktree");
+                calls.borrow_mut().push("remove worktree".to_string());
                 Ok(())
             },
         )
@@ -1684,7 +1794,76 @@ mod tests {
             ),
             (
                 Err("running session refused to close".to_string()),
-                vec!["prepare", "close session safely"],
+                vec![
+                    "validate session-1".to_string(),
+                    "validate session-2".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_reports_sessions_closed_before_a_shutdown_failure() {
+        let first_session = session();
+        let mut second_session = session();
+        second_session.session_id = "session-2".to_string();
+        let sessions = [&first_session, &second_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                Ok::<(), anyhow::Error>(())
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("validate {}", session.session_id));
+                Ok(())
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("close {}", session.session_id));
+                if session.session_id == "session-2" {
+                    anyhow::bail!("shutdown failed");
+                }
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner()
+            ),
+            (
+                Err(
+                    "Failed to close agent session `session-2`; already closed sessions: session-1"
+                        .to_string()
+                ),
+                vec![
+                    "validate session-1".to_string(),
+                    "validate session-2".to_string(),
+                    "prepare".to_string(),
+                    "close session-1".to_string(),
+                    "close session-2".to_string(),
+                ],
             ),
         );
     }
