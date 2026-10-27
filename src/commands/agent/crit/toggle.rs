@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, bail};
 use std::collections::BTreeSet;
 
 use crate::infra::tmux;
@@ -78,32 +78,15 @@ pub(crate) fn toggle_review_pane(
     if crit_pane_ids.is_empty() {
         let url = latest_url.context("No crit review is associated with this agent session")?;
         let port = parse_port(url)?;
-        runtime
-            .window_id_for_pane(parent_pane_id)
-            .with_context(|| {
-                format!("Could not determine window for parent pane {parent_pane_id}")
-            })?;
         ensure_no_port_conflict(port, parent_pane_id, &[], runtime)?;
         return open_review_pane(parent_pane_id, url, port, title, false, runtime);
-    }
-
-    let mut verified_crit_pane_ids = Vec::with_capacity(crit_pane_ids.len());
-    for crit_pane_id in crit_pane_ids {
-        let crit_parent_pane_id = runtime
-            .parent_pane_id_for_crit_pane(&crit_pane_id)
-            .with_context(|| format!("Crit pane {crit_pane_id} has no parent pane ID"))?;
-        ensure!(
-            crit_parent_pane_id == parent_pane_id,
-            "Crit pane {crit_pane_id} belongs to parent pane {crit_parent_pane_id}, not {parent_pane_id}"
-        );
-        verified_crit_pane_ids.push(crit_pane_id);
     }
 
     let parent_window_id = runtime
         .window_id_for_pane(parent_pane_id)
         .with_context(|| format!("Could not determine window for parent pane {parent_pane_id}"))?;
-    let mut crit_panes = Vec::with_capacity(verified_crit_pane_ids.len());
-    for crit_pane_id in verified_crit_pane_ids {
+    let mut crit_panes = Vec::with_capacity(crit_pane_ids.len());
+    for crit_pane_id in crit_pane_ids {
         let crit_window_id = runtime
             .window_id_for_pane(&crit_pane_id)
             .with_context(|| format!("Could not determine window for Crit pane {crit_pane_id}"))?;
@@ -381,7 +364,6 @@ mod tests {
             expected_result: Ok(()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -410,7 +392,6 @@ mod tests {
             expected_result: Ok(()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -437,7 +418,6 @@ mod tests {
             expected_result: Err("No crit review is associated with this agent session".to_string()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -450,13 +430,12 @@ mod tests {
 
     fn ordinary_open_case() -> ToggleCase {
         ToggleCase {
-            runtime: FakeRuntime::new(Vec::new(), &[(PARENT, "@new-window")]),
+            runtime: FakeRuntime::new(Vec::new(), &[]),
             target_pane_id: PARENT,
             latest_url: Some(REVIEW_URL),
             expected_result: Ok(()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_window:%test-parent",
                 "find_port:58321",
                 "focus:%test-parent",
                 "open:%test-parent:http://127.0.0.1:58321/review:58321:force=false",
@@ -478,7 +457,6 @@ mod tests {
             expected_result: Ok(()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "close:%old-crit",
@@ -506,7 +484,6 @@ mod tests {
             ),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -537,7 +514,6 @@ mod tests {
             ),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -571,8 +547,6 @@ mod tests {
             expected_result: Ok(()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%current-crit",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%current-crit",
                 "get_window:%old-crit",
@@ -589,8 +563,6 @@ mod tests {
         let second_old = pane(SECOND_OLD_CRIT, Some(PARENT), Some(59432));
         let mut expected_operations = vec![
             "find_parent:%test-parent",
-            "get_parent:%old-crit",
-            "get_parent:%second-old-crit",
             "get_window:%test-parent",
             "get_window:%old-crit",
             "get_window:%second-old-crit",
@@ -608,7 +580,7 @@ mod tests {
         let (port, url) = if latest_url == SECOND_REVIEW_URL {
             (59432, SECOND_REVIEW_URL)
         } else {
-            expected_operations.insert(10, "find_port:62784".to_string());
+            expected_operations.insert(8, "find_port:62784".to_string());
             (62784, THIRD_REVIEW_URL)
         };
         expected_operations.push(format!("open:%test-parent:{url}:{port}:force={force}"));
@@ -642,8 +614,6 @@ mod tests {
             Err("Failed to close Crit panes: %second-old-crit: Crit pane close failed".to_string());
         case.expected_operations = vec![
             "find_parent:%test-parent",
-            "get_parent:%old-crit",
-            "get_parent:%second-old-crit",
             "get_window:%test-parent",
             "get_window:%old-crit",
             "get_window:%second-old-crit",
@@ -688,7 +658,6 @@ mod tests {
             ),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -718,7 +687,6 @@ mod tests {
             expected_result: Err("Crit port lookup failed".to_string()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -741,14 +709,10 @@ mod tests {
             expected_result: Err(
                 "Could not determine window for parent pane %test-parent".to_string()
             ),
-            expected_operations: vec![
-                "find_parent:%test-parent",
-                "get_parent:%old-crit",
-                "get_window:%test-parent",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
+            expected_operations: vec!["find_parent:%test-parent", "get_window:%test-parent"]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
         }
     }
 
@@ -763,7 +727,6 @@ mod tests {
             expected_result: Err("Crit pane %old-crit has no valid port".to_string()),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_parent:%old-crit",
                 "get_window:%test-parent",
                 "get_window:%old-crit",
                 "get_port:%old-crit",
@@ -774,7 +737,7 @@ mod tests {
         }
     }
 
-    fn missing_parent_case() -> ToggleCase {
+    fn unreadable_parent_option_case() -> ToggleCase {
         let mut runtime = FakeRuntime::new(
             vec![pane(OLD_CRIT, Some(PARENT), Some(58321))],
             &[(PARENT, "@new-window"), (OLD_CRIT, "@old-window")],
@@ -784,11 +747,20 @@ mod tests {
             runtime,
             target_pane_id: PARENT,
             latest_url: Some(REVIEW_URL),
-            expected_result: Err("Crit pane %old-crit has no parent pane ID".to_string()),
-            expected_operations: vec!["find_parent:%test-parent", "get_parent:%old-crit"]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
+            expected_result: Ok(()),
+            expected_operations: vec![
+                "find_parent:%test-parent",
+                "get_window:%test-parent",
+                "get_window:%old-crit",
+                "get_port:%old-crit",
+                "find_port:58321",
+                "close:%old-crit",
+                "focus:%test-parent",
+                "open:%test-parent:http://127.0.0.1:58321/review:58321:force=true",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
         }
     }
 
@@ -806,7 +778,6 @@ mod tests {
             ),
             expected_operations: vec![
                 "find_parent:%test-parent",
-                "get_window:%test-parent",
                 "find_port:58321",
                 "get_parent:%other-crit",
             ]
@@ -855,7 +826,7 @@ mod tests {
     #[case::stops_when_close_fails(close_failure_case())]
     #[case::stops_when_a_window_id_is_unknown(missing_window_case())]
     #[case::stops_when_the_old_port_is_unknown(missing_port_case())]
-    #[case::stops_when_the_old_parent_id_is_unknown(missing_parent_case())]
+    #[case::does_not_reread_the_parent_option(unreadable_parent_option_case())]
     #[case::rejects_another_parents_same_port_on_a_fresh_open(ordinary_open_conflict_case())]
     fn toggle_review_pane_runs_expected_operations(#[case] case: ToggleCase) {
         let result = toggle_review_pane(

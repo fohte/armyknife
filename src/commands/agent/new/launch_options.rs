@@ -1,7 +1,9 @@
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::commands::agent::types::{Engine, ReasoningEffort};
-use crate::shared::config::{Config, ResolvedAgentProfileType, ResolvedLaunchOptions};
+use crate::shared::config::{
+    AgentProfileTypeEngine, Config, ResolvedAgentProfileType, ResolvedLaunchOptions,
+};
 
 use super::CommonNewArgs;
 
@@ -43,27 +45,49 @@ pub(super) fn resolve_profile_type_launch_options(
     common: &CommonNewArgs,
     resolved: &ResolvedAgentProfileType,
 ) -> Result<ResolvedProfileTypeLaunchOptions> {
+    let profile_engine = match resolved.settings.engine {
+        AgentProfileTypeEngine::Claude => Engine::Claude,
+        AgentProfileTypeEngine::Codex => Engine::Codex,
+        AgentProfileTypeEngine::Agy => bail!(
+            "agent type `{}` in profile `{}` uses engine `agy`, which cannot be used with `a agent new --type`",
+            resolved.type_name,
+            resolved.profile_name,
+        ),
+    };
+
     if let Some(engine) = common.engine
-        && engine != resolved.settings.engine
+        && engine != profile_engine
         && common.model.is_none()
     {
         bail!(
             "`--engine {}` differs from type `{}` engine `{}`; specify `--model`",
             engine.process_name(),
             resolved.type_name,
-            resolved.settings.engine.process_name(),
+            profile_engine.process_name(),
         );
     }
 
     Ok(ResolvedProfileTypeLaunchOptions {
-        engine: common.engine.unwrap_or(resolved.settings.engine),
+        engine: common.engine.unwrap_or(profile_engine),
         model: common
             .model
             .clone()
-            .unwrap_or_else(|| resolved.settings.model.clone()),
+            .or_else(|| resolved.settings.model.clone())
+            .with_context(|| {
+                format!(
+                    "agent type `{}` in profile `{}` has no model; specify `--model`",
+                    resolved.type_name, resolved.profile_name
+                )
+            })?,
         reasoning_effort: common
             .reasoning_effort
-            .unwrap_or(resolved.settings.reasoning_effort),
+            .or(resolved.settings.reasoning_effort)
+            .with_context(|| {
+                format!(
+                    "agent type `{}` in profile `{}` has no reasoning_effort; specify `--reasoning-effort`",
+                    resolved.type_name, resolved.profile_name
+                )
+            })?,
     })
 }
 
@@ -94,6 +118,15 @@ mod tests {
         serde_yaml::from_str(indoc! {
             "
             agent:
+              codex:
+                model: model-global
+                reasoning_effort: max
+              launch_profiles:
+                review:
+                  engine: codex
+                  codex:
+                    model: model-kind
+                    reasoning_effort: low
               active_profile: sample-profile
               profiles:
                 sample-profile:
@@ -104,6 +137,17 @@ mod tests {
             "
         })
         .unwrap()
+    }
+
+    fn review_type_settings_mut(
+        config: &mut Config,
+    ) -> &mut crate::shared::config::AgentProfileTypeConfig {
+        config
+            .agent
+            .profiles
+            .get_mut("sample-profile")
+            .and_then(|profile| profile.get_mut("review"))
+            .expect("review profile type should be configured")
     }
 
     #[rstest]
@@ -143,5 +187,89 @@ mod tests {
             resolve_launch_options(&cli.common, &config).map_err(|error| error.to_string());
 
         assert_eq!(result, Err(expected_error.to_string()));
+    }
+
+    #[rstest]
+    #[case::missing_model(
+        true,
+        false,
+        "agent type `review` in profile `sample-profile` has no model; specify `--model`"
+    )]
+    #[case::missing_reasoning_effort(
+        false,
+        true,
+        "agent type `review` in profile `sample-profile` has no reasoning_effort; specify `--reasoning-effort`"
+    )]
+    fn requires_profile_values_without_global_or_kind_fallbacks(
+        #[case] omit_model: bool,
+        #[case] omit_reasoning_effort: bool,
+        #[case] expected_error: &str,
+        mut config: Config,
+    ) {
+        let settings = review_type_settings_mut(&mut config);
+        if omit_model {
+            settings.model = None;
+        }
+        if omit_reasoning_effort {
+            settings.reasoning_effort = None;
+        }
+        let cli = TestCli::try_parse_from(["a", "--kind", "review", "--type", "review"]).unwrap();
+
+        let result =
+            resolve_launch_options(&cli.common, &config).map_err(|error| error.to_string());
+
+        assert_eq!(result, Err(expected_error.to_string()));
+    }
+
+    #[rstest]
+    fn cli_flags_supply_both_omitted_profile_values(mut config: Config) {
+        let settings = review_type_settings_mut(&mut config);
+        settings.model = None;
+        settings.reasoning_effort = None;
+        let cli = TestCli::try_parse_from([
+            "a",
+            "--type",
+            "review",
+            "--model",
+            "model-raven",
+            "--reasoning-effort",
+            "low",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            resolve_launch_options(&cli.common, &config).unwrap(),
+            ResolvedLaunchOptions {
+                engine: Engine::Codex,
+                model: Some("model-raven".to_string()),
+                reasoning_effort: Some(ReasoningEffort::Low),
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::profile_defaults(&["a", "--type", "review"])]
+    #[case::engine_and_model_overrides(&[
+        "a",
+        "--type",
+        "review",
+        "--engine",
+        "claude",
+        "--model",
+        "model-raven",
+    ])]
+    fn rejects_agy_profile_types_for_session_launch(#[case] argv: &[&str], mut config: Config) {
+        let settings = review_type_settings_mut(&mut config);
+        settings.engine = AgentProfileTypeEngine::Agy;
+        settings.reasoning_effort = None;
+        let cli = TestCli::try_parse_from(argv).unwrap();
+
+        let result =
+            resolve_launch_options(&cli.common, &config).map_err(|error| error.to_string());
+
+        assert_eq!(
+            result,
+            Err("agent type `review` in profile `sample-profile` uses engine `agy`, which cannot be used with `a agent new --type`".to_string()),
+        );
     }
 }

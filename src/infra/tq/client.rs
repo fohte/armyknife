@@ -84,6 +84,16 @@ pub struct SessionTasks {
     pub tasks: Vec<TqTask>,
 }
 
+/// Minimal task metadata needed by task-scoped integrations.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TqTaskDetails {
+    pub id: String,
+    pub number: u32,
+    #[serde(default)]
+    pub github_links: Vec<TqGithubLink>,
+}
+
 pub struct TqClient;
 
 impl TqClient {

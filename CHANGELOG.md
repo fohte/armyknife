@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.1.470](https://github.com/fohte/armyknife/compare/v0.1.469...v0.1.470) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** tolerate transient tmux query failures ([#1281](https://github.com/fohte/armyknife/issues/1281)) ([6d9f0fc](https://github.com/fohte/armyknife/commit/6d9f0fc53209336c3c1a415d40282dd714a4f000))
+
+## [0.1.469](https://github.com/fohte/armyknife/compare/v0.1.468...v0.1.469) (2026-10-27)
+
+
+### Features
+
+* **ai:** add PR series plan sync ([#1279](https://github.com/fohte/armyknife/issues/1279)) ([1d0c976](https://github.com/fohte/armyknife/commit/1d0c976a588bcf049d7031746f6f4e3796f1b218))
+
+## [0.1.468](https://github.com/fohte/armyknife/compare/v0.1.467...v0.1.468) (2026-10-27)
+
+
+### Features
+
+* **agent:** allow agy and optional type settings ([#1275](https://github.com/fohte/armyknife/issues/1275)) ([27535aa](https://github.com/fohte/armyknife/commit/27535aa6210dcb09008c435108bbd2c39f578907))
+
+## [0.1.467](https://github.com/fohte/armyknife/compare/v0.1.466...v0.1.467) (2026-10-27)
+
+
+### Features
+
+* **config:** allow active profile lookups ([#1272](https://github.com/fohte/armyknife/issues/1272)) ([99a1402](https://github.com/fohte/armyknife/commit/99a1402dd984190db70acde753805a2b86f8f86f))
+
+## [0.1.466](https://github.com/fohte/armyknife/compare/v0.1.465...v0.1.466) (2026-10-26)
+
+
+### Bug Fixes
+
+* **agent:** allow Git operations in attribution ([#1270](https://github.com/fohte/armyknife/issues/1270)) ([2f5c90a](https://github.com/fohte/armyknife/commit/2f5c90a2774cd1e9304505acbdd4281edd52f930))
+
 ## [0.1.465](https://github.com/fohte/armyknife/compare/v0.1.464...v0.1.465) (2026-10-25)
 
 

@@ -68,6 +68,8 @@ pub(super) fn record_codex_resume_metadata_if_needed(
         agent_status: None,
         agent_status_clear_pending: false,
         engine: Engine::Codex,
+        model: None,
+        effort: None,
     });
 
     if apply_resume_metadata(&mut session, &ancestor_session_ids, launched_with_vibe) {
@@ -158,6 +160,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Codex,
+            model: None,
+            effort: None,
         }
     }
 

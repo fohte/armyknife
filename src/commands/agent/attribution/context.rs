@@ -20,32 +20,16 @@ pub(super) enum ModelIdentity {
 
 impl ModelIdentity {
     pub(super) fn known(raw_slug: String) -> Result<Self> {
-        if raw_slug.trim().is_empty() || raw_slug.contains(['\n', '\r', '\0']) {
-            anyhow::bail!("runtime model slug is empty or cannot fit in a trailer");
+        if raw_slug.trim().is_empty() || raw_slug.contains(['\n', '\r', '\0', '<', '>']) {
+            anyhow::bail!("runtime model slug is empty or cannot fit in a co-author trailer");
         }
         Ok(Self::Known { raw_slug })
     }
 
-    pub(super) fn unknown(reason: Option<&str>) -> Result<Self> {
-        let reason = reason
-            .filter(|reason| !reason.trim().is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "runtime model is unavailable and no explicit unknown reason was supplied"
-                )
-            })?;
-        if reason.contains(['\n', '\r', '\0']) {
-            anyhow::bail!("unknown reason must be a single line");
-        }
-        Ok(Self::Unknown {
-            reason: reason.to_owned(),
-        })
-    }
-
-    pub(super) fn trailer_value(&self) -> &str {
+    pub(super) fn raw_slug(&self) -> Option<&str> {
         match self {
-            Self::Known { raw_slug } => raw_slug,
-            Self::Unknown { .. } => "unknown",
+            Self::Known { raw_slug } => Some(raw_slug),
+            Self::Unknown { .. } => None,
         }
     }
 }
@@ -58,20 +42,6 @@ pub(super) struct OperationContext {
     model: ModelIdentity,
     tool_use_id: String,
     created_at: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub(super) struct CommitTarget {
-    pub(super) repository: String,
-    pub(super) reference: String,
-    pub(super) old_oid: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ClaimRecord {
-    operation_id: String,
-    #[serde(default)]
-    target: Option<CommitTarget>,
 }
 
 impl OperationContext {
@@ -93,12 +63,18 @@ impl OperationContext {
         })
     }
 
-    pub(super) fn tool(&self) -> &'static str {
-        self.provider.label()
-    }
-
+    #[cfg(test)]
     pub(super) fn model(&self) -> &ModelIdentity {
         &self.model
+    }
+
+    pub(super) fn coauthor_trailer(&self) -> Option<String> {
+        let model = self.model.raw_slug()?;
+        let (name, email) = match self.provider {
+            Provider::Codex => ("Codex", "noreply@openai.com"),
+            Provider::ClaudeCode => ("Claude Code", "noreply@anthropic.com"),
+        };
+        Some(format!("Co-authored-by: {name} ({model}) <{email}>"))
     }
 
     fn operation_id(&self) -> &str {
@@ -130,14 +106,6 @@ pub(super) fn create(context: &OperationContext, directory: &Path) -> Result<Pat
 }
 
 pub(super) fn claim(path: &Path, now: i64) -> Result<OperationContext> {
-    claim_with_target(path, now, None)
-}
-
-pub(super) fn claim_with_target(
-    path: &Path,
-    now: i64,
-    target: Option<CommitTarget>,
-) -> Result<OperationContext> {
     let context = read(path)?;
     if is_expired(&context, now) {
         anyhow::bail!("attribution context is stale");
@@ -154,52 +122,18 @@ pub(super) fn claim_with_target(
                 path.display()
             )
         })?;
-    if let Some(target) = target {
-        let record = ClaimRecord {
-            operation_id: context.operation_id().to_owned(),
-            target: Some(target),
-        };
-        serde_json::to_writer(&mut claim_file, &record)
-            .context("failed to mark attribution context as claimed")?;
-    } else {
-        claim_file
-            .write_all(context.operation_id().as_bytes())
-            .context("failed to mark attribution context as claimed")?;
-    }
+    claim_file
+        .write_all(context.operation_id().as_bytes())
+        .context("failed to mark attribution context as claimed")?;
     claim_file
         .sync_all()
         .context("failed to sync attribution claim")?;
     Ok(context)
 }
 
-pub(super) fn claimed_context(path: &Path) -> Result<OperationContext> {
-    let context = read(path)?;
-    let claim = read_claim(path)?;
-    verify_claim_matches(&context, &claim)?;
-    Ok(context)
-}
-
-pub(super) fn claimed_final_object_context(
-    path: &Path,
-) -> Result<(OperationContext, CommitTarget)> {
-    let context = read(path)?;
-    let claim = read_claim(path)?;
-    verify_claim_matches(&context, &claim)?;
-    let target = claim
-        .target
-        .ok_or_else(|| anyhow::anyhow!("attribution claim has no final-object target"))?;
-    Ok((context, target))
-}
-
 pub(super) fn is_expired(context: &OperationContext, now: i64) -> bool {
     let age = now.saturating_sub(context.created_at);
     age < 0 || Duration::from_secs(age as u64) > CONTEXT_TTL
-}
-
-pub(super) fn consume(path: &Path) -> Result<()> {
-    let claim = claim_path(path);
-    remove_if_present(path).context("failed to remove attribution context")?;
-    remove_if_present(&claim).context("failed to remove attribution claim")
 }
 
 pub(super) fn discard(path: &Path) -> Result<()> {
@@ -230,34 +164,6 @@ fn claim_path(path: &Path) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(".claimed");
     path.with_file_name(name)
-}
-
-fn read_claim(path: &Path) -> Result<ClaimRecord> {
-    read_claim_if_present(path)?
-        .ok_or_else(|| anyhow::anyhow!("attribution context has no matching commit-message claim"))
-}
-
-fn read_claim_if_present(path: &Path) -> Result<Option<ClaimRecord>> {
-    let claim_path = claim_path(path);
-    let raw = match fs::read_to_string(&claim_path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("failed to read attribution claim"),
-    };
-    match serde_json::from_str(&raw) {
-        Ok(claim) => Ok(Some(claim)),
-        Err(_) => Ok(Some(ClaimRecord {
-            operation_id: raw,
-            target: None,
-        })),
-    }
-}
-
-fn verify_claim_matches(context: &OperationContext, claim: &ClaimRecord) -> Result<()> {
-    if claim.operation_id != context.operation_id() {
-        anyhow::bail!("attribution commit-message claim does not match its context");
-    }
-    Ok(())
 }
 
 fn remove_if_present(path: &Path) -> Result<()> {

@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use serde_json::Value;
 
+use super::super::transcript::claude_assistant_model;
 use super::super::types::{AgentStatus, Session};
 use super::FORK_SETTINGS;
 use super::response::parse_claude_output;
@@ -82,14 +83,7 @@ fn latest_model(transcript_path: &Path) -> Result<String> {
         let Ok(event) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if event.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        if let Some(value) = event
-            .pointer("/message/model")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        {
+        if let Some(value) = claude_assistant_model(&event) {
             model = Some(value.to_string());
         }
     }
