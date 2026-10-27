@@ -39,63 +39,20 @@ impl AgentProfileTypeEngine {
         }
     }]))
 )]
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentProfileTypeConfig {
     /// Coding agent CLI configured for this type.
     pub engine: AgentProfileTypeEngine,
 
-    /// Model passed to the selected engine when set; `a agent new --type` requires this field or `--model`.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Model passed to the selected engine when set; `a agent new --type` requires a non-empty value or `--model`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
     pub model: Option<String>,
 
     /// Reasoning effort used for this type when set; `a agent new --type` requires this field or `--reasoning-effort`, and agy does not support it.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawAgentProfileTypeConfig {
-    engine: AgentProfileTypeEngine,
-    #[serde(default, deserialize_with = "deserialize_optional_non_empty_model")]
-    model: Option<String>,
-    #[serde(default)]
-    reasoning_effort: Option<ReasoningEffort>,
-}
-
-impl<'de> Deserialize<'de> for AgentProfileTypeConfig {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let raw = RawAgentProfileTypeConfig::deserialize(deserializer)?;
-        if raw.engine == AgentProfileTypeEngine::Agy && raw.reasoning_effort.is_some() {
-            return Err(serde::de::Error::custom(
-                "reasoning_effort is not supported for the agy engine",
-            ));
-        }
-
-        Ok(Self {
-            engine: raw.engine,
-            model: raw.model,
-            reasoning_effort: raw.reasoning_effort,
-        })
-    }
-}
-
-fn deserialize_optional_non_empty_model<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let model = Option::<String>::deserialize(deserializer)?;
-    if model.as_deref() == Some("") {
-        return Err(<D::Error as serde::de::Error>::custom(
-            "model must be a non-empty string",
-        ));
-    }
-    Ok(model)
 }
 
 /// A profile and type resolved from `agent.active_profile`.
@@ -471,18 +428,43 @@ mod tests {
     }
 
     #[rstest]
+    #[case::empty_model(
+        indoc! {"
+            engine: codex
+            model: \"\"
+            reasoning_effort: high
+        "},
+        AgentProfileTypeConfig {
+            engine: AgentProfileTypeEngine::Codex,
+            model: Some(String::new()),
+            reasoning_effort: Some(ReasoningEffort::High),
+        },
+    )]
+    #[case::agy_reasoning_effort(
+        indoc! {"
+            engine: agy
+            reasoning_effort: low
+        "},
+        AgentProfileTypeConfig {
+            engine: AgentProfileTypeEngine::Agy,
+            model: None,
+            reasoning_effort: Some(ReasoningEffort::Low),
+        },
+    )]
+    fn parses_profile_type_settings_deferred_to_launch(
+        #[case] yaml: &str,
+        #[case] expected: AgentProfileTypeConfig,
+    ) {
+        assert_eq!(
+            serde_yaml::from_str::<AgentProfileTypeConfig>(yaml).unwrap(),
+            expected,
+        );
+    }
+
+    #[rstest]
     #[case::missing_engine(indoc! {"
         model: model-ember
         reasoning_effort: high
-    "})]
-    #[case::empty_model(indoc! {"
-        engine: codex
-        model: \"\"
-        reasoning_effort: high
-    "})]
-    #[case::agy_reasoning_effort(indoc! {"
-        engine: agy
-        reasoning_effort: low
     "})]
     #[case::unknown_engine(indoc! {"
         engine: unknown

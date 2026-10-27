@@ -623,10 +623,6 @@ fn load_config_excluding_file(excluded_file: Option<&str>) -> anyhow::Result<Con
     let blame_path = dir.unwrap_or_default();
 
     let config = deserialize_config_with_overlay(yaml_merged, &blame_path, env_overlay())?;
-    config
-        .agent
-        .validate()
-        .map_err(|message| anyhow::anyhow!("Invalid agent configuration: {message}"))?;
     Ok(config)
 }
 
@@ -1205,7 +1201,7 @@ mod tests {
     }
 
     #[test]
-    fn load_config_rejects_invalid_codex_inference_enablement() {
+    fn load_config_accepts_invalid_optional_agent_settings() {
         let config_home = TempDir::new().unwrap();
         let config_dir = config_home.path().join("armyknife");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -1219,12 +1215,21 @@ mod tests {
                   codex_status_inference:
                     enabled: true
                     failure_status: { kind: follow_up_needed, note: investigate failure }
+                  profiles:
+                    sample-profile:
+                      empty-model:
+                        engine: codex
+                        model: ''
+                        reasoning_effort: high
+                      agy-reasoning:
+                        engine: agy
+                        reasoning_effort: low
             "},
         )
         .unwrap();
         let config_home = config_home.path().to_str().unwrap().to_string();
 
-        let error = temp_env::with_vars(
+        let result = temp_env::with_vars(
             [
                 ("XDG_CONFIG_HOME", Some(config_home.as_str())),
                 (
@@ -1232,13 +1237,22 @@ mod tests {
                     None::<&str>,
                 ),
             ],
-            load_config,
+            || {
+                let config = load_config()?;
+                let profile = &config.agent.profiles["sample-profile"];
+
+                Ok::<_, anyhow::Error>((
+                    config.agent.configured_codex_status_inference().is_some(),
+                    profile["empty-model"].model.clone(),
+                    profile["agy-reasoning"].reasoning_effort,
+                ))
+            },
         )
-        .expect_err("missing background status should reject Codex inference enablement");
+        .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
-            format!("{error:#}"),
-            "Invalid agent configuration: agent.codex_status_inference.background_status is required when Codex inference is enabled",
+            result,
+            Ok((false, Some(String::new()), Some(ReasoningEffort::Low)))
         );
     }
 
