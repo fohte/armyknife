@@ -76,20 +76,19 @@ impl LocalComment {
     pub fn parse(content: &str, filename: String, path: &Path) -> Result<Self> {
         let lines: Vec<&str> = content.lines().collect();
 
-        // Split into header lines (metadata comments) and body lines
         let header_end = lines
             .iter()
-            .position(|line| !line.starts_with("<!--") && !line.is_empty())
-            .unwrap_or(lines.len());
+            .take_while(|line| line.starts_with("<!--"))
+            .count();
 
         let metadata = CommentFileMetadata::parse_from_lines(&lines[..header_end], path)?;
 
-        // Body starts after first empty line following headers, or at first non-metadata line
-        let body_start = lines[header_end..]
-            .iter()
-            .position(|line| !line.is_empty())
-            .map(|pos| header_end + pos)
-            .unwrap_or(lines.len());
+        // The separator distinguishes metadata comments from HTML comments in the body.
+        let body_start = if lines.get(header_end) == Some(&"") {
+            header_end + 1
+        } else {
+            header_end
+        };
 
         let body = lines[body_start..].join("\n");
 
@@ -130,6 +129,8 @@ impl LocalComment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::{TimeZone, Utc};
+    use indoc::indoc;
     use rstest::rstest;
 
     #[rstest]
@@ -144,5 +145,52 @@ mod tests {
         #[case] expected: Option<(&str, String)>,
     ) {
         assert_eq!(CommentFileMetadata::extract_key_value(line), expected);
+    }
+
+    #[rstest]
+    #[case::single_html_comment(indoc!("<!-- sticky marker -->"))]
+    #[case::html_comment_before_text(indoc! {"
+        <!-- sticky marker -->
+        Comment text"})]
+    #[case::html_comment_before_blank_line(indoc! {"
+        <!-- sticky marker -->
+
+        Comment text"})]
+    fn test_format_and_parse_preserve_body_starting_with_html_comment(#[case] body: &str) {
+        let timestamp = Utc.with_ymd_and_hms(2031, 4, 5, 6, 7, 8).unwrap();
+        let comment = Comment {
+            id: "IC_sample".to_string(),
+            database_id: 17,
+            author: Some(crate::commands::gh::issue_agent::models::Author {
+                login: "sample-author".to_string(),
+            }),
+            created_at: timestamp,
+            updated_at: timestamp,
+            body: body.to_string(),
+        };
+
+        let content = LocalComment::format_from_comment(&comment);
+        let parsed =
+            LocalComment::parse(&content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some(timestamp.to_rfc3339()),
+                Some(timestamp.to_rfc3339()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                body.to_string(),
+            ),
+        );
     }
 }
