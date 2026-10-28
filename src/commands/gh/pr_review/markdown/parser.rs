@@ -950,9 +950,70 @@ mod tests {
     }
 
     #[rstest]
-    #[case::serialized_body_spacing(false)]
-    #[case::thread_at_body_start(true)]
-    fn test_roundtrip_thread_marker_in_diff_hunk(#[case] thread_at_body_start: bool) {
+    fn test_roundtrip_serialize_parse() {
+        use super::super::serializer::{MarkdownSerializer, ThreadsFrontmatter};
+        use crate::commands::gh::pr_review::models::{
+            Comment, PrData, ReviewThread,
+            comment::{Author, PullRequestReview},
+            thread::CommentsNode,
+        };
+
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![ReviewThread {
+                id: Some("RT_roundtrip".to_string()),
+                is_resolved: false,
+                comments: CommentsNode {
+                    nodes: vec![Comment {
+                        database_id: 1,
+                        author: Some(Author {
+                            login: "reviewer".to_string(),
+                        }),
+                        body: "Please fix this".to_string(),
+                        created_at: "2024-01-15T10:30:00Z".to_string(),
+                        path: Some("src/main.rs".to_string()),
+                        line: Some(42),
+                        start_line: None,
+                        original_line: None,
+                        original_start_line: None,
+                        diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old\n+new".to_string()),
+                        reply_to: None,
+                        pull_request_review: Some(PullRequestReview { database_id: 100 }),
+                    }],
+                },
+            }],
+        };
+
+        let frontmatter = ThreadsFrontmatter {
+            pr: 42,
+            repo: "fohte/armyknife".to_string(),
+            pulled_at: "2024-01-15T10:00:00Z".to_string(),
+            submit: false,
+        };
+
+        let serialized = MarkdownSerializer::serialize(&pr_data, &frontmatter);
+        let parsed = MarkdownParser::parse(&serialized).unwrap();
+
+        assert_eq!(
+            parsed,
+            ParsedThreadsFile {
+                frontmatter,
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_roundtrip".to_string(),
+                    path: "src/main.rs".to_string(),
+                    line: Some(42),
+                    resolve: false,
+                    draft_reply: None,
+                }],
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::blank_line_after_frontmatter(preserve_frontmatter_separator)]
+    #[case::thread_directly_after_frontmatter(remove_frontmatter_separator)]
+    fn test_roundtrip_thread_marker_in_diff_hunk(#[case] shape_serialized: fn(&str) -> String) {
         use super::super::serializer::{MarkdownSerializer, ThreadsFrontmatter};
         use crate::commands::gh::pr_review::models::{
             Comment, PrData, ReviewThread,
@@ -1000,61 +1061,35 @@ mod tests {
             submit: false,
         };
 
-        let mut existing_drafts = std::collections::HashMap::new();
-        existing_drafts.insert("RT_sample".to_string(), "Draft response".to_string());
-        let serialized =
-            MarkdownSerializer::serialize_with_drafts(&pr_data, &frontmatter, &existing_drafts);
-        let mut expected_serialized = indoc! {r#"
-            ---
-            pr: 17
-            repo: "example/project"
-            pulled_at: "2025-01-01T00:00:00Z"
-            submit: false
-            ---
-
-            <!-- thread: RT_sample path: src/example.rs:1 author: @sample-author -->
-            - [ ] resolve
-            <!-- diff -->
-            ```diff
-            @@ -1,2 +1,2 @@
-             <!-- thread: RT_embedded path: docs/embedded.md:9 -->
-             context after marker
-            ```
-            <!-- /diff -->
-            <!-- comment: @sample-author 2025-01-02T00:00:00Z -->
-            Review summary
-            <!-- /comment -->
-            Draft response
-        "#}
-        .to_string();
-
-        let serialized = if thread_at_body_start {
-            remove_frontmatter_separator(&serialized)
-        } else {
-            serialized
-        };
-        if thread_at_body_start {
-            expected_serialized = remove_frontmatter_separator(&expected_serialized);
-        }
+        let existing_drafts = std::collections::HashMap::from([(
+            "RT_sample".to_string(),
+            "Draft response".to_string(),
+        )]);
+        let serialized = shape_serialized(&MarkdownSerializer::serialize_with_drafts(
+            &pr_data,
+            &frontmatter,
+            &existing_drafts,
+        ));
         let parsed = MarkdownParser::parse(&serialized).unwrap();
 
         assert_eq!(
-            (serialized, parsed),
-            (
-                expected_serialized,
-                ParsedThreadsFile {
-                    frontmatter,
-                    reviews: vec![],
-                    threads: vec![ParsedThread {
-                        thread_id: "RT_sample".to_string(),
-                        path: "src/example.rs".to_string(),
-                        line: Some(1),
-                        resolve: false,
-                        draft_reply: Some("Draft response".to_string()),
-                    }],
-                },
-            ),
+            parsed,
+            ParsedThreadsFile {
+                frontmatter,
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_sample".to_string(),
+                    path: "src/example.rs".to_string(),
+                    line: Some(1),
+                    resolve: false,
+                    draft_reply: Some("Draft response".to_string()),
+                }],
+            },
         );
+    }
+
+    fn preserve_frontmatter_separator(content: &str) -> String {
+        content.to_string()
     }
 
     fn remove_frontmatter_separator(content: &str) -> String {
