@@ -69,9 +69,18 @@ fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
     }
 }
 
-fn verify_push_approval(path: &std::path::Path) -> anyhow::Result<()> {
-    let document = Document::<ThreadsFrontmatter>::from_path(path.to_path_buf())?;
-    document.verify_approval()?;
+fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    let document = Document::<ThreadsFrontmatter>::from_content(path.to_path_buf(), content)?;
+    document
+        .approval_manager()
+        .verify_content(content.as_bytes())?;
+
+    if std::fs::read(path)? != content.as_bytes() {
+        return Err(
+            crate::shared::human_in_the_loop::HumanInTheLoopError::ModifiedAfterApproval.into(),
+        );
+    }
+
     Ok(())
 }
 
@@ -176,7 +185,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         PushPlan::Apply => {
             changeset.display();
             let client = GitHubClient::get()?;
-            verify_push_approval(&storage.threads_path())?;
+            verify_push_approval(&storage.threads_path(), &content)?;
             changeset
                 .apply(client, &owner, &repo, args.pr_number)
                 .await?;
@@ -272,6 +281,37 @@ mod tests {
                 .unwrap();
         }
 
-        assert_eq!(verify_push_approval(&path).is_ok(), expected);
+        assert_eq!(verify_push_approval(&path, content).is_ok(), expected);
+    }
+
+    #[rstest]
+    fn test_verify_push_approval_rejects_file_changed_after_parse() {
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        let parsed_content = indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Approved reply"};
+        std::fs::write(&path, parsed_content).unwrap();
+        let parsed_content = std::fs::read_to_string(&path).unwrap();
+        Document::<ThreadsFrontmatter>::from_path(path.clone())
+            .unwrap()
+            .save_approval()
+            .unwrap();
+        std::fs::write(
+            &path,
+            parsed_content.replace("Approved reply", "Unapproved reply"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            verify_push_approval(&path, &parsed_content).map_err(|_| ()),
+            Err(())
+        );
     }
 }

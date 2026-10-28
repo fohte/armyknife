@@ -84,7 +84,21 @@ impl ApprovalManager {
             return Err(HumanInTheLoopError::NotApproved);
         }
         let saved = fs::read_to_string(&self.approve_path)?.trim().to_string();
-        let current = self.compute_mac()?;
+        let content = fs::read(&self.document_path)?;
+        self.verify_mac(&saved, &content)
+    }
+
+    /// Verify approval for content already loaded by the caller.
+    pub fn verify_content(&self, content: &[u8]) -> Result<()> {
+        if !self.exists() {
+            return Err(HumanInTheLoopError::NotApproved);
+        }
+        let saved = fs::read_to_string(&self.approve_path)?.trim().to_string();
+        self.verify_mac(&saved, content)
+    }
+
+    fn verify_mac(&self, saved: &str, content: &[u8]) -> Result<()> {
+        let current = Self::compute_mac_for_content(content);
         if !constant_time_eq(saved.as_bytes(), current.as_bytes()) {
             return Err(HumanInTheLoopError::ModifiedAfterApproval);
         }
@@ -93,13 +107,14 @@ impl ApprovalManager {
 
     fn compute_mac(&self) -> std::io::Result<String> {
         let content = fs::read(&self.document_path)?;
+        Ok(Self::compute_mac_for_content(&content))
+    }
+
+    fn compute_mac_for_content(content: &[u8]) -> String {
         let mut input = Vec::with_capacity(APPROVAL_MAC_DOMAIN.len() + content.len());
         input.extend_from_slice(APPROVAL_MAC_DOMAIN);
-        input.extend_from_slice(&content);
-        Ok(crate::shared::hex::encode(&hmac_sha256(
-            &APPROVAL_HMAC_KEY,
-            &input,
-        )))
+        input.extend_from_slice(content);
+        crate::shared::hex::encode(&hmac_sha256(&APPROVAL_HMAC_KEY, &input))
     }
 }
 

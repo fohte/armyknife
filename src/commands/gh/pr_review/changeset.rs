@@ -424,68 +424,68 @@ mod tests {
     }
 
     #[rstest]
-    fn test_detect_ignores_new_comments_on_threads_without_actions() {
-        let local = make_parsed_file(vec![
+    #[case::inactive_threads(
+        vec![
             make_local_thread("RT_idle", false, None),
             make_local_thread("RT_resolved", true, None),
-        ]);
-        let remote = PrData {
-            reviews: vec![],
-            threads: vec![
-                make_remote_thread(
-                    "RT_idle",
-                    vec![make_comment(1, "user", "2024-01-15T11:00:00Z")],
-                    false,
-                ),
-                make_remote_thread(
-                    "RT_resolved",
-                    vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
-                    true,
-                ),
-            ],
-        };
-
-        assert_eq!(
-            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
-            ReplyChangeSet {
-                actions: vec![],
-                conflicts: vec![],
-            }
-        );
-    }
-
-    #[rstest]
-    fn test_detect_ignores_new_comments_on_unrelated_threads() {
-        let local = make_parsed_file(vec![
+        ],
+        vec![
+            make_remote_thread(
+                "RT_idle",
+                vec![make_comment(1, "user", "2024-01-15T11:00:00Z")],
+                false,
+            ),
+            make_remote_thread(
+                "RT_resolved",
+                vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
+                true,
+            ),
+        ],
+        ReplyChangeSet {
+            actions: vec![],
+            conflicts: vec![],
+        }
+    )]
+    #[case::unrelated_thread(
+        vec![
             make_local_thread("RT_action", false, Some("My reply")),
             make_local_thread("RT_unrelated", false, None),
-        ]);
+        ],
+        vec![
+            make_remote_thread(
+                "RT_action",
+                vec![make_comment(1, "user", "2024-01-15T09:00:00Z")],
+                false,
+            ),
+            make_remote_thread(
+                "RT_unrelated",
+                vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
+                false,
+            ),
+        ],
+        ReplyChangeSet {
+            actions: vec![ReplyAction::PostReply {
+                thread_id: "RT_action".to_string(),
+                in_reply_to: 1,
+                body: "My reply".to_string(),
+            }],
+            conflicts: vec![],
+        }
+    )]
+    fn test_detect_ignores_new_comments_without_action(
+        #[case] local_threads: Vec<ParsedThread>,
+        #[case] remote_threads: Vec<ReviewThread>,
+        #[case] expected: ReplyChangeSet,
+    ) {
+        let local = make_parsed_file(local_threads);
         let remote = PrData {
             reviews: vec![],
-            threads: vec![
-                make_remote_thread(
-                    "RT_action",
-                    vec![make_comment(1, "user", "2024-01-15T09:00:00Z")],
-                    false,
-                ),
-                make_remote_thread(
-                    "RT_unrelated",
-                    vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
-                    false,
-                ),
-            ],
+            threads: remote_threads,
         };
 
         assert_eq!(
             ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
-            ReplyChangeSet {
-                actions: vec![ReplyAction::PostReply {
-                    thread_id: "RT_action".to_string(),
-                    in_reply_to: 1,
-                    body: "My reply".to_string(),
-                }],
-                conflicts: vec![],
-            }
+            expected
         );
     }
 
