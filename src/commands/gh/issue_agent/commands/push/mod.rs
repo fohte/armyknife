@@ -196,8 +196,8 @@ async fn run_with_context(
     };
     let options = DetectOptions {
         current_user: &ctx.current_user,
-        edit_others: args.edit_others,
-        allow_delete: args.allow_delete,
+        edit_others: args.edit_others || args.dry_run,
+        allow_delete: args.allow_delete || args.dry_run,
     };
     let changeset = ChangeSet::detect_with_comparisons(
         &local_state,
@@ -239,6 +239,12 @@ async fn run_with_context(
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;
 
+        // Refresh comment files so their IDs and update timestamps match GitHub.
+        let new_remote_comments = client
+            .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+            .await?;
+        ctx.storage.save_comments(&new_remote_comments)?;
+
         // Clean up approval records after successful push
         cleanup_approval_records(&changeset, ctx);
     } else if !args.dry_run
@@ -250,6 +256,7 @@ async fn run_with_context(
     }
 
     if !args.dry_run
+        && !has_changes
         && let Some(base_comments) = local.base_comments.as_deref()
     {
         let advanced = advance_comment_snapshot(

@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.492](https://github.com/fohte/armyknife/compare/v0.1.491...v0.1.492) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** sync comments after push ([#1331](https://github.com/fohte/armyknife/issues/1331)) ([1c0cf2c](https://github.com/fohte/armyknife/commit/1c0cf2caa0dcbcdadbb37a3c1b506fbf867bd42c))
+
+## [0.1.491](https://github.com/fohte/armyknife/compare/v0.1.490...v0.1.491) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** update sessions after errors ([#1328](https://github.com/fohte/armyknife/issues/1328)) ([a180c5e](https://github.com/fohte/armyknife/commit/a180c5ecd8f631af17ed3fb55b794c00e20e3831))
+* **pr-review:** block re-pulls only on data loss ([#1323](https://github.com/fohte/armyknife/issues/1323)) ([1a962a1](https://github.com/fohte/armyknife/commit/1a962a1a62cac236cc231da77bb44f052b127bb8))
+
+## [0.1.490](https://github.com/fohte/armyknife/compare/v0.1.489...v0.1.490) (2026-10-28)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** recover stale review locks ([#1327](https://github.com/fohte/armyknife/issues/1327)) ([9d8de2d](https://github.com/fohte/armyknife/commit/9d8de2d654dcb92424656209da7d74634cfba26e))
+
 ## [0.1.489](https://github.com/fohte/armyknife/compare/v0.1.488...v0.1.489) (2026-10-28)
 
 

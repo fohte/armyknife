@@ -2,14 +2,15 @@
 
 use super::*;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
-    TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
+    TestSetup, approve_file, create_comment_file, create_comment_file_with_updated_at,
+    setup_local_comment, test_dir,
 };
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::commands::gh::issue_agent::storage::{CommentSnapshot, IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
-use crate::infra::github::RemoteComment;
+use crate::infra::github::{GitHubMockServer, RemoteComment};
 use indoc::formatdoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
@@ -39,6 +40,25 @@ fn make_remote_comment<'a>(
         author,
         body,
     }
+}
+
+async fn comment_write_requests(
+    mock: &GitHubMockServer,
+) -> Vec<(String, Option<serde_json::Value>)> {
+    mock.received_requests()
+        .await
+        .into_iter()
+        .filter(|request| {
+            let path = request.url.path();
+            path.ends_with("/comments") || path.contains("/issues/comments/")
+        })
+        .map(|request| {
+            (
+                request.method.to_string(),
+                serde_json::from_slice(&request.body).ok(),
+            )
+        })
+        .collect()
 }
 
 fn issue_frontmatter(title: &str, labels: &[&str]) -> IssueFrontmatter {
@@ -466,11 +486,15 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
 // Comment operations
 #[rstest]
 #[tokio::test]
-async fn test_updates_own_comment(test_dir: TempDir) {
+async fn test_refreshes_own_comment_after_push(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_comments(vec![make_remote_comment(
             "testuser", "IC_abc", 12345, "Original",
         )])
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+            "2024-01-02T12:00:00Z",
+        )))
         .build()
         .await;
     storage
@@ -482,8 +506,9 @@ async fn test_updates_own_comment(test_dir: TempDir) {
     setup_local_comment(
         test_dir.path(),
         "001_comment_12345.md",
-        &create_comment_file(
+        &create_comment_file_with_updated_at(
             "testuser",
+            "2024-01-01T12:00:00+00:00",
             "2024-01-01T12:00:00+00:00",
             "IC_abc",
             12345,
@@ -495,22 +520,124 @@ async fn test_updates_own_comment(test_dir: TempDir) {
     ctx.comment().update().await;
     ctx.issue(123).get().await;
 
-    let client = mock.client();
     let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await;
+    let comment_path = test_dir.path().join("comments/001_comment_12345.md");
+    let comment_after_push = std::fs::read_to_string(&comment_path).unwrap();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            comment_after_push,
+            storage.read_base_comments().unwrap(),
+        ),
+        (
+            Ok(()),
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_abc -->
+                <!-- databaseId: 12345 -->
+
+                Updated
+            "
+            },
+            Some(vec![CommentSnapshot {
+                id: "IC_abc".to_string(),
+                body: "Updated".to_string(),
+            }]),
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "testuser", "IC_abc", 12345, "Original",
+        )])
+        .remote_comments_updated_at("2024-01-01T12:00:00Z")
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+            "2024-01-02T12:00:00Z",
+        )))
+        .build()
+        .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &create_comment_file_with_updated_at(
+            "testuser",
+            "2024-01-01T12:00:00+00:00",
+            "2024-01-01T12:00:00+00:00",
+            "IC_abc",
+            12345,
+            "Updated",
+        ),
+    );
+    let comment_path = test_dir.path().join("comments/001_comment_12345.md");
+    approve_file(&comment_path);
+    let ctx = mock.repo("owner", "repo");
+    ctx.comment().update().await;
+    ctx.issue(123).get().await;
+
+    let client = mock.client();
+    let first_result = run_with_client_and_storage(
         &make_args(false, false, false),
         &client,
         &storage,
         "testuser",
     )
-    .await;
+    .await
+    .map_err(|error| error.to_string());
+    let comment_after_first_push = std::fs::read_to_string(&comment_path).unwrap();
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &comment_after_first_push.replacen("Updated", "Updated again", 1),
+    );
+    approve_file(&comment_path);
+    approve_file(&test_dir.path().join("issue.md"));
+
+    let second_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let comment_requests = comment_write_requests(&mock).await;
+
     assert_eq!(
-        result
-            .map(|_| storage.read_base_comments().unwrap())
-            .unwrap(),
-        Some(vec![CommentSnapshot {
-            id: "IC_abc".to_string(),
-            body: "Updated".to_string(),
-        }]),
+        (first_result, second_result, comment_requests),
+        (
+            Ok(()),
+            Ok(()),
+            vec![
+                (
+                    "PATCH".to_string(),
+                    Some(serde_json::json!({"body": "Updated"}))
+                ),
+                (
+                    "PATCH".to_string(),
+                    Some(serde_json::json!({"body": "Updated again"})),
+                ),
+            ],
+        ),
     );
 }
 
@@ -595,16 +722,35 @@ async fn test_remote_only_edit_does_not_require_edit_others(test_dir: TempDir) {
     );
 }
 
-#[rstest]
-#[tokio::test]
-async fn test_creates_new_comment(test_dir: TempDir) {
-    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+#[fixture]
+async fn new_comment_setup(test_dir: TempDir) -> (TempDir, GitHubMockServer, IssueStorage) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment(
+                "testuser",
+                "IC_new_comment",
+                99999,
+                "New comment",
+            )],
+            "2024-01-02T12:00:00Z",
+        )))
+        .build()
+        .await;
+    storage.save_base_comments(&[]).unwrap();
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
     approve_file(&test_dir.path().join("comments/new_my_comment.md"));
     let ctx = mock.repo("owner", "repo");
     ctx.issue(123).create_comment().await;
     ctx.issue(123).get().await;
+    (test_dir, mock, storage)
+}
 
+#[rstest]
+#[tokio::test]
+async fn test_creates_new_comment(
+    #[future] new_comment_setup: (TempDir, GitHubMockServer, IssueStorage),
+) {
+    let (test_dir, mock, storage) = new_comment_setup.await;
     let client = mock.client();
     let result = run_with_client_and_storage(
         &make_args(false, false, false),
@@ -613,9 +759,68 @@ async fn test_creates_new_comment(test_dir: TempDir) {
         "testuser",
     )
     .await;
-    assert!(result.is_ok());
-    // Verify the new comment file was removed after creation
-    assert!(!test_dir.path().join("comments/new_my_comment.md").exists());
+    let new_comment_path = test_dir.path().join("comments/001_comment_99999.md");
+    let comment_after_push = std::fs::read_to_string(new_comment_path).unwrap();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            test_dir.path().join("comments/new_my_comment.md").exists(),
+            comment_after_push,
+        ),
+        (
+            Ok(()),
+            false,
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_new_comment -->
+                <!-- databaseId: 99999 -->
+
+                New comment
+            "
+            },
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_does_not_delete_created_comment_on_second_push(
+    #[future] new_comment_setup: (TempDir, GitHubMockServer, IssueStorage),
+) {
+    let (_test_dir, mock, storage) = new_comment_setup.await;
+    let client = mock.client();
+    let first_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let second_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let comment_requests = comment_write_requests(&mock).await;
+
+    assert_eq!(
+        (first_result, second_result, comment_requests),
+        (
+            Ok(()),
+            Ok(()),
+            vec![(
+                "POST".to_string(),
+                Some(serde_json::json!({"body": "New comment"})),
+            )],
+        ),
+    );
 }
 
 #[rstest]
@@ -653,6 +858,77 @@ async fn test_edit_others_comment_denied_without_flag(test_dir: TempDir) {
     assert_eq!(
         result.unwrap_err().to_string(),
         "Cannot edit other user's comment: 001_comment_12345.md (author: otheruser). Use --edit-others to allow."
+    );
+}
+
+#[rstest]
+#[case::edit_other_users_comment(Some("Modified"))]
+#[case::delete_other_users_comment(None)]
+#[tokio::test]
+async fn test_dry_run_shows_other_users_comment_changes(
+    test_dir: TempDir,
+    #[case] local_body: Option<&str>,
+) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "otheruser",
+            "IC_abc",
+            12345,
+            "Original",
+        )])
+        .build()
+        .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
+    if let Some(body) = local_body {
+        setup_local_comment(
+            test_dir.path(),
+            "001_comment_12345.md",
+            &create_comment_file(
+                "otheruser",
+                "2024-01-01T12:00:00+00:00",
+                "IC_abc",
+                12345,
+                body,
+            ),
+        );
+    }
+    let local_comment_path = storage.dir().join("comments/001_comment_12345.md");
+    let local_comment_before =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_before = storage.read_base_comments().unwrap();
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args_full(true, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    let local_comment_after =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_after = storage.read_base_comments().unwrap();
+    let github_writes = mock
+        .received_requests()
+        .await
+        .into_iter()
+        .filter(|request| matches!(request.method.as_str(), "PATCH" | "DELETE"))
+        .map(|request| (request.method.to_string(), request.url.path().to_string()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            local_comment_after,
+            snapshot_after,
+            github_writes,
+        ),
+        (Ok(()), local_comment_before, snapshot_before, Vec::new()),
     );
 }
 

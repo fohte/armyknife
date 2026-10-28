@@ -39,8 +39,8 @@ pub enum PrReviewError {
     #[error("{}", format_conflict_error(*.count, details))]
     ConflictDetected { count: usize, details: String },
 
-    #[error("Local changes detected. Use --force to overwrite")]
-    LocalChangesExist,
+    #[error("Re-pull would lose local data: {details}. Use --force to overwrite")]
+    PullWouldLoseLocalData { details: String },
 
     #[error("No pulled data found. Run 'reply pull' first")]
     NoPulledData,
@@ -69,9 +69,11 @@ mod tests {
     use rstest::rstest;
 
     #[rstest]
-    #[case::local_changes(
-        PrReviewError::LocalChangesExist,
-        "Local changes detected. Use --force to overwrite"
+    #[case::pull_would_lose_local_data(
+        PrReviewError::PullWouldLoseLocalData {
+            details: "thread RT_example at src/example.rs:9: draft reply".to_string(),
+        },
+        "Re-pull would lose local data: thread RT_example at src/example.rs:9: draft reply. Use --force to overwrite"
     )]
     #[case::no_pulled_data(
         PrReviewError::NoPulledData,

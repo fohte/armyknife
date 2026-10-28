@@ -376,13 +376,13 @@ Directories without snapshots keep legacy comparisons against remote values.
 Local edits and deletions stop a pull unless `--force` is used. New `new_*.md`
 comment files are preserved without blocking pull.
 
-| Option           | Description                                                          |
-| ---------------- | -------------------------------------------------------------------- |
-| `-R <repo>`      | Target repository (default: current repo)                            |
-| `--dry-run`      | Show what would be changed without applying                          |
-| `--force`        | Bypass conflict checks; applied local changes still require approval |
-| `--edit-others`  | Allow editing other users' comments                                  |
-| `--allow-delete` | Allow deleting comments removed locally                              |
+| Option           | Description                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)                                                                                                                             |
+| `--dry-run`      | Preview all changes without applying. It needs neither flag; a live push needs `--edit-others` to edit other users' comments and `--allow-delete` to delete comments. |
+| `--force`        | Bypass conflict checks; applied local changes still require approval                                                                                                  |
+| `--edit-others`  | Allow editing other users' comments                                                                                                                                   |
+| `--allow-delete` | Allow deleting comments removed locally                                                                                                                               |
 
 ##### `a gh issue-agent init issue`
 
@@ -447,12 +447,14 @@ Fetch review threads to a local Markdown file for editing.
 a gh pr-review reply pull <pr-number> [options]
 ```
 
-| Option               | Description                                 |
-| -------------------- | ------------------------------------------- |
-| `-R, --repo <REPO>`  | Target repository (owner/repo)              |
-| `--include-resolved` | Include resolved threads                    |
-| `--force`            | Overwrite local changes without checking    |
-| `-d, --open-details` | Expand `<details>` blocks in comment bodies |
+| Option               | Description                                        |
+| -------------------- | -------------------------------------------------- |
+| `-R, --repo <REPO>`  | Target repository (owner/repo)                     |
+| `--include-resolved` | Include resolved threads                           |
+| `--force`            | Overwrite even when local data cannot be preserved |
+| `-d, --open-details` | Expand `<details>` blocks in comment bodies        |
+
+Repeated pulls preserve draft replies and resolve selections for threads included in the refreshed file. Pull stops if the file cannot be parsed or a local reply or unresolved resolve selection would be discarded; pass `--force` to allow that overwrite.
 
 The Markdown file compresses each diff hunk to the lines surrounding the
 commented region (5 before, 3 after). HTML comments and `<picture>` badge
