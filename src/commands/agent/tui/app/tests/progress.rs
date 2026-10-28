@@ -13,7 +13,7 @@ use crate::commands::agent::tui::progress_batches::{
 };
 use crate::commands::agent::tui::session_rows::{SessionRowKey, SessionTask};
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
-use crate::commands::agent::types::{Session, SessionStatus};
+use crate::commands::agent::types::{Session, SessionStatus, TmuxInfo};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
@@ -133,6 +133,108 @@ fn inline_plan_merges_its_worker_once_and_keeps_unmatched_session_children(
             }),
             Some(SessionRowKey::Task("unmatched".to_string())),
         ],
+    );
+}
+
+#[rstest]
+fn inline_planned_item_uses_its_worker_session_without_a_pr_url(timestamp: DateTime<Utc>) {
+    let design = create_test_session_at("design", timestamp);
+    let mut worker = create_test_session_at("worker", timestamp);
+    worker.ancestor_session_ids = vec![design.session_id.clone()];
+    worker.tmux_info = Some(TmuxInfo {
+        session_name: "sample-session".to_string(),
+        window_name: "main".to_string(),
+        window_index: 0,
+        pane_id: "%9".to_string(),
+        socket_path: None,
+    });
+    let mut child = create_test_session_at("worker-child", timestamp);
+    child.ancestor_session_ids = vec![design.session_id.clone(), worker.session_id.clone()];
+    let mut app = create_test_app(vec![design, worker, child]);
+    app.progress_inline_expanded = true;
+    app.progress_session_id = Some("design".to_string());
+    app.progress_fetch_states
+        .insert("design".to_string(), ProgressFetchState::Ready);
+    app.progress_rows = vec![
+        ProgressRow::ImplementationHeader {
+            merged_pr_count: 0,
+            total_pr_count: 1,
+            collapsed: false,
+        },
+        ProgressRow::BatchHeader {
+            batch_id: "batch-a".to_string(),
+            title: "Batch A".to_string(),
+            merged_pr_count: 0,
+            collapsed: false,
+        },
+        ProgressRow::ChecklistPullRequest {
+            batch_id: "batch-a".to_string(),
+            checklist_item_id: "planned-item".to_string(),
+            row: PrProgressRow {
+                session_id: "worker".to_string(),
+                repo: Some("sample-project".to_string()),
+                title: "Planned worker change".to_string(),
+                number: None,
+                url: None,
+                pane_id: Some("%9".to_string()),
+                is_ended: false,
+                lookup_unavailable: false,
+                stages: StageMarks {
+                    implementation: ProgressMark::Working,
+                    diff_review: ProgressMark::NotStarted,
+                    pr_body: ProgressMark::NotStarted,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+            },
+        },
+    ];
+    app.rebuild_row_order();
+    let selected_key = SessionRowKey::Progress {
+        source_session_id: "design".to_string(),
+        selection_key: ProgressSelectionKey::ChecklistItem {
+            batch_id: "batch-a".to_string(),
+            item_id: "planned-item".to_string(),
+        },
+        session_id: Some("worker".to_string()),
+    };
+    let position = app
+        .row_keys
+        .iter()
+        .position(|key| key.as_ref() == Some(&selected_key))
+        .expect("planned worker row should be visible");
+    app.list_state.select(Some(position));
+
+    assert_eq!(
+        (
+            app.row_keys.clone(),
+            app.selected_session_id(),
+            app.selected_session()
+                .and_then(|session| session.tmux_info.as_ref())
+                .map(|info| info.pane_id.as_str()),
+            app.selected_progress_open_target(),
+        ),
+        (
+            vec![
+                None,
+                Some(SessionRowKey::Task("design".to_string())),
+                Some(SessionRowKey::Progress {
+                    source_session_id: "design".to_string(),
+                    selection_key: ProgressSelectionKey::Implementation,
+                    session_id: None,
+                }),
+                Some(SessionRowKey::Progress {
+                    source_session_id: "design".to_string(),
+                    selection_key: ProgressSelectionKey::Batch("batch-a".to_string()),
+                    session_id: None,
+                }),
+                Some(selected_key),
+                Some(SessionRowKey::Task("worker-child".to_string())),
+            ],
+            Some("worker"),
+            Some("%9"),
+            None,
+        ),
     );
 }
 

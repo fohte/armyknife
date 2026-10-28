@@ -29,7 +29,7 @@ pub(super) fn expand_initial_target_batch(
     target: Option<&str>,
     expanded_batches: &mut HashMap<String, bool>,
 ) {
-    if let Some(batch_id) = target.and_then(|delegate_id| plan.batch_id_for_delegate(delegate_id)) {
+    if let Some(batch_id) = target.and_then(|worker_id| plan.batch_id_for_worker(worker_id)) {
         expanded_batches.insert(batch_id.to_string(), true);
     }
 }

@@ -359,7 +359,7 @@ impl App {
         let initial_target = self.initial_progress_target(source_session_id);
         expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
         let unmatched_expanded = initial_target
-            .is_some_and(|target| plan.batch_id_for_delegate(target).is_none())
+            .is_some_and(|target| plan.batch_id_for_worker(target).is_none())
             || !use_current_expansion
             || self.progress_unmatched_expanded;
         build_checklist_progress_rows(

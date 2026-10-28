@@ -25,24 +25,29 @@ pub(super) fn build_inline_progress_item(
     if let (Some(session), Some(ProgressRow::ChecklistPullRequest { row, .. })) =
         (&entry.session, entry.progress.as_ref())
     {
+        let stages = stage_marks(
+            row.stages.implementation,
+            row.stages.diff_review,
+            row.stages.pr_body,
+            row.stages.ci,
+            row.stages.merge,
+        );
+        let annotation = if row.number.is_none() && row.url.is_none() {
+            format!("Planned PR · {} · {stages}", row.title)
+        } else {
+            format!(
+                "PR {} {stages}",
+                row.number
+                    .map_or_else(|| "#?".to_string(), |number| format!("#{number}")),
+            )
+        };
         return build_session_item_with_annotation(
             session,
             app,
             now,
             term_width,
             "",
-            Some(&format!(
-                "PR {} {}",
-                row.number
-                    .map_or_else(|| "#?".to_string(), |number| format!("#{number}")),
-                stage_marks(
-                    row.stages.implementation,
-                    row.stages.diff_review,
-                    row.stages.pr_body,
-                    row.stages.ci,
-                    row.stages.merge
-                ),
-            )),
+            Some(&annotation),
         );
     }
 

@@ -3,12 +3,12 @@ use std::collections::{HashMap, HashSet};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::git::GitRepo;
-use crate::infra::github::{BranchPrQuery, GitHubClient};
+use crate::infra::github::{BranchPrQuery, GitHubClient, PrProgressInfo};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 
 use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
-use super::progress_batches::{build_implementation_plan, pull_request_queries};
+use super::progress_batches::{build_implementation_plan_with_work_sessions, pull_request_queries};
 
 pub(super) async fn fetch_progress(
     selected_session_id: String,
@@ -18,6 +18,7 @@ pub(super) async fn fetch_progress(
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
+    let work_sessions = work_sessions_for_scope(&sessions, &request_scope);
     let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
             let session_ids = session_ids.iter().cloned().collect::<HashSet<_>>();
@@ -30,10 +31,11 @@ pub(super) async fn fetch_progress(
         }
         None => direct_children(sessions, &selected_session_id),
     };
+    let mut sessions_with_progress = delegated.clone();
+    sessions_with_progress.extend(work_sessions.iter().cloned());
 
     let query_data = tokio::task::spawn_blocking({
-        let delegated = delegated.clone();
-        move || branch_queries_for_sessions(&delegated)
+        move || branch_queries_for_sessions(&sessions_with_progress)
     })
     .await
     .map_err(|error| format!("failed to inspect delegated worktrees: {error}"))?;
@@ -85,7 +87,52 @@ pub(super) async fn fetch_progress(
         }
     }
 
-    let delegated: Vec<FetchedDelegate> = delegated
+    let fetched_delegated = fetched_sessions(delegated, &query_data, &prs);
+    let fetched_work_sessions = fetched_sessions(work_sessions, &query_data, &prs);
+    let implementation = implementation_checklist.map(|(checklist, github_links)| {
+        build_implementation_plan_with_work_sessions(
+            &checklist,
+            &github_links,
+            &fetched_delegated,
+            &fetched_work_sessions,
+            &linked_prs,
+            linked_pr_lookup_failed,
+        )
+    });
+
+    Ok(FetchedProgress {
+        selected_session_id,
+        request_scope: Some(request_scope),
+        delegated: fetched_delegated,
+        implementation,
+        github_error,
+    })
+}
+
+fn work_sessions_for_scope(
+    sessions: &[Session],
+    request_scope: &ProgressFetchScope,
+) -> Vec<Session> {
+    let Some(session_ids) = request_scope.session_ids.as_ref() else {
+        return Vec::new();
+    };
+    let session_ids = session_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    sessions
+        .iter()
+        .filter(|session| session_ids.contains(session.session_id.as_str()))
+        .cloned()
+        .collect()
+}
+
+fn fetched_sessions(
+    sessions: Vec<Session>,
+    query_data: &BranchQueries,
+    prs: &HashMap<(String, String, String), Option<PrProgressInfo>>,
+) -> Vec<FetchedDelegate> {
+    sessions
         .into_iter()
         .map(|session| {
             let pull_request = query_data
@@ -106,24 +153,7 @@ pub(super) async fn fetch_progress(
                 lookup_unavailable,
             }
         })
-        .collect();
-    let implementation = implementation_checklist.map(|(checklist, github_links)| {
-        build_implementation_plan(
-            &checklist,
-            &github_links,
-            &delegated,
-            &linked_prs,
-            linked_pr_lookup_failed,
-        )
-    });
-
-    Ok(FetchedProgress {
-        selected_session_id,
-        request_scope: Some(request_scope),
-        delegated,
-        implementation,
-        github_error,
-    })
+        .collect()
 }
 
 // Checklist metadata is optional so tq outages keep the existing delegate view available.
@@ -295,15 +325,17 @@ fn branch_query_from_context(context: SessionPrContext) -> BranchLookup {
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
-    use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
     use std::path::PathBuf;
 
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
 
     use super::{
-        BranchLookup, Resolution, branch_query_for_with, direct_children, task_descendant_children,
+        BranchLookup, Resolution, branch_queries_for_sessions, branch_query_for_with,
+        direct_children, task_descendant_children, work_sessions_for_scope,
     };
+    use crate::commands::agent::tui::progress::ProgressFetchScope;
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use crate::infra::github::BranchPrQuery;
 
@@ -360,6 +392,53 @@ mod tests {
             .map(|session| session.session_id)
             .collect::<Vec<_>>(),
             vec!["nested-child", "direct-child"],
+        );
+    }
+
+    #[test]
+    fn includes_same_task_worker_checklist_metadata_in_progress_candidates() {
+        let mut design = session("design", vec![], 1);
+        design.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "design-branch".to_string(),
+            checklist_item_id: None,
+        });
+        let mut worker = session("worker", vec!["design"], 2);
+        worker.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "worker-branch".to_string(),
+            checklist_item_id: Some("planned-item".to_string()),
+        });
+        let mut unrelated = session("unrelated", vec![], 3);
+        unrelated.pr_context = Some(SessionPrContext {
+            owner: "other-owner".to_string(),
+            repo: "other-repo".to_string(),
+            branch: "other-branch".to_string(),
+            checklist_item_id: Some("other-item".to_string()),
+        });
+        let sessions = vec![design, worker, unrelated];
+        let request_scope = ProgressFetchScope {
+            task_id: Some("task".to_string()),
+            session_ids: Some(vec!["design".to_string(), "worker".to_string()]),
+            other_task_session_ids: Vec::new(),
+        };
+        let work_sessions = work_sessions_for_scope(&sessions, &request_scope);
+        let queries = branch_queries_for_sessions(&work_sessions);
+
+        assert_eq!(
+            (
+                work_sessions
+                    .iter()
+                    .map(|session| session.session_id.as_str())
+                    .collect::<Vec<_>>(),
+                queries.checklist_item_id_by_session,
+            ),
+            (
+                vec!["design", "worker"],
+                HashMap::from([("worker".to_string(), "planned-item".to_string())]),
+            ),
         );
     }
 

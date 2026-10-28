@@ -20,12 +20,12 @@ pub(super) struct ImplementationPlan {
 }
 
 impl ImplementationPlan {
-    pub(super) fn batch_id_for_delegate(&self, session_id: &str) -> Option<&str> {
+    pub(super) fn batch_id_for_worker(&self, session_id: &str) -> Option<&str> {
         self.batches.iter().find_map(|batch| {
             batch
                 .items
                 .iter()
-                .any(|item| item.delegate_session_id.as_deref() == Some(session_id))
+                .any(|item| item.worker_session_id.as_deref() == Some(session_id))
                 .then_some(batch.id.as_str())
         })
     }
@@ -42,7 +42,8 @@ struct ImplementationBatch {
 struct ImplementationItem {
     id: String,
     title: String,
-    delegate_session_id: Option<String>,
+    #[serde(rename = "delegate_session_id")]
+    worker_session_id: Option<String>,
     github_link: Option<TqGithubLink>,
     pull_request: Option<PrProgressInfo>,
     lookup_unavailable: bool,
@@ -107,10 +108,29 @@ pub(super) fn pull_request_queries(
     queries
 }
 
+#[cfg(test)]
 pub(super) fn build_implementation_plan(
     checklist: &TqChecklist,
     github_links: &[TqGithubLink],
     delegates: &[FetchedDelegate],
+    pull_requests: &HashMap<(String, String, u64), Option<PrProgressInfo>>,
+    github_lookup_failed: bool,
+) -> ImplementationPlan {
+    build_implementation_plan_with_work_sessions(
+        checklist,
+        github_links,
+        delegates,
+        &[],
+        pull_requests,
+        github_lookup_failed,
+    )
+}
+
+pub(super) fn build_implementation_plan_with_work_sessions(
+    checklist: &TqChecklist,
+    github_links: &[TqGithubLink],
+    delegates: &[FetchedDelegate],
+    work_sessions: &[FetchedDelegate],
     pull_requests: &HashMap<(String, String, u64), Option<PrProgressInfo>>,
     github_lookup_failed: bool,
 ) -> ImplementationPlan {
@@ -139,6 +159,11 @@ pub(super) fn build_implementation_plan(
             let delegate = delegates
                 .iter()
                 .find(|delegate| delegate.checklist_item_id.as_deref() == Some(&leaf.id));
+            let worker = delegate.or_else(|| {
+                work_sessions
+                    .iter()
+                    .find(|worker| worker.checklist_item_id.as_deref() == Some(&leaf.id))
+            });
             if let Some(delegate) = delegate {
                 matched_delegate_session_ids.insert(delegate.session.session_id.clone());
             }
@@ -148,7 +173,7 @@ pub(super) fn build_implementation_plan(
             });
             let pull_request = linked_progress
                 .cloned()
-                .or_else(|| delegate.and_then(|delegate| delegate.pull_request.clone()));
+                .or_else(|| worker.and_then(|worker| worker.pull_request.clone()));
             let linked_query_missing = github_link.as_ref().is_some_and(|link| {
                 pr_number_query(link).is_some_and(|query| {
                     github_lookup_failed
@@ -156,13 +181,12 @@ pub(super) fn build_implementation_plan(
                 })
             });
             let lookup_unavailable = pull_request.is_none()
-                && (linked_query_missing
-                    || delegate.is_some_and(|delegate| delegate.lookup_unavailable));
+                && (linked_query_missing || worker.is_some_and(|worker| worker.lookup_unavailable));
 
             items.push(ImplementationItem {
                 id: leaf.id.clone(),
                 title,
-                delegate_session_id: delegate.map(|delegate| delegate.session.session_id.clone()),
+                worker_session_id: worker.map(|worker| worker.session.session_id.clone()),
                 github_link,
                 pull_request,
                 lookup_unavailable,
@@ -276,11 +300,13 @@ pub(super) fn build_task_progress_rows(
         }
 
         for item in &batch.items {
-            let delegate = item
-                .delegate_session_id
-                .as_deref()
-                .and_then(|id| delegates.iter().find(|session| session.session_id == id));
-            if let Some(session) = delegate {
+            let worker = item.worker_session_id.as_deref().and_then(|id| {
+                work_sessions
+                    .iter()
+                    .chain(delegates)
+                    .find(|session| session.session_id == id)
+            });
+            if let Some(session) = worker {
                 let mut row = pr_progress_row(
                     &FetchedDelegate {
                         session: session.clone(),
@@ -331,7 +357,7 @@ fn append_unmatched_delegate_rows(
         .batches
         .iter()
         .flat_map(|batch| &batch.items)
-        .filter_map(|item| item.delegate_session_id.as_deref())
+        .filter_map(|item| item.worker_session_id.as_deref())
         .collect::<HashSet<_>>();
     let unmatched_rows = delegates
         .iter()
@@ -458,7 +484,7 @@ mod tests {
 
     use crate::commands::agent::tui::progress::ProgressSelectionKey;
     use crate::commands::agent::tui::ui::test_support::create_test_session;
-    use crate::commands::agent::types::SessionStatus;
+    use crate::commands::agent::types::{SessionPrContext, SessionStatus, TmuxInfo};
     use crate::infra::github::{PrCiState, PrInfo, PrState};
 
     use super::*;
@@ -565,7 +591,7 @@ mod tests {
                             items: vec![ImplementationItem {
                                 id: "item-1".to_string(),
                                 title: "Add a sample feature".to_string(),
-                                delegate_session_id: None,
+                                worker_session_id: None,
                                 github_link: Some(github_link()),
                                 pull_request: Some(merged_progress()),
                                 lookup_unavailable: false,
@@ -577,7 +603,7 @@ mod tests {
                             items: vec![ImplementationItem {
                                 id: "item-2".to_string(),
                                 title: "Add another sample feature".to_string(),
-                                delegate_session_id: None,
+                                worker_session_id: None,
                                 github_link: None,
                                 pull_request: None,
                                 lookup_unavailable: false,
@@ -661,6 +687,123 @@ mod tests {
                         item_id: "item-2".to_string(),
                     }),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn merges_same_task_worker_into_an_uncreated_checklist_pr() {
+        let mut worker = create_test_session("same-task-worker");
+        worker.status = SessionStatus::Running;
+        worker.pr_context = Some(SessionPrContext {
+            owner: "sample-org".to_string(),
+            repo: "sample-project".to_string(),
+            branch: "worker-branch".to_string(),
+            checklist_item_id: Some("item-2".to_string()),
+        });
+        worker.tmux_info = Some(TmuxInfo {
+            session_name: "sample-session".to_string(),
+            window_name: "main".to_string(),
+            window_index: 0,
+            pane_id: "%9".to_string(),
+            socket_path: None,
+        });
+        let work_session = FetchedDelegate {
+            session: worker.clone(),
+            checklist_item_id: Some("item-2".to_string()),
+            pull_request: None,
+            lookup_unavailable: false,
+        };
+        let plan = build_implementation_plan_with_work_sessions(
+            &checklist(),
+            &[github_link()],
+            &[],
+            &[work_session],
+            &HashMap::from([(
+                ("sample-org".to_string(), "sample-project".to_string(), 17),
+                Some(merged_progress()),
+            )]),
+            false,
+        );
+        let rows = build_task_progress_rows(
+            &[create_test_session("selected"), worker],
+            &[],
+            &plan,
+            true,
+            false,
+            &HashMap::new(),
+            &AgentConfig::default(),
+        );
+        let selected_progress = rows.last().expect("the checklist item should be last");
+
+        assert_eq!(
+            (
+                rows.clone(),
+                selected_progress.selection_key(),
+                super::super::progress::open_pr_url_target(selected_progress),
+            ),
+            (
+                vec![
+                    ProgressRow::Work(super::super::progress::WorkProgressRow {
+                        session_id: "selected".to_string(),
+                        role: "session".to_string(),
+                        mark: ProgressMark::Working,
+                        status_label: None,
+                        note: None,
+                        pane_id: None,
+                    }),
+                    ProgressRow::Work(super::super::progress::WorkProgressRow {
+                        session_id: "same-task-worker".to_string(),
+                        role: "session".to_string(),
+                        mark: ProgressMark::Working,
+                        status_label: None,
+                        note: None,
+                        pane_id: Some("%9".to_string()),
+                    }),
+                    ProgressRow::ImplementationHeader {
+                        merged_pr_count: 1,
+                        total_pr_count: 2,
+                        collapsed: false,
+                    },
+                    ProgressRow::BatchHeader {
+                        batch_id: "batch-1".to_string(),
+                        title: "Batch 1".to_string(),
+                        merged_pr_count: 1,
+                        collapsed: true,
+                    },
+                    ProgressRow::BatchHeader {
+                        batch_id: "batch-2".to_string(),
+                        title: "Batch 2".to_string(),
+                        merged_pr_count: 0,
+                        collapsed: false,
+                    },
+                    ProgressRow::ChecklistPullRequest {
+                        batch_id: "batch-2".to_string(),
+                        checklist_item_id: "item-2".to_string(),
+                        row: PrProgressRow {
+                            session_id: "same-task-worker".to_string(),
+                            repo: Some("sample-project".to_string()),
+                            title: "Add another sample feature".to_string(),
+                            number: None,
+                            url: None,
+                            pane_id: Some("%9".to_string()),
+                            is_ended: false,
+                            lookup_unavailable: false,
+                            stages: StageMarks {
+                                implementation: ProgressMark::Working,
+                                diff_review: ProgressMark::NotStarted,
+                                pr_body: ProgressMark::NotStarted,
+                                ci: ProgressMark::NotStarted,
+                                merge: ProgressMark::NotStarted,
+                            },
+                        },
+                    },
+                ],
+                Some(ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-2".to_string(),
+                    item_id: "item-2".to_string(),
+                }),
+                None,
             ),
         );
     }
@@ -895,7 +1038,7 @@ mod tests {
                 items: vec![ImplementationItem {
                     id: "item-1".to_string(),
                     title: "Add a sample feature".to_string(),
-                    delegate_session_id: None,
+                    worker_session_id: None,
                     github_link: None,
                     pull_request: None,
                     lookup_unavailable: false,
@@ -987,7 +1130,7 @@ mod tests {
                 items: vec![ImplementationItem {
                     id: "item-1".to_string(),
                     title: "Add a sample feature".to_string(),
-                    delegate_session_id: None,
+                    worker_session_id: None,
                     github_link: None,
                     pull_request: Some(merged_progress()),
                     lookup_unavailable: false,
