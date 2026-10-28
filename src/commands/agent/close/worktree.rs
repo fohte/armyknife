@@ -29,6 +29,7 @@ pub(super) async fn close_worktree(
     let context = WorktreeCloseContext {
         args,
         sessions: &matching_sessions,
+        worktree_root,
         child_parent_session_id,
         caller_session_id: caller_session_id.as_deref(),
         caller_pane_id: caller_pane_id.as_deref(),
@@ -41,6 +42,7 @@ pub(super) async fn close_worktree(
         |session, force, current_pane_id| {
             validate_worktree_session(session, force, current_pane_id, &LiveCloseRuntime)
         },
+        super::super::store::load_session,
         close_worktree_session,
         |plan| async move { worktree_delete::execute(plan, skip_hooks).await },
     )
@@ -55,6 +57,7 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
 struct WorktreeCloseContext<'a> {
     args: &'a CloseArgs,
     sessions: &'a [&'a Session],
+    worktree_root: &'a Path,
     child_parent_session_id: Option<&'a str>,
     caller_session_id: Option<&'a str>,
     caller_pane_id: Option<&'a str>,
@@ -65,6 +68,7 @@ async fn close_worktree_with<P, F>(
     refuse_current_session: bool,
     prepare: impl Future<Output = Result<P>>,
     mut validate_session: impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
+    mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     mut close_session: impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
     remove_worktree: impl FnOnce(P) -> F,
 ) -> Result<()>
@@ -88,8 +92,38 @@ where
     close_with_worktree_plan(
         prepare,
         || {
-            let mut closed_session_ids = Vec::new();
+            let mut refreshed_sessions = Vec::with_capacity(context.sessions.len());
             for session in context.sessions {
+                let latest_session = load_session(&session.session_id)?.with_context(|| {
+                    format!(
+                        "Could not reload agent session `{}` after worktree confirmation",
+                        session.session_id
+                    )
+                })?;
+                if path_is_within_worktree(&latest_session.cwd, context.worktree_root) {
+                    refreshed_sessions.push(latest_session);
+                }
+            }
+            let refreshed_session_refs = refreshed_sessions.iter().collect::<Vec<&Session>>();
+            child::ensure_target_sessions(
+                &refreshed_session_refs,
+                context.child_parent_session_id,
+            )?;
+            if refuse_current_session {
+                ensure_not_closing_current_session(
+                    &refreshed_session_refs,
+                    context.caller_session_id,
+                    context.caller_pane_id,
+                )?;
+            }
+            for session in &refreshed_sessions {
+                if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
+                    validate_session(session, context.args.force, context.caller_pane_id)?;
+                }
+            }
+
+            let mut closed_session_ids = Vec::new();
+            for session in &refreshed_sessions {
                 if !should_gracefully_close_worktree_session(session, context.caller_pane_id) {
                     continue;
                 }
@@ -212,6 +246,13 @@ mod tests {
     use super::super::test_support::session;
     use super::*;
 
+    fn load_candidate_session(sessions: &[&Session], session_id: &str) -> Result<Option<Session>> {
+        Ok(sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .map(|session| (**session).clone()))
+    }
+
     #[rstest]
     #[case::root(vec!["/tmp/worktrees/feature"], vec!["session-0"])]
     #[case::nested(vec!["/tmp/worktrees/feature/src"], vec!["session-0"])]
@@ -296,6 +337,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: None,
             caller_session_id: Some("session-2"),
             caller_pane_id: None,
@@ -311,6 +353,7 @@ mod tests {
                 calls.borrow_mut().push("validate session");
                 Ok(())
             },
+            |_| Ok(None),
             |_, _, _| {
                 calls.borrow_mut().push("close session");
                 Ok(())
@@ -354,6 +397,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -370,6 +414,7 @@ mod tests {
                 calls.borrow_mut().push("validate session".to_string());
                 Ok(())
             },
+            |_| Ok(None),
             |_, _, _| {
                 calls.borrow_mut().push("close session".to_string());
                 Ok(())
@@ -408,6 +453,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &[],
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -424,6 +470,7 @@ mod tests {
                 calls.borrow_mut().push("validate session");
                 Ok(())
             },
+            |_| Ok(None),
             |_, _, _| {
                 calls.borrow_mut().push("close session");
                 Ok(())
@@ -465,6 +512,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: Some("parent-session"),
             caller_session_id: None,
             caller_pane_id: None,
@@ -480,6 +528,10 @@ mod tests {
             |_, _, _| {
                 calls.borrow_mut().push("validate session");
                 Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push("load session-1");
+                load_candidate_session(&sessions, session_id)
             },
             |_, force, _| {
                 calls.borrow_mut().push(if force {
@@ -503,6 +555,8 @@ mod tests {
                 vec![
                     "validate session",
                     "prepare",
+                    "load session-1",
+                    "validate session",
                     "close session with force",
                     "remove worktree",
                 ],
@@ -511,17 +565,85 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn worktree_close_closes_all_matching_sessions_before_removing_worktree() {
-        let first_session = session();
-        let mut second_session = session();
-        second_session.session_id = "session-2".to_string();
-        second_session.cwd = PathBuf::from("/tmp/worktrees/feature/src");
-        let sessions = [&first_session, &second_session];
+    async fn worktree_close_reloads_activity_after_confirmation() {
+        let mut listed_session = session();
+        listed_session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(1);
+        let latest_session = RefCell::new(listed_session.clone());
+        let sessions = [&listed_session];
         let args = CloseArgs::default();
         let calls = RefCell::new(Vec::<String>::new());
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                latest_session.borrow_mut().updated_at = chrono::Utc::now();
+                Ok::<(), anyhow::Error>(())
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("validate {}", session.session_id));
+                if session.updated_at > listed_session.updated_at {
+                    anyhow::bail!("recent activity prevents closing the session");
+                }
+                Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push(format!("load {session_id}"));
+                Ok(Some(latest_session.borrow().clone()))
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("close {}", session.session_id));
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (
+                Err("recent activity prevents closing the session".to_string()),
+                vec![
+                    "validate session-1".to_string(),
+                    "prepare".to_string(),
+                    "load session-1".to_string(),
+                    "validate session-1".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_skips_a_session_that_moved_outside_the_worktree() {
+        let listed_session = session();
+        let mut latest_session = listed_session.clone();
+        latest_session.cwd = PathBuf::from("/tmp/other-repo");
+        let sessions = [&listed_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: None,
             caller_session_id: None,
             caller_pane_id: None,
@@ -539,6 +661,73 @@ mod tests {
                     .borrow_mut()
                     .push(format!("validate {}", session.session_id));
                 Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push(format!("load {session_id}"));
+                Ok(Some(latest_session.clone()))
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("close {}", session.session_id));
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (result.is_ok(), calls.into_inner()),
+            (
+                true,
+                vec![
+                    "validate session-1".to_string(),
+                    "prepare".to_string(),
+                    "load session-1".to_string(),
+                    "remove worktree".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_closes_all_matching_sessions_before_removing_worktree() {
+        let mut first_session = session();
+        first_session.cwd = PathBuf::from("/tmp/worktrees/feature");
+        let mut second_session = session();
+        second_session.session_id = "session-2".to_string();
+        second_session.cwd = PathBuf::from("/tmp/worktrees/feature/src");
+        let sessions = [&first_session, &second_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            worktree_root: Path::new("/tmp/worktrees/feature"),
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                Ok::<(), anyhow::Error>(())
+            },
+            |session, _, _| {
+                calls
+                    .borrow_mut()
+                    .push(format!("validate {}", session.session_id));
+                Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push(format!("load {}", session_id));
+                load_candidate_session(&sessions, session_id)
             },
             |session, _, _| {
                 calls.borrow_mut().push(session.session_id.clone());
@@ -562,6 +751,10 @@ mod tests {
                     "validate session-1".to_string(),
                     "validate session-2".to_string(),
                     "prepare".to_string(),
+                    "load session-1".to_string(),
+                    "load session-2".to_string(),
+                    "validate session-1".to_string(),
+                    "validate session-2".to_string(),
                     "session-1".to_string(),
                     "session-2".to_string(),
                     "remove worktree".to_string(),
@@ -581,6 +774,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: None,
             caller_session_id: None,
             caller_pane_id: None,
@@ -601,6 +795,7 @@ mod tests {
                 }
                 Ok(())
             },
+            |_| Ok(None),
             |session, _, _| {
                 calls
                     .borrow_mut()
@@ -640,6 +835,7 @@ mod tests {
         let context = WorktreeCloseContext {
             args: &args,
             sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
             child_parent_session_id: None,
             caller_session_id: None,
             caller_pane_id: None,
@@ -657,6 +853,10 @@ mod tests {
                     .borrow_mut()
                     .push(format!("validate {}", session.session_id));
                 Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push(format!("load {}", session_id));
+                load_candidate_session(&sessions, session_id)
             },
             |session, _, _| {
                 calls
@@ -688,6 +888,10 @@ mod tests {
                     "validate session-1".to_string(),
                     "validate session-2".to_string(),
                     "prepare".to_string(),
+                    "load session-1".to_string(),
+                    "load session-2".to_string(),
+                    "validate session-1".to_string(),
+                    "validate session-2".to_string(),
                     "close session-1".to_string(),
                     "close session-2".to_string(),
                 ],

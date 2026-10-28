@@ -23,13 +23,13 @@ use super::signal::{LibcSignalSender, SignalSender};
 use super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use crate::infra::process::{self, ProcessSnapshot};
 use crate::infra::tmux;
-use crate::shared::active_session::{NoDraftProbe, is_session_active};
-use crate::shared::config::{DEFAULT_AUTO_PAUSE_TIMEOUT, load_config, load_config_or_default};
+use crate::shared::config::{load_config, load_config_or_default};
 use crate::shared::env_var::EnvVars;
 use crate::shared::worktree_delete;
 
 const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
+const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
@@ -236,6 +236,7 @@ struct SessionClosePlan<'a> {
     tmux_info: &'a TmuxInfo,
     agent_pid: Option<u32>,
     should_end_codex_session: bool,
+    draft_state_unavailable: bool,
 }
 
 fn prepare_close_session<'a, R: CloseRuntime>(
@@ -274,38 +275,61 @@ fn prepare_close_session<'a, R: CloseRuntime>(
         ensure_session_is_idle(session, effective_status)?;
     }
 
-    let (agent_pid, should_end_codex_session) = match runtime
+    let (agent_pid, should_end_codex_session, draft_state_unavailable) = match runtime
         .resolve_agent_pid(tmux_info, session.engine)?
     {
         Some(pid) => {
-            if !force {
-                ensure_no_unsent_draft(runtime, tmux_info, session)?;
-            }
-            (Some(pid), true)
+            let draft_state_unavailable = if force {
+                false
+            } else {
+                ensure_no_unsent_draft(runtime, tmux_info, session)?
+            };
+            (Some(pid), true, draft_state_unavailable)
         }
-        None if force => (None, false),
+        None if force => (None, true, false),
         None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
             bail!(
                 "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
             );
         }
-        None => (None, true),
+        None => (None, true, false),
     };
 
     Ok(Some(SessionClosePlan {
         tmux_info,
         agent_pid,
         should_end_codex_session,
+        draft_state_unavailable,
     }))
 }
 
 fn close_session<R: CloseRuntime>(session: &Session, force: bool, runtime: &R) -> Result<()> {
+    let stderr = io::stderr();
+    close_session_with_warning_writer(session, force, runtime, &mut stderr.lock())
+}
+
+fn close_session_with_warning_writer<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    runtime: &R,
+    warning_writer: &mut impl io::Write,
+) -> Result<()> {
     let Some(plan) = prepare_close_session(session, force, runtime)? else {
         return Ok(());
     };
     let tmux_info = plan.tmux_info;
     let pane_id = tmux_info.pane_id.as_str();
+
+    if plan.draft_state_unavailable
+        && let Err(error) = write_draft_unavailable_warning(warning_writer, &session.session_id)
+    {
+        tracing::warn!(
+            event = "agent.close.draft_state_warning_failed",
+            session = %session.session_id,
+            error = %error,
+        );
+    }
 
     if let Some(pid) = plan.agent_pid {
         let exited = match runtime.request_graceful_quit(tmux_info, pid) {
@@ -402,16 +426,22 @@ fn ensure_no_unsent_draft<R: CloseRuntime>(
     runtime: &R,
     tmux_info: &TmuxInfo,
     session: &Session,
-) -> Result<()> {
+) -> Result<bool> {
     match runtime.has_draft(tmux_info, session.engine) {
-        Some(false) => Ok(()),
+        Some(false) => Ok(false),
         Some(true) => bail!(
             "Agent session `{}` has an unsent draft; pass --force to close it",
             session.session_id
         ),
         None => {
             let timeout = runtime.unknown_draft_timeout();
-            let active = is_session_active(session, &NoDraftProbe, Utc::now(), timeout);
+            let active = match Utc::now()
+                .signed_duration_since(session.updated_at)
+                .to_std()
+            {
+                Ok(elapsed) => elapsed < timeout,
+                Err(_) => true,
+            };
             tracing::debug!(
                 event = "agent.close.draft_state_unavailable",
                 session = %session.session_id,
@@ -424,9 +454,19 @@ fn ensure_no_unsent_draft<R: CloseRuntime>(
                     session.session_id
                 );
             }
-            Ok(())
+            Ok(true)
         }
     }
+}
+
+fn write_draft_unavailable_warning(
+    writer: &mut impl io::Write,
+    session_id: &str,
+) -> io::Result<()> {
+    writeln!(
+        writer,
+        "Warning: could not inspect the unsent draft for session `{session_id}`; using its last update time for the close safety check"
+    )
 }
 
 #[cfg(test)]
@@ -814,9 +854,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn close_allows_unknown_draft_when_session_update_is_stale() {
-        let mut session = session();
+    #[rstest]
+    #[case::stopped(SessionStatus::Stopped)]
+    #[case::paused(SessionStatus::Paused)]
+    #[case::ended(SessionStatus::Ended)]
+    fn close_allows_unknown_draft_when_session_update_is_stale(
+        mut session: Session,
+        #[case] status: SessionStatus,
+    ) {
+        session.status = status;
         session.updated_at = Utc::now() - chrono::TimeDelta::hours(1);
         let runtime = FakeRuntime {
             draft: None,
@@ -829,6 +875,69 @@ mod tests {
             (result.is_ok(), runtime.calls.into_inner()),
             (
                 true,
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    draft_call(Engine::Claude),
+                    graceful_quit_call(42),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::paused(SessionStatus::Paused)]
+    #[case::ended(SessionStatus::Ended)]
+    fn close_blocks_unknown_draft_for_recent_terminal_sessions(
+        mut session: Session,
+        #[case] status: SessionStatus,
+    ) {
+        session.status = status;
+        session.updated_at = Utc::now();
+        let runtime = FakeRuntime {
+            draft: None,
+            ..FakeRuntime::default()
+        };
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it"
+                    .to_string(),
+                vec![
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(Engine::Claude),
+                    draft_call(Engine::Claude),
+                ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_warns_when_draft_state_is_unavailable() {
+        let mut session = session();
+        session.updated_at = Utc::now() - chrono::TimeDelta::hours(1);
+        let runtime = FakeRuntime {
+            draft: None,
+            ..FakeRuntime::default()
+        };
+        let mut stderr = Vec::new();
+
+        let result = close_session_with_warning_writer(&session, false, &runtime, &mut stderr);
+
+        assert_eq!(
+            (result.is_ok(), stderr, runtime.calls.into_inner()),
+            (
+                true,
+                b"Warning: could not inspect the unsent draft for session `session-1`; using its last update time for the close safety check\n"
+                    .to_vec(),
                 vec![
                     pane_exists_call(),
                     pane_session_call(),
@@ -1139,19 +1248,21 @@ mod tests {
 
         let result = close_session(&session, true, &runtime);
 
+        let mut expected_calls = vec![
+            pane_exists_call(),
+            pane_session_call(),
+            resolve_pid_call(engine),
+            pane_exists_call(),
+            pane_session_call(),
+        ];
+        if engine == Engine::Codex {
+            expected_calls.push(Call::EndCodexSession("session-1".to_string()));
+        }
+        expected_calls.push(kill_pane_call());
+
         assert_eq!(
             (result.is_ok(), runtime.calls.into_inner()),
-            (
-                true,
-                vec![
-                    pane_exists_call(),
-                    pane_session_call(),
-                    resolve_pid_call(engine),
-                    pane_exists_call(),
-                    pane_session_call(),
-                    kill_pane_call(),
-                ],
-            ),
+            (true, expected_calls),
         );
     }
 
