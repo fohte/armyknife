@@ -131,7 +131,22 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn comment() -> Comment {
+        let timestamp = Utc.with_ymd_and_hms(2031, 4, 5, 6, 7, 8).unwrap();
+        Comment {
+            id: "IC_sample".to_string(),
+            database_id: 17,
+            author: Some(crate::commands::gh::issue_agent::models::Author {
+                login: "sample-author".to_string(),
+            }),
+            created_at: timestamp,
+            updated_at: timestamp,
+            body: "Comment text".to_string(),
+        }
+    }
 
     #[rstest]
     #[case("<!-- author: testuser -->", Some(("author", "testuser".to_string())))]
@@ -156,18 +171,11 @@ mod tests {
         <!-- sticky marker -->
 
         Comment text"})]
-    fn test_format_and_parse_preserve_body_starting_with_html_comment(#[case] body: &str) {
-        let timestamp = Utc.with_ymd_and_hms(2031, 4, 5, 6, 7, 8).unwrap();
-        let comment = Comment {
-            id: "IC_sample".to_string(),
-            database_id: 17,
-            author: Some(crate::commands::gh::issue_agent::models::Author {
-                login: "sample-author".to_string(),
-            }),
-            created_at: timestamp,
-            updated_at: timestamp,
-            body: body.to_string(),
-        };
+    fn test_format_and_parse_preserve_body_starting_with_html_comment(
+        #[case] body: &str,
+        mut comment: Comment,
+    ) {
+        comment.body = body.to_string();
 
         let content = LocalComment::format_from_comment(&comment);
         let parsed =
@@ -185,11 +193,49 @@ mod tests {
             ),
             (
                 Some("sample-author".to_string()),
-                Some(timestamp.to_rfc3339()),
-                Some(timestamp.to_rfc3339()),
+                Some(comment.created_at.to_rfc3339()),
+                Some(comment.updated_at.to_rfc3339()),
                 Some("IC_sample".to_string()),
                 Some(17),
                 body.to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn test_parse_preserves_extra_blank_line_in_body() {
+        let content = indoc! {"
+            <!-- author: sample-author -->
+            <!-- createdAt: 2031-04-05T06:07:08+00:00 -->
+            <!-- updatedAt: 2031-04-05T06:07:08+00:00 -->
+            <!-- id: IC_sample -->
+            <!-- databaseId: 17 -->
+
+
+            Comment text"};
+        let parsed =
+            LocalComment::parse(content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                indoc! {"
+
+                    Comment text"}
+                .to_string(),
             ),
         );
     }
