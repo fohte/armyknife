@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.489](https://github.com/fohte/armyknife/compare/v0.1.488...v0.1.489) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** narrow reply push gates ([#1322](https://github.com/fohte/armyknife/issues/1322)) ([af27f7d](https://github.com/fohte/armyknife/commit/af27f7d40b69769ee73b1761f7be2c3c27e4e702))
+* **issue-agent:** keep leading HTML comments ([#1325](https://github.com/fohte/armyknife/issues/1325)) ([5dbdc86](https://github.com/fohte/armyknife/commit/5dbdc86d8cf683f44b73cf2d025433c1f8688eee))
+
 ## [0.1.488](https://github.com/fohte/armyknife/compare/v0.1.487...v0.1.488) (2026-10-28)
 
 
