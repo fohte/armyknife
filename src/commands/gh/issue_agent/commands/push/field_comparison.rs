@@ -5,8 +5,8 @@ use crate::commands::gh::issue_agent::models::{Issue, IssueMetadata};
 use crate::commands::gh::issue_agent::storage::IssueContent;
 
 #[derive(Clone, Copy)]
-pub(super) struct FieldComparison {
-    pub(super) local_changed: bool,
+pub(in crate::commands::gh::issue_agent) struct FieldComparison {
+    pub(in crate::commands::gh::issue_agent) local_changed: bool,
     remote_changed: bool,
     sides_equal: bool,
 }
@@ -18,12 +18,12 @@ impl FieldComparison {
 }
 
 #[derive(Clone, Copy)]
-pub(super) struct IssueFieldComparisons {
-    pub(super) body: FieldComparison,
-    pub(super) title: FieldComparison,
-    pub(super) labels: FieldComparison,
-    pub(super) sub_issues: FieldComparison,
-    pub(super) parent_issue: FieldComparison,
+pub(in crate::commands::gh::issue_agent) struct IssueFieldComparisons {
+    pub(in crate::commands::gh::issue_agent) body: FieldComparison,
+    pub(in crate::commands::gh::issue_agent) title: FieldComparison,
+    pub(in crate::commands::gh::issue_agent) labels: FieldComparison,
+    pub(in crate::commands::gh::issue_agent) sub_issues: FieldComparison,
+    pub(in crate::commands::gh::issue_agent) parent_issue: FieldComparison,
 }
 
 impl IssueFieldComparisons {
@@ -108,7 +108,7 @@ impl IssueFieldValues {
     }
 }
 
-pub(super) fn compare_issue_fields(
+pub(in crate::commands::gh::issue_agent) fn compare_issue_fields(
     local_metadata: &IssueMetadata,
     local_body: &str,
     remote_issue: &Issue,
