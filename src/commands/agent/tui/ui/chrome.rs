@@ -17,7 +17,6 @@ use super::edit_bar::render_edit_input;
 use super::help::{build_help_lines, render_help_lines};
 use super::helpers::{DIM_FG, count_statuses, truncate};
 use super::session_content::render_main_list;
-use super::session_list::summary::selected_summary_lines;
 
 const HEADER_HEIGHT: u16 = 1;
 
@@ -39,19 +38,11 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
 
     let help_lines = build_help_lines(app);
     let help_height = help_lines.len() as u16;
-    let summary_lines = if app.view == View::Session {
-        selected_summary_lines(app, area.width.saturating_sub(2) as usize)
-    } else {
-        Vec::new()
-    };
     let mut constraints = vec![Constraint::Length(HEADER_HEIGHT)];
     if show_top_bar {
         constraints.push(Constraint::Length(1));
     }
     constraints.push(Constraint::Min(1));
-    if !summary_lines.is_empty() {
-        constraints.push(Constraint::Length(summary_lines.len() as u16));
-    }
     constraints.push(Constraint::Length(help_height));
     if has_error {
         constraints.push(Constraint::Length(1));
@@ -66,10 +57,6 @@ pub(super) fn render_with_time(frame: &mut Frame, app: &mut App, now: DateTime<U
     }
     render_main_list(frame, areas[area_index], app, now);
     area_index += 1;
-    if !summary_lines.is_empty() {
-        frame.render_widget(Paragraph::new(summary_lines), areas[area_index]);
-        area_index += 1;
-    }
     render_help_lines(frame, areas[area_index], help_lines);
     area_index += 1;
     if has_error {
@@ -241,10 +228,12 @@ fn render_search_input(frame: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::progress::ProgressRow;
     use crate::commands::agent::tui::ui::test_support::{
         create_test_session, render_buffer, render_to_string, render_to_string_with, wt_row,
     };
     use crate::commands::agent::types::{AgentStatus, Session, SessionStatus};
+    use indoc::indoc;
     use rstest::rstest;
 
     #[test]
@@ -277,6 +266,37 @@ mod tests {
             " agent watch                                    1 needs you · 1 running · 2 idle"
         );
         assert_eq!(buffer[(idle_start, 0)].fg, DIM_FG);
+    }
+
+    #[test]
+    fn test_session_view_omits_selected_row_summary_and_keeps_help_bar() {
+        let now = Utc::now();
+        let mut worker = create_test_session("worker");
+        worker.label = Some("Selected worker".to_string());
+        worker.agent_status = Some(AgentStatus {
+            kind: "waiting".to_string(),
+            note: "CI check".to_string(),
+        });
+        let sessions = vec![worker];
+        let output = render_to_string_with(&sessions, Some(1), now, 80, 8, |app| {
+            app.progress_session_id = Some("worker".to_string());
+            app.progress_rows = vec![ProgressRow::ImplementationHeader {
+                merged_pr_count: 2,
+                total_pr_count: 5,
+                collapsed: false,
+            }];
+        });
+        let expected = indoc! {"
+             agent watch                                    0 needs you · 1 running · 0 idle
+             ── TASKS ──────────────────────────────────────────────────────────────────────
+            >● project                 Selected worker                              just now
+
+
+
+
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
+
+        assert_eq!(output, expected);
     }
 
     #[test]

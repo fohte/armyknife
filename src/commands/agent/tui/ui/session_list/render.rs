@@ -209,7 +209,7 @@ mod tests {
 
 
 
-            Configured
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -359,7 +359,7 @@ mod tests {
 
 
 
-            Wide
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -435,7 +435,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -477,7 +477,7 @@ mod tests {
 
 
 
-            Fix the bug
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -592,7 +592,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -628,8 +628,8 @@ mod tests {
              ── TASKS ──────────────────────────────────────────────────────────────────────
              ◐ project                 session-name                                      48m
 
-            session-name
-            Waiting: choose an option
+
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -642,8 +642,8 @@ mod tests {
         36,
         indoc! {"
              agent watch1 needs you · 0 running
+             ── YOUR TURN ──────────────────────
             >◐  you     session-name ch just now
-            session-name
              ?: keys   /: search   Tab: toggle p"}
     )]
     #[case::omitted_note(
@@ -652,8 +652,8 @@ mod tests {
         43,
         indoc! {"
              agent watch1 needs you · 0 running · 0 idl
+             ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  session-name  just now
-            session-name
              ?: keys   /: search   Tab: toggle progress"}
     )]
     #[case::long_session_name_keeps_time_column(
@@ -662,8 +662,8 @@ mod tests {
         43,
         indoc! {"
              agent watch1 needs you · 0 running · 0 idl
+             ── YOUR TURN ─────────────────────────────
             >◐  needs_attention  a-long-ses... just now
-            a-long-session-name
              ?: keys   /: search   Tab: toggle progress"}
     )]
     fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
@@ -715,7 +715,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -748,7 +748,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -799,7 +799,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -847,7 +847,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
@@ -876,7 +876,7 @@ mod tests {
 
 
 
-            project
+
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
