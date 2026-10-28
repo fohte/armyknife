@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.493](https://github.com/fohte/armyknife/compare/v0.1.492...v0.1.493) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** preview comment changes ([#1333](https://github.com/fohte/armyknife/issues/1333)) ([802d05f](https://github.com/fohte/armyknife/commit/802d05fce56ed9edf2ee3af1cff174d903879a09))
+
 ## [0.1.492](https://github.com/fohte/armyknife/compare/v0.1.491...v0.1.492) (2026-10-28)
 
 
