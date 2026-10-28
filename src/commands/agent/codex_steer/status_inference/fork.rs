@@ -109,9 +109,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use rstest::rstest;
+    use serde_json::json;
 
-    use super::with_fork_resources;
+    use super::{infer_status, with_fork_resources};
+    use crate::commands::agent::codex_steer::history::CodexThreadMetadata;
     use crate::commands::agent::codex_steer::status_inference::relay::Relay;
+    use crate::commands::agent::types::Session;
 
     #[derive(Clone, Copy)]
     enum ForkOutcome {
@@ -138,6 +141,8 @@ mod tests {
             model_provider: "custom".to_string(),
             model: "fixture-model".to_string(),
             session_id: "fixture-thread".to_string(),
+            turn_id: "fixture-turn".to_string(),
+            last_assistant_message: "fixture final message".to_string(),
         };
 
         let actual = infer_status(&session, &thread, "fixture prompt", &[])
