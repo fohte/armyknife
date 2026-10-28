@@ -516,6 +516,11 @@ mod tests {
                             Let users choose which notifications they receive.
 
                             ```mermaid
+                            ---
+                            config:
+                              flowchart:
+                                wrappingWidth: 400
+                            ---
                             flowchart LR
                               P1(\"Add preference tables<br/>This PR\")
                               click P1 href \"https://github.com/acme/notify-api/pull/12\" _blank
