@@ -69,12 +69,9 @@ fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
     }
 }
 
-fn verify_push_approval(path: &std::path::Path, plan: PushPlan) -> anyhow::Result<()> {
-    if plan == PushPlan::Apply {
-        let document = Document::<ThreadsFrontmatter>::from_path(path.to_path_buf())?;
-        document.verify_approval()?;
-    }
-
+fn verify_push_approval(path: &std::path::Path) -> anyhow::Result<()> {
+    let document = Document::<ThreadsFrontmatter>::from_path(path.to_path_buf())?;
+    document.verify_approval()?;
     Ok(())
 }
 
@@ -166,9 +163,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         .into());
     }
 
-    let plan = push_plan(&changeset, args.dry_run);
-
-    match plan {
+    match push_plan(&changeset, args.dry_run) {
         PushPlan::NoChanges => {
             println!("No changes to push.");
             return Ok(());
@@ -178,14 +173,15 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
             println!("\n(dry-run mode: no changes applied)");
             return Ok(());
         }
-        PushPlan::Apply => changeset.display(),
+        PushPlan::Apply => {
+            changeset.display();
+            let client = GitHubClient::get()?;
+            verify_push_approval(&storage.threads_path())?;
+            changeset
+                .apply(client, &owner, &repo, args.pr_number)
+                .await?;
+        }
     }
-
-    let client = GitHubClient::get()?;
-    verify_push_approval(&storage.threads_path(), plan)?;
-    changeset
-        .apply(client, &owner, &repo, args.pr_number)
-        .await?;
 
     // Re-fetch and update local file after push
     let include_resolved = local.threads.iter().any(|t| t.resolve);
@@ -211,57 +207,71 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
 
     #[rstest]
-    #[case::no_changes(None, false, PushPlan::NoChanges, true)]
-    #[case::dry_run(
-        Some(ReplyAction::PostReply {
-            thread_id: "RT_test".to_string(),
-            in_reply_to: 1,
-            body: "Reply".to_string(),
-        }),
-        true,
-        PushPlan::DryRun,
-        true
-    )]
-    #[case::apply_reply(
-        Some(ReplyAction::PostReply {
-            thread_id: "RT_test".to_string(),
-            in_reply_to: 1,
-            body: "Reply".to_string(),
-        }),
-        false,
-        PushPlan::Apply,
-        false
-    )]
-    #[case::apply_resolve(
-        Some(ReplyAction::ResolveThread {
-            thread_id: "RT_test".to_string(),
-            thread_node_id: "RT_test".to_string(),
-        }),
-        false,
-        PushPlan::Apply,
-        false
-    )]
-    fn test_approval_is_required_only_when_changes_are_applied(
-        #[case] action: Option<ReplyAction>,
+    #[case::no_changes(false, false, PushPlan::NoChanges)]
+    #[case::dry_run(true, true, PushPlan::DryRun)]
+    #[case::apply(true, false, PushPlan::Apply)]
+    fn test_push_plan(
+        #[case] has_changes: bool,
         #[case] dry_run: bool,
         #[case] expected_plan: PushPlan,
-        #[case] expected_approval_result: bool,
     ) {
         let changeset = ReplyChangeSet {
-            actions: action.into_iter().collect(),
+            actions: if has_changes {
+                vec![ReplyAction::PostReply {
+                    thread_id: "RT_test".to_string(),
+                    in_reply_to: 1,
+                    body: "Reply".to_string(),
+                }]
+            } else {
+                vec![]
+            },
             conflicts: vec![],
         };
-        let temp_dir = TempDir::new().unwrap();
-        let missing_document = temp_dir.path().join("threads.md");
-        let plan = push_plan(&changeset, dry_run);
 
-        assert_eq!(
-            (plan, verify_push_approval(&missing_document, plan).is_ok()),
-            (expected_plan, expected_approval_result)
-        );
+        assert_eq!(push_plan(&changeset, dry_run), expected_plan);
+    }
+
+    #[rstest]
+    #[case::approved(
+        indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Draft reply"},
+        true
+    )]
+    #[case::not_approved(
+        indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+            Draft reply"},
+        false
+    )]
+    fn test_verify_push_approval(#[case] content: &str, #[case] expected: bool) {
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        std::fs::write(&path, content).unwrap();
+
+        if expected {
+            Document::<ThreadsFrontmatter>::from_path(path.clone())
+                .unwrap()
+                .save_approval()
+                .unwrap();
+        }
+
+        assert_eq!(verify_push_approval(&path).is_ok(), expected);
     }
 }
