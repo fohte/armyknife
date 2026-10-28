@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::future::Future;
 use std::io::{self, Write};
 use std::path::Path;
@@ -22,8 +21,6 @@ pub(super) async fn close_session_value(
         );
     };
 
-    let stderr = io::stderr();
-    let mut warning_writer = stderr.lock();
     close_session_value_with_worktree(
         SessionWorktreeContext {
             session,
@@ -39,7 +36,7 @@ pub(super) async fn close_session_value(
             super::worktree::close_worktree_session(session, args.force, current_pane_id.as_deref())
         },
         |plan| crate::shared::worktree_delete::execute(plan, args.skip_hooks),
-        &mut warning_writer,
+        &mut io::stderr(),
     )
     .await
 }
@@ -87,19 +84,17 @@ where
 
 fn find_shared_worktree_session_ids(context: &SessionWorktreeContext<'_>) -> Result<Vec<String>> {
     let sessions = super::super::store::list_sessions()?;
-    let pane_liveness = RefCell::new(tmux::PaneLiveness::default());
+    let mut pane_liveness = tmux::PaneLiveness::default();
     collect_shared_worktree_session_ids(
         context,
         &sessions,
         super::super::store::load_session,
         |info| {
-            pane_liveness.borrow_mut().cache_socket(
+            pane_liveness.cache_socket(
                 info.socket_path.as_deref(),
                 tmux::list_all_pane_ids_for_socket,
             );
-            pane_liveness
-                .borrow()
-                .is_alive(info.socket_path.as_deref(), &info.pane_id)
+            pane_liveness.is_alive(info.socket_path.as_deref(), &info.pane_id)
         },
     )
 }
@@ -161,7 +156,7 @@ mod tests {
     use std::cell::RefCell;
     use std::path::{Path, PathBuf};
 
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::super::test_support::session;
     use super::*;
@@ -190,6 +185,39 @@ mod tests {
             force,
             parent_session_id,
             worktree_root: Path::new("/tmp/worktrees/feature"),
+        }
+    }
+
+    #[fixture]
+    fn shared_worktree_sessions() -> (Session, Vec<Session>) {
+        let mut target_session =
+            linked_session("target", "/tmp/worktrees/feature", Some("%target"));
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let sessions = vec![
+            target_session.clone(),
+            linked_session(
+                "parent-session",
+                "/tmp/worktrees/feature/src",
+                Some("%parent"),
+            ),
+            linked_session("live-session", "/tmp/worktrees/feature", Some("%live")),
+            linked_session(
+                "unknown-session",
+                "/tmp/worktrees/feature/src",
+                Some("%unknown"),
+            ),
+            linked_session("untracked-session", "/tmp/worktrees/feature", None),
+            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
+            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
+        ];
+        (target_session, sessions)
+    }
+
+    fn pane_liveness(info: &TmuxInfo) -> Option<bool> {
+        match info.pane_id.as_str() {
+            "%live" | "%parent" => Some(true),
+            "%dead" => Some(false),
+            _ => None,
         }
     }
 
@@ -241,28 +269,12 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn forced_close_keeps_worktree_for_active_sessions_and_reports_their_ids() {
-        let mut target_session =
-            linked_session("target", "/tmp/worktrees/feature", Some("%target"));
-        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
-        let sessions = vec![
-            target_session.clone(),
-            linked_session(
-                "parent-session",
-                "/tmp/worktrees/feature/src",
-                Some("%parent"),
-            ),
-            linked_session("live-session", "/tmp/worktrees/feature", Some("%live")),
-            linked_session(
-                "unknown-session",
-                "/tmp/worktrees/feature/src",
-                Some("%unknown"),
-            ),
-            linked_session("untracked-session", "/tmp/worktrees/feature", None),
-            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
-            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
-        ];
+    async fn forced_close_keeps_worktree_for_active_sessions_and_reports_their_ids(
+        shared_worktree_sessions: (Session, Vec<Session>),
+    ) {
+        let (target_session, sessions) = shared_worktree_sessions;
         let calls = RefCell::new(Vec::new());
         let mut warning = Vec::new();
 
@@ -278,12 +290,7 @@ mod tests {
                             "the registered caller should not be loaded"
                         ))
                     },
-                    |info| match info.pane_id.as_str() {
-                        "%live" | "%parent" | "%outside" => Some(true),
-                        "%dead" => Some(false),
-                        "%unknown" => None,
-                        _ => None,
-                    },
+                    pane_liveness,
                 )
             },
             async {
@@ -326,29 +333,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn collects_only_other_non_stale_sessions_inside_the_worktree() {
-        let mut target_session =
-            linked_session("target", "/tmp/worktrees/feature", Some("%target"));
-        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
-        let sessions = vec![
-            target_session.clone(),
-            linked_session(
-                "parent-session",
-                "/tmp/worktrees/feature/src",
-                Some("%parent"),
-            ),
-            linked_session("live-session", "/tmp/worktrees/feature", Some("%live")),
-            linked_session(
-                "unknown-session",
-                "/tmp/worktrees/feature/src",
-                Some("%unknown"),
-            ),
-            linked_session("untracked-session", "/tmp/worktrees/feature", None),
-            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
-            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
-        ];
-
+    #[rstest]
+    fn collects_only_other_non_stale_sessions_inside_the_worktree(
+        shared_worktree_sessions: (Session, Vec<Session>),
+    ) {
+        let (target_session, sessions) = shared_worktree_sessions;
         let actual = collect_shared_worktree_session_ids(
             &context(&target_session, false, Some("parent-session")),
             &sessions,
@@ -357,12 +346,7 @@ mod tests {
                     "the registered caller should not be loaded"
                 ))
             },
-            |info| match info.pane_id.as_str() {
-                "%live" | "%parent" | "%outside" => Some(true),
-                "%dead" => Some(false),
-                "%unknown" => None,
-                _ => None,
-            },
+            pane_liveness,
         )
         .map_err(|error| error.to_string());
 
