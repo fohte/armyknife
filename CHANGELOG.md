@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.474](https://github.com/fohte/armyknife/compare/v0.1.473...v0.1.474) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue after rejected thread reads ([#1291](https://github.com/fohte/armyknife/issues/1291)) ([7869285](https://github.com/fohte/armyknife/commit/7869285a5c09d65411b5190bd891dbfb5c70dbc2))
+* **agent:** continue sweep after auto-pause errors ([#1290](https://github.com/fohte/armyknife/issues/1290)) ([d595c8c](https://github.com/fohte/armyknife/commit/d595c8c64c42467ab0cb278cc68d32229e101937))
+
 ## [0.1.473](https://github.com/fohte/armyknife/compare/v0.1.472...v0.1.473) (2026-10-27)
 
 
