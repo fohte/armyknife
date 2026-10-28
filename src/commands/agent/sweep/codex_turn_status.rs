@@ -182,7 +182,7 @@ fn increment_update_count(updates: &mut CodexTurnUpdates, is_failed: bool) {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use chrono::{DateTime, TimeDelta, Utc};
     use rstest::{fixture, rstest};
@@ -447,18 +447,68 @@ mod tests {
         );
     }
 
+    fn configure_load_failure(sessions_dir: &Path, failed_session: &Session) -> String {
+        let connection = Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        connection
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, ?3)",
+                rusqlite::params![
+                    failed_session.session_id,
+                    store::serialize_session(failed_session).expect("serialize session"),
+                    0,
+                ],
+            )
+            .expect("invalid-ID session should be listed");
+
+        let error = store::load_session_from(sessions_dir, &failed_session.session_id)
+            .expect_err("invalid session ID should fail to load");
+        format!("{error:#}")
+    }
+
+    fn configure_update_failure(sessions_dir: &Path, failed_session: &Session) -> String {
+        save_session_to(sessions_dir, failed_session).expect("save session");
+        let connection = Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_fixture_session_update
+                 BEFORE UPDATE ON sessions
+                 WHEN OLD.session_id = 'fixture-update-error-session'
+                 BEGIN
+                     SELECT RAISE(ABORT, 'fixture update failed');
+                 END;",
+            )
+            .expect("update failure trigger should be created");
+
+        let error = store::update_session_in(sessions_dir, &failed_session.session_id, |_| true)
+            .expect_err("trigger should fail the session update");
+        format!("{error:#}")
+    }
+
     #[rstest]
-    #[case::load_failure("load")]
-    #[case::update_failure("update")]
+    #[case::load_failure(
+        "../fixture-load-error-session",
+        "load",
+        configure_load_failure,
+        vec!["fixture-success-session".to_string()],
+    )]
+    #[case::update_failure(
+        "fixture-update-error-session",
+        "update",
+        configure_update_failure,
+        vec![
+            "fixture-update-error-session".to_string(),
+            "fixture-success-session".to_string(),
+        ],
+    )]
     fn session_store_error_does_not_stop_other_sessions(
         sessions_dir: TempDir,
+        #[case] failed_session_id: &str,
         #[case] operation: &str,
+        #[case] configure_failure: fn(&Path, &Session) -> String,
+        #[case] expected_requested_threads: Vec<String>,
     ) {
-        let failed_session_id = match operation {
-            "load" => "../fixture-load-error-session",
-            "update" => "fixture-update-error-session",
-            _ => unreachable!(),
-        };
         let successful_session_id = "fixture-success-session";
         let successful_session = session(
             successful_session_id,
@@ -474,49 +524,7 @@ mod tests {
             Engine::Codex,
             successful_session.updated_at + TimeDelta::days(1),
         );
-        if operation == "load" {
-            let connection = Connection::open(sessions_dir.path().join("sessions.db"))
-                .expect("session database should open");
-            connection
-                .execute(
-                    "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        failed_session_id,
-                        store::serialize_session(&failed_session).expect("serialize session"),
-                        0,
-                    ],
-                )
-                .expect("invalid-ID session should be listed");
-        } else {
-            save_session_to(sessions_dir.path(), &failed_session).expect("save session");
-            let connection = Connection::open(sessions_dir.path().join("sessions.db"))
-                .expect("session database should open");
-            connection
-                .execute_batch(
-                    "CREATE TRIGGER fail_fixture_session_update
-                     BEFORE UPDATE ON sessions
-                     WHEN OLD.session_id = 'fixture-update-error-session'
-                     BEGIN
-                         SELECT RAISE(ABORT, 'fixture update failed');
-                     END;",
-                )
-                .expect("update failure trigger should be created");
-        }
-
-        let expected_error = match operation {
-            "load" => {
-                let error = store::load_session_from(sessions_dir.path(), failed_session_id)
-                    .expect_err("invalid session ID should fail to load");
-                format!("{error:#}")
-            }
-            "update" => {
-                let error =
-                    store::update_session_in(sessions_dir.path(), failed_session_id, |_| true)
-                        .expect_err("trigger should fail the session update");
-                format!("{error:#}")
-            }
-            _ => unreachable!(),
-        };
+        let expected_error = configure_failure(sessions_dir.path(), &failed_session);
 
         let syncer = RecordingTmuxStatusSyncer::default();
         let mut requested_threads = Vec::new();
@@ -532,14 +540,6 @@ mod tests {
             )
         });
 
-        let expected_requested_threads = if operation == "load" {
-            vec![successful_session_id.to_string()]
-        } else {
-            vec![
-                failed_session_id.to_string(),
-                successful_session_id.to_string(),
-            ]
-        };
         let actual = (
             updates.expect("session-level errors must not fail sweep"),
             load_session(sessions_dir.path(), successful_session_id).status,
