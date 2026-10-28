@@ -1,9 +1,11 @@
 use std::fs;
+use std::io::Read;
 use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
+use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use rusqlite::{
     Connection, OpenFlags, OptionalExtension,
     backup::{Backup, StepResult},
@@ -15,6 +17,14 @@ use super::super::super::super::history::CodexThreadMetadata;
 
 pub(super) const STATE_DB_FILENAME: &str = "state_5.sqlite";
 pub(super) const THREAD_HISTORY_DB_FILENAME: &str = "thread_history_1.sqlite";
+
+const SQLITE_URI_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'&')
+    .add(b'?');
 
 pub(super) struct ThreadRecord {
     pub(super) rollout_path: String,
@@ -35,11 +45,14 @@ pub(super) fn backup_databases(
             metadata.file_type().is_file(),
             "source Codex database is not a regular file"
         );
+        ensure_wal_sidecars_are_readable(&source_path)?;
+        let source_uri = readonly_source_uri(&source_path)?;
         let source = Connection::open_with_flags(
-            &source_path,
+            source_uri,
             OpenFlags::SQLITE_OPEN_READ_ONLY
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX
-                | OpenFlags::SQLITE_OPEN_NOFOLLOW,
+                | OpenFlags::SQLITE_OPEN_NOFOLLOW
+                | OpenFlags::SQLITE_OPEN_URI,
         )
         .with_context(|| format!("open source Codex {filename} read-only"))?;
         source
@@ -71,6 +84,49 @@ pub(super) fn backup_databases(
             .close()
             .map_err(|(_, error)| error)
             .with_context(|| format!("close private Codex {filename} backup"))?;
+    }
+    Ok(())
+}
+
+fn readonly_source_uri(path: &Path) -> Result<String> {
+    let path = path
+        .to_str()
+        .context("source Codex database path is not valid UTF-8")?;
+    // SQLite's bundled Unix VFS otherwise opens the WAL index with write access.
+    Ok(format!(
+        "file:{}?mode=ro&readonly_shm=1",
+        utf8_percent_encode(path, SQLITE_URI_ENCODE_SET)
+    ))
+}
+
+fn ensure_wal_sidecars_are_readable(database_path: &Path) -> Result<()> {
+    let mut database =
+        fs::File::open(database_path).context("read source Codex database header")?;
+    let mut header = [0; 20];
+    database
+        .read_exact(&mut header)
+        .context("read source Codex database header")?;
+    if header[18] != 2 || header[19] != 2 {
+        return Ok(());
+    }
+
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = database_path.with_file_name(format!(
+            "{}{}",
+            database_path
+                .file_name()
+                .context("source Codex database has no filename")?
+                .to_string_lossy(),
+            suffix
+        ));
+        let metadata = fs::symlink_metadata(&sidecar)
+            .with_context(|| format!("inspect source Codex WAL sidecar {suffix}"))?;
+        ensure!(
+            metadata.file_type().is_file(),
+            "source Codex WAL sidecar is not a regular file"
+        );
+        fs::File::open(sidecar)
+            .with_context(|| format!("open source Codex WAL sidecar {suffix} read-only"))?;
     }
     Ok(())
 }
@@ -172,38 +228,81 @@ pub(super) fn validate_target_history(path: &Path, thread: &CodexThreadMetadata)
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+    use std::ffi::OsString;
     use std::time::Duration;
+    use std::time::SystemTime;
 
     use rusqlite::{Connection, OpenFlags};
     use tempfile::TempDir;
 
-    use super::{STATE_DB_FILENAME, backup_databases};
+    use super::{STATE_DB_FILENAME, THREAD_HISTORY_DB_FILENAME, backup_databases};
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct FileObservation {
+        contents: Vec<u8>,
+        modified: Option<SystemTime>,
+    }
+
+    fn snapshot_directory(
+        path: &std::path::Path,
+    ) -> anyhow::Result<BTreeMap<OsString, FileObservation>> {
+        std::fs::read_dir(path)?
+            .map(|entry| {
+                let entry = entry?;
+                let metadata = entry.metadata()?;
+                Ok((
+                    entry.file_name(),
+                    FileObservation {
+                        contents: std::fs::read(entry.path())?,
+                        modified: metadata.modified().ok(),
+                    },
+                ))
+            })
+            .collect()
+    }
 
     #[test]
     fn online_backup_includes_committed_wal_pages_without_writing_the_source() -> anyhow::Result<()>
     {
         let root = TempDir::new()?;
         let root_path = root.path().canonicalize()?;
+        let writer_home = root_path.join("writer");
         let source_home = root_path.join("source");
         let private_home = root_path.join("private");
+        std::fs::create_dir_all(&writer_home)?;
         std::fs::create_dir_all(&source_home)?;
         std::fs::create_dir_all(&private_home)?;
         let source_path = source_home.join(STATE_DB_FILENAME);
-        let source = Connection::open(&source_path)?;
-        source.execute_batch(
+        let writer_path = writer_home.join(STATE_DB_FILENAME);
+        let writer = Connection::open(&writer_path)?;
+        writer.execute_batch(
             "PRAGMA journal_mode=WAL;
              CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, history_mode TEXT NOT NULL);
              INSERT INTO threads VALUES ('fixture-thread', '/source/sessions/fixture.jsonl', 'paginated');",
         )?;
-        source.busy_timeout(Duration::from_secs(1))?;
-        Connection::open(source_home.join(super::THREAD_HISTORY_DB_FILENAME))?
+        writer.busy_timeout(Duration::from_secs(1))?;
+        Connection::open(writer_home.join(THREAD_HISTORY_DB_FILENAME))?
             .execute_batch("CREATE TABLE fixture_history (id TEXT)")?;
+        for suffix in ["", "-wal", "-shm"] {
+            std::fs::copy(
+                writer_path.with_file_name(format!("{STATE_DB_FILENAME}{suffix}")),
+                source_home.join(format!("{STATE_DB_FILENAME}{suffix}")),
+            )?;
+        }
+        std::fs::copy(
+            writer_home.join(THREAD_HISTORY_DB_FILENAME),
+            source_home.join(THREAD_HISTORY_DB_FILENAME),
+        )?;
+        drop(writer);
+        let source_before = snapshot_directory(&source_home)?;
 
         backup_databases(
             &source_home,
             &private_home,
             std::time::Instant::now() + Duration::from_secs(10),
         )?;
+        let source_after = snapshot_directory(&source_home)?;
         let copied = Connection::open_with_flags(
             private_home.join(STATE_DB_FILENAME),
             OpenFlags::SQLITE_OPEN_READ_ONLY,
@@ -213,33 +312,65 @@ mod tests {
             ["fixture-thread"],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        let original_row: (String, String) = source.query_row(
-            "SELECT rollout_path, history_mode FROM threads WHERE id = ?1",
-            ["fixture-thread"],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-
         assert_eq!(
             (
                 copied_row,
-                original_row,
                 source_path.exists(),
                 source_home
                     .join(format!("{STATE_DB_FILENAME}-wal"))
                     .exists(),
+                source_before == source_after,
             ),
             (
                 (
                     "/source/sessions/fixture.jsonl".to_string(),
                     "paginated".to_string(),
                 ),
-                (
-                    "/source/sessions/fixture.jsonl".to_string(),
-                    "paginated".to_string(),
-                ),
+                true,
                 true,
                 true,
             ),
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_wal_sidecar_fails_before_opening_or_changing_the_source() -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let root_path = root.path().canonicalize()?;
+        let writer_home = root_path.join("writer");
+        let source_home = root_path.join("missing-sidecar-source");
+        let private_home = root_path.join("private");
+        std::fs::create_dir_all(&writer_home)?;
+        std::fs::create_dir_all(&source_home)?;
+        std::fs::create_dir_all(&private_home)?;
+        let source_path = writer_home.join(STATE_DB_FILENAME);
+        let writer = Connection::open(&source_path)?;
+        writer.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA wal_autocheckpoint=0;
+             CREATE TABLE fixture (id TEXT);
+             INSERT INTO fixture VALUES ('fixture-row');",
+        )?;
+        let wal_path = source_path.with_file_name(format!("{STATE_DB_FILENAME}-wal"));
+        std::fs::copy(&source_path, source_home.join(STATE_DB_FILENAME))?;
+        std::fs::copy(
+            &wal_path,
+            source_home.join(format!("{STATE_DB_FILENAME}-wal")),
+        )?;
+        drop(writer);
+        let before = snapshot_directory(&source_home)?;
+
+        let result = backup_databases(
+            &source_home,
+            &private_home,
+            std::time::Instant::now() + Duration::from_secs(10),
+        )
+        .map_err(|_| ());
+
+        assert_eq!(
+            (result, snapshot_directory(&source_home)?, before.clone()),
+            (Err(()), before.clone(), before),
         );
         Ok(())
     }

@@ -102,6 +102,7 @@ name = "armyknife"
 version = "0.1.472"
 dependencies = [
  "anyhow",
+ "base64 0.23.1",
  "chrono",
  "clap",
  "clap_complete",

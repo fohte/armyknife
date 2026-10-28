@@ -3,8 +3,16 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
+use base64::Engine;
+use chrono::{Duration as ChronoDuration, Utc};
 use serde_json::Value;
 use toml_edit::DocumentMut;
+
+use super::super::FORK_TIMEOUT;
+use super::MAX_SNAPSHOT_DURATION;
+
+const CHATGPT_TOKEN_REFRESH_WINDOW: ChronoDuration = ChronoDuration::minutes(5);
+const TOKEN_SNAPSHOT_MARGIN: ChronoDuration = ChronoDuration::seconds(30);
 
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct SourcePaths {
@@ -145,22 +153,28 @@ pub(super) fn copy_startup_files(source_home: &Path, private_home: &Path) -> Res
     ] {
         let source = source_home.join(name);
         let destination = private_home.join(name);
-        let Some(contents) = copy_private_file(&source, &destination, required)? else {
+        let Some(contents) = read_private_file(&source, required)? else {
             continue;
         };
+        let snapshot = if name == "auth.json" {
+            private_auth_snapshot(&contents)?
+        } else {
+            contents
+        };
         if json_object {
-            let value: Value = serde_json::from_slice(&contents)
+            let value: Value = serde_json::from_slice(&snapshot)
                 .with_context(|| format!("parse source Codex {name} snapshot"))?;
             ensure!(
                 value.is_object(),
                 "source Codex credential snapshot is not a JSON object"
             );
         }
+        write_private_file(&destination, &snapshot)?;
     }
     Ok(())
 }
 
-fn copy_private_file(source: &Path, destination: &Path, required: bool) -> Result<Option<Vec<u8>>> {
+fn read_private_file(source: &Path, required: bool) -> Result<Option<Vec<u8>>> {
     let metadata = match fs::symlink_metadata(source) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == io::ErrorKind::NotFound && !required => return Ok(None),
@@ -174,6 +188,10 @@ fn copy_private_file(source: &Path, destination: &Path, required: bool) -> Resul
         "source Codex startup file is not a regular file"
     );
     let contents = fs::read(source).context("read source Codex startup file")?;
+    Ok(Some(contents))
+}
+
+fn write_private_file(destination: &Path, contents: &[u8]) -> Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -184,25 +202,170 @@ fn copy_private_file(source: &Path, destination: &Path, required: bool) -> Resul
     let mut destination_file = options
         .open(destination)
         .context("create private Codex startup file")?;
-    io::copy(&mut contents.as_slice(), &mut destination_file)
-        .context("copy private Codex startup file")?;
-    Ok(Some(contents))
+    let mut contents = contents;
+    io::copy(&mut contents, &mut destination_file).context("copy private Codex startup file")?;
+    Ok(())
+}
+
+fn private_auth_snapshot(contents: &[u8]) -> Result<Vec<u8>> {
+    let mut auth: Value =
+        serde_json::from_slice(contents).context("parse source Codex auth snapshot")?;
+    let auth_object = auth
+        .as_object_mut()
+        .context("source Codex auth snapshot is not a JSON object")?;
+    if let Some(tokens) = auth_object.get_mut("tokens")
+        && !tokens.is_null()
+    {
+        let token_object = tokens
+            .as_object_mut()
+            .context("source Codex token snapshot is not a JSON object")?;
+        let access_token = token_object
+            .get("access_token")
+            .and_then(Value::as_str)
+            .context("source Codex access token is unavailable")?;
+        let expiration = jwt_expiration(access_token)?;
+        let minimum_validity = CHATGPT_TOKEN_REFRESH_WINDOW
+            + ChronoDuration::from_std(MAX_SNAPSHOT_DURATION)
+                .context("Codex snapshot duration exceeds the token expiry range")?
+            + ChronoDuration::from_std(FORK_TIMEOUT)
+                .context("Codex fork timeout exceeds the token expiry range")?
+            + TOKEN_SNAPSHOT_MARGIN;
+        let minimum_expiration = Utc::now() + minimum_validity;
+        ensure!(
+            expiration > minimum_expiration,
+            "source Codex access token expires too soon for status inference"
+        );
+        ensure!(
+            token_object
+                .get("refresh_token")
+                .and_then(Value::as_str)
+                .is_some(),
+            "source Codex refresh token is unavailable"
+        );
+        token_object.insert("refresh_token".to_string(), Value::String(String::new()));
+    }
+    serde_json::to_vec(&auth).context("serialize private Codex auth snapshot")
+}
+
+fn jwt_expiration(jwt: &str) -> Result<chrono::DateTime<Utc>> {
+    let mut parts = jwt.split('.');
+    let header = parts
+        .next()
+        .context("source Codex access token has no header")?;
+    let payload = parts
+        .next()
+        .context("source Codex access token has no claims")?;
+    let signature = parts
+        .next()
+        .context("source Codex access token has no signature")?;
+    ensure!(
+        !header.is_empty()
+            && !payload.is_empty()
+            && !signature.is_empty()
+            && parts.next().is_none(),
+        "source Codex access token has an unsupported format"
+    );
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload)
+        .context("decode source Codex access token claims")?;
+    let claims: Value =
+        serde_json::from_slice(&payload).context("parse source Codex access token claims")?;
+    let expiration = claims
+        .get("exp")
+        .and_then(Value::as_i64)
+        .context("source Codex access token has no expiration")?;
+    chrono::DateTime::<Utc>::from_timestamp(expiration, 0)
+        .context("source Codex access token expiration is invalid")
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
+    use base64::Engine;
+    use chrono::Utc;
     use rstest::rstest;
+    use serde_json::{Value, json};
 
     use std::fs;
 
     use tempfile::TempDir;
 
     use super::{
-        SourceEnvironment, SourcePaths, resolve_path, resolve_source_with_environment,
-        resolve_sqlite_home,
+        SourceEnvironment, SourcePaths, copy_startup_files, private_auth_snapshot, resolve_path,
+        resolve_source_with_environment, resolve_sqlite_home,
     };
+
+    fn access_token(expires_in_seconds: i64) -> String {
+        let expiration = Utc::now().timestamp() + expires_in_seconds;
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(json!({ "exp": expiration }).to_string());
+        format!("fixture-header.{payload}.fixture-signature")
+    }
+
+    fn auth_with_access_token(access_token: String) -> Value {
+        json!({
+            "auth_mode": "chatgpt",
+            "tokens": {
+                "id_token": "fixture-id-token",
+                "access_token": access_token,
+                "refresh_token": "fixture-refresh-token",
+                "account_id": "fixture-account",
+            },
+            "last_refresh": "2026-01-01T00:00:00Z",
+        })
+    }
+
+    #[test]
+    fn private_auth_snapshot_removes_the_refresh_token_without_changing_source_auth()
+    -> anyhow::Result<()> {
+        let root = TempDir::new()?;
+        let source_home = root.path().join("source");
+        let private_home = root.path().join("private");
+        fs::create_dir_all(&source_home)?;
+        fs::create_dir_all(&private_home)?;
+        let source_auth = auth_with_access_token(access_token(3600));
+        let source_bytes = serde_json::to_vec(&source_auth)?;
+        fs::write(source_home.join("auth.json"), &source_bytes)?;
+
+        copy_startup_files(&source_home, &private_home)?;
+
+        let private_auth: Value =
+            serde_json::from_slice(&fs::read(private_home.join("auth.json"))?)?;
+        let mut expected_auth = source_auth;
+        expected_auth["tokens"]["refresh_token"] = Value::String(String::new());
+        assert_eq!(
+            (private_auth, fs::read(source_home.join("auth.json"))?),
+            (expected_auth, source_bytes),
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::expired(0)]
+    #[case::near_expiry(500)]
+    fn private_auth_snapshot_rejects_tokens_that_may_refresh_during_the_fork(
+        #[case] expires_in_seconds: i64,
+    ) {
+        let auth = auth_with_access_token(access_token(expires_in_seconds));
+        let result =
+            private_auth_snapshot(&serde_json::to_vec(&auth).expect("fixture auth serializes"))
+                .map(|_| ())
+                .map_err(|_| ());
+
+        assert_eq!(result, Err(()));
+    }
+
+    #[test]
+    fn private_auth_snapshot_rejects_access_tokens_without_an_expiration() {
+        let auth = auth_with_access_token("fixture-header.e30.fixture-signature".to_string());
+        let result =
+            private_auth_snapshot(&serde_json::to_vec(&auth).expect("fixture auth serializes"))
+                .map(|_| ())
+                .map_err(|_| ());
+
+        assert_eq!(result, Err(()));
+    }
 
     #[test]
     fn resolves_custom_codex_home_and_configured_sqlite_home_from_injected_environment()
