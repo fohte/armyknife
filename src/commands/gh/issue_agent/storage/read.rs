@@ -83,11 +83,14 @@ impl LocalComment {
 
         let metadata = CommentFileMetadata::parse_from_lines(&lines[..header_end], path)?;
 
-        // The separator distinguishes metadata comments from HTML comments in the body.
-        let body_start = if lines.get(header_end) == Some(&"") {
-            header_end + 1
-        } else {
-            header_end
+        // Without a metadata header, preserve the legacy handling of initial blank lines.
+        let body_start = match header_end {
+            0 => lines
+                .iter()
+                .position(|line| !line.is_empty())
+                .unwrap_or(lines.len()),
+            _ if lines.get(header_end) == Some(&"") => header_end + 1,
+            _ => header_end,
         };
 
         let body = lines[body_start..].join("\n");
@@ -236,6 +239,95 @@ mod tests {
 
                     Comment text"}
                 .to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::no_leading_blank_lines(&["Comment text"], "Comment text")]
+    #[case::multiple_leading_blank_lines(&["", "", "Comment text"], "Comment text")]
+    fn test_parse_new_comment_without_header(#[case] lines: &[&str], #[case] expected_body: &str) {
+        let content = lines.join("\n");
+        let parsed = LocalComment::parse(
+            &content,
+            "new_comment.md".to_string(),
+            Path::new("new_comment.md"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                parsed.filename,
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                "new_comment.md".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                expected_body.to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::single_line_body(
+        &[
+            "<!-- author: sample-author -->",
+            "<!-- createdAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- updatedAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- id: IC_sample -->",
+            "<!-- databaseId: 17 -->",
+            "Comment text",
+        ],
+        "Comment text",
+    )]
+    #[case::multiple_body_lines(
+        &[
+            "<!-- author: sample-author -->",
+            "<!-- createdAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- updatedAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- id: IC_sample -->",
+            "<!-- databaseId: 17 -->",
+            "Comment text",
+            "Additional text",
+        ],
+        indoc! {"
+            Comment text
+            Additional text"},
+    )]
+    fn test_parse_header_without_blank_separator(
+        #[case] lines: &[&str],
+        #[case] expected_body: &str,
+    ) {
+        let content = lines.join("\n");
+        let parsed =
+            LocalComment::parse(&content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                expected_body.to_string(),
             ),
         );
     }
