@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.479](https://github.com/fohte/armyknife/compare/v0.1.478...v0.1.479) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** isolate Codex status fork storage ([#1301](https://github.com/fohte/armyknife/issues/1301)) ([d39d39f](https://github.com/fohte/armyknife/commit/d39d39f9c9a311e72f118bc6bd4662c935a90826))
+
 ## [0.1.478](https://github.com/fohte/armyknife/compare/v0.1.477...v0.1.478) (2026-10-28)
 
 
