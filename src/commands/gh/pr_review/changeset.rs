@@ -26,6 +26,7 @@ pub struct ThreadConflict {
 }
 
 /// Represents the set of changes to apply from local edits to GitHub.
+#[derive(Debug, PartialEq, Eq)]
 pub struct ReplyChangeSet {
     pub actions: Vec<ReplyAction>,
     pub conflicts: Vec<ThreadConflict>,
@@ -48,14 +49,7 @@ impl ReplyChangeSet {
                 None => continue,
             };
 
-            // Check for conflicts: new comments since pull
-            if has_new_comments_since(remote_thread, pulled_at) {
-                conflicts.push(ThreadConflict {
-                    thread_id: local_thread.thread_id.clone(),
-                    path: local_thread.path.clone(),
-                    reason: "New comments added since last pull".to_string(),
-                });
-            }
+            let action_start = actions.len();
 
             // Detect draft reply
             if let Some(draft) = &local_thread.draft_reply
@@ -76,6 +70,15 @@ impl ReplyChangeSet {
                 actions.push(ReplyAction::ResolveThread {
                     thread_id: local_thread.thread_id.clone(),
                     thread_node_id: node_id.clone(),
+                });
+            }
+
+            // New comments matter only when this thread has an action to apply.
+            if actions.len() > action_start && has_new_comments_since(remote_thread, pulled_at) {
+                conflicts.push(ThreadConflict {
+                    thread_id: local_thread.thread_id.clone(),
+                    path: local_thread.path.clone(),
+                    reason: "New comments added since last pull".to_string(),
                 });
             }
         }
@@ -370,8 +373,29 @@ mod tests {
     }
 
     #[rstest]
-    fn test_detect_conflict() {
-        let local = make_parsed_file(vec![make_local_thread("RT_abc", false, Some("My reply"))]);
+    #[case::reply(
+        false,
+        Some("My reply"),
+        ReplyAction::PostReply {
+            thread_id: "RT_abc".to_string(),
+            in_reply_to: 1,
+            body: "My reply".to_string(),
+        }
+    )]
+    #[case::resolve(
+        true,
+        None,
+        ReplyAction::ResolveThread {
+            thread_id: "RT_abc".to_string(),
+            thread_node_id: "RT_abc".to_string(),
+        }
+    )]
+    fn test_detect_conflict_for_action(
+        #[case] resolve: bool,
+        #[case] draft_reply: Option<&str>,
+        #[case] action: ReplyAction,
+    ) {
+        let local = make_parsed_file(vec![make_local_thread("RT_abc", resolve, draft_reply)]);
         let remote = PrData {
             reviews: vec![],
             threads: vec![make_remote_thread(
@@ -386,10 +410,83 @@ mod tests {
         };
 
         let changeset = ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z");
-        assert!(changeset.has_conflicts());
-        assert_eq!(changeset.conflicts.len(), 1);
-        // Still detects the action even with conflicts
-        assert!(changeset.has_changes());
+        assert_eq!(
+            changeset,
+            ReplyChangeSet {
+                actions: vec![action],
+                conflicts: vec![ThreadConflict {
+                    thread_id: "RT_abc".to_string(),
+                    path: "src/main.rs".to_string(),
+                    reason: "New comments added since last pull".to_string(),
+                }],
+            }
+        );
+    }
+
+    #[rstest]
+    fn test_detect_ignores_new_comments_on_threads_without_actions() {
+        let local = make_parsed_file(vec![
+            make_local_thread("RT_idle", false, None),
+            make_local_thread("RT_resolved", true, None),
+        ]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![
+                make_remote_thread(
+                    "RT_idle",
+                    vec![make_comment(1, "user", "2024-01-15T11:00:00Z")],
+                    false,
+                ),
+                make_remote_thread(
+                    "RT_resolved",
+                    vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
+                    true,
+                ),
+            ],
+        };
+
+        assert_eq!(
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
+            ReplyChangeSet {
+                actions: vec![],
+                conflicts: vec![],
+            }
+        );
+    }
+
+    #[rstest]
+    fn test_detect_ignores_new_comments_on_unrelated_threads() {
+        let local = make_parsed_file(vec![
+            make_local_thread("RT_action", false, Some("My reply")),
+            make_local_thread("RT_unrelated", false, None),
+        ]);
+        let remote = PrData {
+            reviews: vec![],
+            threads: vec![
+                make_remote_thread(
+                    "RT_action",
+                    vec![make_comment(1, "user", "2024-01-15T09:00:00Z")],
+                    false,
+                ),
+                make_remote_thread(
+                    "RT_unrelated",
+                    vec![make_comment(2, "user", "2024-01-15T11:00:00Z")],
+                    false,
+                ),
+            ],
+        };
+
+        assert_eq!(
+            ReplyChangeSet::detect(&local, &remote, "2024-01-15T10:00:00Z"),
+            ReplyChangeSet {
+                actions: vec![ReplyAction::PostReply {
+                    thread_id: "RT_action".to_string(),
+                    in_reply_to: 1,
+                    body: "My reply".to_string(),
+                }],
+                conflicts: vec![],
+            }
+        );
     }
 
     #[rstest]

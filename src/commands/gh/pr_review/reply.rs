@@ -52,6 +52,32 @@ pub struct ReplyPushArgs {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushPlan {
+    NoChanges,
+    DryRun,
+    Apply,
+}
+
+fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
+    if !changeset.has_changes() {
+        PushPlan::NoChanges
+    } else if dry_run {
+        PushPlan::DryRun
+    } else {
+        PushPlan::Apply
+    }
+}
+
+fn verify_push_approval(path: &std::path::Path, plan: PushPlan) -> anyhow::Result<()> {
+    if plan == PushPlan::Apply {
+        let document = Document::<ThreadsFrontmatter>::from_path(path.to_path_buf())?;
+        document.verify_approval()?;
+    }
+
+    Ok(())
+}
+
 pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
@@ -122,10 +148,6 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         return Err(PrReviewError::NoPulledData.into());
     }
 
-    // Verify approval before pushing
-    let document = Document::<ThreadsFrontmatter>::from_path(storage.threads_path())?;
-    document.verify_approval()?;
-
     let content = storage.read_threads()?;
     let local = MarkdownParser::parse(&content)?;
 
@@ -144,21 +166,23 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         .into());
     }
 
-    if !changeset.has_changes() {
-        println!("No changes to push.");
-        return Ok(());
+    let plan = push_plan(&changeset, args.dry_run);
+
+    match plan {
+        PushPlan::NoChanges => {
+            println!("No changes to push.");
+            return Ok(());
+        }
+        PushPlan::DryRun => {
+            changeset.display();
+            println!("\n(dry-run mode: no changes applied)");
+            return Ok(());
+        }
+        PushPlan::Apply => changeset.display(),
     }
 
-    // Display changes
-    changeset.display();
-
-    if args.dry_run {
-        println!("\n(dry-run mode: no changes applied)");
-        return Ok(());
-    }
-
-    // Apply changes
     let client = GitHubClient::get()?;
+    verify_push_approval(&storage.threads_path(), plan)?;
     changeset
         .apply(client, &owner, &repo, args.pr_number)
         .await?;
@@ -181,4 +205,63 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     println!("\nPush complete.");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use rstest::rstest;
+    use tempfile::TempDir;
+
+    #[rstest]
+    #[case::no_changes(None, false, PushPlan::NoChanges, true)]
+    #[case::dry_run(
+        Some(ReplyAction::PostReply {
+            thread_id: "RT_test".to_string(),
+            in_reply_to: 1,
+            body: "Reply".to_string(),
+        }),
+        true,
+        PushPlan::DryRun,
+        true
+    )]
+    #[case::apply_reply(
+        Some(ReplyAction::PostReply {
+            thread_id: "RT_test".to_string(),
+            in_reply_to: 1,
+            body: "Reply".to_string(),
+        }),
+        false,
+        PushPlan::Apply,
+        false
+    )]
+    #[case::apply_resolve(
+        Some(ReplyAction::ResolveThread {
+            thread_id: "RT_test".to_string(),
+            thread_node_id: "RT_test".to_string(),
+        }),
+        false,
+        PushPlan::Apply,
+        false
+    )]
+    fn test_approval_is_required_only_when_changes_are_applied(
+        #[case] action: Option<ReplyAction>,
+        #[case] dry_run: bool,
+        #[case] expected_plan: PushPlan,
+        #[case] expected_approval_result: bool,
+    ) {
+        let changeset = ReplyChangeSet {
+            actions: action.into_iter().collect(),
+            conflicts: vec![],
+        };
+        let temp_dir = TempDir::new().unwrap();
+        let missing_document = temp_dir.path().join("threads.md");
+        let plan = push_plan(&changeset, dry_run);
+
+        assert_eq!(
+            (plan, verify_push_approval(&missing_document, plan).is_ok()),
+            (expected_plan, expected_approval_result)
+        );
+    }
 }
