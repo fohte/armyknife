@@ -49,7 +49,7 @@ struct TqBranchMetadata {
 trait PostSubmitProcessor {
     fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
 
-    fn has_public_plan(&self, metadata: &TqBranchMetadata) -> bool;
+    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool;
 
     async fn link_and_sync(
         &self,
@@ -68,11 +68,12 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         read_current_branch_tq_metadata(branch)
     }
 
-    fn has_public_plan(&self, metadata: &TqBranchMetadata) -> bool {
+    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool {
         match crate::commands::ai::pr_series::load_plan_if_present(&metadata.task_id) {
             Ok(plan) => plan.is_some(),
             Err(error) => {
                 tracing::warn!(
+                    event = "pr_draft.submit.plan_check_failed",
                     task_id = %metadata.task_id,
                     error = %error,
                     "failed to check for a PR series plan"
@@ -218,10 +219,6 @@ async fn run_impl(
     } else {
         None
     };
-    let has_public_plan = tq_metadata
-        .as_ref()
-        .is_some_and(|metadata| post_submit_processor.has_public_plan(metadata));
-
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
@@ -249,7 +246,8 @@ async fn run_impl(
                 &target.repo,
                 number,
                 &draft.body,
-                has_public_plan,
+                post_submit_processor,
+                tq_metadata.as_ref(),
             )
             .await;
             gh_client
@@ -314,21 +312,26 @@ async fn body_for_existing_pr_update(
     repo: &str,
     number: u64,
     submitted_body: &str,
-    has_public_plan: bool,
+    post_submit_processor: &impl PostSubmitProcessor,
+    metadata: Option<&TqBranchMetadata>,
 ) -> String {
-    if !has_public_plan {
+    let Some(metadata) = metadata else {
+        return submitted_body.to_string();
+    };
+    if !post_submit_processor.has_saved_plan(metadata) {
         return submitted_body.to_string();
     }
 
     let existing_body = match gh_client.get_pull_request_body(owner, repo, number).await {
         Ok(body) => body,
         Err(error) => {
-            tracing::warn!(
+            warn_pr_series_body_fallback(
+                "pr_draft.submit.read_body_failed",
                 owner,
                 repo,
                 number,
-                error = %error,
-                "failed to read the existing PR body; continuing with the submitted body"
+                metadata,
+                &error,
             );
             return submitted_body.to_string();
         }
@@ -337,16 +340,40 @@ async fn body_for_existing_pr_update(
     match preserve_managed_section(&existing_body, submitted_body) {
         Ok(body) => body,
         Err(error) => {
-            tracing::warn!(
+            warn_pr_series_body_fallback(
+                "pr_draft.submit.preserve_section_failed",
                 owner,
                 repo,
                 number,
-                error = %error,
-                "failed to preserve the PR series section; continuing with the submitted body"
+                metadata,
+                &error,
             );
             submitted_body.to_string()
         }
     }
+}
+
+fn warn_pr_series_body_fallback(
+    event: &'static str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    metadata: &TqBranchMetadata,
+    error: &anyhow::Error,
+) {
+    tracing::warn!(
+        event = event,
+        task_id = %metadata.task_id,
+        owner,
+        repo,
+        number,
+        error = %error,
+        "failed to preserve the PR series section while updating the PR body"
+    );
+    eprintln!(
+        "Warning: could not preserve the PR series section for {owner}/{repo} pull request {number}: {error}. Continuing with the draft body. If synchronization does not restore the section, run `a ai pr-series sync {}`.",
+        metadata.task_id,
+    );
 }
 
 fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
@@ -423,7 +450,7 @@ mod tests {
     use crate::shared::env_var::EnvVars;
     use clap::Parser;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
     use std::sync::Mutex;
 
@@ -444,7 +471,7 @@ mod tests {
             None
         }
 
-        fn has_public_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
             false
         }
 
@@ -482,7 +509,7 @@ mod tests {
         calls: Mutex<Vec<PostSubmitCall>>,
         failure_stage: Option<SubmitSyncStage>,
         metadata: Option<TqBranchMetadata>,
-        public_plan: bool,
+        saved_plan: bool,
     }
 
     impl PostSubmitProcessor for PostSubmitSpy {
@@ -490,8 +517,8 @@ mod tests {
             self.metadata.clone()
         }
 
-        fn has_public_plan(&self, _metadata: &TqBranchMetadata) -> bool {
-            self.public_plan
+        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+            self.saved_plan
         }
 
         async fn link_and_sync(
@@ -514,6 +541,18 @@ mod tests {
                 }),
                 None => Ok(SubmitSyncOutcome::Synchronized),
             }
+        }
+    }
+
+    #[fixture]
+    fn post_submit_spy(#[default(true)] saved_plan: bool) -> PostSubmitSpy {
+        PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            saved_plan,
+            ..PostSubmitSpy::default()
         }
     }
 
@@ -833,8 +872,11 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn post_submit_sync_failure_does_not_undo_pr_creation() {
+    async fn post_submit_sync_failure_does_not_undo_pr_creation(
+        mut post_submit_spy: PostSubmitSpy,
+    ) {
         let env = setup_test_env("acme", "aftercare-failure-fixture").await;
         let draft_path = create_approved_draft(
             &env.owner,
@@ -849,15 +891,7 @@ mod tests {
             draft: false,
             no_review: false,
         };
-        let metadata = TqBranchMetadata {
-            task_id: "sample-task-id".to_string(),
-            checklist_item_id: "sample-leaf-id".to_string(),
-        };
-        let processor = PostSubmitSpy {
-            failure_stage: Some(SubmitSyncStage::Link),
-            metadata: Some(metadata.clone()),
-            ..PostSubmitSpy::default()
-        };
+        post_submit_spy.failure_stage = Some(SubmitSyncStage::Link);
         let client = env.mock.client();
 
         let result = run_impl(
@@ -866,7 +900,7 @@ mod tests {
             &noop_hook,
             noop_config,
             || Some((env.owner.clone(), env.repo.clone())),
-            &processor,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await
@@ -875,7 +909,7 @@ mod tests {
         assert_eq!(
             (
                 result,
-                processor
+                post_submit_spy
                     .calls
                     .lock()
                     .expect("post-submit spy mutex")
@@ -894,8 +928,11 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn skips_post_submit_sync_when_filepath_targets_another_repo() {
+    async fn skips_post_submit_sync_when_filepath_targets_another_repo(
+        #[with(false)] post_submit_spy: PostSubmitSpy,
+    ) {
         let env = setup_test_env("acme", "aftercare-target-fixture").await;
         let draft_path = create_approved_draft(
             &env.owner,
@@ -910,13 +947,6 @@ mod tests {
             draft: false,
             no_review: false,
         };
-        let processor = PostSubmitSpy {
-            metadata: Some(TqBranchMetadata {
-                task_id: "sample-task-id".to_string(),
-                checklist_item_id: "sample-leaf-id".to_string(),
-            }),
-            ..PostSubmitSpy::default()
-        };
         let client = env.mock.client();
 
         let result = run_impl(
@@ -925,7 +955,7 @@ mod tests {
             &noop_hook,
             noop_config,
             || Some(("acme".to_string(), "notify-web".to_string())),
-            &processor,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await
@@ -934,7 +964,7 @@ mod tests {
         assert_eq!(
             (
                 result,
-                processor
+                post_submit_spy
                     .calls
                     .lock()
                     .expect("post-submit spy mutex")
@@ -1116,18 +1146,36 @@ mod tests {
         ));
     }
 
+    #[derive(Clone, Copy)]
+    enum ExistingPrBody<'a> {
+        Text(&'a str),
+        MalformedMarkers,
+        ReadFailure,
+    }
+
     async fn setup_test_env_with_existing_pr(
         owner: &str,
         repo: &str,
         branch: &str,
         pr_number: u64,
-        existing_body: Option<&str>,
+        existing_body: ExistingPrBody<'_>,
         updated_body: &str,
     ) -> TestEnv {
         crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
+        let existing_body = match existing_body {
+            ExistingPrBody::Text(body) => Some(body),
+            ExistingPrBody::MalformedMarkers => Some(
+                indoc! {"
+                    Existing body
+                    <!-- pr-series:start -->
+                "}
+                .trim_end_matches('\n'),
+            ),
+            ExistingPrBody::ReadFailure => None,
+        };
         ctx.list_pull_requests_with(pr_number, "Old title", existing_body.unwrap_or(""), branch)
             .await;
         match existing_body {
@@ -1148,8 +1196,20 @@ mod tests {
         }
     }
 
+    async fn pull_request_update_payloads(env: &TestEnv, path: &str) -> Vec<serde_json::Value> {
+        env.mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| request.method.as_str() == "PATCH" && request.url.path() == path)
+            .map(|request| request.body_json::<serde_json::Value>())
+            .collect::<serde_json::Result<Vec<_>>>()
+            .expect("decode update request body")
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn submit_updates_existing_pr() {
+    async fn submit_updates_existing_pr(#[with(true)] post_submit_spy: PostSubmitSpy) {
         let existing_body = indoc! {"
             Existing body
 
@@ -1175,7 +1235,7 @@ mod tests {
             "repo_submit_update",
             "feature/existing-pr",
             42,
-            Some(existing_body),
+            ExistingPrBody::Text(existing_body),
             updated_body,
         )
         .await;
@@ -1203,36 +1263,18 @@ mod tests {
             Ok(())
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
-        let processor = PostSubmitSpy {
-            metadata: Some(TqBranchMetadata {
-                task_id: "sample-task-id".to_string(),
-                checklist_item_id: "sample-leaf-id".to_string(),
-            }),
-            public_plan: true,
-            ..PostSubmitSpy::default()
-        };
         let result = run_impl(
             &args,
             &client,
             &noop_hook,
             write_config,
             current_repo,
-            &processor,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await;
-        let update_payloads = env
-            .mock
-            .received_requests()
-            .await
-            .iter()
-            .filter(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/owner/repo_submit_update/pulls/42"
-            })
-            .map(|request| request.body_json::<serde_json::Value>())
-            .collect::<serde_json::Result<Vec<_>>>()
-            .expect("decode update request body");
+        let update_payloads =
+            pull_request_update_payloads(&env, "/repos/owner/repo_submit_update/pulls/42").await;
 
         assert_eq!(
             (
@@ -1255,11 +1297,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::malformed_markers(Some("Existing body\n<!-- pr-series:start -->"))]
-    #[case::body_read_failure(None)]
+    #[case::malformed_markers(ExistingPrBody::MalformedMarkers)]
+    #[case::body_read_failure(ExistingPrBody::ReadFailure)]
     #[tokio::test]
     async fn submit_updates_with_draft_body_when_existing_section_cannot_be_preserved(
-        #[case] existing_body: Option<&str>,
+        #[case] existing_body: ExistingPrBody<'_>,
+        #[with(true)] post_submit_spy: PostSubmitSpy,
     ) {
         let env = setup_test_env_with_existing_pr(
             "owner",
@@ -1284,37 +1327,21 @@ mod tests {
             no_review: false,
         };
         let client = env.mock.client();
-        let processor = PostSubmitSpy {
-            metadata: Some(TqBranchMetadata {
-                task_id: "sample-task-id".to_string(),
-                checklist_item_id: "sample-leaf-id".to_string(),
-            }),
-            public_plan: true,
-            ..PostSubmitSpy::default()
-        };
-
         let result = run_impl(
             &args,
             &client,
             &noop_hook,
             noop_config,
             || Some((env.owner.clone(), env.repo.clone())),
-            &processor,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await;
-        let update_payloads = env
-            .mock
-            .received_requests()
-            .await
-            .iter()
-            .filter(|request| {
-                request.method.as_str() == "PATCH"
-                    && request.url.path() == "/repos/owner/repo_submit_preserve_fallback/pulls/42"
-            })
-            .map(|request| request.body_json::<serde_json::Value>())
-            .collect::<serde_json::Result<Vec<_>>>()
-            .expect("decode update request body");
+        let update_payloads = pull_request_update_payloads(
+            &env,
+            "/repos/owner/repo_submit_preserve_fallback/pulls/42",
+        )
+        .await;
 
         assert_eq!(
             (result.map_err(|error| error.to_string()), update_payloads),
@@ -1328,14 +1355,17 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn submit_skips_existing_body_fetch_without_public_plan() {
+    async fn submit_skips_existing_body_fetch_without_saved_plan(
+        #[with(false)] post_submit_spy: PostSubmitSpy,
+    ) {
         let env = setup_test_env_with_existing_pr(
             "owner",
             "repo_submit_without_plan",
             "feature/without-plan",
             42,
-            Some("Existing body"),
+            ExistingPrBody::Text("Existing body"),
             "Updated body",
         )
         .await;
@@ -1353,21 +1383,13 @@ mod tests {
             no_review: false,
         };
         let client = env.mock.client();
-        let processor = PostSubmitSpy {
-            metadata: Some(TqBranchMetadata {
-                task_id: "sample-task-id".to_string(),
-                checklist_item_id: "sample-leaf-id".to_string(),
-            }),
-            ..PostSubmitSpy::default()
-        };
-
         let result = run_impl(
             &args,
             &client,
             &noop_hook,
             noop_config,
             || Some((env.owner.clone(), env.repo.clone())),
-            &processor,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await;
@@ -1583,7 +1605,7 @@ mod tests {
             "repo_submit_hook_update",
             "feature/hook-update",
             42,
-            Some("Old body"),
+            ExistingPrBody::Text("Old body"),
             "Updated body",
         )
         .await;
