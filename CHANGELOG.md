@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.475](https://github.com/fohte/armyknife/compare/v0.1.474...v0.1.475) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue work after record failures ([#1293](https://github.com/fohte/armyknife/issues/1293)) ([e830de5](https://github.com/fohte/armyknife/commit/e830de5b463592a985047bf707d0454043249fe1))
+
 ## [0.1.474](https://github.com/fohte/armyknife/compare/v0.1.473...v0.1.474) (2026-10-28)
 
 
