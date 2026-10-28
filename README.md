@@ -462,6 +462,10 @@ a gh pr-review reply push <pr-number> [options]
 | `--dry-run`         | Preview changes without applying |
 | `--force`           | Force push even with conflicts   |
 
+New comments since pull conflict only on threads with a draft reply or resolve
+action; `--force` overrides the conflict. Approval (`submit: true`) is required
+only when changes are applied, so `--dry-run` and no-change pushes skip approval.
+
 ##### `a gh pr-review reply review`
 
 Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.

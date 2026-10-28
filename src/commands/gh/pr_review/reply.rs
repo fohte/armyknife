@@ -52,6 +52,31 @@ pub struct ReplyPushArgs {
     pub force: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PushPlan {
+    NoChanges,
+    DryRun,
+    Apply,
+}
+
+fn push_plan(changeset: &ReplyChangeSet, dry_run: bool) -> PushPlan {
+    if !changeset.has_changes() {
+        PushPlan::NoChanges
+    } else if dry_run {
+        PushPlan::DryRun
+    } else {
+        PushPlan::Apply
+    }
+}
+
+fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
+    let document = Document::<ThreadsFrontmatter>::from_content(path.to_path_buf(), content)?;
+    document
+        .approval_manager()
+        .verify_content_matches_file(content.as_bytes())?;
+    Ok(())
+}
+
 pub async fn run_pull(args: &ReplyPullArgs) -> anyhow::Result<()> {
     let (owner, repo) = git::get_repo_owner_and_name(args.repo.as_deref())?;
 
@@ -122,10 +147,6 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         return Err(PrReviewError::NoPulledData.into());
     }
 
-    // Verify approval before pushing
-    let document = Document::<ThreadsFrontmatter>::from_path(storage.threads_path())?;
-    document.verify_approval()?;
-
     let content = storage.read_threads()?;
     let local = MarkdownParser::parse(&content)?;
 
@@ -144,24 +165,25 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
         .into());
     }
 
-    if !changeset.has_changes() {
-        println!("No changes to push.");
-        return Ok(());
+    match push_plan(&changeset, args.dry_run) {
+        PushPlan::NoChanges => {
+            println!("No changes to push.");
+            return Ok(());
+        }
+        PushPlan::DryRun => {
+            changeset.display();
+            println!("\n(dry-run mode: no changes applied)");
+            return Ok(());
+        }
+        PushPlan::Apply => {
+            changeset.display();
+            let client = GitHubClient::get()?;
+            verify_push_approval(&storage.threads_path(), &content)?;
+            changeset
+                .apply(client, &owner, &repo, args.pr_number)
+                .await?;
+        }
     }
-
-    // Display changes
-    changeset.display();
-
-    if args.dry_run {
-        println!("\n(dry-run mode: no changes applied)");
-        return Ok(());
-    }
-
-    // Apply changes
-    let client = GitHubClient::get()?;
-    changeset
-        .apply(client, &owner, &repo, args.pr_number)
-        .await?;
 
     // Re-fetch and update local file after push
     let include_resolved = local.threads.iter().any(|t| t.resolve);
@@ -181,4 +203,111 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
     println!("\nPush complete.");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use crate::shared::human_in_the_loop::HumanInTheLoopError;
+    use indoc::indoc;
+    use rstest::rstest;
+    use tempfile::TempDir;
+
+    #[rstest]
+    #[case::no_changes(false, false, PushPlan::NoChanges)]
+    #[case::dry_run(true, true, PushPlan::DryRun)]
+    #[case::apply(true, false, PushPlan::Apply)]
+    fn test_push_plan(
+        #[case] has_changes: bool,
+        #[case] dry_run: bool,
+        #[case] expected_plan: PushPlan,
+    ) {
+        let changeset = ReplyChangeSet {
+            actions: if has_changes {
+                vec![ReplyAction::PostReply {
+                    thread_id: "RT_test".to_string(),
+                    in_reply_to: 1,
+                    body: "Reply".to_string(),
+                }]
+            } else {
+                vec![]
+            },
+            conflicts: vec![],
+        };
+
+        assert_eq!(push_plan(&changeset, dry_run), expected_plan);
+    }
+
+    #[rstest]
+    #[case::approved(
+        indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Draft reply"},
+        true
+    )]
+    #[case::not_approved(
+        indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: false
+            ---
+            Draft reply"},
+        false
+    )]
+    fn test_verify_push_approval(#[case] content: &str, #[case] expected: bool) {
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        std::fs::write(&path, content).unwrap();
+
+        if expected {
+            Document::<ThreadsFrontmatter>::from_path(path.clone())
+                .unwrap()
+                .save_approval()
+                .unwrap();
+        }
+
+        assert_eq!(verify_push_approval(&path, content).is_ok(), expected);
+    }
+
+    #[rstest]
+    fn test_verify_push_approval_rejects_file_changed_after_parse() {
+        crate::shared::testing::init_approval_dir();
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("threads.md");
+        let parsed_content = indoc! {"
+            ---
+            pr: 1
+            repo: example/repo
+            pulled_at: '2024-01-15T10:00:00Z'
+            submit: true
+            ---
+            Approved reply"};
+        std::fs::write(&path, parsed_content).unwrap();
+        let parsed_content = std::fs::read_to_string(&path).unwrap();
+        Document::<ThreadsFrontmatter>::from_path(path.clone())
+            .unwrap()
+            .save_approval()
+            .unwrap();
+        std::fs::write(
+            &path,
+            parsed_content.replace("Approved reply", "Unapproved reply"),
+        )
+        .unwrap();
+
+        let error = verify_push_approval(&path, &parsed_content).unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<HumanInTheLoopError>(),
+            Some(HumanInTheLoopError::ModifiedAfterApproval)
+        ));
+    }
 }
