@@ -67,6 +67,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         progress_rows,
         status,
         source_placement.has_remaining_children,
+        &source_placement.child_tree_prefix,
         &entries,
         &descendants,
     );
@@ -86,6 +87,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
 struct SourcePlacement {
     row_index: usize,
     has_remaining_children: bool,
+    child_tree_prefix: Vec<bool>,
 }
 
 fn find_source_placement(
@@ -95,13 +97,17 @@ fn find_source_placement(
     let row_index = task_rows.iter().position(
         |row| matches!(row, SessionRow::Session(entry) if entry.session.session_id == source_session_id),
     )?;
-    let source_depth = match &task_rows[row_index] {
-        SessionRow::Session(entry) => entry
-            .tree_prefix
-            .as_ref()
-            .map_or(0, |prefix| prefix.len() + 1),
-        _ => 0,
+    let SessionRow::Session(source) = &task_rows[row_index] else {
+        return None;
     };
+    let source_depth = source
+        .tree_prefix
+        .as_ref()
+        .map_or(0, |prefix| prefix.len() + 1);
+    let mut child_tree_prefix = source.tree_prefix.clone().unwrap_or_default();
+    if source.tree_prefix.is_some() {
+        child_tree_prefix.push(source.is_last_sibling);
+    }
     let has_remaining_children = task_rows
         .iter()
         .skip(row_index + 1)
@@ -115,6 +121,7 @@ fn find_source_placement(
     Some(SourcePlacement {
         row_index,
         has_remaining_children,
+        child_tree_prefix,
     })
 }
 
@@ -123,6 +130,7 @@ fn build_inline_progress_rows<'a>(
     progress_rows: &[ProgressRow],
     status: Option<String>,
     has_remaining_children: bool,
+    source_tree_prefix: &[bool],
     entries: &HashMap<String, SessionRowEntry<'a>>,
     descendants: &HashMap<String, Vec<SessionRowEntry<'a>>>,
 ) -> Vec<SessionRow<'a>> {
@@ -141,7 +149,7 @@ fn build_inline_progress_rows<'a>(
             progress: None,
             label: Some(label),
             session: None,
-            tree_prefix: Vec::new(),
+            tree_prefix: source_tree_prefix.to_vec(),
             is_last_sibling: !has_remaining_children && !has_visible_progress_rows,
             selection_key: None,
         })));
@@ -169,24 +177,26 @@ fn build_inline_progress_rows<'a>(
             continue;
         };
         let (tree_prefix, is_last_sibling, session) = match progress {
-            ProgressRow::ImplementationHeader { .. } => (Vec::new(), !has_remaining_children, None),
+            ProgressRow::ImplementationHeader { .. } => {
+                (source_tree_prefix.to_vec(), !has_remaining_children, None)
+            }
             ProgressRow::BatchHeader { .. } => {
                 batch_index += 1;
-                (
-                    vec![!has_remaining_children],
-                    batch_index == visible_batches,
-                    None,
-                )
+                let mut tree_prefix = source_tree_prefix.to_vec();
+                tree_prefix.push(!has_remaining_children);
+                (tree_prefix, batch_index == visible_batches, None)
             }
             ProgressRow::ChecklistPullRequest { batch_id, row, .. } => {
                 let item_index = batch_item_indices.entry(batch_id.clone()).or_default();
                 *item_index += 1;
                 let item_count = batch_item_counts.get(batch_id).copied().unwrap_or(1);
+                let mut tree_prefix = source_tree_prefix.to_vec();
+                tree_prefix.extend([
+                    !has_remaining_children,
+                    Some(batch_id.as_str()) == last_batch_id,
+                ]);
                 (
-                    vec![
-                        !has_remaining_children,
-                        Some(batch_id.as_str()) == last_batch_id,
-                    ],
+                    tree_prefix,
                     *item_index == item_count,
                     entries.get(&row.session_id).cloned(),
                 )
@@ -195,14 +205,12 @@ fn build_inline_progress_rows<'a>(
                 let item_index = batch_item_indices.entry(batch_id.clone()).or_default();
                 *item_index += 1;
                 let item_count = batch_item_counts.get(batch_id).copied().unwrap_or(1);
-                (
-                    vec![
-                        !has_remaining_children,
-                        Some(batch_id.as_str()) == last_batch_id,
-                    ],
-                    *item_index == item_count,
-                    None,
-                )
+                let mut tree_prefix = source_tree_prefix.to_vec();
+                tree_prefix.extend([
+                    !has_remaining_children,
+                    Some(batch_id.as_str()) == last_batch_id,
+                ]);
+                (tree_prefix, *item_index == item_count, None)
             }
             ProgressRow::Work(_)
             | ProgressRow::PullRequest(_)
@@ -232,12 +240,17 @@ fn build_inline_progress_rows<'a>(
         if let Some(parent) = session
             && let Some(children) = descendants.get(&parent.session.session_id)
         {
+            // Reparenting replaces the worker's original ancestor path.
+            let replaced_prefix_len = parent
+                .tree_prefix
+                .as_ref()
+                .map_or(0, |prefix| prefix.len() + 1);
             for child in children {
                 let mut child = child.clone();
                 let old_prefix = child.tree_prefix.clone().unwrap_or_default();
                 let mut child_prefix = tree_prefix.clone();
                 child_prefix.push(is_last_sibling);
-                child_prefix.extend(old_prefix.into_iter().skip(1));
+                child_prefix.extend(old_prefix.into_iter().skip(replaced_prefix_len));
                 child.tree_prefix = Some(child_prefix);
                 inline_rows.push(SessionRow::Session(child));
             }

@@ -240,13 +240,27 @@ mod tests {
 
 
          ?: keys   /: search   Tab: toggle progress   q: quit"};
+    const NESTED_SOURCE_WORKER_SCREEN: &str = indoc! {"
+         agent watch                                                                                                0 needs you · 5 running · 0 idle
+         ── TASKS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+         ● project                 Parent session ◐ 0/2                                                                                     just now
+        >● project               ├─   Design source                                                                                         just now
+         ▾                       │  └─   Implementation plan · 0/1 PRs merged
+         ▾                       │     └─   Batch: Batch A · 0 PRs merged
+         ● project               │        └─   Worker session · Planned PR · Placeholder change · I:● R:○ B:○ CI:○ M:○                      just now
+         ● project               │           └─   Worker child                                                                              just now
+         ● project               └─   Following sibling                                                                                     just now
+
+         ?: keys   /: search   Tab: toggle progress   q: quit"};
 
     #[rstest]
-    #[case::planned_without_pr(None, None, PLANNED_WORKER_SCREEN)]
-    #[case::number_without_url(Some(17), None, NUMBERED_WORKER_SCREEN)]
+    #[case::planned_without_pr(None, None, false, PLANNED_WORKER_SCREEN)]
+    #[case::number_without_url(Some(17), None, false, NUMBERED_WORKER_SCREEN)]
+    #[case::nested_source_keeps_parent_continuation(None, None, true, NESTED_SOURCE_WORKER_SCREEN)]
     fn render_inline_checklist_worker_annotation(
         #[case] number: Option<u64>,
         #[case] url: Option<&str>,
+        #[case] nested_source: bool,
         #[case] expected: &str,
     ) {
         let now = Utc::now();
@@ -258,7 +272,50 @@ mod tests {
         worker.label = Some("Worker session".to_string());
         worker.ancestor_session_ids = vec![design.session_id.clone()];
 
-        let output = render_to_string_with(&[design, worker], Some(1), now, 140, 10, |app| {
+        let (sessions, selected_index, row_order) = if nested_source {
+            let mut parent = create_test_session("parent");
+            parent.updated_at = now;
+            parent.status = SessionStatus::Running;
+            parent.label = Some("Parent session".to_string());
+            let mut sibling = create_test_session("sibling");
+            sibling.updated_at = now;
+            sibling.status = SessionStatus::Running;
+            sibling.label = Some("Following sibling".to_string());
+            design.ancestor_session_ids = vec![parent.session_id.clone()];
+            sibling.ancestor_session_ids = vec![parent.session_id.clone()];
+            worker.ancestor_session_ids =
+                vec![parent.session_id.clone(), design.session_id.clone()];
+            let mut worker_child = create_test_session("worker-child");
+            worker_child.updated_at = now;
+            worker_child.status = SessionStatus::Running;
+            worker_child.label = Some("Worker child".to_string());
+            worker_child.ancestor_session_ids = vec![
+                parent.session_id.clone(),
+                design.session_id.clone(),
+                worker.session_id.clone(),
+            ];
+            (
+                vec![parent, design, worker, worker_child, sibling],
+                Some(2),
+                vec![
+                    None,
+                    Some("parent"),
+                    Some("design"),
+                    Some("worker"),
+                    Some("worker-child"),
+                    Some("sibling"),
+                ],
+            )
+        } else {
+            (
+                vec![design, worker],
+                Some(1),
+                vec![None, Some("design"), Some("worker")],
+            )
+        };
+
+        let height = if nested_source { 11 } else { 10 };
+        let output = render_to_string_with(&sessions, selected_index, now, 140, height, |app| {
             app.progress_inline_expanded = true;
             app.progress_session_id = Some("design".to_string());
             app.progress_fetch_states
@@ -297,7 +354,7 @@ mod tests {
                     },
                 },
             ];
-            app.update_row_order(&[None, Some("design"), Some("worker")]);
+            app.update_row_order(&row_order);
         });
 
         assert_eq!(output, expected);
