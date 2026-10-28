@@ -1,5 +1,5 @@
 use std::fs::{self, OpenOptions};
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail, ensure};
@@ -202,8 +202,9 @@ fn write_private_file(destination: &Path, contents: &[u8]) -> Result<()> {
     let mut destination_file = options
         .open(destination)
         .context("create private Codex startup file")?;
-    let mut contents = contents;
-    io::copy(&mut contents, &mut destination_file).context("copy private Codex startup file")?;
+    destination_file
+        .write_all(contents)
+        .context("copy private Codex startup file")?;
     Ok(())
 }
 
@@ -342,29 +343,52 @@ mod tests {
     }
 
     #[rstest]
-    #[case::expired(0)]
-    #[case::near_expiry(500)]
-    fn private_auth_snapshot_rejects_tokens_that_may_refresh_during_the_fork(
-        #[case] expires_in_seconds: i64,
+    #[case::expired(
+        Some(0),
+        true,
+        "source Codex access token expires too soon for status inference"
+    )]
+    #[case::near_expiry(
+        Some(500),
+        true,
+        "source Codex access token expires too soon for status inference"
+    )]
+    #[case::missing_expiration(None, true, "source Codex access token has no expiration")]
+    #[case::missing_refresh_token(Some(3600), false, "source Codex refresh token is unavailable")]
+    fn private_auth_snapshot_rejects_unsafe_auth(
+        #[case] expires_in_seconds: Option<i64>,
+        #[case] has_refresh_token: bool,
+        #[case] expected_error: &str,
     ) {
-        let auth = auth_with_access_token(access_token(expires_in_seconds));
+        let access_token = expires_in_seconds
+            .map(access_token)
+            .unwrap_or_else(|| "fixture-header.e30.fixture-signature".to_string());
+        let mut auth = auth_with_access_token(access_token);
+        if !has_refresh_token {
+            auth["tokens"]
+                .as_object_mut()
+                .expect("fixture token object should exist")
+                .remove("refresh_token");
+        }
         let result =
             private_auth_snapshot(&serde_json::to_vec(&auth).expect("fixture auth serializes"))
                 .map(|_| ())
-                .map_err(|_| ());
+                .map_err(|error| error.to_string());
 
-        assert_eq!(result, Err(()));
+        assert_eq!(result, Err(expected_error.to_string()));
     }
 
     #[test]
-    fn private_auth_snapshot_rejects_access_tokens_without_an_expiration() {
-        let auth = auth_with_access_token("fixture-header.e30.fixture-signature".to_string());
-        let result =
-            private_auth_snapshot(&serde_json::to_vec(&auth).expect("fixture auth serializes"))
-                .map(|_| ())
-                .map_err(|_| ());
+    fn private_auth_snapshot_preserves_api_key_auth_without_oauth_tokens() {
+        let auth = json!({
+            "auth_mode": "apikey",
+            "OPENAI_API_KEY": "fixture-api-key",
+            "tokens": null,
+        });
+        let expected = serde_json::to_vec(&auth).expect("fixture auth serializes");
+        let actual = private_auth_snapshot(&expected).expect("API-key auth should be accepted");
 
-        assert_eq!(result, Err(()));
+        assert_eq!(actual, expected);
     }
 
     #[test]

@@ -268,7 +268,7 @@ mod tests {
         let root = TempDir::new()?;
         let root_path = root.path().canonicalize()?;
         let writer_home = root_path.join("writer");
-        let source_home = root_path.join("source");
+        let source_home = root_path.join("source home #1?%&\"");
         let private_home = root_path.join("private");
         std::fs::create_dir_all(&writer_home)?;
         std::fs::create_dir_all(&source_home)?;
@@ -334,8 +334,12 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn missing_wal_sidecar_fails_before_opening_or_changing_the_source() -> anyhow::Result<()> {
+    #[rstest::rstest]
+    #[case::missing_wal("-wal")]
+    #[case::missing_shm("-shm")]
+    fn missing_wal_sidecar_fails_before_opening_or_changing_the_source(
+        #[case] missing_suffix: &str,
+    ) -> anyhow::Result<()> {
         let root = TempDir::new()?;
         let root_path = root.path().canonicalize()?;
         let writer_home = root_path.join("writer");
@@ -352,12 +356,14 @@ mod tests {
              CREATE TABLE fixture (id TEXT);
              INSERT INTO fixture VALUES ('fixture-row');",
         )?;
-        let wal_path = source_path.with_file_name(format!("{STATE_DB_FILENAME}-wal"));
-        std::fs::copy(&source_path, source_home.join(STATE_DB_FILENAME))?;
-        std::fs::copy(
-            &wal_path,
-            source_home.join(format!("{STATE_DB_FILENAME}-wal")),
-        )?;
+        for suffix in ["", "-wal", "-shm"] {
+            if suffix != missing_suffix {
+                std::fs::copy(
+                    source_path.with_file_name(format!("{STATE_DB_FILENAME}{suffix}")),
+                    source_home.join(format!("{STATE_DB_FILENAME}{suffix}")),
+                )?;
+            }
+        }
         drop(writer);
         let before = snapshot_directory(&source_home)?;
 
