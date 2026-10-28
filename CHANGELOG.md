@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.478](https://github.com/fohte/armyknife/compare/v0.1.477...v0.1.478) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** wait indefinitely and clean up ([#1295](https://github.com/fohte/armyknife/issues/1295)) ([b7c3e87](https://github.com/fohte/armyknife/commit/b7c3e87e0233d71c8c542ae61572cebb5340ada3))
+
 ## [0.1.477](https://github.com/fohte/armyknife/compare/v0.1.476...v0.1.477) (2026-10-28)
 
 
