@@ -195,7 +195,7 @@ where
     P: FnOnce() -> Result<SweepReport>,
     C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
     M: FnOnce() -> Fut,
-    Fut: Future<Output = usize>,
+    Fut: Future<Output = Result<usize>>,
     W: FnMut(&str),
 {
     let report = if pause_enabled {
@@ -214,7 +214,12 @@ where
         "Codex status failed",
         &mut on_pass_failure,
     );
-    let merged_closed = merged_close_pass().await;
+    let merged_closed = recover_sweep_pass(
+        merged_close_pass().await,
+        "agent.sweep.sessions_read_failed",
+        "merged-session close failed",
+        &mut on_pass_failure,
+    );
     (report, codex_updates, merged_closed)
 }
 
@@ -834,7 +839,7 @@ mod tests {
             },
             || async {
                 close_calls.set(close_calls.get() + 1);
-                2
+                Ok(2)
             },
             |warning| *warning_output.borrow_mut() = Some(warning.to_string()),
         )
@@ -892,7 +897,7 @@ mod tests {
                 },
                 || async {
                     close_calls.set(close_calls.get() + 1);
-                    2
+                    Ok(2)
                 },
                 |warning| warning_output.borrow_mut().push(warning.to_string()),
             ));
@@ -924,6 +929,66 @@ mod tests {
                 0,
                 1,
                 vec!["[armyknife] agent sweep: Codex status failed: failed to read Codex sessions: session store unavailable".to_string()],
+            ),
+        );
+    }
+
+    #[test]
+    fn run_sweep_passes_reports_merged_session_read_error_and_returns_zero_closed() {
+        use std::cell::Cell;
+        use std::cell::RefCell;
+        use std::task::{Context, Poll, Waker};
+
+        use crate::shared::testing::capture_json_events;
+
+        let codex_status_calls = Cell::new(0);
+        let close_pass_calls = Cell::new(0);
+        let warning_output = RefCell::new(Vec::<String>::new());
+        let (result, warning_events) = capture_json_events(tracing::Level::WARN, || {
+            let mut passes = Box::pin(run_sweep_passes(
+                false,
+                || Ok(SweepReport::default()),
+                || {
+                    codex_status_calls.set(codex_status_calls.get() + 1);
+                    Ok(codex_turn_status::CodexTurnUpdates::default())
+                },
+                || {
+                    close_pass_calls.set(close_pass_calls.get() + 1);
+                    merged_close::close_merged_sessions_with_session_reader(false, || {
+                        Err(anyhow::anyhow!("database is locked")
+                            .context("opening session database"))
+                    })
+                },
+                |warning| warning_output.borrow_mut().push(warning.to_string()),
+            ));
+            let mut context = Context::from_waker(Waker::noop());
+            match std::future::Future::poll(passes.as_mut(), &mut context) {
+                Poll::Ready(result) => Some(result),
+                Poll::Pending => None,
+            }
+        });
+
+        assert_eq!(
+            (
+                result,
+                warning_events,
+                codex_status_calls.get(),
+                close_pass_calls.get(),
+                warning_output.into_inner(),
+            ),
+            (
+                Some((
+                    SweepReport::default(),
+                    codex_turn_status::CodexTurnUpdates::default(),
+                    0,
+                )),
+                vec![serde_json::json!({
+                    "event": "agent.sweep.sessions_read_failed",
+                    "error": "opening session database: database is locked",
+                })],
+                1,
+                1,
+                vec!["[armyknife] agent sweep: merged-session close failed: opening session database: database is locked".to_string()],
             ),
         );
     }
