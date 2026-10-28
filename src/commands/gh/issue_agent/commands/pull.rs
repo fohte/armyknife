@@ -582,6 +582,53 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
+        async fn test_succeeds_when_comment_differs_only_by_crlf(test_dir: TempDir) {
+            use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
+
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_abc123",
+                database_id: 12345,
+                author: "commenter",
+                body: "Test comment\r\n",
+            }])
+            .await;
+            ctx.sub_issues_empty(123).await;
+
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: commenter -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Test comment
+                "},
+            )
+            .unwrap();
+
+            let client = mock.client();
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage).await;
+
+            assert_eq!(result.unwrap(), "Test Issue".to_string());
+        }
+
+        #[rstest]
+        #[tokio::test]
         async fn test_succeeds_when_only_remote_data_changed_since_snapshot(test_dir: TempDir) {
             use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
 
@@ -1045,13 +1092,8 @@ mod tests {
             );
         }
 
-        #[rstest]
-        #[case::labels("labels")]
-        #[case::sub_issues("sub-issues")]
-        #[case::parent_issue("parent issue")]
-        fn test_issue_relationship_and_label_changes(test_dir: TempDir, #[case] field: &str) {
-            let storage = IssueStorage::from_dir(test_dir.path());
-            let mut local_metadata = IssueMetadata {
+        fn test_metadata() -> IssueMetadata {
+            IssueMetadata {
                 number: 123,
                 title: "Test Issue".to_string(),
                 state: "OPEN".to_string(),
@@ -1064,69 +1106,63 @@ mod tests {
                 last_edited_at: None,
                 parent_issue: None,
                 sub_issues: vec![],
-            };
-            let changes = match field {
-                "labels" => {
-                    local_metadata.labels = vec!["bug".to_string()];
-                    LocalChanges {
-                        labels_changed: true,
-                        ..LocalChanges::default()
-                    }
-                }
-                "sub-issues" => {
-                    local_metadata.sub_issues = vec!["owner/repo#456".to_string()];
-                    LocalChanges {
-                        sub_issues_changed: true,
-                        ..LocalChanges::default()
-                    }
-                }
-                "parent issue" => {
-                    local_metadata.parent_issue = Some("owner/repo#789".to_string());
-                    LocalChanges {
-                        parent_issue_changed: true,
-                        ..LocalChanges::default()
-                    }
-                }
-                _ => unreachable!(),
-            };
-            storage.save_metadata(&local_metadata).unwrap();
+            }
+        }
 
+        #[rstest]
+        #[case::labels(
+            IssueMetadata { labels: vec!["bug".to_string()], ..test_metadata() },
+            LocalChanges { labels_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Labels ===
+                - bug
+                + (none)
+
+            "},
+        )]
+        #[case::sub_issues(
+            IssueMetadata { sub_issues: vec!["owner/repo#456".to_string()], ..test_metadata() },
+            LocalChanges { sub_issues_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Sub-issues ===
+                - owner/repo#456
+                + (none)
+
+            "},
+        )]
+        #[case::parent_issue(
+            IssueMetadata { parent_issue: Some("owner/repo#789".to_string()), ..test_metadata() },
+            LocalChanges { parent_issue_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Parent issue ===
+                - owner/repo#789
+                + (none)
+
+            "},
+        )]
+        fn test_issue_field_changes_show_empty_remote_values(
+            test_dir: TempDir,
+            #[case] local_metadata: IssueMetadata,
+            #[case] changes: LocalChanges,
+            #[case] expected: &str,
+        ) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            storage.save_metadata(&local_metadata).unwrap();
             let remote_issue = factories::issue_with(|issue| {
                 issue.labels = vec![];
                 issue.sub_issues = vec![];
                 issue.parent_issue = None;
             });
 
-            let expected = match field {
-                "labels" => indoc! {"
-
-                    === Local changes detected ===
-
-                    === Labels ===
-                    - bug
-                    + (none)
-
-                "},
-                "sub-issues" => indoc! {"
-
-                    === Local changes detected ===
-
-                    === Sub-issues ===
-                    - owner/repo#456
-                    + (none)
-
-                "},
-                "parent issue" => indoc! {"
-
-                    === Local changes detected ===
-
-                    === Parent issue ===
-                    - owner/repo#789
-                    + (none)
-
-                "},
-                _ => unreachable!(),
-            };
             assert_eq!(
                 to_string(|writer| {
                     write_local_changes(writer, &storage, &remote_issue, &[], &changes)

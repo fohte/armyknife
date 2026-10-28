@@ -549,6 +549,7 @@ mod tests {
 
     "})]
     #[case::trailing_spaces("Original comment", "Original comment  ")]
+    #[case::crlf("Original comment", "Original comment\r\n")]
     #[case::leading_newline("Original comment", "\nOriginal comment")]
     #[case::leading_multiple_newlines("Original comment", indoc! {"
 
