@@ -1297,16 +1297,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::malformed_markers(ExistingPrBody::MalformedMarkers)]
-    #[case::body_read_failure(ExistingPrBody::ReadFailure)]
+    #[case::malformed_markers(ExistingPrBody::MalformedMarkers, "repo_submit_preserve_malformed")]
+    #[case::body_read_failure(ExistingPrBody::ReadFailure, "repo_submit_preserve_read_failure")]
     #[tokio::test]
     async fn submit_updates_with_draft_body_when_existing_section_cannot_be_preserved(
         #[case] existing_body: ExistingPrBody<'_>,
+        #[case] repo: &str,
         #[with(true)] post_submit_spy: PostSubmitSpy,
     ) {
         let env = setup_test_env_with_existing_pr(
             "owner",
-            "repo_submit_preserve_fallback",
+            repo,
             "feature/preserve-fallback",
             42,
             existing_body,
@@ -1337,11 +1338,8 @@ mod tests {
             no_vibe_access,
         )
         .await;
-        let update_payloads = pull_request_update_payloads(
-            &env,
-            "/repos/owner/repo_submit_preserve_fallback/pulls/42",
-        )
-        .await;
+        let update_payloads =
+            pull_request_update_payloads(&env, &format!("/repos/owner/{repo}/pulls/42")).await;
 
         assert_eq!(
             (result.map_err(|error| error.to_string()), update_payloads),
