@@ -45,6 +45,14 @@ pub(super) fn resolve_profile_type_launch_options(
     common: &CommonNewArgs,
     resolved: &ResolvedAgentProfileType,
 ) -> Result<ResolvedProfileTypeLaunchOptions> {
+    if resolved.settings.model.as_deref() == Some("") {
+        bail!(
+            "agent type `{}` in profile `{}` has an empty model; configure a non-empty model",
+            resolved.type_name,
+            resolved.profile_name,
+        );
+    }
+
     let profile_engine = match resolved.settings.engine {
         AgentProfileTypeEngine::Claude => Engine::Claude,
         AgentProfileTypeEngine::Codex => Engine::Codex,
@@ -271,5 +279,28 @@ mod tests {
             result,
             Err("agent type `review` in profile `sample-profile` uses engine `agy`, which cannot be used with `a agent new --type`".to_string()),
         );
+    }
+
+    #[rstest]
+    #[case::empty_model(&["a", "--type", "review"], AgentProfileTypeEngine::Codex, Some(""), None, "agent type `review` in profile `sample-profile` has an empty model; configure a non-empty model")]
+    #[case::empty_model_with_cli_override(&["a", "--type", "review", "--model", "model-raven"], AgentProfileTypeEngine::Codex, Some(""), None, "agent type `review` in profile `sample-profile` has an empty model; configure a non-empty model")]
+    fn rejects_invalid_profile_type_settings_at_use_time(
+        #[case] argv: &[&str],
+        #[case] engine: AgentProfileTypeEngine,
+        #[case] model: Option<&str>,
+        #[case] reasoning_effort: Option<ReasoningEffort>,
+        #[case] expected_error: &str,
+        mut config: Config,
+    ) {
+        let settings = review_type_settings_mut(&mut config);
+        settings.engine = engine;
+        settings.model = model.map(str::to_string);
+        settings.reasoning_effort = reasoning_effort;
+        let cli = TestCli::try_parse_from(argv).unwrap();
+
+        let result =
+            resolve_launch_options(&cli.common, &config).map_err(|error| error.to_string());
+
+        assert_eq!(result, Err(expected_error.to_string()));
     }
 }

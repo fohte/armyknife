@@ -6,13 +6,17 @@ use serde_json::Value;
 pub(super) struct MatchingItemSnapshot {
     item_ids_by_turn: HashMap<String, HashSet<String>>,
     item_counts_by_turn: HashMap<String, usize>,
+    baseline_available: bool,
 }
 
 pub(super) fn matching_user_message_snapshot(
     thread: &Value,
     content: &str,
 ) -> MatchingItemSnapshot {
-    let mut snapshot = MatchingItemSnapshot::default();
+    let mut snapshot = MatchingItemSnapshot {
+        baseline_available: true,
+        ..MatchingItemSnapshot::default()
+    };
     let Some(turns) = thread.get("turns").and_then(Value::as_array) else {
         return snapshot;
     };
@@ -42,6 +46,12 @@ pub(super) fn matching_user_message_snapshot(
         }
     }
     snapshot
+}
+
+impl MatchingItemSnapshot {
+    pub(super) fn baseline_available(&self) -> bool {
+        self.baseline_available
+    }
 }
 
 pub(super) fn has_recorded_message(
@@ -87,6 +97,10 @@ pub(super) fn has_user_message(
             && item.get("clientId").and_then(Value::as_str) == Some(client_user_message_id)
     }) {
         return true;
+    }
+    // Without a baseline, a content-only match cannot distinguish an old item from this delivery.
+    if !snapshot.baseline_available {
+        return false;
     }
     let current_matching_count = items
         .iter()
@@ -158,7 +172,8 @@ fn is_matching_user_message_notification(
     match item.get("clientId").and_then(Value::as_str) {
         Some(item_client_id) => item_client_id == client_user_message_id,
         None => {
-            has_same_text_content(item, content)
+            snapshot.baseline_available
+                && has_same_text_content(item, content)
                 && item
                     .get("id")
                     .and_then(Value::as_str)
@@ -229,7 +244,7 @@ mod tests {
     use rstest::rstest;
     use serde_json::{Value, json};
 
-    use super::{MatchingItemSnapshot, has_user_message, latest_turn_status};
+    use super::{has_user_message, latest_turn_status, matching_user_message_snapshot};
 
     #[rstest]
     #[case::newer_start_time(json!({
@@ -272,12 +287,14 @@ mod tests {
             ],
         });
 
+        let snapshot = matching_user_message_snapshot(&json!({"turns": []}), "sample prompt");
+
         assert!(!has_user_message(
             &thread,
             "turn-a",
             "message-a",
             "sample prompt",
-            &MatchingItemSnapshot::default(),
+            &snapshot,
         ));
     }
 }

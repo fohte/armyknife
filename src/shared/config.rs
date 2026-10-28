@@ -410,6 +410,12 @@ pub struct RepoConfig {
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
+    /// Whether this fork is maintained independently without contributing upstream.
+    /// Consumed by external tools; armyknife only stores and exposes the value.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema-gen", schemars(default))]
+    pub standalone_fork: bool,
+
     /// Whether vibe mode is allowed for this repository. When omitted, the org setting applies.
     #[serde(default)]
     pub vibe: Option<bool>,
@@ -623,10 +629,6 @@ fn load_config_excluding_file(excluded_file: Option<&str>) -> anyhow::Result<Con
     let blame_path = dir.unwrap_or_default();
 
     let config = deserialize_config_with_overlay(yaml_merged, &blame_path, env_overlay())?;
-    config
-        .agent
-        .validate()
-        .map_err(|message| anyhow::anyhow!("Invalid agent configuration: {message}"))?;
     Ok(config)
 }
 
@@ -815,6 +817,7 @@ mod tests {
     use super::env_overlay::env_overlay_from;
     use super::*;
     use crate::commands::agent::types::ReasoningEffort;
+    use crate::shared::testing::capture_json_events;
     use indoc::{formatdoc, indoc};
     use rstest::{fixture, rstest};
     use std::fs;
@@ -1205,7 +1208,34 @@ mod tests {
     }
 
     #[test]
-    fn load_config_rejects_invalid_codex_inference_enablement() {
+    fn invalid_enabled_codex_inference_logs_a_warning_when_disabled() {
+        let config = AgentConfig {
+            codex_status_inference: CodexStatusInferenceConfig {
+                enabled: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let (configured, log_events) = capture_json_events(tracing::Level::WARN, || {
+            config.configured_codex_status_inference().is_some()
+        });
+
+        assert_eq!(
+            (configured, log_events),
+            (
+                false,
+                vec![serde_json::json!({
+                    "event": "agent.status_inference.config_invalid",
+                    "error": "agent.status_inference_prompt and at least one agent.statuses entry are required",
+                    "message": "Codex status inference is disabled because its configuration is invalid",
+                })],
+            ),
+        );
+    }
+
+    #[test]
+    fn load_config_accepts_invalid_optional_agent_settings() {
         let config_home = TempDir::new().unwrap();
         let config_dir = config_home.path().join("armyknife");
         std::fs::create_dir_all(&config_dir).unwrap();
@@ -1219,12 +1249,21 @@ mod tests {
                   codex_status_inference:
                     enabled: true
                     failure_status: { kind: follow_up_needed, note: investigate failure }
+                  profiles:
+                    sample-profile:
+                      empty-model:
+                        engine: codex
+                        model: ''
+                        reasoning_effort: high
+                      agy-reasoning:
+                        engine: agy
+                        reasoning_effort: low
             "},
         )
         .unwrap();
         let config_home = config_home.path().to_str().unwrap().to_string();
 
-        let error = temp_env::with_vars(
+        let result = temp_env::with_vars(
             [
                 ("XDG_CONFIG_HOME", Some(config_home.as_str())),
                 (
@@ -1232,13 +1271,22 @@ mod tests {
                     None::<&str>,
                 ),
             ],
-            load_config,
+            || {
+                let config = load_config()?;
+                let profile = &config.agent.profiles["sample-profile"];
+
+                Ok::<_, anyhow::Error>((
+                    config.agent.configured_codex_status_inference().is_some(),
+                    profile["empty-model"].model.clone(),
+                    profile["agy-reasoning"].reasoning_effort,
+                ))
+            },
         )
-        .expect_err("missing background status should reject Codex inference enablement");
+        .map_err(|error| format!("{error:#}"));
 
         assert_eq!(
-            format!("{error:#}"),
-            "Invalid agent configuration: agent.codex_status_inference.background_status is required when Codex inference is enabled",
+            result,
+            Ok((false, Some(String::new()), Some(ReasoningEffort::Low)))
         );
     }
 
@@ -1691,6 +1739,49 @@ mod tests {
 
         assert_eq!(config.repos.len(), 1);
         assert_eq!(config.repos[repo_id].direct_commit, expected);
+    }
+
+    #[rstest]
+    #[case::enabled(
+        "example-org/standalone-tool",
+        indoc! {"
+            repos:
+              example-org/standalone-tool:
+                standalone_fork: true
+        "},
+        true
+    )]
+    #[case::disabled(
+        "example-org/managed-fork",
+        indoc! {"
+            repos:
+              example-org/managed-fork:
+                standalone_fork: false
+        "},
+        false
+    )]
+    #[case::unset_defaults_to_false(
+        "example-org/unset-fork",
+        indoc! {"
+            repos:
+              example-org/unset-fork: {}
+        "},
+        false
+    )]
+    fn parse_repos_config_standalone_fork(
+        #[case] repo_id: &str,
+        #[case] yaml: &str,
+        #[case] expected: bool,
+    ) {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.repos[repo_id],
+            RepoConfig {
+                standalone_fork: expected,
+                ..RepoConfig::default()
+            }
+        );
     }
 
     #[test]
