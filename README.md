@@ -272,6 +272,8 @@ Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR diagrams if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
+When updating an existing PR, `submit` keeps its `pr-series` section if the draft does not include one.
+
 ```sh
 a ai pr-series set <task-id> --file plan.json
 a ai pr-series sync <task-id>
