@@ -21,6 +21,10 @@ pub(super) fn infer_status(
     prompt: &str,
     configured_kinds: &[String],
 ) -> Result<AgentStatus> {
+    ensure!(
+        thread.model_provider == "openai",
+        "Codex status fork requires the built-in OpenAI provider"
+    );
     let inference_dir = tempfile::Builder::new()
         .prefix("armyknife-codex-status-")
         .tempdir()
@@ -185,6 +189,34 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use serde_json::json;
+
+    #[test]
+    fn fork_rejects_non_openai_provider_before_starting_inference() {
+        let session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/workspace/fixture",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .expect("fixture session should deserialize");
+        let thread = CodexThreadMetadata {
+            model_provider: "custom".to_string(),
+            model: "fixture-model".to_string(),
+            session_id: "fixture-thread".to_string(),
+        };
+
+        let actual = infer_status(&session, &thread, "fixture prompt", &[])
+            .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            actual,
+            Err("Codex status fork requires the built-in OpenAI provider".to_string())
+        );
+    }
 
     #[rstest]
     #[case::mac_tmp_fixture_path(

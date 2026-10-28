@@ -25,11 +25,6 @@ pub(crate) fn infer_status(request: &Request<'_>) -> Result<AgentStatus> {
     let thread =
         client.read_complete_thread(request.thread_id, turn_id, request.last_assistant_message)?;
 
-    ensure!(
-        thread.model_provider == "openai",
-        "Codex status fork requires the built-in OpenAI provider"
-    );
-
     fork::infer_status(
         request.session,
         &thread,
