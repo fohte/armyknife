@@ -405,9 +405,7 @@ fn print_result(dry_run: bool, has_changes: bool) {
     println!();
     if dry_run {
         if has_changes {
-            println!(
-                "[dry-run] Changes detected. Re-run without --dry-run to apply; comment changes may also need --edit-others or --allow-delete."
-            );
+            println!("[dry-run] Changes detected. Run without --dry-run to apply.");
         } else {
             println!("[dry-run] No changes detected.");
         }

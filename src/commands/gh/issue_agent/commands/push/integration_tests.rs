@@ -673,6 +673,12 @@ async fn test_dry_run_shows_other_users_comment_changes(
         )])
         .build()
         .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
     if let Some(body) = local_body {
         setup_local_comment(
             test_dir.path(),
@@ -686,6 +692,10 @@ async fn test_dry_run_shows_other_users_comment_changes(
             ),
         );
     }
+    let local_comment_path = storage.dir().join("comments/001_comment_12345.md");
+    let local_comment_before =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_before = storage.read_base_comments().unwrap();
 
     let client = mock.client();
     let result = run_with_client_and_storage(
@@ -695,7 +705,26 @@ async fn test_dry_run_shows_other_users_comment_changes(
         "testuser",
     )
     .await;
-    assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
+    let local_comment_after =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_after = storage.read_base_comments().unwrap();
+    let github_writes = mock
+        .received_requests()
+        .await
+        .into_iter()
+        .filter(|request| matches!(request.method.as_str(), "PATCH" | "DELETE"))
+        .map(|request| (request.method.to_string(), request.url.path().to_string()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            local_comment_after,
+            snapshot_after,
+            github_writes,
+        ),
+        (Ok(()), local_comment_before, snapshot_before, Vec::new()),
+    );
 }
 
 #[rstest]
