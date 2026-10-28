@@ -1,5 +1,6 @@
 //! Change detection functions for push command.
 
+mod comment_snapshot;
 mod three_way_conflicts;
 
 use std::collections::{HashMap, HashSet};
@@ -13,33 +14,9 @@ use super::changeset::{
 };
 use super::field_comparison::IssueFieldComparisons;
 
-type BaseCommentMap<'a> = HashMap<&'a str, &'a CommentSnapshot>;
-
-#[derive(Debug, PartialEq, Eq)]
-enum CommentBodyComparison {
-    Unchanged,
-    LocalOnly,
-    RemoteOnly,
-    Converged,
-    Divergent,
-}
-
-fn index_base_comments(base_comments: Option<&[CommentSnapshot]>) -> Option<BaseCommentMap<'_>> {
-    base_comments.map(|comments| comments.iter().map(|c| (c.id.as_str(), c)).collect())
-}
-
-fn compare_comment_bodies(local: &str, base: &str, remote: &str) -> CommentBodyComparison {
-    let local_changed = !comment_bodies_equal(local, base);
-    let remote_changed = !comment_bodies_equal(remote, base);
-
-    match (local_changed, remote_changed) {
-        (false, false) => CommentBodyComparison::Unchanged,
-        (true, false) => CommentBodyComparison::LocalOnly,
-        (false, true) => CommentBodyComparison::RemoteOnly,
-        (true, true) if comment_bodies_equal(local, remote) => CommentBodyComparison::Converged,
-        (true, true) => CommentBodyComparison::Divergent,
-    }
-}
+pub(super) use comment_snapshot::{
+    CommentBodyComparison, compare_comment_bodies, index_base_comments,
+};
 
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
