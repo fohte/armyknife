@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 use super::pr_series::{
     PrSeriesPlan, Repository, load_plan_if_present, resolve_created_pull_requests,
@@ -51,12 +51,6 @@ pub(super) async fn link_and_sync_after_submit(
     repo: &str,
     pr_url: &str,
 ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
-    let tq_client = TqClient::detect().ok_or_else(|| {
-        SubmitSyncFailure::new(
-            SubmitSyncStage::Prepare,
-            anyhow::anyhow!("tq CLI is required to synchronize a PR series"),
-        )
-    })?;
     let context = SubmittedPrContext {
         task_id,
         checklist_item_id,
@@ -64,7 +58,13 @@ pub(super) async fn link_and_sync_after_submit(
         repo,
         url: pr_url,
     };
-    link_and_sync_after_submit_with(&tq_client, load_plan_if_present, github, &context).await
+    link_and_sync_after_submit_with(
+        || TqClient::detect().context("tq CLI is required to synchronize a PR series"),
+        load_plan_if_present,
+        github,
+        &context,
+    )
+    .await
 }
 
 pub(super) trait SubmitSyncTqClient {
@@ -95,21 +95,42 @@ impl SubmitSyncTqClient for TqClient {
     }
 }
 
-pub(super) async fn link_and_sync_after_submit_with(
-    tq_client: &impl SubmitSyncTqClient,
-    load_plan: impl FnOnce(&str) -> Result<Option<PrSeriesPlan>>,
+impl<T: SubmitSyncTqClient + ?Sized> SubmitSyncTqClient for &T {
+    async fn task_details(&self, task_id: &str) -> Result<TqTaskDetails> {
+        (**self).task_details(task_id).await
+    }
+
+    async fn list_checklists(&self, task_id: &str) -> Result<Vec<TqChecklist>> {
+        (**self).list_checklists(task_id).await
+    }
+
+    async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
+        (**self).link_checklist_item(item_id, github_url).await
+    }
+}
+
+pub(super) async fn link_and_sync_after_submit_with<Tq, Detect, LoadPlan>(
+    detect_tq_client: Detect,
+    load_plan: LoadPlan,
     github: &(impl PrBodyClient + RepoClient),
     context: &SubmittedPrContext<'_>,
-) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
-    let task = tq_client
-        .task_details(context.task_id)
-        .await
-        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
-    let Some(plan) = load_plan(&task.id)
+) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>
+where
+    Tq: SubmitSyncTqClient,
+    Detect: FnOnce() -> Result<Tq>,
+    LoadPlan: FnOnce(&str) -> Result<Option<PrSeriesPlan>>,
+{
+    let Some(plan) = load_plan(context.task_id)
         .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?
     else {
         return Ok(SubmitSyncOutcome::NoPlan);
     };
+    let tq_client = detect_tq_client()
+        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
+    let task = tq_client
+        .task_details(context.task_id)
+        .await
+        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
     let checklists = tq_client
         .list_checklists(&task.id)
         .await
@@ -476,7 +497,7 @@ mod tests {
         ]);
 
         let result = link_and_sync_after_submit_with(
-            &tq,
+            || Ok(&tq),
             |_| Ok(Some(plan)),
             &github,
             &current_pr_context(),
@@ -507,19 +528,33 @@ mod tests {
         let github = FakeGitHub::default();
         github.add_body("acme/notify-api", 12, "Schema PR body");
         let expected_bodies = github.bodies();
+        let detect_called = std::cell::Cell::new(false);
 
-        let result =
-            link_and_sync_after_submit_with(&tq, |_| Ok(None), &github, &current_pr_context())
-                .await
-                .map_err(|failure| (failure.stage, failure.error.to_string()));
+        let result = link_and_sync_after_submit_with(
+            || -> Result<&FakeSubmitTq> {
+                detect_called.set(true);
+                bail!("tq CLI is unavailable")
+            },
+            |_| Ok(None),
+            &github,
+            &current_pr_context(),
+        )
+        .await
+        .map_err(|failure| (failure.stage, failure.error.to_string()));
 
         assert_eq!(
             (
                 result,
+                detect_called.get(),
                 tq.link_calls.lock().unwrap().clone(),
                 github.bodies(),
             ),
-            (Ok(SubmitSyncOutcome::NoPlan), Vec::new(), expected_bodies),
+            (
+                Ok(SubmitSyncOutcome::NoPlan),
+                false,
+                Vec::new(),
+                expected_bodies,
+            ),
         );
     }
 
@@ -532,7 +567,7 @@ mod tests {
         let expected_bodies = github.bodies();
 
         let result = link_and_sync_after_submit_with(
-            &tq,
+            || Ok(&tq),
             |_| Ok(Some(sample_plan())),
             &github,
             &current_pr_context(),
@@ -582,10 +617,14 @@ mod tests {
         context.checklist_item_id = checklist_item_id;
         context.repo = repo;
 
-        let result =
-            link_and_sync_after_submit_with(&tq, |_| Ok(Some(sample_plan())), &github, &context)
-                .await
-                .map_err(|failure| (failure.stage, failure.error.to_string()));
+        let result = link_and_sync_after_submit_with(
+            || Ok(&tq),
+            |_| Ok(Some(sample_plan())),
+            &github,
+            &context,
+        )
+        .await
+        .map_err(|failure| (failure.stage, failure.error.to_string()));
 
         assert_eq!(
             (
@@ -624,7 +663,7 @@ mod tests {
         ]);
 
         let result = link_and_sync_after_submit_with(
-            &tq,
+            || Ok(&tq),
             |_| Ok(Some(plan)),
             &github,
             &current_pr_context(),
@@ -673,7 +712,7 @@ mod tests {
         ]);
 
         let result = link_and_sync_after_submit_with(
-            &tq,
+            || Ok(&tq),
             |_| Ok(Some(plan)),
             &github,
             &current_pr_context(),
