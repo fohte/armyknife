@@ -354,15 +354,21 @@ a gh issue-agent <command> <issue-number> [options]
 | `init`   | Create boilerplate files for new issues or comments                                                                                                                                     |
 
 Each pulled issue directory contains `issue.md` for editable issue fields and
-body, `.issue.base.md` as a managed snapshot, and `comments/` for issue comments.
-When a snapshot exists, `push` compares title, body, labels, sub-issues, and parent
+body, `.issue.base.md` as a managed issue snapshot, `.comments.base.json` as a
+snapshot of comment IDs and bodies, and `comments/` for issue comments. When the
+issue snapshot exists, `push` compares title, body, labels, sub-issues, and parent
 issue against it. Remote-only issue field changes are preserved. Without
 `--force`, edits to the same field on both sides with different values stop the
-push. Use `pull --force` to keep remote values or `push --force` to overwrite
-them; an applied push still requires approval for each changed file. `diff` uses
-the snapshot when available to identify local issue field changes. Directories
-without a snapshot keep legacy two-way change detection and body/title timestamp
-conflict checks until a pull or a push that applies changes creates the snapshot.
+push. With a comment snapshot, `push` and `diff` compare local comment bodies
+against the snapshot, preserving comments added remotely and remote-only edits.
+Conflicts are reported when both sides changed a comment differently. Deleting
+a comment still requires `--allow-delete`, and editing another user's comment
+still requires `--edit-others`. Use `pull --force` to keep remote values or
+`push --force` to overwrite them; an applied push still requires approval for
+each changed file. Directories without an issue snapshot keep legacy issue-field
+detection and body/title timestamp conflict checks. Directories without a
+comment snapshot keep legacy two-way comment detection and timestamp conflict
+checks until the next pull saves one.
 
 | Option           | Description                                                          |
 | ---------------- | -------------------------------------------------------------------- |
@@ -461,6 +467,10 @@ a gh pr-review reply push <pr-number> [options]
 | `-R, --repo <REPO>` | Target repository (owner/repo)   |
 | `--dry-run`         | Preview changes without applying |
 | `--force`           | Force push even with conflicts   |
+
+New comments since pull conflict only on threads with a draft reply or resolve
+action; `--force` overrides the conflict. Approval (`submit: true`) is required
+only when changes are applied, so `--dry-run` and no-change pushes skip approval.
 
 ##### `a gh pr-review reply review`
 
@@ -652,9 +662,9 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch, unless a `--child` target shares the calling session's worktree; in that case, only the child session is closed. A worktree target closes all tracked sessions in that worktree that are eligible for close. A `--child` worktree target with no matching tracked session is rejected because its parent relationship cannot be verified. It validates every candidate before shutting down the first session; if a validation fails, no session is shut down and the worktree remains. A session on the caller's current pane is not shut down. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; every matching session must be a direct child of the calling session, as listed by `a agent peer children`. `--force` does not bypass this check.
+`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch only when no other listed session uses it. Another session counts as using it when its cwd is inside the worktree and its tmux pane is alive or cannot be confirmed dead, including sessions without pane info. If another session uses it, only the target session is closed and the worktree is kept, even with `--force`. This rule also applies to `--child` targets. A worktree target closes all tracked sessions in that worktree that are eligible for close. A `--child` worktree target with no matching tracked session is rejected because its parent relationship cannot be verified. It validates every candidate before shutting down the first session; if a validation fails, no session is shut down and the worktree remains. A session on the caller's current pane is not shut down. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; every matching session must be a direct child of the calling session, as listed by `a agent peer children`. `--force` does not bypass this check.
 
-The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft. If a live agent process is found but the pane cannot be parsed to check for a draft, close protects the session while the elapsed time since `session.updated_at` is within the configured auto-pause timeout; it proceeds when that time has elapsed. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it allows closing only for sessions marked ended or paused unless `--force` is passed. Even with `--force`, it refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
+The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft. If a live agent process is found but the pane cannot be parsed to check for a draft, close protects the session while the elapsed time since `session.updated_at` is within the configured auto-pause timeout; it proceeds when that time has elapsed. When closing a worktree, sessions without tmux information receive the same running, waiting-for-input, pending-task, and recent-activity checks unless they are paused or `--force` is passed. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it allows closing only for sessions marked ended or paused unless `--force` is passed. Even with `--force`, it refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
 
 `new` options:
 

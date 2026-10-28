@@ -61,6 +61,7 @@ async fn run_with_context(ctx: &IssueContext, client: &GitHubClient) -> anyhow::
         metadata: &local.metadata,
         body: &local.body,
         comments: &local.comments,
+        base_comments: local.base_comments.as_deref(),
     };
     let remote_state = RemoteState {
         issue: &remote.issue,

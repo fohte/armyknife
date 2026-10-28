@@ -14,7 +14,9 @@ use clap::Args;
 
 use super::common;
 use super::common::IssueContext;
-use crate::commands::gh::issue_agent::models::IssueFrontmatter;
+use crate::commands::gh::issue_agent::body_compare::comment_bodies_equal;
+use crate::commands::gh::issue_agent::models::{Comment, IssueFrontmatter};
+use crate::commands::gh::issue_agent::storage::{CommentSnapshot, LocalComment};
 use crate::infra::github::GitHubClient;
 use crate::shared::human_in_the_loop::ApprovalManager;
 
@@ -160,6 +162,7 @@ async fn run_with_context(
             local_metadata: &local.metadata,
             local_body: &local.body,
             local_comments: &local.comments,
+            base_comments: local.base_comments.as_deref(),
             remote_issue: &remote.issue,
             remote_comments: &remote.comments,
         };
@@ -185,6 +188,7 @@ async fn run_with_context(
         metadata: &local.metadata,
         body: &local.body,
         comments: &local.comments,
+        base_comments: local.base_comments.as_deref(),
     };
     let remote_state = RemoteState {
         issue: &remote.issue,
@@ -251,10 +255,83 @@ async fn run_with_context(
         ctx.storage.save_base_issue(&frontmatter, body)?;
     }
 
+    if !args.dry_run
+        && !has_changes
+        && let Some(base_comments) = local.base_comments.as_deref()
+    {
+        let advanced = advance_comment_snapshot(
+            base_comments,
+            &local.comments,
+            &remote.comments,
+            &changeset.comments,
+        );
+        if advanced.as_slice() != base_comments {
+            ctx.storage.save_base_comments(&advanced)?;
+        }
+    }
+
     // Show result
     print_result(args.dry_run, has_changes);
 
     Ok(())
+}
+
+fn advance_comment_snapshot(
+    base_comments: &[CommentSnapshot],
+    local_comments: &[LocalComment],
+    remote_comments: &[Comment],
+    changes: &[CommentChange<'_>],
+) -> Vec<CommentSnapshot> {
+    let mut snapshot = base_comments.to_vec();
+
+    for change in changes {
+        match change {
+            CommentChange::Updated {
+                filename,
+                local_body,
+                ..
+            } => {
+                let Some(comment_id) = local_comments
+                    .iter()
+                    .find(|comment| comment.filename == *filename)
+                    .and_then(|comment| comment.metadata.id.as_deref())
+                else {
+                    continue;
+                };
+                if let Some(base_comment) = snapshot.iter_mut().find(|c| c.id == comment_id) {
+                    base_comment.body = (*local_body).to_string();
+                }
+            }
+            CommentChange::Deleted { database_id, .. } => {
+                if let Some(remote_comment) = remote_comments
+                    .iter()
+                    .find(|comment| comment.database_id == *database_id)
+                {
+                    snapshot.retain(|comment| comment.id != remote_comment.id);
+                }
+            }
+            CommentChange::New { .. } => {}
+        }
+    }
+
+    for local_comment in local_comments {
+        if local_comment.is_new() {
+            continue;
+        }
+        let Some(comment_id) = local_comment.metadata.id.as_deref() else {
+            continue;
+        };
+        let Some(remote_comment) = remote_comments.iter().find(|c| c.id == comment_id) else {
+            continue;
+        };
+        if comment_bodies_equal(&local_comment.body, &remote_comment.body)
+            && let Some(base_comment) = snapshot.iter_mut().find(|c| c.id == comment_id)
+        {
+            base_comment.body = remote_comment.body.clone();
+        }
+    }
+
+    snapshot
 }
 
 /// Collect file paths that require approval for the given changeset.
@@ -351,6 +428,64 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use tempfile::TempDir;
+
+    mod advance_comment_snapshot_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::testing::factories;
+
+        fn local_comment(id: &str, body: &str) -> LocalComment {
+            factories::local_comment_with(|comment| {
+                comment.filename = "001_comment_12345.md".to_string();
+                comment.body = body.to_string();
+                comment.metadata.id = Some(id.to_string());
+            })
+        }
+
+        fn remote_comment(id: &str, database_id: i64, body: &str) -> Comment {
+            factories::comment_with(|comment| {
+                comment.id = id.to_string();
+                comment.database_id = database_id;
+                comment.body = body.to_string();
+            })
+        }
+
+        #[rstest]
+        fn test_converged_comment_advances_snapshot() {
+            let base_comments = vec![CommentSnapshot {
+                id: "IC_123".to_string(),
+                body: "original".to_string(),
+            }];
+            let local_comments = vec![local_comment("IC_123", "shared")];
+            let remote_comments = vec![remote_comment("IC_123", 12345, "shared")];
+
+            assert_eq!(
+                advance_comment_snapshot(&base_comments, &local_comments, &remote_comments, &[],),
+                vec![CommentSnapshot {
+                    id: "IC_123".to_string(),
+                    body: "shared".to_string(),
+                }],
+            );
+        }
+
+        #[rstest]
+        fn test_deleted_comment_is_removed_from_snapshot() {
+            let base_comments = vec![CommentSnapshot {
+                id: "IC_123".to_string(),
+                body: "original".to_string(),
+            }];
+            let remote_comments = vec![remote_comment("IC_123", 12345, "original")];
+            let changes = vec![CommentChange::Deleted {
+                database_id: 12345,
+                body: "original",
+                author: "alice",
+            }];
+
+            assert_eq!(
+                advance_comment_snapshot(&base_comments, &[], &remote_comments, &changes),
+                Vec::<CommentSnapshot>::new(),
+            );
+        }
+    }
 
     mod parse_target_tests {
         use super::*;

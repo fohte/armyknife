@@ -1,5 +1,7 @@
 use std::fs;
 
+use serde::{Deserialize, Serialize};
+
 use super::error::{Result, StorageError};
 use super::issue_storage::IssueStorage;
 use super::read::LocalComment;
@@ -12,12 +14,29 @@ pub struct IssueContent {
     pub body: String,
 }
 
+/// Comment content saved as the baseline for push change detection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommentSnapshot {
+    pub id: String,
+    pub body: String,
+}
+
 impl IssueStorage {
     /// Read the last saved issue snapshot used for push change detection.
     pub fn read_base_issue(&self) -> Result<Option<IssueContent>> {
         let path = self.dir.join(".issue.base.md");
         match fs::read_to_string(&path) {
             Ok(content) => parse_issue_md(&content).map(Some),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    /// Read the last saved comment snapshot used for push change detection.
+    pub fn read_base_comments(&self) -> Result<Option<Vec<CommentSnapshot>>> {
+        let path = self.dir.join(".comments.base.json");
+        match fs::read_to_string(&path) {
+            Ok(content) => serde_json::from_str(&content).map(Some).map_err(Into::into),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error.into()),
         }
@@ -183,6 +202,14 @@ mod tests {
         let storage = IssueStorage::from_dir(dir.path());
 
         assert_eq!(storage.read_base_issue().unwrap(), None);
+    }
+
+    #[test]
+    fn test_read_base_comments_returns_none_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = IssueStorage::from_dir(dir.path());
+
+        assert_eq!(storage.read_base_comments().unwrap(), None);
     }
 
     #[test]

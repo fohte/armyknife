@@ -1,7 +1,9 @@
 //! ChangeSet: Represents all detected changes between local and remote state.
 
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage, LocalComment};
+use crate::commands::gh::issue_agent::storage::{
+    CommentSnapshot, IssueContent, IssueStorage, LocalComment,
+};
 use crate::infra::github::GitHubClient;
 
 use crossterm::style::Color;
@@ -21,6 +23,7 @@ pub(crate) struct LocalState<'a> {
     pub(crate) metadata: &'a IssueMetadata,
     pub(crate) body: &'a str,
     pub(crate) comments: &'a [LocalComment],
+    pub(crate) base_comments: Option<&'a [CommentSnapshot]>,
 }
 
 /// Remote state for change detection.
@@ -160,6 +163,7 @@ impl<'a> ChangeSet<'a> {
         let comments = detect_comment_changes(
             local.comments,
             remote.comments,
+            local.base_comments,
             options.current_user,
             options.edit_others,
             options.allow_delete,
@@ -412,6 +416,7 @@ mod tests {
                 metadata: &metadata,
                 body: &base_issue.body,
                 comments: &local_comments,
+                base_comments: None,
             };
             let remote_issue = factories::issue_with_fields(
                 "Remote title",
@@ -447,6 +452,7 @@ mod tests {
                 metadata: &metadata,
                 body: &base_issue.body,
                 comments: &local_comments,
+                base_comments: None,
             };
             let remote_issue = factories::issue_with_fields(
                 "Base title",
