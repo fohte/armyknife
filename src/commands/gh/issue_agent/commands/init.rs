@@ -61,10 +61,12 @@ pub struct InitCommentArgs {
 
 /// Run the init command.
 pub async fn run(args: &InitArgs) -> anyhow::Result<()> {
-    let client = GitHubClient::get()?;
     match &args.command {
-        InitCommands::Issue(issue_args) => run_init_issue(issue_args, client).await,
-        InitCommands::Comment(comment_args) => run_init_comment(comment_args, client).await,
+        InitCommands::Issue(issue_args) => {
+            let client = GitHubClient::get()?;
+            run_init_issue(issue_args, client).await
+        }
+        InitCommands::Comment(comment_args) => run_init_comment(comment_args),
     }
 }
 
@@ -288,18 +290,14 @@ fn validate_comment_name(name: &str) -> anyhow::Result<()> {
 }
 
 /// Initialize a new comment boilerplate file.
-async fn run_init_comment(args: &InitCommentArgs, client: &GitHubClient) -> anyhow::Result<()> {
+fn run_init_comment(args: &InitCommentArgs) -> anyhow::Result<()> {
     let repo = get_repo_from_arg_or_git(&args.repo)?;
     // Validate repo format to prevent path traversal
-    let (owner, repo_name) = parse_repo(&repo)?;
+    parse_repo(&repo)?;
 
-    // Validate comment name if provided (local validation first, before network call)
     if let Some(name) = &args.name {
         validate_comment_name(name)?;
     }
-
-    // Validate repository exists on GitHub
-    validate_repo_exists(client, &owner, &repo_name).await?;
 
     let storage = IssueStorage::new(&repo, args.issue_number as i64);
     run_init_comment_with_storage(&storage, args.issue_number, args.name.as_deref())
@@ -510,6 +508,34 @@ mod tests {
                 dir.path().join("comments/new_duplicate.md").display()
             );
             assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    mod run_init_comment_tests {
+        use super::*;
+
+        #[rstest]
+        fn test_creates_comment_for_pulled_issue_without_github_client() {
+            let dir = tempfile::tempdir().unwrap();
+            let cache_home = dir.path().join("cache");
+            let issue_dir = cache_home.join("armyknife/gh-issue-agent/example/repo/42");
+            fs::create_dir_all(&issue_dir).unwrap();
+            fs::write(issue_dir.join("issue.md"), "test").unwrap();
+
+            let args = InitCommentArgs {
+                issue_number: 42,
+                repo: Some("example/repo".to_string()),
+                name: Some("offline".to_string()),
+            };
+            let cache_home = cache_home.to_str().unwrap();
+            let actual = temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home))], || {
+                let result = run_init_comment(&args).map_err(|error| error.to_string());
+                let content = fs::read_to_string(issue_dir.join("comments/new_offline.md"))
+                    .map_err(|error| error.to_string());
+                (result, content)
+            });
+
+            assert_eq!(actual, (Ok(()), Ok("Comment body\n".to_string())));
         }
     }
 
