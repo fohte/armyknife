@@ -13,6 +13,7 @@ use crate::infra::github::{
     CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
 use crate::shared::config::{Config, load_config};
+use crate::shared::human_in_the_loop::LockGuard;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -169,9 +170,13 @@ async fn run_impl(
     };
     let is_private = target.is_private;
 
-    // Check for lock (editor still open)
-    if DraftFile::lock_path(&draft_path).exists() {
-        anyhow::bail!("Please close the editor before submitting the PR.");
+    // Check for a live review holder before submitting.
+    let lock_path = LockGuard::lock_path(&draft_path);
+    if LockGuard::is_locked(&draft_path) {
+        anyhow::bail!(
+            "Please close the editor before submitting the PR (lock: {}).",
+            lock_path.display()
+        );
     }
 
     let draft = DraftFile::from_path(draft_path.clone())?;
@@ -808,6 +813,15 @@ mod tests {
             "Ready title",
             "Body content",
         );
+        fs::write(
+            LockGuard::lock_path(&draft_path),
+            indoc! {"
+                armyknife-review-lock-v1
+                id=expired-session
+                pid=4294967295
+            "},
+        )
+        .unwrap();
 
         let args = SubmitArgs {
             filepath: Some(draft_path),
@@ -828,10 +842,48 @@ mod tests {
         )
         .await;
 
-        assert!(
-            result.is_ok(),
-            "submit should work with GitHubMockServer: {:?}",
-            result.err()
+        assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
+    }
+
+    #[tokio::test]
+    async fn submit_fails_with_the_path_of_a_live_review_lock() {
+        let env = setup_test_env("owner", "repo_submit_live_lock").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/test",
+            "Ready title",
+            "Body content",
+        );
+        let lock_guard = LockGuard::acquire(&draft_path).unwrap();
+        let lock_path = LockGuard::lock_path(&draft_path);
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+
+        let client = env.mock.client();
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &NoopPostSubmitProcessor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        drop(lock_guard);
+
+        assert_eq!(
+            result,
+            Err(format!(
+                "Please close the editor before submitting the PR (lock: {}).",
+                lock_path.display()
+            )),
         );
     }
 

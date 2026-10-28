@@ -86,6 +86,7 @@ pub async fn run_create_with_client(
         metadata: &local_metadata,
         body: &new_issue.body,
         comments: &[],
+        base_comments: None,
     };
     let remote_state = RemoteState {
         issue: &created,

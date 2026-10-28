@@ -1,5 +1,71 @@
 # Changelog
 
+## [0.1.491](https://github.com/fohte/armyknife/compare/v0.1.490...v0.1.491) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** update sessions after errors ([#1328](https://github.com/fohte/armyknife/issues/1328)) ([a180c5e](https://github.com/fohte/armyknife/commit/a180c5ecd8f631af17ed3fb55b794c00e20e3831))
+* **pr-review:** block re-pulls only on data loss ([#1323](https://github.com/fohte/armyknife/issues/1323)) ([1a962a1](https://github.com/fohte/armyknife/commit/1a962a1a62cac236cc231da77bb44f052b127bb8))
+
+## [0.1.490](https://github.com/fohte/armyknife/compare/v0.1.489...v0.1.490) (2026-10-28)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** recover stale review locks ([#1327](https://github.com/fohte/armyknife/issues/1327)) ([9d8de2d](https://github.com/fohte/armyknife/commit/9d8de2d654dcb92424656209da7d74634cfba26e))
+
+## [0.1.489](https://github.com/fohte/armyknife/compare/v0.1.488...v0.1.489) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/pr-review:** narrow reply push gates ([#1322](https://github.com/fohte/armyknife/issues/1322)) ([af27f7d](https://github.com/fohte/armyknife/commit/af27f7d40b69769ee73b1761f7be2c3c27e4e702))
+* **issue-agent:** keep leading HTML comments ([#1325](https://github.com/fohte/armyknife/issues/1325)) ([5dbdc86](https://github.com/fohte/armyknife/commit/5dbdc86d8cf683f44b73cf2d025433c1f8688eee))
+
+## [0.1.488](https://github.com/fohte/armyknife/compare/v0.1.487...v0.1.488) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** log session list read errors ([#1319](https://github.com/fohte/armyknife/issues/1319)) ([f24eb0f](https://github.com/fohte/armyknife/commit/f24eb0f7ad04d1f14a612b26bdfc3c7d8edb2b35))
+* **gh/pr-review:** parse line-start thread markers ([#1320](https://github.com/fohte/armyknife/issues/1320)) ([28480db](https://github.com/fohte/armyknife/commit/28480db7edf71fc4a3993ad0f48b0ce258a38e8f))
+
+## [0.1.487](https://github.com/fohte/armyknife/compare/v0.1.486...v0.1.487) (2026-10-28)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** widen PR series diagram labels ([#1316](https://github.com/fohte/armyknife/issues/1316)) ([82c904f](https://github.com/fohte/armyknife/commit/82c904f2de74e26a4521c2f62ca76344c5811c69))
+
+## [0.1.486](https://github.com/fohte/armyknife/compare/v0.1.485...v0.1.486) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** skip repo check for comments ([#1315](https://github.com/fohte/armyknife/issues/1315)) ([759fbcd](https://github.com/fohte/armyknife/commit/759fbcdb0e4f09ea990fecee9a495e0fc6313bbb))
+
+## [0.1.485](https://github.com/fohte/armyknife/compare/v0.1.484...v0.1.485) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/close:** keep shared worktrees ([#1312](https://github.com/fohte/armyknife/issues/1312)) ([803349d](https://github.com/fohte/armyknife/commit/803349d249bdfd90a4762a24675d51da3ad5fd96))
+
+## [0.1.484](https://github.com/fohte/armyknife/compare/v0.1.483...v0.1.484) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** guard close for sessions without tmux ([#1311](https://github.com/fohte/armyknife/issues/1311)) ([94209e5](https://github.com/fohte/armyknife/commit/94209e51b15a2fe2f9f0099c7b0986643e862ae7))
+
+## [0.1.483](https://github.com/fohte/armyknife/compare/v0.1.482...v0.1.483) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** continue after Codex errors ([#1309](https://github.com/fohte/armyknife/issues/1309)) ([c1dd564](https://github.com/fohte/armyknife/commit/c1dd564df565c15bd94f32624f99d1c8b22cab02))
+
 ## [0.1.482](https://github.com/fohte/armyknife/compare/v0.1.481...v0.1.482) (2026-10-28)
 
 

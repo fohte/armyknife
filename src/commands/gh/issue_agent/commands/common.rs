@@ -4,7 +4,9 @@ use std::path::Path;
 
 use super::IssueArgs;
 use crate::commands::gh::issue_agent::models::{Comment, Issue, IssueMetadata};
-use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage, LocalComment};
+use crate::commands::gh::issue_agent::storage::{
+    CommentSnapshot, IssueContent, IssueStorage, LocalComment,
+};
 use crate::infra::git;
 use crate::infra::github::GitHubClient;
 
@@ -53,6 +55,7 @@ pub struct LocalData {
     pub body: String,
     pub comments: Vec<LocalComment>,
     pub base_issue: Option<IssueContent>,
+    pub base_comments: Option<Vec<CommentSnapshot>>,
 }
 
 /// Fetch an issue and its sub-issues in parallel, merging the results.
@@ -122,11 +125,13 @@ impl IssueContext {
         let body = self.storage.read_body()?;
         let comments = self.storage.read_comments()?;
         let base_issue = self.storage.read_base_issue()?;
+        let base_comments = self.storage.read_base_comments()?;
         Ok(LocalData {
             metadata,
             body,
             comments,
             base_issue,
+            base_comments,
         })
     }
 }
@@ -148,6 +153,10 @@ pub fn print_fetch_success(issue_number: u64, title: &str, dir: &Path) {
     );
     eprintln!(
         "  {}/.issue.base.md    - Last saved issue snapshot (managed)",
+        dir.display()
+    );
+    eprintln!(
+        "  {}/.comments.base.json - Last saved comment snapshot (managed)",
         dir.display()
     );
     eprintln!(

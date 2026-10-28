@@ -10,7 +10,8 @@ use super::{
     wait_for_fifo_signal_with_timeout,
 };
 
-pub(super) struct ReviewLabels<'a> {
+pub(super) struct ReviewContext<'a> {
+    pub(super) lock_id: &'a str,
     pub(super) window_title: &'a str,
     pub(super) command_name: &'a str,
 }
@@ -22,7 +23,7 @@ pub(super) fn launch_review<S, H>(
     tmux_pane_id: Option<&str>,
     document_path: &Path,
     done_fifo_path: &Path,
-    labels: &ReviewLabels<'_>,
+    context: &ReviewContext<'_>,
     handler: &H,
     editor_config: &EditorConfig,
     notifications_enabled: bool,
@@ -33,9 +34,11 @@ where
 {
     let exe_path = std::env::current_exe()?;
     let mut review_args =
-        handler.build_complete_args(document_path, tmux_pane_id, labels.window_title);
+        handler.build_complete_args(document_path, tmux_pane_id, context.window_title);
     review_args.push("--done-fifo".into());
     review_args.push(done_fifo_path.as_os_str().to_os_string());
+    review_args.push("--review-lock-id".into());
+    review_args.push(context.lock_id.into());
 
     let mut queue_entry = None;
     if let Some(parent_pane_id) = tmux_pane_id {
@@ -46,7 +49,7 @@ where
             || {
                 super::tmux::open_review_pane(
                     parent_pane_id,
-                    labels.window_title,
+                    context.window_title,
                     &shpool_session,
                     exe_path.as_os_str(),
                     &review_args,
@@ -62,8 +65,8 @@ where
                     session_id,
                     review_pane_id,
                     document_path,
-                    labels.window_title,
-                    labels.command_name,
+                    context.window_title,
+                    context.command_name,
                     editor_config,
                 )
             },
@@ -75,7 +78,7 @@ where
         &exe_path,
         &review_args,
         document_path,
-        labels.window_title,
+        context.window_title,
         editor_config,
     )?;
     Ok((None, None))

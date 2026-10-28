@@ -440,30 +440,31 @@ fn check_draft_state<R: CloseRuntime>(
             "Agent session `{}` has an unsent draft; pass --force to close it",
             session.session_id
         ),
-        None => {
-            let timeout = runtime.unknown_draft_timeout();
-            let active = match Utc::now()
-                .signed_duration_since(session.updated_at)
-                .to_std()
-            {
-                Ok(elapsed) => elapsed < timeout,
-                Err(_) => true,
-            };
-            tracing::debug!(
-                event = "agent.close.draft_state_unavailable",
-                session = %session.session_id,
-                timeout = ?timeout,
-                decision = if active { "blocked_recent_activity" } else { "proceed_after_timeout" },
-            );
-            if active {
-                bail!(
-                    "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
-                    session.session_id
-                );
-            }
-            Ok(DraftInspection::Unavailable)
-        }
+        None => check_unknown_draft_state(session, runtime.unknown_draft_timeout()),
     }
+}
+
+fn check_unknown_draft_state(session: &Session, timeout: Duration) -> Result<DraftInspection> {
+    let active = match Utc::now()
+        .signed_duration_since(session.updated_at)
+        .to_std()
+    {
+        Ok(elapsed) => elapsed < timeout,
+        Err(_) => true,
+    };
+    tracing::debug!(
+        event = "agent.close.draft_state_unavailable",
+        session = %session.session_id,
+        timeout = ?timeout,
+        decision = if active { "blocked_recent_activity" } else { "proceed_after_timeout" },
+    );
+    if active {
+        bail!(
+            "Could not check for an unsent draft in agent session `{}`; recent activity prevents closing it, pass --force to close it",
+            session.session_id
+        );
+    }
+    Ok(DraftInspection::Unavailable)
 }
 
 fn write_draft_unavailable_warning(
