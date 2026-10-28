@@ -159,6 +159,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
   example-org/example-repo:
     vibe: false # override the org vibe setting (default: inherit)
+  example-org/standalone-tool:
+    standalone_fork: true # independently maintained fork; consumed externally, only stored and exposed by armyknife
 ```
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
@@ -264,6 +266,43 @@ Manage PR body drafts with human-in-the-loop review.
 | `--base <ref>` | Base branch for the PR                                                           |
 | `--draft`      | Create as draft PR                                                               |
 | `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
+
+#### `a ai pr-series`
+
+Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+Both commands require the `tq` CLI to be installed and available on `PATH`.
+
+```sh
+a ai pr-series set <task-id> --file plan.json
+a ai pr-series sync <task-id>
+```
+
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. Each `summary` must fit in one line below Mermaid's 200px label width. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`:
+
+```json
+{
+  "name": "Notification preferences",
+  "purpose": "Let users choose which notifications they receive.",
+  "pullRequests": [
+    {
+      "id": "schema",
+      "summary": "Add preference tables",
+      "dependsOn": [],
+      "repository": "acme/notify-api",
+      "tqLeafId": "<schema-leaf-id>"
+    },
+    {
+      "id": "settings",
+      "summary": "Add the settings page",
+      "dependsOn": ["schema"],
+      "repository": "acme/notify-web",
+      "tqLeafId": "<settings-leaf-id>"
+    }
+  ]
+}
+```
+
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
 
 #### `a ai review`
 
@@ -455,8 +494,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `codex [<args>...]`                                        |         | Start Codex and bind its thread ID to the current tmux pane                                 |
 | `close [target] [--child] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                              |
 | `clean [--dry-run] [--all] [--force]`                      |         | Delete merged or closed worktrees                                                           |
-| `hook <event>`                                             |         | Record session events (called from Claude Code hooks)                                       |
-| `attribution pre-tool-use <provider>`                      |         | Add operation context to a provider's commit command after its permission proxy             |
+| `hook <event>`                                             |         | Record coding agent hook events                                                             |
+| `attribution pre-tool-use <provider>`                      |         | Pass through the existing provider permission proxy result                                  |
 | `list`                                                     | `ls`    | List all Claude Code sessions with status                                                   |
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                 |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
@@ -486,15 +525,13 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 #### AI commit attribution
 
-`a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin with the original `hook_input` and the existing proxy's `hook_output` (or `null` when it passed). When it can identify a commit command and its provider model, it supplies private operation context for the commit message hook. Unknown commands, commands it cannot safely inspect, and requests without model evidence leave the proxy's command and permission result unchanged. Attribution does not decide whether Git operations are allowed.
+`a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin and returns its `hook_output` unchanged. It emits no output when `hook_output` is `null` or unavailable. The command remains as a compatibility entrypoint for existing provider proxy registrations and does not inspect or modify commands or permission decisions.
 
-The generated message contains a standard `Co-authored-by` trailer in the form `Co-authored-by: Codex ({runtime_model}) <noreply@openai.com>` or `Co-authored-by: Claude Code ({runtime_model}) <noreply@anthropic.com>`. The runtime model ID is recorded in the co-author name without normalization. Codex records the raw model ID from its PreToolUse input. Claude Code records `message.model` only when the transcript contains the matching assistant `tool_use_id`, tool name, and original command. Neither provider falls back to a launch profile or an unrelated recent model. If no model ID is available, no attribution metadata is added. The legacy `--unknown-reason` option is accepted but does not invent a model. Existing `Co-authored-by` trailers are preserved, and an identical trailer is not added twice. Legacy `AI-Tool`, `AI-Model`, and `AI-Model-Reason` footer trailers are removed when attribution is added. See the [Claude Code attribution documentation](https://code.claude.com/docs/en/settings-reference#attribution-commit).
+The `prepare-commit-msg` hook reads `CLAUDE_CODE_SESSION_ID` before `CODEX_SESSION_ID` to load the recorded session; when both variables contain non-empty IDs, Claude's ID takes precedence, and an empty Claude ID falls back to Codex's ID. A trailer-safe model adds `Co-authored-by: Codex ({model}) <noreply@openai.com>` or `Co-authored-by: Claude Code ({model}) <noreply@anthropic.com>`; the model ID is used without normalization. A non-empty, trailer-safe effort is included after the model as `({model}, {effort})`. The hook adds no attribution when the session ID, record, or usable model is unavailable. Existing `Co-authored-by` trailers are preserved, and an identical trailer is not added twice. Legacy `AI-Tool`, `AI-Model`, and `AI-Model-Reason` footer trailers are removed when attribution is added. See the [Claude Code attribution documentation](https://code.claude.com/docs/en/settings-reference#attribution-commit).
 
-The helper applies operation context to the permission proxy's final command. Codex uses `permissionDecision: allow` when needed to accept `updatedInput`; the provider still applies its normal approval policy to the rewritten command. Claude Code's existing `allow`, `ask`, or no-decision result is retained. If attribution cannot safely update the command or write its context, the original proxy result is returned and a diagnostic is written to stderr.
+Human commits without a matching agent session remain unchanged. If session loading fails, or message replacement fails, the original message remains unchanged and a diagnostic is written to stderr, allowing Git to continue. Existing author, committer, signature, and unrelated trailers are left alone.
 
-Each context is private, expires ten minutes after creation, and can be claimed once. The `prepare-commit-msg` hook appends the co-author trailer when a usable context is present. Human commits without a configured context path are unchanged without a diagnostic. If a configured context is missing, stale, or invalid, or message replacement fails, the original message remains unchanged and a diagnostic is written to stderr, allowing Git to continue. Existing author, committer, signature, and unrelated trailers are left alone.
-
-An existing provider proxy can pass its PreToolUse envelope through `a agent attribution pre-tool-use codex`. Its returned response must be used as the provider's hook response. Existing Git hook scripts can run `a agent attribution prepare-commit-msg "$1"` from `prepare-commit-msg`. The `commit-msg` and `reference-transaction` commands remain as no-op compatibility entrypoints for older hook registrations. The legacy `--final-object` flag is accepted but has no effect.
+Existing provider proxies can pass their PreToolUse envelope through `a agent attribution pre-tool-use <provider>` and use the returned response as the provider's hook response. Existing Git hook scripts can run `a agent attribution prepare-commit-msg "$1"` from `prepare-commit-msg`. The `commit-msg` and `reference-transaction` commands remain as no-op compatibility entrypoints for older hook registrations. The legacy `--unknown-reason` and `--final-object` options are accepted but have no effect.
 
 Only provider metadata attribution is performed. Git command permissions, aliases, compound commands, pull, merge, and rebase remain under the existing permission proxy and Git configuration.
 
@@ -675,6 +712,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         ]
       }
     ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook post-model-switch" }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -721,6 +765,8 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
+
+Claude Code records the model from `SessionStart.model` or `PostModelSwitch.to_model`; if no model has been recorded, the last assistant message in the transcript supplies it. Hook events that include `effort.level` record that effort. Codex sessions also record model and effort metadata when available.
 
 The pane is normally found by walking the hook process's ancestry up to it. A Codex session running through the shared `codex app-server` daemon breaks that link: the daemon runs the agent loop, hooks included, outside any pane's process tree, so armyknife falls back to the launcher-written session ID option. It binds only when exactly one pane has that session ID and is currently running the Codex CLI. The lookup accepts both `@armyknife-last-agent-session-id` and the pre-rename `@armyknife-last-claude-code-session-id` option; if there is no unique match, the session remains unbound.
 
@@ -1051,6 +1097,14 @@ ja
 $ cd ~/ghq/github.com/fohte/dotfiles
 $ a config get repo.direct_commit
 true
+
+$ cd ~/ghq/github.com/example-org/standalone-tool
+$ a config get repo.standalone_fork
+true
+
+$ cd ~/ghq/github.com/example-org/unconfigured-fork
+$ a config get repo.standalone_fork
+false
 ```
 
 ## Release

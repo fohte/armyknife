@@ -285,6 +285,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Default::default(),
+            model: None,
+            effort: None,
         }
     }
 
