@@ -270,14 +270,22 @@ fn parse_review_header(
 
 fn parse_threads(body: &str) -> Result<Vec<ParsedThread>, PrReviewError> {
     let mut threads = Vec::new();
+    let thread_marker = "<!-- thread: ";
+    let mut thread_starts = Vec::new();
+    let mut line_start = 0;
 
-    // Split by thread headers
-    let parts: Vec<&str> = body.split("<!-- thread: ").collect();
+    for line in body.split_inclusive('\n') {
+        // Diff context lines can contain marker text without starting a thread.
+        if line.starts_with(thread_marker) {
+            thread_starts.push(line_start);
+        }
+        line_start += line.len();
+    }
 
-    // Skip the first part (before any thread header)
-    for part in parts.iter().skip(1) {
-        let thread = parse_single_thread(part)?;
-        threads.push(thread);
+    for (index, marker_start) in thread_starts.iter().enumerate() {
+        let part_start = marker_start + thread_marker.len();
+        let part_end = thread_starts.get(index + 1).copied().unwrap_or(body.len());
+        threads.push(parse_single_thread(&body[part_start..part_end])?);
     }
 
     Ok(threads)
@@ -986,12 +994,114 @@ mod tests {
         let serialized = MarkdownSerializer::serialize(&pr_data, &frontmatter);
         let parsed = MarkdownParser::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.frontmatter, frontmatter);
-        assert_eq!(parsed.threads.len(), 1);
-        assert_eq!(parsed.threads[0].thread_id, "RT_roundtrip");
-        assert_eq!(parsed.threads[0].path, "src/main.rs");
-        assert_eq!(parsed.threads[0].line, Some(42));
-        assert!(!parsed.threads[0].resolve);
-        assert!(parsed.threads[0].draft_reply.is_none());
+        assert_eq!(
+            parsed,
+            ParsedThreadsFile {
+                frontmatter,
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_roundtrip".to_string(),
+                    path: "src/main.rs".to_string(),
+                    line: Some(42),
+                    resolve: false,
+                    draft_reply: None,
+                }],
+            },
+        );
+    }
+
+    #[rstest]
+    #[case::blank_line_after_frontmatter(preserve_frontmatter_separator)]
+    #[case::thread_directly_after_frontmatter(remove_frontmatter_separator)]
+    fn test_roundtrip_thread_marker_in_diff_hunk(#[case] shape_serialized: fn(&str) -> String) {
+        use super::super::serializer::{MarkdownSerializer, ThreadsFrontmatter};
+        use crate::commands::gh::pr_review::models::{
+            Comment, PrData, ReviewThread,
+            comment::{Author, PullRequestReview},
+            thread::CommentsNode,
+        };
+
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![ReviewThread {
+                id: Some("RT_sample".to_string()),
+                is_resolved: false,
+                comments: CommentsNode {
+                    nodes: vec![Comment {
+                        database_id: 1,
+                        author: Some(Author {
+                            login: "sample-author".to_string(),
+                        }),
+                        body: "Review summary".to_string(),
+                        created_at: "2025-01-02T00:00:00Z".to_string(),
+                        path: Some("src/example.rs".to_string()),
+                        line: Some(1),
+                        start_line: None,
+                        original_line: None,
+                        original_start_line: None,
+                        diff_hunk: Some(
+                            indoc! {r#"
+                                @@ -1,2 +1,2 @@
+                                 <!-- thread: RT_embedded path: docs/embedded.md:9 -->
+                                 context after marker
+                            "#}
+                            .to_string(),
+                        ),
+                        reply_to: None,
+                        pull_request_review: Some(PullRequestReview { database_id: 200 }),
+                    }],
+                },
+            }],
+        };
+
+        let frontmatter = ThreadsFrontmatter {
+            pr: 17,
+            repo: "example/project".to_string(),
+            pulled_at: "2025-01-01T00:00:00Z".to_string(),
+            submit: false,
+        };
+
+        let existing_drafts = std::collections::HashMap::from([(
+            "RT_sample".to_string(),
+            "Draft response".to_string(),
+        )]);
+        let serialized = shape_serialized(&MarkdownSerializer::serialize_with_drafts(
+            &pr_data,
+            &frontmatter,
+            &existing_drafts,
+        ));
+        let parsed = MarkdownParser::parse(&serialized).unwrap();
+
+        assert_eq!(
+            parsed,
+            ParsedThreadsFile {
+                frontmatter,
+                reviews: vec![],
+                threads: vec![ParsedThread {
+                    thread_id: "RT_sample".to_string(),
+                    path: "src/example.rs".to_string(),
+                    line: Some(1),
+                    resolve: false,
+                    draft_reply: Some("Draft response".to_string()),
+                }],
+            },
+        );
+    }
+
+    fn preserve_frontmatter_separator(content: &str) -> String {
+        content.to_string()
+    }
+
+    fn remove_frontmatter_separator(content: &str) -> String {
+        let separator_start = content
+            .split_inclusive('\n')
+            .take_while(|line| !line.trim().is_empty())
+            .map(str::len)
+            .sum::<usize>();
+        format!(
+            "{}{}",
+            &content[..separator_start],
+            &content[separator_start + 1..]
+        )
     }
 }
