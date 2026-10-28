@@ -56,6 +56,7 @@ pub fn render_section(
         .map(|(index, (entry, _))| (entry.id.as_str(), format!("P{}", index + 1)))
         .collect::<HashMap<_, _>>();
 
+    // GitHub's 120px default clips labels; 400px exceeds MAX_LABEL_WIDTH_PX (200px).
     let mut diagram =
         String::from("---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n");
     let repositories = visible_entries
