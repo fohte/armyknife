@@ -283,7 +283,7 @@ mod tests {
     use super::super::models::thread::CommentsNode;
     use super::*;
     use indoc::indoc;
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     const THREAD_WITH_DRAFT_AND_RESOLVE: &str = indoc! {r#"
         ---
@@ -316,50 +316,39 @@ mod tests {
         <!-- /comment -->
     "#};
 
-    #[fixture]
-    fn local_thread_with_draft_and_resolve() -> String {
-        THREAD_WITH_DRAFT_AND_RESOLVE.to_string()
-    }
-
-    #[fixture]
-    fn local_thread_without_actions() -> String {
-        THREAD_WITHOUT_LOCAL_ACTIONS_TEMPLATE.replace("{submit}", "false")
-    }
-
     #[rstest]
-    fn test_prepare_existing_thread_actions_blocks_unparseable_file() {
-        let expected = "Re-pull would lose local data: threads.md could not be parsed, so draft replies and resolve ticks cannot be preserved: Invalid frontmatter: missing opening ---. Use --force to overwrite";
+    #[case::unparseable_file(
+        "not threads markdown",
+        None,
+        "Re-pull would lose local data: threads.md could not be parsed, so draft replies and resolve ticks cannot be preserved: Invalid frontmatter: missing opening ---. Use --force to overwrite"
+    )]
+    #[case::missing_local_actions(
+        THREAD_WITH_DRAFT_AND_RESOLVE,
+        None,
+        "Re-pull would lose local data: thread RT_example at src/example.rs:9: draft reply and resolve tick. Use --force to overwrite"
+    )]
+    #[case::draft_on_omitted_resolved_thread(
+        THREAD_WITH_DRAFT_AND_RESOLVE,
+        Some(true),
+        "Re-pull would lose local data: thread RT_example at src/example.rs:9: draft reply. Use --force to overwrite"
+    )]
+    fn test_prepare_existing_thread_actions_blocks_when_local_data_would_be_lost(
+        #[case] content: &str,
+        #[case] remote_is_resolved: Option<bool>,
+        #[case] expected: &str,
+    ) {
+        let remote_thread_states = remote_is_resolved
+            .map(|is_resolved| HashMap::from([("RT_example".to_string(), is_resolved)]))
+            .unwrap_or_default();
 
-        let result = prepare_existing_thread_actions(
-            Some("not threads markdown"),
-            &HashMap::new(),
-            false,
-            false,
-        );
+        let result =
+            prepare_existing_thread_actions(Some(content), &remote_thread_states, false, false);
 
         assert_eq!(result.unwrap_err().to_string(), expected);
     }
 
     #[rstest]
-    fn test_prepare_existing_thread_actions_blocks_missing_local_actions(
-        local_thread_with_draft_and_resolve: String,
-    ) {
-        let expected = "Re-pull would lose local data: thread RT_example at src/example.rs:9: draft reply and resolve tick. Use --force to overwrite";
-
-        let result = prepare_existing_thread_actions(
-            Some(&local_thread_with_draft_and_resolve),
-            &HashMap::new(),
-            false,
-            false,
-        );
-
-        assert_eq!(result.unwrap_err().to_string(), expected);
-    }
-
-    #[rstest]
-    fn test_prepare_existing_thread_actions_preserves_local_actions(
-        local_thread_with_draft_and_resolve: String,
-    ) {
+    fn test_prepare_existing_thread_actions_preserves_local_actions() {
         let remote_thread_states = HashMap::from([("RT_example".to_string(), false)]);
         let expected = HashMap::from([(
             "RT_example".to_string(),
@@ -371,7 +360,7 @@ mod tests {
 
         assert_eq!(
             prepare_existing_thread_actions(
-                Some(&local_thread_with_draft_and_resolve),
+                Some(THREAD_WITH_DRAFT_AND_RESOLVE),
                 &remote_thread_states,
                 false,
                 false,
@@ -382,45 +371,22 @@ mod tests {
     }
 
     #[rstest]
-    fn test_prepare_existing_thread_actions_allows_missing_thread_without_local_actions(
-        local_thread_without_actions: String,
+    #[case::missing_thread_without_local_actions(false, false)]
+    #[case::submit_approval_flag(true, false)]
+    #[case::whitespace_only_edits(false, true)]
+    fn test_prepare_existing_thread_actions_allows_changes_without_local_actions(
+        #[case] submit: bool,
+        #[case] whitespace_only_edit: bool,
     ) {
-        assert_eq!(
-            prepare_existing_thread_actions(
-                Some(&local_thread_without_actions),
-                &HashMap::new(),
-                false,
-                false,
-            )
-            .unwrap(),
-            HashMap::new()
-        );
-    }
-
-    #[rstest]
-    fn test_prepare_existing_thread_actions_ignores_submit_approval_flag() {
-        let content = THREAD_WITHOUT_LOCAL_ACTIONS_TEMPLATE.replace("{submit}", "true");
+        let submit = if submit { "true" } else { "false" };
+        let mut content = THREAD_WITHOUT_LOCAL_ACTIONS_TEMPLATE.replace("{submit}", submit);
+        if whitespace_only_edit {
+            content.push(' ');
+        }
 
         assert_eq!(
-            prepare_existing_thread_actions(Some(&content), &HashMap::new(), false, false).unwrap(),
-            HashMap::new()
-        );
-    }
-
-    #[rstest]
-    fn test_prepare_existing_thread_actions_allows_whitespace_only_edits(
-        mut local_thread_without_actions: String,
-    ) {
-        local_thread_without_actions.push(' ');
-
-        assert_eq!(
-            prepare_existing_thread_actions(
-                Some(&local_thread_without_actions),
-                &HashMap::new(),
-                false,
-                false,
-            )
-            .unwrap(),
+            prepare_existing_thread_actions(Some(&content), &HashMap::new(), false, false,)
+                .unwrap(),
             HashMap::new()
         );
     }
@@ -435,23 +401,6 @@ mod tests {
                 .unwrap(),
             HashMap::new()
         );
-    }
-
-    #[rstest]
-    fn test_prepare_existing_thread_actions_blocks_draft_on_omitted_resolved_thread(
-        local_thread_with_draft_and_resolve: String,
-    ) {
-        let remote_thread_states = HashMap::from([("RT_example".to_string(), true)]);
-        let expected = "Re-pull would lose local data: thread RT_example at src/example.rs:9: draft reply. Use --force to overwrite";
-
-        let result = prepare_existing_thread_actions(
-            Some(&local_thread_with_draft_and_resolve),
-            &remote_thread_states,
-            false,
-            false,
-        );
-
-        assert_eq!(result.unwrap_err().to_string(), expected);
     }
 
     #[rstest]
@@ -471,28 +420,22 @@ mod tests {
                 },
             ],
         };
-        let expected = (
-            HashMap::from([
-                ("RT_resolved_example".to_string(), true),
-                ("RT_active_example".to_string(), false),
-            ]),
-            vec![("RT_active_example".to_string(), false)],
+        let thread_states = prepare_pull_data(&mut pr_data, false);
+        let remaining_threads = pr_data
+            .threads
+            .iter()
+            .map(|thread| (thread.id.clone(), thread.is_resolved))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            (thread_states, remaining_threads),
+            (
+                HashMap::from([
+                    ("RT_resolved_example".to_string(), true),
+                    ("RT_active_example".to_string(), false),
+                ]),
+                vec![(Some("RT_active_example".to_string()), false)],
+            )
         );
-        let result = (
-            prepare_pull_data(&mut pr_data, false),
-            pr_data
-                .threads
-                .iter()
-                .filter_map(|thread| {
-                    thread
-                        .id
-                        .as_ref()
-                        .map(|id| (id.clone(), thread.is_resolved))
-                })
-                .collect::<Vec<_>>(),
-        );
-
-        assert_eq!(result, expected);
     }
 
     #[rstest]
