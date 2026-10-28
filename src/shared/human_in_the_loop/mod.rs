@@ -46,6 +46,7 @@ pub(crate) const PR_DRAFT_REVIEW_MARKER: &str = "pr-draft-review:";
 const TERMINAL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const FIFO_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const REVIEW_SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(2);
+const MAX_CONSECUTIVE_SESSION_CHECK_FAILURES: usize = 3;
 
 /// Trait for types that handle the review completion callback.
 ///
@@ -395,21 +396,53 @@ fn wait_for_fifo_signal(file: std::fs::File, fifo_path: &Path) -> Result<()> {
 fn wait_for_fifo_signal_or_session_exit(
     file: std::fs::File,
     session: &str,
+    is_session_alive: impl FnMut(&str) -> Result<bool>,
+) -> Result<()> {
+    wait_for_fifo_signal_or_session_exit_with_interval(
+        file,
+        session,
+        REVIEW_SESSION_CHECK_INTERVAL,
+        is_session_alive,
+    )
+}
+
+fn wait_for_fifo_signal_or_session_exit_with_interval(
+    file: std::fs::File,
+    session: &str,
+    check_interval: Duration,
     mut is_session_alive: impl FnMut(&str) -> Result<bool>,
 ) -> Result<()> {
     use std::time::Instant;
 
     let mut next_session_check = Instant::now();
+    let mut consecutive_check_failures = 0;
     poll_fifo_signal(file, |file| {
         if Instant::now() >= next_session_check {
-            if !is_session_alive(session)? {
-                return Ok(if try_read_fifo_signal(file)? {
-                    FifoPollAction::Signaled
-                } else {
-                    FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
-                });
+            match is_session_alive(session) {
+                Ok(true) => consecutive_check_failures = 0,
+                Ok(false) => {
+                    consecutive_check_failures = 0;
+                    return Ok(if try_read_fifo_signal(file)? {
+                        FifoPollAction::Signaled
+                    } else {
+                        FifoPollAction::Abort(HumanInTheLoopError::ReviewSessionClosed)
+                    });
+                }
+                Err(error) => {
+                    consecutive_check_failures += 1;
+                    tracing::warn!(
+                        session,
+                        consecutive_check_failures,
+                        max_consecutive_failures = MAX_CONSECUTIVE_SESSION_CHECK_FAILURES,
+                        error = %error,
+                        "Review session liveness check failed"
+                    );
+                    if consecutive_check_failures >= MAX_CONSECUTIVE_SESSION_CHECK_FAILURES {
+                        return Err(error);
+                    }
+                }
             }
-            next_session_check = Instant::now() + REVIEW_SESSION_CHECK_INTERVAL;
+            next_session_check = Instant::now() + check_interval;
         }
         Ok(FifoPollAction::Continue)
     })
@@ -568,6 +601,8 @@ fn signal_fifo(fifo_path: &Path) {
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
     use rstest::{fixture, rstest};
     use serde::{Deserialize, Serialize};
@@ -707,18 +742,88 @@ mod tests {
     }
 
     #[rstest]
-    fn wait_for_fifo_signal_or_session_exit_propagates_session_query_failure(
+    fn wait_for_fifo_signal_or_session_exit_retries_a_transient_session_query_failure(
         fifo_reader: FifoReaderFixture,
     ) {
-        let result =
-            wait_for_fifo_signal_or_session_exit(fifo_reader.reader, "review-session", |_| {
+        let checks = Cell::new(0);
+        let writer_path = fifo_reader.fifo_path.clone();
+        let result = wait_for_fifo_signal_or_session_exit_with_interval(
+            fifo_reader.reader,
+            "review-session",
+            Duration::ZERO,
+            |_| {
+                let check_count = checks.get() + 1;
+                checks.set(check_count);
+                if check_count == 1 {
+                    return Err(HumanInTheLoopError::CommandFailed(
+                        "tmux is unavailable".into(),
+                    ));
+                }
+
+                signal_fifo(&writer_path);
+                Ok(true)
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, checks.get()), (Ok(()), 2));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_session_exit_resets_failures_after_a_successful_check(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let checks = Cell::new(0);
+        let writer_path = fifo_reader.fifo_path.clone();
+        let result = wait_for_fifo_signal_or_session_exit_with_interval(
+            fifo_reader.reader,
+            "review-session",
+            Duration::ZERO,
+            |_| {
+                let check_count = checks.get() + 1;
+                checks.set(check_count);
+                match check_count {
+                    1 | 3 | 4 => Err(HumanInTheLoopError::CommandFailed(
+                        "tmux is unavailable".into(),
+                    )),
+                    5 => {
+                        signal_fifo(&writer_path);
+                        Ok(true)
+                    }
+                    _ => Ok(true),
+                }
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!((result, checks.get()), (Ok(()), 5));
+    }
+
+    #[rstest]
+    fn wait_for_fifo_signal_or_session_exit_stops_after_consecutive_session_query_failures(
+        fifo_reader: FifoReaderFixture,
+    ) {
+        let checks = Cell::new(0);
+        let result = wait_for_fifo_signal_or_session_exit_with_interval(
+            fifo_reader.reader,
+            "review-session",
+            Duration::ZERO,
+            |_| {
+                checks.set(checks.get() + 1);
                 Err(HumanInTheLoopError::CommandFailed(
                     "tmux is unavailable".into(),
                 ))
-            })
-            .map_err(|error| error.to_string());
+            },
+        )
+        .map_err(|error| error.to_string());
 
-        assert_eq!(result, Err("Command failed: tmux is unavailable".into()));
+        assert_eq!(
+            (result, checks.get()),
+            (
+                Err("Command failed: tmux is unavailable".into()),
+                MAX_CONSECUTIVE_SESSION_CHECK_FAILURES,
+            ),
+        );
     }
 
     #[rstest]

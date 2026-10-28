@@ -405,6 +405,14 @@ impl GitHubMockServer {
         GitHubClient::with_base_url(&self.server.uri(), "test-token").unwrap()
     }
 
+    #[cfg(test)]
+    pub async fn received_requests(&self) -> Vec<wiremock::Request> {
+        self.server
+            .received_requests()
+            .await
+            .expect("mock server is available")
+    }
+
     /// Create a repository context for building mocks.
     ///
     /// This is the preferred way to set up mocks. Example:
@@ -1058,6 +1066,55 @@ impl<'a> MockPullRequestBuilder<'a> {
                 "Test body",
                 "feature",
             )))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount mock for GET /repos/{owner}/{repo}/pulls/{number}.
+    pub async fn get_body(self, body: Option<&str>) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "number": self.number,
+                "title": "A sample pull request",
+                "state": "open",
+                "html_url": format!("https://github.com/{owner}/{repo}/pull/{}", self.number),
+                "body": body,
+                "merged_at": null,
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount a failing GET /repos/{owner}/{repo}/pulls/{number} response.
+    pub async fn get_body_error(self, status: u16) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Require a body-only request when updating a pull request.
+    pub async fn update_body_matching(self, body: &str) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let expected_body = json!({ "body": body });
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .and(body_json(expected_body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "number": self.number,
+                "title": "A sample pull request",
+                "state": "open",
+                "html_url": format!("https://github.com/{owner}/{repo}/pull/{}", self.number),
+                "body": body,
+                "merged_at": null,
+            })))
             .mount(self.server)
             .await;
     }

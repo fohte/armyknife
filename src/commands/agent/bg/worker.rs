@@ -50,8 +50,14 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
 
     let reminder = ReminderSettings::load();
     let mut reminder_delivery = None;
-    let status = bg_tasks::set_worker_pid(&args.session, &args.task_id, std::process::id())
-        .and_then(|()| run_command(args, &reminder, &mut reminder_delivery));
+    let worker_pid = std::process::id();
+    let status = record_worker_pid_then_run(
+        &args.session,
+        &args.task_id,
+        worker_pid,
+        || bg_tasks::set_worker_pid(&args.session, &args.task_id, worker_pid),
+        || run_command(args, &reminder, &mut reminder_delivery),
+    );
     let execution_error = status.as_ref().err().map(|error| format!("{error:#}"));
     let exit_code = status.as_ref().ok().and_then(ExitStatus::code);
 
@@ -94,6 +100,25 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn record_worker_pid_then_run<T>(
+    session_id: &str,
+    task_id: &str,
+    worker_pid: u32,
+    record_worker_pid: impl FnOnce() -> Result<()>,
+    run_command: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    if let Err(error) = record_worker_pid() {
+        tracing::warn!(
+            event = "agent.bg_run.worker_pid_record_failed",
+            session = %session_id,
+            task = %task_id,
+            worker_pid,
+            error = %error,
+        );
+    }
+    run_command()
 }
 
 fn record_failed_completion_notification(
@@ -287,6 +312,26 @@ mod tests {
     use indoc::indoc;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn runs_command_when_worker_pid_recording_fails() {
+        let mut command_ran = false;
+        let result = record_worker_pid_then_run(
+            "fixture-session",
+            "fixture-task",
+            1234,
+            || anyhow::bail!("fixture record failure"),
+            || {
+                command_ran = true;
+                Ok("command result")
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), command_ran),
+            (Ok("command result"), true),
+        );
+    }
 
     #[test]
     fn reminder_message_identifies_the_background_task() {

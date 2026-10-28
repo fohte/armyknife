@@ -120,6 +120,8 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         }
     }
 

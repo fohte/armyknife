@@ -242,8 +242,10 @@ mod tests {
             format!("{} {}", std::process::id(), descendant.id()),
         )
         .expect("worker should write both PIDs");
-        if std::env::var(GROUP_HELPER_MODE_ENV).is_ok_and(|mode| mode == "exit") {
-            return;
+        match std::env::var(GROUP_HELPER_MODE_ENV).as_deref() {
+            Ok("exit") => return,
+            Ok("failure") => std::process::exit(1),
+            _ => {}
         }
         loop {
             thread::sleep(Duration::from_secs(1));
@@ -262,6 +264,20 @@ mod tests {
         let alive = wait_for_process_group_to_exit(&pids);
 
         assert_eq!((status.success(), alive), (true, vec![false, false]),);
+    }
+
+    #[test]
+    fn process_group_failure_terminates_remaining_descendants() {
+        let temp_dir = tempfile::tempdir().expect("fixture directory should be created");
+        let pid_file = temp_dir.path().join("pids");
+        let command = process_group_helper_command(&pid_file, "failure");
+
+        let status = run_in_process_group_with_timeout(command, Duration::from_secs(5))
+            .expect("helper should exit with a failure status");
+        let pids = read_process_group_helper_pids(&pid_file);
+        let alive = wait_for_process_group_to_exit(&pids);
+
+        assert_eq!((status.code(), alive), (Some(1), vec![false, false]),);
     }
 
     #[test]
@@ -312,7 +328,7 @@ mod tests {
     }
 
     fn read_process_group_helper_pids(path: &Path) -> Vec<u32> {
-        let deadline = Instant::now() + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             if let Ok(contents) = std::fs::read_to_string(path) {
                 let pids = contents

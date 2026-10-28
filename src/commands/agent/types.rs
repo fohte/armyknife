@@ -191,6 +191,18 @@ pub struct HookInput {
     #[serde(default)]
     pub engine: Engine,
 
+    /// Runtime model supplied by Codex hooks and Claude Code SessionStart.
+    #[serde(default)]
+    pub model: Option<String>,
+
+    /// Runtime model selected by Claude Code's PostModelSwitch hook.
+    #[serde(default)]
+    pub to_model: Option<String>,
+
+    /// Runtime effort included by Claude Code on supported hook events.
+    #[serde(default)]
+    pub effort: Option<HookEffort>,
+
     // SessionStart event fields
     /// Source of the session start event: "startup" (new session) or "resume" (session restore).
     /// Used to skip "startup" events on `claude -c` which create unwanted empty sessions.
@@ -259,6 +271,13 @@ pub struct HookInput {
     // Ignore other fields from Claude Code / Codex hooks
     #[serde(flatten)]
     _extra: serde_json::Value,
+}
+
+/// Effort payload included by Claude Code hooks.
+#[derive(Debug, Deserialize)]
+pub struct HookEffort {
+    #[serde(default)]
+    pub level: Option<String>,
 }
 
 impl HookInput {
@@ -363,6 +382,7 @@ pub enum HookEvent {
     Notification,
     Stop,
     StopFailure,
+    PostModelSwitch,
     SessionEnd,
 }
 
@@ -377,6 +397,7 @@ impl HookEvent {
             "notification" => Ok(Self::Notification),
             "stop" => Ok(Self::Stop),
             "stop-failure" => Ok(Self::StopFailure),
+            "post-model-switch" => Ok(Self::PostModelSwitch),
             "session-end" => Ok(Self::SessionEnd),
             _ => Err(CcError::UnknownHookEvent(s.to_string()).into()),
         }

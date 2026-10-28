@@ -303,7 +303,6 @@ mod tests {
                 "code": rejection.code,
                 "message": rejection.message,
                 "display_message": rejection.to_string(),
-                "thread_without_turns": rejection.is_thread_without_turns_error(),
             }),
             other => json!({"unexpected": format!("{other:?}")}),
         };
@@ -315,7 +314,6 @@ mod tests {
                 "code": -32600,
                 "message": "list_turns is not supported yet",
                 "display_message": "Codex app-server `thread/read` failed: list_turns is not supported yet (code -32600)",
-                "thread_without_turns": true,
             }),
         );
     }

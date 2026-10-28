@@ -87,12 +87,42 @@ impl TqClient {
         }
     }
 
+    /// Links a pull request URL to a checklist item.
+    pub async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
+        let args = build_checklist_item_update_args(item_id, github_url);
+        let command_args = args.clone();
+        let join_result = tokio::task::spawn_blocking(move || run_tq_command(&command_args)).await;
+        match join_result {
+            Ok(result) => result,
+            Err(error) => Err(TqError::command_failed(
+                &args,
+                format!("task panicked: {error}"),
+                None,
+            )),
+        }
+    }
+
     /// Lists GitHub links attached to a task.
     pub async fn task_github_links(&self, task_id: &str) -> Result<Vec<TqGithubLink>> {
         let args = build_task_get_args(task_id);
         let task_id = task_id.to_string();
         let join_result =
             tokio::task::spawn_blocking(move || run_task_github_links(&task_id)).await;
+        match join_result {
+            Ok(result) => result,
+            Err(error) => Err(TqError::command_failed(
+                &args,
+                format!("task panicked: {error}"),
+                None,
+            )),
+        }
+    }
+
+    /// Fetches the stable ID and GitHub links for a task.
+    pub async fn task_details(&self, task_id: &str) -> Result<super::TqTaskDetails> {
+        let args = build_task_get_args(task_id);
+        let task_id = task_id.to_string();
+        let join_result = tokio::task::spawn_blocking(move || run_task_details(&task_id)).await;
         match join_result {
             Ok(result) => result,
             Err(error) => Err(TqError::command_failed(
@@ -112,6 +142,17 @@ fn build_checklist_list_args(task_id: &str) -> Vec<String> {
     ]
 }
 
+fn build_checklist_item_update_args(item_id: &str, github_url: &str) -> Vec<String> {
+    vec![
+        "checklist".to_string(),
+        "item".to_string(),
+        "update".to_string(),
+        item_id.to_string(),
+        "--github".to_string(),
+        github_url.to_string(),
+    ]
+}
+
 fn build_task_get_args(task_id: &str) -> Vec<String> {
     vec!["task".to_string(), "get".to_string(), task_id.to_string()]
 }
@@ -125,7 +166,20 @@ fn run_task_github_links(task_id: &str) -> Result<Vec<TqGithubLink>> {
     Ok(task.github_links)
 }
 
+fn run_task_details(task_id: &str) -> Result<super::TqTaskDetails> {
+    run_tq_json(&build_task_get_args(task_id))
+}
+
 fn run_tq_json<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T> {
+    let output = run_tq_output(args)?;
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
+
+fn run_tq_command(args: &[String]) -> Result<()> {
+    run_tq_output(args).map(|_| ())
+}
+
+fn run_tq_output(args: &[String]) -> Result<std::process::Output> {
     let mut command = ExternalTool::Tq.command();
     command.args(args);
 
@@ -141,7 +195,7 @@ fn run_tq_json<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T> {
         ));
     }
 
-    Ok(serde_json::from_slice(&output.stdout)?)
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -149,6 +203,24 @@ mod tests {
     use indoc::indoc;
 
     use super::*;
+
+    #[test]
+    fn builds_checklist_link_update_args() {
+        assert_eq!(
+            build_checklist_item_update_args(
+                "sample-checklist-item",
+                "https://github.com/acme/notify-api/pull/17",
+            ),
+            vec![
+                "checklist",
+                "item",
+                "update",
+                "sample-checklist-item",
+                "--github",
+                "https://github.com/acme/notify-api/pull/17",
+            ],
+        );
+    }
 
     #[test]
     fn parses_nested_checklist_items_and_optional_progress_fields() {
@@ -202,6 +274,8 @@ mod tests {
     fn parses_github_links_needed_to_resolve_checklist_items() {
         let json = indoc! {r#"
             {
+              "id": "task-1",
+              "number": 58,
               "githubLinks": [
                 {
                   "id": "link-1",
@@ -218,19 +292,21 @@ mod tests {
         "#};
 
         assert_eq!(
-            serde_json::from_str::<TaskGithubLinks>(json)
-                .unwrap()
-                .github_links,
-            vec![TqGithubLink {
-                id: "link-1".to_string(),
-                kind: Some("pull_request".to_string()),
-                owner: Some("sample-org".to_string()),
-                repo: Some("sample-project".to_string()),
-                number: Some(17),
-                title: Some("Add a sample feature".to_string()),
-                url: Some("https://github.com/sample-org/sample-project/pull/17".to_string()),
-                state: Some("open".to_string()),
-            }],
+            serde_json::from_str::<super::super::TqTaskDetails>(json).unwrap(),
+            super::super::TqTaskDetails {
+                id: "task-1".to_string(),
+                number: 58,
+                github_links: vec![TqGithubLink {
+                    id: "link-1".to_string(),
+                    kind: Some("pull_request".to_string()),
+                    owner: Some("sample-org".to_string()),
+                    repo: Some("sample-project".to_string()),
+                    number: Some(17),
+                    title: Some("Add a sample feature".to_string()),
+                    url: Some("https://github.com/sample-org/sample-project/pull/17".to_string()),
+                    state: Some("open".to_string()),
+                }],
+            },
         );
     }
 

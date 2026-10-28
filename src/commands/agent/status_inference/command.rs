@@ -151,11 +151,6 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
         codex_snapshot,
         infer_claude_status,
         |session, snapshot, prompt, configured_kinds| {
-            let turn_id = snapshot
-                .turn_id
-                .as_deref()
-                .filter(|turn_id| !turn_id.is_empty())
-                .context("Codex Stop snapshot has no turn_id")?;
             let last_assistant_message = snapshot
                 .last_assistant_message
                 .as_deref()
@@ -164,7 +159,7 @@ fn run_inner(args: &StatusInferenceArgs) -> Result<()> {
             let request = codex_steer::status_inference::Request {
                 session,
                 thread_id: &snapshot.thread_id,
-                turn_id,
+                turn_id: snapshot.turn_id.as_deref(),
                 last_assistant_message,
                 prompt,
                 configured_kinds,
@@ -254,11 +249,6 @@ where
             configured_kinds.sort();
             let inference_result = (|| {
                 let snapshot = codex_snapshot?.context("Codex Stop snapshot is missing")?;
-                let _turn_id = snapshot
-                    .turn_id
-                    .as_deref()
-                    .filter(|turn_id| !turn_id.is_empty())
-                    .context("Codex Stop snapshot has no turn_id")?;
                 let _last_assistant_message = snapshot
                     .last_assistant_message
                     .as_deref()
@@ -400,7 +390,6 @@ pub(crate) fn record_codex_failure_status_if_unchanged(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::io::{self, Write};
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 
@@ -408,54 +397,11 @@ mod tests {
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
-    use tracing_subscriber::prelude::*;
 
     use super::*;
     use crate::commands::agent::types::SessionStatus;
     use crate::shared::config::{CodexStatusInferenceConfig, StatusInferenceStatusConfig};
-
-    struct TraceBufferWriter(Arc<Mutex<Vec<u8>>>);
-
-    impl Write for TraceBufferWriter {
-        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-            let mut output = self
-                .0
-                .lock()
-                .map_err(|_| io::Error::other("trace buffer lock was poisoned"))?;
-            output.extend_from_slice(bytes);
-            Ok(bytes.len())
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
-
-    fn capture_info_json_events<T>(operation: impl FnOnce() -> T) -> (T, Vec<serde_json::Value>) {
-        let log_output = Arc::new(Mutex::new(Vec::new()));
-        let writer_output = log_output.clone();
-        let fmt_layer = tracing_subscriber::fmt::layer()
-            .json()
-            .flatten_event(true)
-            .without_time()
-            .with_level(false)
-            .with_target(false)
-            .with_writer(move || TraceBufferWriter(writer_output.clone()))
-            .with_filter(tracing_subscriber::filter::filter_fn(|metadata| {
-                *metadata.level() == tracing::Level::INFO
-            }));
-        let subscriber = tracing_subscriber::registry().with(fmt_layer);
-        let result = tracing::subscriber::with_default(subscriber, operation);
-        let log_output = log_output.lock().expect("log output lock").clone();
-        let log_events = String::from_utf8(log_output)
-            .expect("trace output should be UTF-8")
-            .lines()
-            .map(serde_json::from_str)
-            .collect::<Result<Vec<serde_json::Value>, _>>()
-            .expect("trace output should contain JSON events");
-
-        (result, log_events)
-    }
+    use crate::shared::testing::capture_json_events;
 
     struct InferenceWorkerContext {
         _temp_dir: TempDir,
@@ -500,6 +446,8 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         };
         store::save_session_to(&sessions_dir, &session).expect("session should be saved");
         let agent_config: AgentConfig = serde_yaml::from_str(indoc! {
@@ -795,7 +743,7 @@ mod tests {
         enable_codex_inference(&mut context.agent_config, true);
         let args = args_for(&context.session);
         let mut classifier_called = false;
-        let (result, log_events) = capture_info_json_events(|| {
+        let (result, log_events) = capture_json_events(tracing::Level::INFO, || {
             run_inner_with(
                 &args,
                 &context.sessions_dir,
@@ -838,7 +786,7 @@ mod tests {
             .expect("Codex session should be saved");
         enable_codex_inference(&mut context.agent_config, true);
         let args = args_for(&context.session);
-        let (result, log_events) = capture_info_json_events(|| {
+        let (result, log_events) = capture_json_events(tracing::Level::INFO, || {
             run_inner_with(
                 &args,
                 &context.sessions_dir,
@@ -880,7 +828,7 @@ mod tests {
             kind: "finished".to_string(),
             note: "manual status takes precedence".to_string(),
         });
-        let (result, log_events) = capture_info_json_events(|| {
+        let (result, log_events) = capture_json_events(tracing::Level::INFO, || {
             run_inner_with(
                 &args,
                 &context.sessions_dir,

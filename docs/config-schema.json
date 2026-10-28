@@ -343,7 +343,7 @@
           "$ref": "#/$defs/AgentProfileTypeEngine"
         },
         "model": {
-          "description": "Model passed to the selected engine when set; `a agent new --type` requires this field or `--model`.",
+          "description": "Model passed to the selected engine when set; `a agent new --type` rejects an empty configured value even if `--model` is given, while `--model` can supply a missing value.",
           "type": [
             "string",
             "null"
@@ -794,6 +794,11 @@
             "null"
           ],
           "default": null
+        },
+        "standalone_fork": {
+          "description": "Whether this fork is maintained independently without contributing upstream.\nConsumed by external tools; armyknife only stores and exposes the value.",
+          "type": "boolean",
+          "default": false
         },
         "vibe": {
           "description": "Whether vibe mode is allowed for this repository. When omitted, the org setting applies.",

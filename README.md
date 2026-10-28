@@ -45,7 +45,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.status_inference_prompt` lets a detached worker infer a missing status from a Claude Code fork or, when enabled below, a temporary Codex fork of the saved conversation using the parent's model. Both paths use tokens.
 
-`agent.codex_status_inference.enabled` opts Codex sessions into detached classification through an ephemeral fork of the saved conversation. Inference requires Codex's built-in OpenAI provider, the `codex` CLI, and the `srt` sandbox runtime. Enabling it requires a non-empty `agent.status_inference_prompt`, at least one `agent.statuses` entry, and both `failure_status` and `background_status`. Each configured `kind` must name an entry in `agent.statuses`, and each `note` must be a non-empty single line. A worker failure records `failure_status` only if the stopped session remains unchanged and has no explicit status, unless shadow mode is active. When pending background work is the applicable Stop reason and no higher-priority condition is active, the hook records `background_status` without running the classifier. Invalid enabled settings fail configuration validation.
+`agent.codex_status_inference.enabled` opts Codex sessions into detached classification through an ephemeral fork of the saved conversation. Inference requires Codex's built-in OpenAI provider, the `codex` CLI, and the `srt` sandbox runtime. Enabling it requires a non-empty `agent.status_inference_prompt`, at least one `agent.statuses` entry, and both `failure_status` and `background_status`. Each configured `kind` must name an entry in `agent.statuses`, and each `note` must be a non-empty single line. A worker failure records `failure_status` only if the stopped session remains unchanged and has no explicit status, unless shadow mode is active. When pending background work is the applicable Stop reason and no higher-priority condition is active, the hook records `background_status` without running the classifier. Invalid enabled settings do not prevent config loading; the Stop hook logs a warning and disables Codex inference until settings are valid.
 
 Set `agent.codex_status_inference.shadow_mode` to `true` to classify without writing an inferred status. While the stopped session remains unchanged and has no explicit status, the worker logs the inferred kind and note, or the configured failure kind and note if inference fails. When pending background work is the applicable Stop reason and no higher-priority condition is active, the Stop hook logs the configured background kind and note. Shadow mode does not write inferred statuses to the session database.
 
@@ -159,6 +159,8 @@ repos: # per-repository overrides, keyed by "owner/repo"
         reviewers: [devin, coderabbit] # repo-level reviewer override (takes precedence over org)
   example-org/example-repo:
     vibe: false # override the org vibe setting (default: inherit)
+  example-org/standalone-tool:
+    standalone_fork: true # independently maintained fork; consumed externally, only stored and exposed by armyknife
 ```
 
 `agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
@@ -167,7 +169,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
 
 Without `--type`, `agent.launch_profiles` maps exact `--kind` values to launch defaults. Each entry can select an `engine` and set `model` and `reasoning_effort` under `claude` and `codex`. An omitted engine falls back to `agent.default_engine`. An explicit `--engine` overrides the profile's engine and selects only that engine's settings. Explicit `--model` and `--reasoning-effort` values override the selected engine's profile values; Codex then falls back to `agent.codex` for any unset value. When no matching profile exists, launches keep the existing global defaults.
 
-`agent.profiles` maps arbitrary profile names to arbitrary type names. Every type requires an `engine` (`claude`, `codex`, or `agy`); `model` and `reasoning_effort` are optional and remain unset when omitted, and a configured `model` must be non-empty. `agy` can be stored in profile type settings but is not a session engine; config loading rejects `reasoning_effort` with `agy`, and `a agent new --type` rejects session launches with it. `agent.active_profile` selects the profile used by `a agent new --type <type>`; `a agent profile use <profile>` updates that selection in `zz-agent-profiles.local.yaml`. The `--type` path uses only that type's settings, independent of `--kind`; explicit `--engine`, `--model`, and `--reasoning-effort` flags override their matching values for that launch only. A `--type` session launch requires a final `model` and `reasoning_effort` from the profile or matching CLI flags; it does not fall back to `agent.codex` or `agent.launch_profiles`. When `--engine` differs from the type's engine, `--model` is required. Calls without `--type` keep the existing launch resolution. `a agent profile show` lists only configured values. Add `--dry-run` with `--type` to print the effective values and their sources without starting a session or creating a worktree.
+`agent.profiles` maps arbitrary profile names to arbitrary type names. Every type requires an `engine` (`claude`, `codex`, or `agy`); `model` and `reasoning_effort` are optional and remain unset when omitted, and a configured `model` must be non-empty when its type is selected. `agy` can be stored in profile type settings but is not a session engine; config loading accepts `reasoning_effort` with `agy`, and `a agent new --type` rejects the selected type because agy is not a session engine. `agent.active_profile` selects the profile used by `a agent new --type <type>`; `a agent profile use <profile>` updates that selection in `zz-agent-profiles.local.yaml`. The `--type` path uses only that type's settings, independent of `--kind`; explicit `--engine`, `--model`, and `--reasoning-effort` flags override their matching values for that launch only. A `--type` session launch requires a final `model` and `reasoning_effort` from the profile or matching CLI flags; it does not fall back to `agent.codex` or `agent.launch_profiles`. When `--engine` differs from the type's engine, `--model` is required. Calls without `--type` keep the existing launch resolution. `a agent profile show` lists only configured values. Add `--dry-run` with `--type` to print the effective values and their sources without starting a session or creating a worktree.
 
 ### Splitting public and private config
 
@@ -246,7 +248,7 @@ Manage PR body drafts with human-in-the-loop review.
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `new`    | Create a new PR body draft file                                                                                                                                                                                   |
 | `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                            |
 
 `new` options:
 
@@ -264,6 +266,47 @@ Manage PR body drafts with human-in-the-loop review.
 | `--base <ref>` | Base branch for the PR                                                           |
 | `--draft`      | Create as draft PR                                                               |
 | `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
+
+#### `a ai pr-series`
+
+Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+Both commands require the `tq` CLI to be installed and available on `PATH`.
+
+When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR diagrams if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
+
+When updating an existing PR, `submit` keeps its `pr-series` section if the draft does not include one.
+
+```sh
+a ai pr-series set <task-id> --file plan.json
+a ai pr-series sync <task-id>
+```
+
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. Each `summary` must fit in one line below Mermaid's 200px label width. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`:
+
+```json
+{
+  "name": "Notification preferences",
+  "purpose": "Let users choose which notifications they receive.",
+  "pullRequests": [
+    {
+      "id": "schema",
+      "summary": "Add preference tables",
+      "dependsOn": [],
+      "repository": "acme/notify-api",
+      "tqLeafId": "<schema-leaf-id>"
+    },
+    {
+      "id": "settings",
+      "summary": "Add the settings page",
+      "dependsOn": ["schema"],
+      "repository": "acme/notify-web",
+      "tqLeafId": "<settings-leaf-id>"
+    }
+  ]
+}
+```
+
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
 
 #### `a ai review`
 
@@ -435,7 +478,7 @@ a gh pr-review reply review <pr-number> [options]
 
 #### `a gh pr-merge`
 
-Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting up to five minutes for required checks. The merge is aborted if checks fail or the head commit changes. After GitHub confirms the merge, the command closes the matching local head-branch worktree and its agent session using the same safety checks as `a agent close`; cleanup failures are reported without changing the merge result. Cleanup is skipped unless exactly one worktree for the head repository and branch can be identified, or when the target session is the caller's current agent session. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting for required checks to finish successfully. The merge is aborted if checks fail or the head commit changes. After the merge command succeeds, the command closes the matching local head-branch worktree and its agent session using the same safety checks as `a agent close`; cleanup failures are reported without changing the merge result. Cleanup is skipped unless exactly one worktree for the head repository and branch can be identified, or when the target session is the caller's current agent session. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
 
 ```sh
 a gh pr-merge <pr-number> [options]
@@ -455,8 +498,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `codex [<args>...]`                                        |         | Start Codex and bind its thread ID to the current tmux pane                                 |
 | `close [target] [--child] [--force] [--skip-hooks]`        | `c`     | Close an agent session and its linked worktree                                              |
 | `clean [--dry-run] [--all] [--force]`                      |         | Delete merged or closed worktrees                                                           |
-| `hook <event>`                                             |         | Record session events (called from Claude Code hooks)                                       |
-| `attribution pre-tool-use <provider>`                      |         | Add operation context to a provider's commit command after its permission proxy             |
+| `hook <event>`                                             |         | Record coding agent hook events                                                             |
+| `attribution pre-tool-use <provider>`                      |         | Pass through the existing provider permission proxy result                                  |
 | `list`                                                     | `ls`    | List all Claude Code sessions with status                                                   |
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                 |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
@@ -487,15 +530,13 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 
 #### AI commit attribution
 
-`a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin with the original `hook_input` and the existing proxy's `hook_output` (or `null` when it passed). When it can identify a commit command and its provider model, it supplies private operation context for the commit message hook. Unknown commands, commands it cannot safely inspect, and requests without model evidence leave the proxy's command and permission result unchanged. Attribution does not decide whether Git operations are allowed.
+`a agent attribution pre-tool-use <claude-code|codex>` reads a JSON envelope from stdin and returns its `hook_output` unchanged. It emits no output when `hook_output` is `null` or unavailable. The command remains as a compatibility entrypoint for existing provider proxy registrations and does not inspect or modify commands or permission decisions.
 
-The generated message contains a standard `Co-authored-by` trailer in the form `Co-authored-by: Codex ({runtime_model}) <noreply@openai.com>` or `Co-authored-by: Claude Code ({runtime_model}) <noreply@anthropic.com>`. The runtime model ID is recorded in the co-author name without normalization. Codex records the raw model ID from its PreToolUse input. Claude Code records `message.model` only when the transcript contains the matching assistant `tool_use_id`, tool name, and original command. Neither provider falls back to a launch profile or an unrelated recent model. If no model ID is available, no attribution metadata is added. The legacy `--unknown-reason` option is accepted but does not invent a model. Existing `Co-authored-by` trailers are preserved, and an identical trailer is not added twice. Legacy `AI-Tool`, `AI-Model`, and `AI-Model-Reason` footer trailers are removed when attribution is added. See the [Claude Code attribution documentation](https://code.claude.com/docs/en/settings-reference#attribution-commit).
+The `prepare-commit-msg` hook reads `CLAUDE_CODE_SESSION_ID` before `CODEX_SESSION_ID` to load the recorded session; when both variables contain non-empty IDs, Claude's ID takes precedence, and an empty Claude ID falls back to Codex's ID. A trailer-safe model adds `Co-authored-by: Codex ({model}) <noreply@openai.com>` or `Co-authored-by: Claude Code ({model}) <noreply@anthropic.com>`; the model ID is used without normalization. A non-empty, trailer-safe effort is included after the model as `({model}, {effort})`. The hook adds no attribution when the session ID, record, or usable model is unavailable. Existing `Co-authored-by` trailers are preserved, and an identical trailer is not added twice. Legacy `AI-Tool`, `AI-Model`, and `AI-Model-Reason` footer trailers are removed when attribution is added. See the [Claude Code attribution documentation](https://code.claude.com/docs/en/settings-reference#attribution-commit).
 
-The helper applies operation context to the permission proxy's final command. Codex uses `permissionDecision: allow` when needed to accept `updatedInput`; the provider still applies its normal approval policy to the rewritten command. Claude Code's existing `allow`, `ask`, or no-decision result is retained. If attribution cannot safely update the command or write its context, the original proxy result is returned and a diagnostic is written to stderr.
+Human commits without a matching agent session remain unchanged. If session loading fails, or message replacement fails, the original message remains unchanged and a diagnostic is written to stderr, allowing Git to continue. Existing author, committer, signature, and unrelated trailers are left alone.
 
-Each context is private, expires ten minutes after creation, and can be claimed once. The `prepare-commit-msg` hook appends the co-author trailer when a usable context is present. Human commits without a configured context path are unchanged without a diagnostic. If a configured context is missing, stale, or invalid, or message replacement fails, the original message remains unchanged and a diagnostic is written to stderr, allowing Git to continue. Existing author, committer, signature, and unrelated trailers are left alone.
-
-An existing provider proxy can pass its PreToolUse envelope through `a agent attribution pre-tool-use codex`. Its returned response must be used as the provider's hook response. Existing Git hook scripts can run `a agent attribution prepare-commit-msg "$1"` from `prepare-commit-msg`. The `commit-msg` and `reference-transaction` commands remain as no-op compatibility entrypoints for older hook registrations. The legacy `--final-object` flag is accepted but has no effect.
+Existing provider proxies can pass their PreToolUse envelope through `a agent attribution pre-tool-use <provider>` and use the returned response as the provider's hook response. Existing Git hook scripts can run `a agent attribution prepare-commit-msg "$1"` from `prepare-commit-msg`. The `commit-msg` and `reference-transaction` commands remain as no-op compatibility entrypoints for older hook registrations. The legacy `--unknown-reason` and `--final-object` options are accepted but have no effect.
 
 Only provider metadata attribution is performed. Git command permissions, aliases, compound commands, pull, merge, and rebase remain under the existing permission proxy and Git configuration.
 
@@ -519,7 +560,9 @@ When a Claude Code `Stop` hook cannot infer why the agent stopped and no status 
 
 When Codex inference is enabled, the Stop hook immediately allows the turn to end and starts a detached worker. The worker preserves the Stop payload's `turn_id` and final assistant message, waits for that turn to finish and the message to appear in app-server history, then starts an ephemeral `codex exec fork` with the parent's model and saved conversation. The child alone routes HTTP and WebSocket inference requests through a temporary loopback relay to the official Responses endpoint. The relay sets `tool_choice` to `none`, rejects tool-call responses, and uses the parent session ID for cache affinity. The fork disables Codex hooks and armyknife hook registration, and its sandbox limits writes to the temporary inference directory. A valid result is stored only if the session still matches the stopped timestamp and has no explicit status; the status update checks those conditions again while holding the session lock. Acquisition, relay, classification, invalid output, timeout, and spawn failures record the configured failure status only if the stopped session remains unchanged and has no explicit status, unless shadow mode is active. Shadow mode logs the result without writing an inferred status. When pending background work is the applicable Stop reason and no higher-priority condition is active, the hook uses the configured background status without starting classification.
 
-When inference is disabled in a valid config, Codex uses `agent.stop_hook_instruction`. Invalid overall config fails validation; the Stop hook's default-loading path then uses the default config, which has no statuses or instruction, and allows Stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger inference or blocking. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports from sessions without inference, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
+Status inference uses a private snapshot of the parent conversation and file-backed credentials. The worker creates read-only online backups of the SQLite databases and copies the required conversation lineage into its private home; a WAL database without readable `-wal` and `-shm` sidecars fails closed. The private auth snapshot omits the refresh token and is used only when the access token remains valid beyond the snapshot and fork safety window. The fork keeps its state and temporary writes in that snapshot, disables hooks and armyknife session registration, and retains MCP tool definitions while the relay rejects tool calls. The `agent.status_inference.usage` event records numeric input, cached-input, and output counts from official Responses usage with session correlation; it omits response bodies, credentials, and fork-process cumulative counters. Unsupported or inconsistent snapshots follow the configured failure-status path, and temporary resources are removed when the worker exits.
+
+When inference is disabled in a valid config, Codex uses `agent.stop_hook_instruction`. If inference is enabled with incomplete settings, config loading succeeds; the Stop hook logs a warning, disables Codex inference, and uses `agent.stop_hook_instruction` when configured. If another config parsing error prevents loading, the Stop hook uses defaults, which have no statuses or instruction, and allows Stop without setting a status. Background work, pending permission prompts, `AskUserQuestion`, an existing status, paused sessions, and `stop_hook_active` are recognized automatically and do not trigger inference or blocking. A blocked stop keeps the session running and skips stop notifications and auto-compaction. To require status reports from sessions without inference, configure an instruction that asks the agent to run `a agent status set <kind> <note>` with a name from `agent.statuses`.
 
 Define status names under `agent.statuses`; the configured state controls how each status is shown:
 
@@ -534,6 +577,8 @@ $ a agent status set awaiting_build "waiting for a build"
 ```
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
+
+If recording the URL to a tracked session fails, the command warns and still attempts to display the review in a tmux pane or browser and send a notification.
 
 `a agent crit open` shows the review waiting on an agent pane in a tmux floating pane, one at a time. Pending editor reviews (in start order) come first and the Crit review last. If none is shown, it shows the last one shown (or the first); if one is shown, it switches to the next, wrapping around. `a agent crit close` closes the shown review without ending it. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. A review that starts while another editor is shown waits hidden until it is switched to or the shown one ends, when the next one is shown. Reviews started outside an agent pane open right away and are not queued. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and show the Crit review. The queue is mirrored to the pane options `@armyknife-review-queue` on the floating pane (for example `[comment 1] · comment 2 · crit`, with the shown review in brackets) and `@armyknife-review-count` on the agent pane (only while nothing is shown), and the `window-layout-changed` hook is re-run so tmux configuration can show them in the pane border:
 
@@ -607,9 +652,9 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch, unless a `--child` target shares the calling session's worktree; in that case, only the child session is closed. A worktree target with multiple tracked sessions is ambiguous; pass a session ID to select one. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; the target must resolve to a tracked direct child of the calling session, as listed by `a agent peer children`. It rejects targets without a unique tracked session, and `--force` does not bypass this check.
+`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch, unless a `--child` target shares the calling session's worktree; in that case, only the child session is closed. A worktree target closes all tracked sessions in that worktree that are eligible for close. A `--child` worktree target with no matching tracked session is rejected because its parent relationship cannot be verified. It validates every candidate before shutting down the first session; if a validation fails, no session is shut down and the worktree remains. A session on the caller's current pane is not shut down. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; every matching session must be a direct child of the calling session, as listed by `a agent peer children`. `--force` does not bypass this check.
 
-The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft or a draft that cannot be checked while an agent process is present. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it skips the draft check and allows closing only for sessions marked ended or paused. It also refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
+The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft. If a live agent process is found but the pane cannot be parsed to check for a draft, close protects the session while the elapsed time since `session.updated_at` is within the configured auto-pause timeout; it proceeds when that time has elapsed. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it allows closing only for sessions marked ended or paused unless `--force` is passed. Even with `--force`, it refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
 
 `new` options:
 
@@ -676,6 +721,13 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
         ]
       }
     ],
+    "PostModelSwitch": [
+      {
+        "hooks": [
+          { "type": "command", "command": "a agent hook post-model-switch" }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
@@ -722,6 +774,8 @@ Add the following to your Claude Code settings (`~/.claude/settings.json`):
 These hooks record session state changes, enabling `a agent list` to display active sessions with their current status (running, waiting for input, stopped, or failed). `StopFailure` marks API-error interruptions as `Failed`; when no permission request remains, the next user prompt returns the session to `Running`. An unclassified `Stop` remains `Running` while the hook asks the agent to set its status.
 
 The `SessionStart` and `UserPromptSubmit` hooks store the agent session ID in the tmux pane user option `@armyknife-last-agent-session-id`, so that `a agent resume` can relaunch the session inside that pane. Reading this option falls back to the pre-rename key `@armyknife-last-claude-code-session-id` when the current key is unset, since a pane only gets its option rewritten on those two hook events, and a pane holding a still-running session would otherwise lose its binding right after the rename.
+
+Claude Code records the model from `SessionStart.model` or `PostModelSwitch.to_model`; if no model has been recorded, the last assistant message in the transcript supplies it. Hook events that include `effort.level` record that effort. Codex sessions also record model and effort metadata when available.
 
 The pane is normally found by walking the hook process's ancestry up to it. A Codex session running through the shared `codex app-server` daemon breaks that link: the daemon runs the agent loop, hooks included, outside any pane's process tree, so armyknife falls back to the launcher-written session ID option. It binds only when exactly one pane has that session ID and is currently running the Codex CLI. The lookup accepts both `@armyknife-last-agent-session-id` and the pre-rename `@armyknife-last-claude-code-session-id` option; if there is no unique match, the session remains unbound.
 
@@ -1052,6 +1106,14 @@ ja
 $ cd ~/ghq/github.com/fohte/dotfiles
 $ a config get repo.direct_commit
 true
+
+$ cd ~/ghq/github.com/example-org/standalone-tool
+$ a config get repo.standalone_fork
+true
+
+$ cd ~/ghq/github.com/example-org/unconfigured-fork
+$ a config get repo.standalone_fork
+false
 ```
 
 ## Release
