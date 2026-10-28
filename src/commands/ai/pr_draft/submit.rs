@@ -86,7 +86,7 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
     let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
-    run_impl_with_post_submit(
+    run_impl(
         args,
         client,
         default_runner(),
@@ -110,28 +110,7 @@ fn ensure_no_review_access(
     ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
-#[cfg(test)]
 async fn run_impl(
-    args: &SubmitArgs,
-    gh_client: &(impl PrClient + RepoClient),
-    run_hook: HookRunner<'_>,
-    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
-    current_repo_identity: impl FnOnce() -> Option<(String, String)>,
-    vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
-) -> anyhow::Result<()> {
-    run_impl_with_post_submit(
-        args,
-        gh_client,
-        run_hook,
-        write_config,
-        current_repo_identity,
-        &NoopPostSubmitProcessor,
-        vibe_access_check,
-    )
-    .await
-}
-
-async fn run_impl_with_post_submit(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
     run_hook: HookRunner<'_>,
@@ -299,25 +278,6 @@ async fn run_impl_with_post_submit(
     Ok(())
 }
 
-#[cfg(test)]
-struct NoopPostSubmitProcessor;
-
-#[cfg(test)]
-impl PostSubmitProcessor for NoopPostSubmitProcessor {
-    fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
-        None
-    }
-
-    async fn link_and_sync(
-        &self,
-        _metadata: &TqBranchMetadata,
-        _target: &PrTarget,
-        _pr_url: &str,
-    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
-        Ok(SubmitSyncOutcome::NoPlan)
-    }
-}
-
 fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
     tq_branch_metadata(
         read_branch_config_value(branch, "x-tq-task-id"),
@@ -384,6 +344,8 @@ fn read_current_repo_identity() -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
     use crate::infra::github::GitHubMockServer;
     use crate::shared::config::Config;
@@ -402,6 +364,23 @@ mod tests {
 
     fn noop_config(_key: &str, _value: &str) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    struct NoopPostSubmitProcessor;
+
+    impl PostSubmitProcessor for NoopPostSubmitProcessor {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            None
+        }
+
+        async fn link_and_sync(
+            &self,
+            _metadata: &TqBranchMetadata,
+            _target: &PrTarget,
+            _pr_url: &str,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            Ok(SubmitSyncOutcome::NoPlan)
+        }
     }
 
     fn no_current_repo() -> Option<(String, String)> {
@@ -674,6 +653,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             vibe_access_check,
         )
         .await
@@ -724,6 +704,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -760,6 +741,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -773,7 +755,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_submit_sync_failure_does_not_undo_pr_creation() {
-        let env = setup_test_env("acme", "notify-api").await;
+        let env = setup_test_env("acme", "aftercare-failure-fixture").await;
         let draft_path = create_approved_draft(
             &env.owner,
             &env.repo,
@@ -798,7 +780,7 @@ mod tests {
         };
         let client = env.mock.client();
 
-        let result = run_impl_with_post_submit(
+        let result = run_impl(
             &args,
             &client,
             &noop_hook,
@@ -825,25 +807,84 @@ mod tests {
                     "sample-task-id".to_string(),
                     "sample-leaf-id".to_string(),
                     "acme".to_string(),
-                    "notify-api".to_string(),
-                    "https://github.com/acme/notify-api/pull/1".to_string(),
+                    "aftercare-failure-fixture".to_string(),
+                    "https://github.com/acme/aftercare-failure-fixture/pull/1".to_string(),
                 )],
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn skips_post_submit_sync_when_filepath_targets_another_repo() {
+        let env = setup_test_env("acme", "aftercare-target-fixture").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/notify-setting",
+            "Add notification setting",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let processor = PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            ..PostSubmitSpy::default()
+        };
+        let client = env.mock.client();
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some(("acme".to_string(), "notify-web".to_string())),
+            &processor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                processor
+                    .calls
+                    .lock()
+                    .expect("post-submit spy mutex")
+                    .clone()
+            ),
+            (Ok(()), Vec::new()),
         );
     }
 
     #[rstest]
     #[case::prepare(
         SubmitSyncStage::Prepare,
-        "PR submit completed, but PR series setup failed: sample synchronization failure\nAfter resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`."
+        indoc! {"
+            PR submit completed, but PR series setup failed: sample synchronization failure
+            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
     )]
     #[case::link(
         SubmitSyncStage::Link,
-        "PR submit completed, but its tq checklist link failed: sample synchronization failure\nAfter resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`."
+        indoc! {"
+            PR submit completed, but its tq checklist link failed: sample synchronization failure
+            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
     )]
     #[case::sync(
         SubmitSyncStage::Sync,
-        "PR submit completed and linked, but PR series synchronization failed: sample synchronization failure\nAfter resolving the listed errors, run `a ai pr-series sync sample-task-id`."
+        indoc! {"
+            PR submit completed and linked, but PR series synchronization failed: sample synchronization failure
+            After resolving the listed errors, run `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
     )]
     fn formats_post_submit_recovery_instructions(
         #[case] stage: SubmitSyncStage,
@@ -927,6 +968,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             |_, _| Ok(()),
         )
         .await;
@@ -982,6 +1024,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1058,6 +1101,7 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1100,6 +1144,7 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1142,6 +1187,7 @@ mod tests {
             &noop_hook,
             write_config,
             unrelated_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1211,6 +1257,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1282,6 +1329,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1319,6 +1367,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await

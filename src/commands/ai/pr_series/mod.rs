@@ -1,8 +1,41 @@
-pub(super) mod model;
+mod model;
 mod plan;
 mod render;
-pub(super) mod storage;
-pub(super) mod sync;
+mod storage;
+mod sync;
+
+#[cfg(test)]
+pub(super) use model::PrSeriesEntry;
+pub(super) use model::{
+    CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests,
+    validate_checklist_leaf_ids,
+};
+pub(super) use storage::load_plan_if_present;
+
+pub(super) async fn sync_after_submit(
+    plan: &PrSeriesPlan,
+    created_pull_requests: &[CreatedPullRequest],
+    github: &(impl crate::infra::github::PrBodyClient + crate::infra::github::RepoClient),
+) -> anyhow::Result<usize> {
+    sync::sync_after_submit(plan, created_pull_requests, github).await
+}
+
+#[cfg(test)]
+pub(super) fn synchronized_body_for_test(
+    plan: &PrSeriesPlan,
+    entry_id: &str,
+    body: &str,
+    repository_privacy: &std::collections::HashMap<String, bool>,
+    created_pull_requests: &[CreatedPullRequest],
+) -> anyhow::Result<String> {
+    sync::synchronized_body(
+        plan,
+        entry_id,
+        body,
+        repository_privacy,
+        created_pull_requests,
+    )
+}
 
 use clap::Subcommand;
 

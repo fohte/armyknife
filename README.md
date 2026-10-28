@@ -242,11 +242,11 @@ Open a file in editor for review (no approval flow). After the editor exits, a u
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                                                                                                                                                                                                                  |
-| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `new`    | Create a new PR body draft file                                                                                                                                                                                                                                                              |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion)                                                                           |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode). For the current repo, it caches the PR URL and best-effort links the PR and synchronizes linked PR diagrams when the branch has tq task and checklist item IDs plus a saved PR series plan |
+| Action   | Description                                                                                                                                                                                                        |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `new`    | Create a new PR body draft file                                                                                                                                                                                    |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                             |
 
 `new` options:
 
@@ -269,6 +269,8 @@ Manage PR body drafts with human-in-the-loop review.
 
 Register a task's PR split plan and synchronize its diagram into linked PR bodies.
 Both commands require the `tq` CLI to be installed and available on `PATH`.
+
+When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR diagrams if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
 ```sh
 a ai pr-series set <task-id> --file plan.json

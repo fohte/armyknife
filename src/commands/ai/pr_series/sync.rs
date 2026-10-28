@@ -16,10 +16,10 @@ pub struct SyncArgs {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(in crate::commands::ai) struct SyncReport {
-    pub(in crate::commands::ai) updated: Vec<String>,
-    pub(in crate::commands::ai) unchanged: Vec<String>,
-    pub(in crate::commands::ai) failed: Vec<(String, String)>,
+struct SyncReport {
+    updated: Vec<String>,
+    unchanged: Vec<String>,
+    failed: Vec<(String, String)>,
 }
 
 struct PendingUpdate {
@@ -56,7 +56,17 @@ pub async fn run(args: &SyncArgs) -> Result<()> {
     Ok(())
 }
 
-pub(in crate::commands::ai) async fn sync_created_pull_requests(
+pub(super) async fn sync_after_submit(
+    plan: &PrSeriesPlan,
+    created_pull_requests: &[CreatedPullRequest],
+    github: &(impl PrBodyClient + RepoClient),
+) -> Result<usize> {
+    let report = sync_created_pull_requests(plan, created_pull_requests, github).await?;
+    print_report(&report);
+    Ok(report.failed.len())
+}
+
+async fn sync_created_pull_requests(
     plan: &PrSeriesPlan,
     created_pull_requests: &[CreatedPullRequest],
     github: &(impl PrBodyClient + RepoClient),
@@ -186,7 +196,7 @@ pub(in crate::commands::ai) async fn sync_created_pull_requests(
     Ok(report)
 }
 
-fn synchronized_body(
+pub(super) fn synchronized_body(
     plan: &PrSeriesPlan,
     entry_id: &str,
     body: &str,
@@ -203,7 +213,7 @@ fn synchronized_body(
     replace_managed_section(body, &section)
 }
 
-pub(in crate::commands::ai) fn print_report(report: &SyncReport) {
+fn print_report(report: &SyncReport) {
     for url in &report.updated {
         println!("Updated {url}");
     }
@@ -225,12 +235,7 @@ mod tests {
 
     use super::*;
     use crate::commands::ai::pr_series::model::PrSeriesEntry;
-    use crate::commands::ai::pr_series_aftercare::{
-        SubmitSyncOutcome, SubmitSyncStage, SubmitSyncTqClient, SubmittedPrContext,
-        link_and_sync_after_submit_with,
-    };
     use crate::infra::github::{CreatePrParams, PrBodyClient, PrClient, PrInfo, UpdatePrParams};
-    use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink, TqTaskDetails};
 
     #[derive(Default)]
     struct FakeGitHub {
@@ -354,110 +359,6 @@ mod tests {
         }
     }
 
-    struct FakeSubmitTq {
-        task: Mutex<TqTaskDetails>,
-        checklists: Mutex<Vec<TqChecklist>>,
-        link_calls: Mutex<Vec<(String, String)>>,
-        link_error: Option<String>,
-    }
-
-    impl SubmitSyncTqClient for FakeSubmitTq {
-        async fn task_details(&self, _task_id: &str) -> Result<TqTaskDetails> {
-            Ok(self.task.lock().unwrap().clone())
-        }
-
-        async fn list_checklists(&self, _task_id: &str) -> Result<Vec<TqChecklist>> {
-            Ok(self.checklists.lock().unwrap().clone())
-        }
-
-        async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
-            self.link_calls
-                .lock()
-                .unwrap()
-                .push((item_id.to_string(), github_url.to_string()));
-            if let Some(error) = &self.link_error {
-                bail!("{error}");
-            }
-
-            let mut checklists = self.checklists.lock().unwrap();
-            let found = checklists
-                .iter_mut()
-                .flat_map(|checklist| &mut checklist.items)
-                .any(|item| set_leaf_link(item, item_id, "link-settings"));
-            if !found {
-                bail!("checklist item was not found");
-            }
-            self.task.lock().unwrap().github_links.push(TqGithubLink {
-                id: "link-settings".to_string(),
-                kind: Some("pull_request".to_string()),
-                owner: Some("acme".to_string()),
-                repo: Some("notify-web".to_string()),
-                number: Some(17),
-                title: Some("Add the settings page".to_string()),
-                url: Some(github_url.to_string()),
-                state: Some("open".to_string()),
-            });
-            Ok(())
-        }
-    }
-
-    fn set_leaf_link(item: &mut TqChecklistItem, item_id: &str, link_id: &str) -> bool {
-        if item.id == item_id && item.children.is_empty() {
-            item.github_link_id = Some(link_id.to_string());
-            return true;
-        }
-        item.children
-            .iter_mut()
-            .any(|child| set_leaf_link(child, item_id, link_id))
-    }
-
-    fn fake_submit_tq(link_error: Option<&str>) -> FakeSubmitTq {
-        FakeSubmitTq {
-            task: Mutex::new(TqTaskDetails {
-                id: "sample-task-id".to_string(),
-                number: 58,
-                github_links: vec![TqGithubLink {
-                    id: "link-schema".to_string(),
-                    kind: Some("pull_request".to_string()),
-                    owner: Some("acme".to_string()),
-                    repo: Some("notify-api".to_string()),
-                    number: Some(12),
-                    title: Some("Add preference tables".to_string()),
-                    url: Some("https://github.com/acme/notify-api/pull/12".to_string()),
-                    state: Some("open".to_string()),
-                }],
-            }),
-            checklists: Mutex::new(vec![TqChecklist {
-                id: "checklist-1".to_string(),
-                name: "Implementation".to_string(),
-                items: vec![TqChecklistItem {
-                    id: "batch-1".to_string(),
-                    content: "Implementation".to_string(),
-                    checked_at: None,
-                    github_link_id: None,
-                    children: vec![
-                        TqChecklistItem {
-                            id: "leaf-schema".to_string(),
-                            content: "Add preference tables".to_string(),
-                            checked_at: None,
-                            github_link_id: Some("link-schema".to_string()),
-                            children: Vec::new(),
-                        },
-                        TqChecklistItem {
-                            id: "leaf-settings".to_string(),
-                            content: "Add the settings page".to_string(),
-                            checked_at: None,
-                            github_link_id: None,
-                            children: Vec::new(),
-                        },
-                    ],
-                }],
-            }]),
-            link_calls: Mutex::new(Vec::new()),
-            link_error: link_error.map(str::to_string),
-        }
-    }
-
     fn sample_plan() -> PrSeriesPlan {
         PrSeriesPlan {
             name: "Notification preferences".to_string(),
@@ -479,151 +380,6 @@ mod tests {
                 },
             ],
         }
-    }
-
-    #[tokio::test]
-    async fn links_the_new_pr_before_synchronizing_all_created_pr_bodies() {
-        let tq = fake_submit_tq(None);
-        let plan = sample_plan();
-        let github = FakeGitHub::default();
-        github.add_body("acme/notify-api", 12, "Schema PR body");
-        github.add_body("acme/notify-web", 17, "Settings PR body");
-        let current_pr_url = "https://github.com/acme/notify-web/pull/17";
-        let created_pull_requests = vec![
-            CreatedPullRequest {
-                entry_id: "schema".to_string(),
-                repository: Repository {
-                    owner: "acme".to_string(),
-                    name: "notify-api".to_string(),
-                },
-                number: 12,
-                url: "https://github.com/acme/notify-api/pull/12".to_string(),
-            },
-            CreatedPullRequest {
-                entry_id: "settings".to_string(),
-                repository: Repository {
-                    owner: "acme".to_string(),
-                    name: "notify-web".to_string(),
-                },
-                number: 17,
-                url: current_pr_url.to_string(),
-            },
-        ];
-        let repository_privacy = HashMap::from([
-            ("acme/notify-api".to_string(), false),
-            ("acme/notify-web".to_string(), false),
-        ]);
-        let expected_bodies = HashMap::from([
-            (
-                ("acme/notify-api".to_string(), 12),
-                synchronized_body(
-                    &plan,
-                    "schema",
-                    "Schema PR body",
-                    &repository_privacy,
-                    &created_pull_requests,
-                )
-                .unwrap(),
-            ),
-            (
-                ("acme/notify-web".to_string(), 17),
-                synchronized_body(
-                    &plan,
-                    "settings",
-                    "Settings PR body",
-                    &repository_privacy,
-                    &created_pull_requests,
-                )
-                .unwrap(),
-            ),
-        ]);
-        let context = SubmittedPrContext {
-            task_id: "58",
-            checklist_item_id: "leaf-settings",
-            owner: "acme",
-            repo: "notify-web",
-            url: current_pr_url,
-        };
-
-        let result = link_and_sync_after_submit_with(&tq, |_| Ok(Some(plan)), &github, &context)
-            .await
-            .map_err(|failure| (failure.stage, failure.error.to_string()));
-
-        assert_eq!(
-            (
-                result,
-                tq.link_calls.lock().unwrap().clone(),
-                github.bodies(),
-            ),
-            (
-                Ok(SubmitSyncOutcome::Synchronized),
-                vec![("leaf-settings".to_string(), current_pr_url.to_string())],
-                expected_bodies,
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn skips_linking_and_body_sync_when_no_plan_is_saved() {
-        let tq = fake_submit_tq(None);
-        let github = FakeGitHub::default();
-        github.add_body("acme/notify-api", 12, "Schema PR body");
-        let expected_bodies = github.bodies();
-        let context = SubmittedPrContext {
-            task_id: "58",
-            checklist_item_id: "leaf-settings",
-            owner: "acme",
-            repo: "notify-web",
-            url: "https://github.com/acme/notify-web/pull/17",
-        };
-
-        let result = link_and_sync_after_submit_with(&tq, |_| Ok(None), &github, &context)
-            .await
-            .map_err(|failure| (failure.stage, failure.error.to_string()));
-
-        assert_eq!(
-            (
-                result,
-                tq.link_calls.lock().unwrap().clone(),
-                github.bodies(),
-            ),
-            (Ok(SubmitSyncOutcome::NoPlan), Vec::new(), expected_bodies,),
-        );
-    }
-
-    #[tokio::test]
-    async fn reports_checklist_link_errors_without_syncing_pr_bodies() {
-        let tq = fake_submit_tq(Some("temporary tq failure"));
-        let github = FakeGitHub::default();
-        github.add_body("acme/notify-api", 12, "Schema PR body");
-        github.add_body("acme/notify-web", 17, "Settings PR body");
-        let expected_bodies = github.bodies();
-        let current_pr_url = "https://github.com/acme/notify-web/pull/17";
-        let context = SubmittedPrContext {
-            task_id: "58",
-            checklist_item_id: "leaf-settings",
-            owner: "acme",
-            repo: "notify-web",
-            url: current_pr_url,
-        };
-
-        let result =
-            link_and_sync_after_submit_with(&tq, |_| Ok(Some(sample_plan())), &github, &context)
-                .await
-                .map_err(|failure| (failure.stage, failure.error.to_string()));
-
-        assert_eq!(
-            (
-                result,
-                tq.link_calls.lock().unwrap().clone(),
-                github.bodies(),
-            ),
-            (
-                Err((SubmitSyncStage::Link, "temporary tq failure".to_string(),)),
-                vec![("leaf-settings".to_string(), current_pr_url.to_string())],
-                expected_bodies,
-            ),
-        );
     }
 
     fn created_pull_requests() -> Vec<CreatedPullRequest> {

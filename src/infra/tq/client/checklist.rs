@@ -90,12 +90,8 @@ impl TqClient {
     /// Links a pull request URL to a checklist item.
     pub async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
         let args = build_checklist_item_update_args(item_id, github_url);
-        let task_id = item_id.to_string();
-        let github_url = github_url.to_string();
-        let join_result = tokio::task::spawn_blocking(move || {
-            run_tq_command(&build_checklist_item_update_args(&task_id, &github_url))
-        })
-        .await;
+        let command_args = args.clone();
+        let join_result = tokio::task::spawn_blocking(move || run_tq_command(&command_args)).await;
         match join_result {
             Ok(result) => result,
             Err(error) => Err(TqError::command_failed(
@@ -175,25 +171,15 @@ fn run_task_details(task_id: &str) -> Result<super::TqTaskDetails> {
 }
 
 fn run_tq_json<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T> {
-    let mut command = ExternalTool::Tq.command();
-    command.args(args);
-
-    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
-        .map_err(|error| TqError::command_failed(args, error.to_string(), None))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TqError::command_failed(
-            args,
-            "command exited with non-zero status",
-            Some(stderr),
-        ));
-    }
-
+    let output = run_tq_output(args)?;
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
 fn run_tq_command(args: &[String]) -> Result<()> {
+    run_tq_output(args).map(|_| ())
+}
+
+fn run_tq_output(args: &[String]) -> Result<std::process::Output> {
     let mut command = ExternalTool::Tq.command();
     command.args(args);
 
@@ -209,7 +195,7 @@ fn run_tq_command(args: &[String]) -> Result<()> {
         ));
     }
 
-    Ok(())
+    Ok(output)
 }
 
 #[cfg(test)]
