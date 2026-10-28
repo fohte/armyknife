@@ -180,6 +180,16 @@ pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
     ))
 }
 
+pub fn preserve_managed_section(existing_body: &str, submitted_body: &str) -> Result<String> {
+    if managed_section_range(submitted_body)?.is_some() {
+        return Ok(submitted_body.to_string());
+    }
+    let Some(existing_range) = managed_section_range(existing_body)? else {
+        return Ok(submitted_body.to_string());
+    };
+    replace_managed_section(submitted_body, &existing_body[existing_range])
+}
+
 fn body_without_managed_section(body: &str) -> Result<String> {
     let Some(section_range) = managed_section_range(body)? else {
         return Ok(body.to_string());

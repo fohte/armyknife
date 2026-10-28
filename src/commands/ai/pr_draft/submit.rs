@@ -4,12 +4,13 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
+use crate::commands::ai::pr_series::preserve_managed_section;
 use crate::commands::ai::pr_series_aftercare::{
     SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
 };
 use crate::infra::git::cmd::{run_git, run_git_optional};
 use crate::infra::github::{
-    CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
+    CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
 use crate::shared::config::{Config, load_config};
 
@@ -112,7 +113,7 @@ fn ensure_no_review_access(
 
 async fn run_impl(
     args: &SubmitArgs,
-    gh_client: &(impl PrClient + RepoClient),
+    gh_client: &(impl PrBodyClient + PrClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
@@ -211,13 +212,17 @@ async fn run_impl(
     let pr_url = match update_target {
         Some(number) => {
             // Update existing PR
+            let existing_body = gh_client
+                .get_pull_request_body(&target.owner, &target.repo, number)
+                .await?;
+            let body = preserve_managed_section(&existing_body, &draft.body)?;
             gh_client
                 .update_pull_request(UpdatePrParams {
                     owner: target.owner.clone(),
                     repo: target.repo.clone(),
                     number,
                     title: draft.frontmatter.title.clone(),
-                    body: draft.body.clone(),
+                    body,
                 })
                 .await?
         }
@@ -1041,14 +1046,19 @@ mod tests {
         repo: &str,
         branch: &str,
         pr_number: u64,
+        existing_body: &str,
+        updated_body: &str,
     ) -> TestEnv {
         crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
-        ctx.list_pull_requests_with(pr_number, "Old title", "Old body", branch)
+        ctx.list_pull_requests_with(pr_number, "Old title", existing_body, branch)
             .await;
-        ctx.update_pull_request(pr_number, "Updated title", "Updated body", branch)
+        ctx.pull_request(pr_number)
+            .get_body(Some(existing_body))
+            .await;
+        ctx.update_pull_request(pr_number, "Updated title", updated_body, branch)
             .await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
@@ -1064,11 +1074,33 @@ mod tests {
 
     #[tokio::test]
     async fn submit_updates_existing_pr() {
+        let existing_body = indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            ### Notification preferences
+
+            Existing diagram
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
+        let updated_body = indoc! {"
+            Updated body
+
+            <!-- pr-series:start -->
+            ### Notification preferences
+
+            Existing diagram
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
         let env = setup_test_env_with_existing_pr(
             "owner",
             "repo_submit_update",
             "feature/existing-pr",
             42,
+            existing_body,
+            updated_body,
         )
         .await;
 
@@ -1299,6 +1331,8 @@ mod tests {
             "repo_submit_hook_update",
             "feature/hook-update",
             42,
+            "Old body",
+            "Updated body",
         )
         .await;
         let draft_path = create_approved_draft(

@@ -10,6 +10,7 @@ pub(super) use model::{
     CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests,
     validate_checklist_leaf_ids,
 };
+pub(super) use render::preserve_managed_section;
 pub(super) use storage::load_plan_if_present;
 
 pub(super) async fn sync_after_submit(
