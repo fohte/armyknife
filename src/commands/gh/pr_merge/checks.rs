@@ -17,8 +17,8 @@ pub(super) fn wait_for_required_checks(
     let mut required_checks_configured = None;
     wait_until_complete(
         || query_required_check_status(owner, repo, pr_number, &mut required_checks_configured),
-        || {
-            println!("Required checks are still pending; retrying in 10 seconds...");
+        |details| {
+            println!("Required checks are pending: {details}; retrying in 10 seconds...");
             thread::sleep(CHECK_POLL_INTERVAL);
         },
     )
@@ -26,12 +26,12 @@ pub(super) fn wait_for_required_checks(
 
 fn wait_until_complete(
     mut poll: impl FnMut() -> anyhow::Result<CheckWaitStatus>,
-    mut wait: impl FnMut(),
+    mut wait: impl FnMut(&str),
 ) -> anyhow::Result<()> {
     loop {
         match poll()? {
             CheckWaitStatus::Complete => return Ok(()),
-            CheckWaitStatus::Pending => wait(),
+            CheckWaitStatus::Pending(details) => wait(&details),
         }
     }
 }
@@ -51,16 +51,23 @@ fn query_required_check_status(
         repository,
         "--required".to_string(),
         "--json".to_string(),
-        "bucket".to_string(),
+        "bucket,state,name,link".to_string(),
     ];
     // With --json, gh skips status exit codes; no required checks fail before JSON output.
     let output = run_gh(&args).context("Failed to query required checks")?;
 
     match classify_check_result(output.status.success(), &output.stdout)? {
         Some(CheckOutcome::Complete) => Ok(CheckWaitStatus::Complete),
-        Some(CheckOutcome::Pending) => Ok(CheckWaitStatus::Pending),
-        Some(CheckOutcome::Failed) => {
-            bail!("Required checks failed: {}", command_output_text(&output));
+        Some(CheckOutcome::Pending(checks)) => {
+            Ok(CheckWaitStatus::Pending(format_check_details(&checks)))
+        }
+        Some(CheckOutcome::Failed(checks)) => {
+            let details = if checks.is_empty() {
+                command_output_text(&output)
+            } else {
+                format_check_details(&checks)
+            };
+            bail!("Required checks failed: {details}");
         }
         None => {
             let has_required_checks = match *required_checks_configured {
@@ -71,14 +78,22 @@ fn query_required_check_status(
                     has_required_checks
                 }
             };
-            Ok(status_for_missing_check_output(has_required_checks))
+            Ok(status_for_missing_check_output(
+                has_required_checks,
+                &command_output_text(&output),
+            ))
         }
     }
 }
 
-fn status_for_missing_check_output(has_required_checks: bool) -> CheckWaitStatus {
+fn status_for_missing_check_output(has_required_checks: bool, gh_output: &str) -> CheckWaitStatus {
     if has_required_checks {
-        CheckWaitStatus::Pending
+        let details = if gh_output.is_empty() {
+            "gh pr checks returned no status rows".to_string()
+        } else {
+            format!("gh pr checks returned no status rows: {gh_output}")
+        };
+        CheckWaitStatus::Pending(details)
     } else {
         CheckWaitStatus::Complete
     }
@@ -89,7 +104,7 @@ fn classify_check_result(
     stdout: &[u8],
 ) -> anyhow::Result<Option<CheckOutcome>> {
     if !status_success {
-        return Ok((!stdout.is_empty()).then_some(CheckOutcome::Failed));
+        return Ok((!stdout.is_empty()).then_some(CheckOutcome::Failed(Vec::new())));
     }
 
     let checks = serde_json::from_slice::<Vec<GhCheck>>(stdout)
@@ -99,20 +114,41 @@ fn classify_check_result(
         bail!("gh pr checks returned an empty JSON result");
     }
 
-    if checks
+    let failed_checks = checks
         .iter()
-        .any(|check| matches!(check.bucket, CheckBucket::Fail | CheckBucket::Cancel))
-    {
-        return Ok(Some(CheckOutcome::Failed));
+        .filter(|check| {
+            matches!(check.bucket, CheckBucket::Fail | CheckBucket::Cancel)
+                || check.state == "STALE"
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    if !failed_checks.is_empty() {
+        return Ok(Some(CheckOutcome::Failed(failed_checks)));
     }
-    if checks
+    let pending_checks = checks
         .iter()
-        .any(|check| check.bucket == CheckBucket::Pending)
-    {
-        return Ok(Some(CheckOutcome::Pending));
+        .filter(|check| check.bucket == CheckBucket::Pending)
+        .cloned()
+        .collect::<Vec<_>>();
+    if !pending_checks.is_empty() {
+        return Ok(Some(CheckOutcome::Pending(pending_checks)));
     }
 
     Ok(Some(CheckOutcome::Complete))
+}
+
+fn format_check_details(checks: &[GhCheck]) -> String {
+    checks
+        .iter()
+        .map(|check| {
+            if check.link.is_empty() {
+                format!("{} ({})", check.name, check.state)
+            } else {
+                format!("{} ({}) {}", check.name, check.state, check.link)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn command_output_text(output: &std::process::Output) -> String {
@@ -222,9 +258,6 @@ const REQUIRED_CHECKS_JQ: &str = r#"
     end
 "#;
 
-const REQUIRED_STATUS_CHECK_RULES_JQ: &str =
-    r#"add | any(.[]; .type == "required_status_checks" or .type == "workflows")"#;
-
 fn parse_required_check_page(response: &[u8]) -> anyhow::Result<RequiredCheckPage> {
     serde_json::from_slice(response).context("Failed to parse required check query result")
 }
@@ -234,19 +267,7 @@ fn fetch_required_status_check_rules(
     repo: &str,
     branch: &str,
 ) -> anyhow::Result<bool> {
-    let encoded_branch =
-        percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC);
-    let endpoint = format!("repos/{owner}/{repo}/rules/branches/{encoded_branch}");
-    let args = [
-        "api".to_string(),
-        endpoint,
-        "--paginate".to_string(),
-        "--slurp".to_string(),
-        "--jq".to_string(),
-        REQUIRED_STATUS_CHECK_RULES_JQ.to_string(),
-        "-F".to_string(),
-        "per_page=100".to_string(),
-    ];
+    let args = required_status_check_rules_args(owner, repo, branch);
 
     let output = run_gh(&args).context("Failed to inspect required status check rules")?;
     if !output.status.success() {
@@ -258,8 +279,33 @@ fn fetch_required_status_check_rules(
     parse_required_status_check_rules(&output.stdout)
 }
 
+fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [String; 6] {
+    let encoded_branch =
+        percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC);
+    let endpoint = format!("repos/{owner}/{repo}/rules/branches/{encoded_branch}");
+    [
+        "api".to_string(),
+        endpoint,
+        "--paginate".to_string(),
+        "--slurp".to_string(),
+        "-F".to_string(),
+        "per_page=100".to_string(),
+    ]
+}
+
 fn parse_required_status_check_rules(response: &[u8]) -> anyhow::Result<bool> {
-    serde_json::from_slice(response).context("Failed to parse required status check rule result")
+    let pages = serde_json::from_slice::<Vec<Vec<RequiredStatusCheckRule>>>(response)
+        .context("Failed to parse required status check rule pages")?;
+    if pages.is_empty() {
+        bail!("GitHub returned no branch-rule pages");
+    }
+
+    Ok(pages.into_iter().flatten().any(|rule| {
+        matches!(
+            rule.rule_type.as_str(),
+            "required_status_checks" | "workflows"
+        )
+    }))
 }
 
 fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
@@ -272,22 +318,25 @@ fn run_gh(args: &[String]) -> anyhow::Result<std::process::Output> {
 #[derive(Debug, PartialEq, Eq)]
 enum CheckOutcome {
     Complete,
-    Pending,
-    Failed,
+    Pending(Vec<GhCheck>),
+    Failed(Vec<GhCheck>),
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum CheckWaitStatus {
     Complete,
-    Pending,
+    Pending(String),
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 struct GhCheck {
+    name: String,
+    state: String,
     bucket: CheckBucket,
+    link: String,
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 enum CheckBucket {
     #[serde(rename = "pass")]
     Pass,
@@ -309,6 +358,12 @@ struct RequiredCheckPage {
     base_ref_name: String,
 }
 
+#[derive(Deserialize)]
+struct RequiredStatusCheckRule {
+    #[serde(rename = "type")]
+    rule_type: String,
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -317,26 +372,100 @@ mod tests {
 
     use super::*;
 
+    fn gh_check(name: &str, state: &str, bucket: CheckBucket, link: &str) -> GhCheck {
+        GhCheck {
+            name: name.to_string(),
+            state: state.to_string(),
+            bucket,
+            link: link.to_string(),
+        }
+    }
+
     #[rstest]
-    #[case::all_pass(true, r#"[{"bucket":"pass"}]"#, Some(CheckOutcome::Complete))]
-    #[case::skipped_check_passes(true, r#"[{"bucket":"skipping"}]"#, Some(CheckOutcome::Complete))]
-    #[case::pending_check_waits(true, r#"[{"bucket":"pending"}]"#, Some(CheckOutcome::Pending))]
-    #[case::failed_check_fails(true, r#"[{"bucket":"fail"}]"#, Some(CheckOutcome::Failed))]
-    #[case::cancelled_check_fails(true, r#"[{"bucket":"cancel"}]"#, Some(CheckOutcome::Failed))]
+    #[case::all_pass(
+        true,
+        r#"[{"name":"build","state":"SUCCESS","bucket":"pass","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Complete)
+    )]
+    #[case::skipped_check_passes(
+        true,
+        r#"[{"name":"docs","state":"SKIPPED","bucket":"skipping","link":"https://example.invalid/checks/docs"}]"#,
+        Some(CheckOutcome::Complete)
+    )]
+    #[case::pending_check_waits(
+        true,
+        r#"[{"name":"build","state":"IN_PROGRESS","bucket":"pending","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Pending(vec![gh_check(
+            "build",
+            "IN_PROGRESS",
+            CheckBucket::Pending,
+            "https://example.invalid/checks/build",
+        )]))
+    )]
+    #[case::stale_check_fails(
+        true,
+        r#"[{"name":"build","state":"STALE","bucket":"pending","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Failed(vec![gh_check(
+            "build",
+            "STALE",
+            CheckBucket::Pending,
+            "https://example.invalid/checks/build",
+        )]))
+    )]
+    #[case::failed_check_fails(
+        true,
+        r#"[{"name":"build","state":"FAILURE","bucket":"fail","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Failed(vec![gh_check(
+            "build",
+            "FAILURE",
+            CheckBucket::Fail,
+            "https://example.invalid/checks/build",
+        )]))
+    )]
+    #[case::cancelled_check_fails(
+        true,
+        r#"[{"name":"build","state":"CANCELLED","bucket":"cancel","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Failed(vec![gh_check(
+            "build",
+            "CANCELLED",
+            CheckBucket::Cancel,
+            "https://example.invalid/checks/build",
+        )]))
+    )]
     #[case::pass_and_pending_wait(
         true,
-        r#"[{"bucket":"pass"},{"bucket":"pending"}]"#,
-        Some(CheckOutcome::Pending)
+        r#"[{"name":"build","state":"SUCCESS","bucket":"pass","link":"https://example.invalid/checks/build"},{"name":"docs","state":"EXPECTED","bucket":"pending","link":"https://example.invalid/checks/docs"}]"#,
+        Some(CheckOutcome::Pending(vec![gh_check(
+            "docs",
+            "EXPECTED",
+            CheckBucket::Pending,
+            "https://example.invalid/checks/docs",
+        )]))
     )]
     #[case::pending_and_fail_fails(
         true,
-        r#"[{"bucket":"pending"},{"bucket":"fail"}]"#,
-        Some(CheckOutcome::Failed)
+        r#"[{"name":"docs","state":"IN_PROGRESS","bucket":"pending","link":"https://example.invalid/checks/docs"},{"name":"build","state":"FAILURE","bucket":"fail","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Failed(vec![gh_check(
+            "build",
+            "FAILURE",
+            CheckBucket::Fail,
+            "https://example.invalid/checks/build",
+        )]))
     )]
     #[case::pass_and_cancel_fails(
         true,
-        r#"[{"bucket":"pass"},{"bucket":"cancel"}]"#,
-        Some(CheckOutcome::Failed)
+        r#"[{"name":"docs","state":"SUCCESS","bucket":"pass","link":"https://example.invalid/checks/docs"},{"name":"build","state":"CANCELLED","bucket":"cancel","link":"https://example.invalid/checks/build"}]"#,
+        Some(CheckOutcome::Failed(vec![gh_check(
+            "build",
+            "CANCELLED",
+            CheckBucket::Cancel,
+            "https://example.invalid/checks/build",
+        )]))
+    )]
+    #[case::nonzero_with_output_fails(
+        false,
+        "gh returned an error",
+        Some(CheckOutcome::Failed(Vec::new()))
     )]
     #[case::empty_error_needs_required_check_lookup(false, "", None)]
     fn classify_check_result_cases(
@@ -347,6 +476,35 @@ mod tests {
         assert_eq!(
             classify_check_result(status_success, stdout.as_bytes()).unwrap(),
             expected,
+        );
+    }
+
+    #[test]
+    fn classify_empty_success_fails() {
+        assert_eq!(
+            classify_check_result(true, b"[]").unwrap_err().to_string(),
+            "gh pr checks returned an empty JSON result",
+        );
+    }
+
+    #[test]
+    fn format_check_details_includes_names_states_and_links() {
+        assert_eq!(
+            format_check_details(&[
+                gh_check(
+                    "build",
+                    "IN_PROGRESS",
+                    CheckBucket::Pending,
+                    "https://example.invalid/checks/build",
+                ),
+                gh_check(
+                    "docs",
+                    "EXPECTED",
+                    CheckBucket::Pending,
+                    "https://example.invalid/checks/docs",
+                ),
+            ]),
+            "build (IN_PROGRESS) https://example.invalid/checks/build; docs (EXPECTED) https://example.invalid/checks/docs",
         );
     }
 
@@ -385,12 +543,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::required_status_rules(b"true", true)]
-    #[case::no_required_status_rules(b"false", false)]
-    fn parse_required_status_check_rules_cases(#[case] response: &[u8], #[case] expected: bool) {
+    #[case::required_status_rules(b"[[{\"type\":\"required_status_checks\"}]]", Ok(true))]
+    #[case::workflow_rules(b"[[{\"type\":\"workflows\"}]]", Ok(true))]
+    #[case::no_required_status_rules(b"[[{\"type\":\"pull_request\"}]]", Ok(false))]
+    #[case::empty_page(b"[[]]", Ok(false))]
+    #[case::missing_pages(b"[]", Err("GitHub returned no branch-rule pages".to_string()))]
+    fn parse_required_status_check_rules_cases(
+        #[case] response: &[u8],
+        #[case] expected_result: Result<bool, String>,
+    ) {
+        let result = parse_required_status_check_rules(response).map_err(|error| error.to_string());
+
+        assert_eq!(result, expected_result);
+    }
+
+    #[test]
+    fn required_status_check_rules_args_do_not_mix_slurp_with_jq() {
         assert_eq!(
-            parse_required_status_check_rules(response).unwrap(),
-            expected
+            required_status_check_rules_args("owner", "repo", "feature/branch"),
+            [
+                "api".to_string(),
+                "repos/owner/repo/rules/branches/feature%2Fbranch".to_string(),
+                "--paginate".to_string(),
+                "--slurp".to_string(),
+                "-F".to_string(),
+                "per_page=100".to_string(),
+            ],
         );
     }
 
@@ -441,14 +619,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::configured_check_is_pending(true, CheckWaitStatus::Pending)]
-    #[case::no_configured_check_is_complete(false, CheckWaitStatus::Complete)]
+    #[case::configured_check_is_pending(
+        true,
+        "permission denied",
+        CheckWaitStatus::Pending(
+            "gh pr checks returned no status rows: permission denied".to_string()
+        )
+    )]
+    #[case::no_configured_check_is_complete(false, "no check rows", CheckWaitStatus::Complete)]
     fn missing_check_output_cases(
         #[case] has_required_checks: bool,
+        #[case] gh_output: &str,
         #[case] expected: CheckWaitStatus,
     ) {
         assert_eq!(
-            status_for_missing_check_output(has_required_checks),
+            status_for_missing_check_output(has_required_checks, gh_output),
             expected
         );
     }
@@ -456,17 +641,27 @@ mod tests {
     #[rstest]
     fn wait_repeats_pending_queries_until_checks_finish() {
         let mut statuses = VecDeque::from([
-            CheckWaitStatus::Pending,
-            CheckWaitStatus::Pending,
+            CheckWaitStatus::Pending("build (IN_PROGRESS)".to_string()),
+            CheckWaitStatus::Pending("docs (EXPECTED)".to_string()),
             CheckWaitStatus::Complete,
         ]);
-        let mut waits = 0;
+        let mut wait_messages = Vec::new();
 
         let result = wait_until_complete(
             || statuses.pop_front().context("No fake check result remains"),
-            || waits += 1,
+            |message| wait_messages.push(message.to_string()),
         );
 
-        assert_eq!((result.is_ok(), statuses.len(), waits), (true, 0, 2));
+        assert_eq!(
+            (result.is_ok(), statuses.len(), wait_messages),
+            (
+                true,
+                0,
+                vec![
+                    "build (IN_PROGRESS)".to_string(),
+                    "docs (EXPECTED)".to_string()
+                ]
+            ),
+        );
     }
 }
