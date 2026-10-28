@@ -4,9 +4,13 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::infra::git::cmd::run_git;
+use crate::commands::ai::pr_series::preserve_managed_section;
+use crate::commands::ai::pr_series_aftercare::{
+    SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
+};
+use crate::infra::git::cmd::{run_git, run_git_optional};
 use crate::infra::github::{
-    CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
+    CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
 use crate::shared::config::{Config, load_config};
 
@@ -36,14 +40,77 @@ struct PrTarget {
     is_private: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TqBranchMetadata {
+    task_id: String,
+    checklist_item_id: String,
+}
+
+trait PostSubmitProcessor {
+    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
+
+    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool;
+
+    async fn link_and_sync(
+        &self,
+        metadata: &TqBranchMetadata,
+        target: &PrTarget,
+        pr_url: &str,
+    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
+}
+
+struct PrSeriesPostSubmitProcessor<'a> {
+    github: &'a GitHubClient,
+}
+
+impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
+    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata> {
+        read_current_branch_tq_metadata(branch)
+    }
+
+    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool {
+        match crate::commands::ai::pr_series::load_plan_if_present(&metadata.task_id) {
+            Ok(plan) => plan.is_some(),
+            Err(error) => {
+                tracing::warn!(
+                    event = "pr_draft.submit.plan_check_failed",
+                    task_id = %metadata.task_id,
+                    error = %error,
+                    "failed to check for a PR series plan"
+                );
+                false
+            }
+        }
+    }
+
+    async fn link_and_sync(
+        &self,
+        metadata: &TqBranchMetadata,
+        target: &PrTarget,
+        pr_url: &str,
+    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+        link_and_sync_after_submit(
+            self.github,
+            &metadata.task_id,
+            &metadata.checklist_item_id,
+            &target.owner,
+            &target.repo,
+            pr_url,
+        )
+        .await
+    }
+}
+
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
+    let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
     run_impl(
         args,
         client,
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
+        &post_submit_processor,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
@@ -63,10 +130,11 @@ fn ensure_no_review_access(
 
 async fn run_impl(
     args: &SubmitArgs,
-    gh_client: &(impl PrClient + RepoClient),
+    gh_client: &(impl PrBodyClient + PrClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+    post_submit_processor: &impl PostSubmitProcessor,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
@@ -140,6 +208,17 @@ async fn run_impl(
         _ => None,
     };
 
+    let target_is_current_repo = if args.filepath.is_some() {
+        current_repo_identity()
+            .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
+    } else {
+        true
+    };
+    let tq_metadata = if target_is_current_repo {
+        post_submit_processor.metadata_for_branch(&target.branch)
+    } else {
+        None
+    };
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
@@ -161,13 +240,23 @@ async fn run_impl(
     let pr_url = match update_target {
         Some(number) => {
             // Update existing PR
+            let body = body_for_existing_pr_update(
+                gh_client,
+                &target.owner,
+                &target.repo,
+                number,
+                &draft.body,
+                post_submit_processor,
+                tq_metadata.as_ref(),
+            )
+            .await;
             gh_client
                 .update_pull_request(UpdatePrParams {
                     owner: target.owner.clone(),
                     repo: target.repo.clone(),
                     number,
                     title: draft.frontmatter.title.clone(),
-                    body: draft.body.clone(),
+                    body,
                 })
                 .await?
         }
@@ -187,12 +276,6 @@ async fn run_impl(
         }
     };
 
-    let target_is_current_repo = if args.filepath.is_some() {
-        current_repo_identity()
-            .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
-    } else {
-        true
-    };
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -206,10 +289,137 @@ async fn run_impl(
 
     println!("{pr_url}");
 
+    if let Some(metadata) = tq_metadata
+        && let Err(failure) = post_submit_processor
+            .link_and_sync(&metadata, &target, &pr_url)
+            .await
+    {
+        eprintln!(
+            "{}",
+            format_post_submit_failure(&failure, &metadata, &pr_url)
+        );
+    }
+
     // Cleanup
     draft.cleanup()?;
 
     Ok(())
+}
+
+async fn body_for_existing_pr_update(
+    gh_client: &impl PrBodyClient,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    submitted_body: &str,
+    post_submit_processor: &impl PostSubmitProcessor,
+    metadata: Option<&TqBranchMetadata>,
+) -> String {
+    let Some(metadata) = metadata else {
+        return submitted_body.to_string();
+    };
+    if !post_submit_processor.has_saved_plan(metadata) {
+        return submitted_body.to_string();
+    }
+
+    let existing_body = match gh_client.get_pull_request_body(owner, repo, number).await {
+        Ok(body) => body,
+        Err(error) => {
+            warn_pr_series_body_fallback(
+                "pr_draft.submit.read_body_failed",
+                owner,
+                repo,
+                number,
+                metadata,
+                &error,
+            );
+            return submitted_body.to_string();
+        }
+    };
+
+    match preserve_managed_section(&existing_body, submitted_body) {
+        Ok(body) => body,
+        Err(error) => {
+            warn_pr_series_body_fallback(
+                "pr_draft.submit.preserve_section_failed",
+                owner,
+                repo,
+                number,
+                metadata,
+                &error,
+            );
+            submitted_body.to_string()
+        }
+    }
+}
+
+fn warn_pr_series_body_fallback(
+    event: &'static str,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    metadata: &TqBranchMetadata,
+    error: &anyhow::Error,
+) {
+    tracing::warn!(
+        event = event,
+        task_id = %metadata.task_id,
+        owner,
+        repo,
+        number,
+        error = %error,
+        "failed to preserve the PR series section while updating the PR body"
+    );
+    eprintln!(
+        "Warning: could not preserve the PR series section for {owner}/{repo} pull request {number}: {error}. Continuing with the draft body. If synchronization does not restore the section, run `a ai pr-series sync {}`.",
+        metadata.task_id,
+    );
+}
+
+fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
+    tq_branch_metadata(
+        read_branch_config_value(branch, "x-tq-task-id"),
+        read_branch_config_value(branch, "x-tq-checklist-item-id"),
+    )
+}
+
+fn tq_branch_metadata(
+    task_id: Option<String>,
+    checklist_item_id: Option<String>,
+) -> Option<TqBranchMetadata> {
+    let task_id = task_id.filter(|value| !value.trim().is_empty())?;
+    let checklist_item_id = checklist_item_id.filter(|value| !value.trim().is_empty())?;
+    Some(TqBranchMetadata {
+        task_id,
+        checklist_item_id,
+    })
+}
+
+fn read_branch_config_value(branch: &str, name: &str) -> Option<String> {
+    let key = format!("branch.{branch}.{name}");
+    run_git_optional(Path::new("."), ["config", "--local", "--get", &key])
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn format_post_submit_failure(
+    failure: &SubmitSyncFailure,
+    metadata: &TqBranchMetadata,
+    pr_url: &str,
+) -> String {
+    match failure.stage {
+        SubmitSyncStage::Prepare => format!(
+            "PR submit completed, but PR series setup failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
+            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
+        ),
+        SubmitSyncStage::Link => format!(
+            "PR submit completed, but its tq checklist link failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
+            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
+        ),
+        SubmitSyncStage::Sync => format!(
+            "PR submit completed and linked, but PR series synchronization failed: {}\nAfter resolving the listed errors, run `a ai pr-series sync {}`.",
+            failure.error, metadata.task_id
+        ),
+    }
 }
 
 fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
@@ -232,13 +442,15 @@ fn read_current_repo_identity() -> Option<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
+
     use super::*;
     use crate::infra::github::GitHubMockServer;
     use crate::shared::config::Config;
     use crate::shared::env_var::EnvVars;
     use clap::Parser;
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::fs;
     use std::sync::Mutex;
 
@@ -250,6 +462,27 @@ mod tests {
 
     fn noop_config(_key: &str, _value: &str) -> anyhow::Result<()> {
         Ok(())
+    }
+
+    struct NoopPostSubmitProcessor;
+
+    impl PostSubmitProcessor for NoopPostSubmitProcessor {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            None
+        }
+
+        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+            false
+        }
+
+        async fn link_and_sync(
+            &self,
+            _metadata: &TqBranchMetadata,
+            _target: &PrTarget,
+            _pr_url: &str,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            Ok(SubmitSyncOutcome::NoPlan)
+        }
     }
 
     fn no_current_repo() -> Option<(String, String)> {
@@ -267,6 +500,60 @@ mod tests {
     #[derive(Default)]
     struct HookSpy {
         calls: Mutex<Vec<HookCall>>,
+    }
+
+    type PostSubmitCall = (String, String, String, String, String);
+
+    #[derive(Default)]
+    struct PostSubmitSpy {
+        calls: Mutex<Vec<PostSubmitCall>>,
+        failure_stage: Option<SubmitSyncStage>,
+        metadata: Option<TqBranchMetadata>,
+        saved_plan: bool,
+    }
+
+    impl PostSubmitProcessor for PostSubmitSpy {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            self.metadata.clone()
+        }
+
+        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+            self.saved_plan
+        }
+
+        async fn link_and_sync(
+            &self,
+            metadata: &TqBranchMetadata,
+            target: &PrTarget,
+            pr_url: &str,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            self.calls.lock().expect("post-submit spy mutex").push((
+                metadata.task_id.clone(),
+                metadata.checklist_item_id.clone(),
+                target.owner.clone(),
+                target.repo.clone(),
+                pr_url.to_string(),
+            ));
+            match self.failure_stage {
+                Some(stage) => Err(SubmitSyncFailure {
+                    stage,
+                    error: anyhow::anyhow!("sample synchronization failure"),
+                }),
+                None => Ok(SubmitSyncOutcome::Synchronized),
+            }
+        }
+    }
+
+    #[fixture]
+    fn post_submit_spy(#[default(true)] saved_plan: bool) -> PostSubmitSpy {
+        PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            saved_plan,
+            ..PostSubmitSpy::default()
+        }
     }
 
     #[derive(Clone)]
@@ -485,6 +772,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             vibe_access_check,
         )
         .await
@@ -535,6 +823,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -571,6 +860,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -580,6 +870,172 @@ mod tests {
             "submit should pass the draft branch when --filepath is used: {:?}",
             result.err()
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn post_submit_sync_failure_does_not_undo_pr_creation(
+        mut post_submit_spy: PostSubmitSpy,
+    ) {
+        let env = setup_test_env("acme", "aftercare-failure-fixture").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/notify-setting",
+            "Add notification setting",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        post_submit_spy.failure_stage = Some(SubmitSyncStage::Link);
+        let client = env.mock.client();
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &post_submit_spy,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                post_submit_spy
+                    .calls
+                    .lock()
+                    .expect("post-submit spy mutex")
+                    .clone()
+            ),
+            (
+                Ok(()),
+                vec![(
+                    "sample-task-id".to_string(),
+                    "sample-leaf-id".to_string(),
+                    "acme".to_string(),
+                    "aftercare-failure-fixture".to_string(),
+                    "https://github.com/acme/aftercare-failure-fixture/pull/1".to_string(),
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn skips_post_submit_sync_when_filepath_targets_another_repo(
+        #[with(false)] post_submit_spy: PostSubmitSpy,
+    ) {
+        let env = setup_test_env("acme", "aftercare-target-fixture").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/notify-setting",
+            "Add notification setting",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some(("acme".to_string(), "notify-web".to_string())),
+            &post_submit_spy,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                post_submit_spy
+                    .calls
+                    .lock()
+                    .expect("post-submit spy mutex")
+                    .clone()
+            ),
+            (Ok(()), Vec::new()),
+        );
+    }
+
+    #[rstest]
+    #[case::prepare(
+        SubmitSyncStage::Prepare,
+        indoc! {"
+            PR submit completed, but PR series setup failed: sample synchronization failure
+            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
+    )]
+    #[case::link(
+        SubmitSyncStage::Link,
+        indoc! {"
+            PR submit completed, but its tq checklist link failed: sample synchronization failure
+            After resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
+    )]
+    #[case::sync(
+        SubmitSyncStage::Sync,
+        indoc! {"
+            PR submit completed and linked, but PR series synchronization failed: sample synchronization failure
+            After resolving the listed errors, run `a ai pr-series sync sample-task-id`.
+        "}.trim_end()
+    )]
+    fn formats_post_submit_recovery_instructions(
+        #[case] stage: SubmitSyncStage,
+        #[case] expected: &str,
+    ) {
+        let failure = SubmitSyncFailure {
+            stage,
+            error: anyhow::anyhow!("sample synchronization failure"),
+        };
+        let metadata = TqBranchMetadata {
+            task_id: "sample-task-id".to_string(),
+            checklist_item_id: "sample-leaf-id".to_string(),
+        };
+
+        assert_eq!(
+            format_post_submit_failure(
+                &failure,
+                &metadata,
+                "https://github.com/acme/notify-api/pull/17",
+            ),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::both_ids(
+        Some("sample-task-id".to_string()),
+        Some("sample-leaf-id".to_string()),
+        Some(TqBranchMetadata {
+            task_id: "sample-task-id".to_string(),
+            checklist_item_id: "sample-leaf-id".to_string(),
+        })
+    )]
+    #[case::missing_task_id(None, Some("sample-leaf-id".to_string()), None)]
+    #[case::missing_leaf_id(Some("sample-task-id".to_string()), None, None)]
+    fn requires_both_branch_tq_ids(
+        #[case] task_id: Option<String>,
+        #[case] checklist_item_id: Option<String>,
+        #[case] expected: Option<TqBranchMetadata>,
+    ) {
+        assert_eq!(tq_branch_metadata(task_id, checklist_item_id), expected);
     }
 
     #[tokio::test]
@@ -622,6 +1078,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             |_, _| Ok(()),
         )
         .await;
@@ -677,6 +1134,7 @@ mod tests {
             &noop_hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -688,19 +1146,43 @@ mod tests {
         ));
     }
 
+    #[derive(Clone, Copy)]
+    enum ExistingPrBody<'a> {
+        Text(&'a str),
+        MalformedMarkers,
+        ReadFailure,
+    }
+
     async fn setup_test_env_with_existing_pr(
         owner: &str,
         repo: &str,
         branch: &str,
         pr_number: u64,
+        existing_body: ExistingPrBody<'_>,
+        updated_body: &str,
     ) -> TestEnv {
         crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
-        ctx.list_pull_requests_with(pr_number, "Old title", "Old body", branch)
+        let existing_body = match existing_body {
+            ExistingPrBody::Text(body) => Some(body),
+            ExistingPrBody::MalformedMarkers => Some(
+                indoc! {"
+                    Existing body
+                    <!-- pr-series:start -->
+                "}
+                .trim_end_matches('\n'),
+            ),
+            ExistingPrBody::ReadFailure => None,
+        };
+        ctx.list_pull_requests_with(pr_number, "Old title", existing_body.unwrap_or(""), branch)
             .await;
-        ctx.update_pull_request(pr_number, "Updated title", "Updated body", branch)
+        match existing_body {
+            Some(body) => ctx.pull_request(pr_number).get_body(Some(body)).await,
+            None => ctx.pull_request(pr_number).get_body_error(503).await,
+        }
+        ctx.update_pull_request(pr_number, "Updated title", updated_body, branch)
             .await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
@@ -714,13 +1196,47 @@ mod tests {
         }
     }
 
+    async fn pull_request_update_payloads(env: &TestEnv, path: &str) -> Vec<serde_json::Value> {
+        env.mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| request.method.as_str() == "PATCH" && request.url.path() == path)
+            .map(|request| request.body_json::<serde_json::Value>())
+            .collect::<serde_json::Result<Vec<_>>>()
+            .expect("decode update request body")
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn submit_updates_existing_pr() {
+    async fn submit_updates_existing_pr(#[with(true)] post_submit_spy: PostSubmitSpy) {
+        let existing_body = indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            ### Notification preferences
+
+            Existing diagram
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
+        let updated_body = indoc! {"
+            Updated body
+
+            <!-- pr-series:start -->
+            ### Notification preferences
+
+            Existing diagram
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
         let env = setup_test_env_with_existing_pr(
             "owner",
             "repo_submit_update",
             "feature/existing-pr",
             42,
+            ExistingPrBody::Text(existing_body),
+            updated_body,
         )
         .await;
 
@@ -753,18 +1269,155 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
+            &post_submit_spy,
             no_vibe_access,
         )
         .await;
+        let update_payloads =
+            pull_request_update_payloads(&env, "/repos/owner/repo_submit_update/pulls/42").await;
 
         assert_eq!(
-            result
-                .map(|()| cached_config.into_inner().expect("cache spy mutex"))
-                .map_err(|error| error.to_string()),
-            Ok(Some((
-                "branch.feature/existing-pr.pr-url".to_string(),
-                "https://github.com/owner/repo_submit_update/pull/42".to_string(),
-            ))),
+            (
+                result
+                    .map(|()| cached_config.into_inner().expect("cache spy mutex"))
+                    .map_err(|error| error.to_string()),
+                update_payloads,
+            ),
+            (
+                Ok(Some((
+                    "branch.feature/existing-pr.pr-url".to_string(),
+                    "https://github.com/owner/repo_submit_update/pull/42".to_string(),
+                ))),
+                vec![serde_json::json!({
+                    "title": "Updated title",
+                    "body": updated_body,
+                })],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::malformed_markers(ExistingPrBody::MalformedMarkers, "repo_submit_preserve_malformed")]
+    #[case::body_read_failure(ExistingPrBody::ReadFailure, "repo_submit_preserve_read_failure")]
+    #[tokio::test]
+    async fn submit_updates_with_draft_body_when_existing_section_cannot_be_preserved(
+        #[case] existing_body: ExistingPrBody<'_>,
+        #[case] repo: &str,
+        #[with(true)] post_submit_spy: PostSubmitSpy,
+    ) {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            repo,
+            "feature/preserve-fallback",
+            42,
+            existing_body,
+            "Updated body",
+        )
+        .await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/preserve-fallback",
+            "Updated title",
+            "Updated body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &post_submit_spy,
+            no_vibe_access,
+        )
+        .await;
+        let update_payloads =
+            pull_request_update_payloads(&env, &format!("/repos/owner/{repo}/pulls/42")).await;
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), update_payloads),
+            (
+                Ok(()),
+                vec![serde_json::json!({
+                    "title": "Updated title",
+                    "body": "Updated body\n",
+                })],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn submit_skips_existing_body_fetch_without_saved_plan(
+        #[with(false)] post_submit_spy: PostSubmitSpy,
+    ) {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            "repo_submit_without_plan",
+            "feature/without-plan",
+            42,
+            ExistingPrBody::Text("Existing body"),
+            "Updated body",
+        )
+        .await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/without-plan",
+            "Updated title",
+            "Updated body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &post_submit_spy,
+            no_vibe_access,
+        )
+        .await;
+        let requests = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .map(|request| (request.method.to_string(), request.url.path().to_string()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), requests),
+            (
+                Ok(()),
+                vec![
+                    (
+                        "GET".to_string(),
+                        "/repos/owner/repo_submit_without_plan".to_string()
+                    ),
+                    (
+                        "GET".to_string(),
+                        "/repos/owner/repo_submit_without_plan/pulls".to_string(),
+                    ),
+                    (
+                        "PATCH".to_string(),
+                        "/repos/owner/repo_submit_without_plan/pulls/42".to_string(),
+                    ),
+                ],
+            ),
         );
     }
 
@@ -795,6 +1448,7 @@ mod tests {
             &noop_hook,
             write_config,
             current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -837,6 +1491,7 @@ mod tests {
             &noop_hook,
             write_config,
             unrelated_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -906,6 +1561,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -947,6 +1603,8 @@ mod tests {
             "repo_submit_hook_update",
             "feature/hook-update",
             42,
+            ExistingPrBody::Text("Old body"),
+            "Updated body",
         )
         .await;
         let draft_path = create_approved_draft(
@@ -977,6 +1635,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await;
@@ -1014,6 +1673,7 @@ mod tests {
             &hook,
             noop_config,
             no_current_repo,
+            &NoopPostSubmitProcessor,
             no_vibe_access,
         )
         .await

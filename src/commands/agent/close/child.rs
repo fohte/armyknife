@@ -37,6 +37,22 @@ pub(super) fn ensure_target_session(
     Ok(())
 }
 
+pub(super) fn ensure_target_sessions(
+    sessions: &[&Session],
+    parent_session_id: Option<&str>,
+) -> Result<()> {
+    let Some(parent_session_id) = parent_session_id else {
+        return Ok(());
+    };
+    if sessions.is_empty() {
+        return ensure_target_session(None, Some(parent_session_id));
+    }
+    for session in sessions {
+        ensure_target_session(Some(*session), Some(parent_session_id))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;

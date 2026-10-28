@@ -67,6 +67,9 @@ pub(super) fn handle(stream: &mut TcpStream, state: &RelayState) -> Result<()> {
                 write_rejection(stream, 502, "tool call rejected");
                 bail!("Codex status response requested a tool call");
             }
+            if let Some(usage) = super::usage::from_http_body(&body) {
+                usage.log(&state.parent_session_id);
+            }
             write_upstream_response(stream, status.as_u16(), &headers, &body)?;
         }
         Err(_) => write_rejection(stream, 502, "official Codex request failed"),
@@ -334,11 +337,11 @@ pub(super) fn contains_tool_call(body: &[u8], content_type: Option<&HeaderValue>
         .to_ascii_lowercase();
     if content_type.starts_with("text/event-stream") {
         for line in body.split(|byte| *byte == b'\n') {
-            let line = trim_ascii(line);
+            let line = super::trim_ascii(line);
             let Some(data) = line.strip_prefix(b"data:") else {
                 continue;
             };
-            let data = trim_ascii(data);
+            let data = super::trim_ascii(data);
             if data == b"[DONE]" || data.is_empty() {
                 continue;
             }
@@ -377,16 +380,6 @@ fn is_tool_call_type(value: &str) -> bool {
     value.ends_with("_call")
         || value.starts_with("response.function_call_")
         || value.starts_with("response.mcp_call_")
-}
-
-fn trim_ascii(mut bytes: &[u8]) -> &[u8] {
-    while bytes.first().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[1..];
-    }
-    while bytes.last().is_some_and(u8::is_ascii_whitespace) {
-        bytes = &bytes[..bytes.len() - 1];
-    }
-    bytes
 }
 
 async fn wait_until_cancelled(cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>) {

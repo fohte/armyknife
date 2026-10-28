@@ -1,5 +1,90 @@
 # Changelog
 
+## [0.1.482](https://github.com/fohte/armyknife/compare/v0.1.481...v0.1.482) (2026-10-28)
+
+
+### Features
+
+* **review:** show one review per agent pane ([#1277](https://github.com/fohte/armyknife/issues/1277)) ([b41613e](https://github.com/fohte/armyknife/commit/b41613eb8f79d918bdc37de8f52054eae3943bee))
+
+## [0.1.481](https://github.com/fohte/armyknife/compare/v0.1.480...v0.1.481) (2026-10-28)
+
+
+### Features
+
+* **ai:** support automatic split-PR overview sync ([#1305](https://github.com/fohte/armyknife/issues/1305)) ([4d03ad5](https://github.com/fohte/armyknife/commit/4d03ad5a6928474265c798115fc9e34fe309253b))
+
+## [0.1.480](https://github.com/fohte/armyknife/compare/v0.1.479...v0.1.480) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/close:** unblock safe session cleanup ([#1303](https://github.com/fohte/armyknife/issues/1303)) ([dad4e1e](https://github.com/fohte/armyknife/commit/dad4e1e5dbc8763a64ae382abfe3eaa614286a02))
+
+## [0.1.479](https://github.com/fohte/armyknife/compare/v0.1.478...v0.1.479) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** isolate Codex status fork storage ([#1301](https://github.com/fohte/armyknife/issues/1301)) ([d39d39f](https://github.com/fohte/armyknife/commit/d39d39f9c9a311e72f118bc6bd4662c935a90826))
+
+## [0.1.478](https://github.com/fohte/armyknife/compare/v0.1.477...v0.1.478) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** wait indefinitely and clean up ([#1295](https://github.com/fohte/armyknife/issues/1295)) ([b7c3e87](https://github.com/fohte/armyknife/commit/b7c3e87e0233d71c8c542ae61572cebb5340ada3))
+
+## [0.1.477](https://github.com/fohte/armyknife/compare/v0.1.476...v0.1.477) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/status-inference:** accept extra fields ([#1298](https://github.com/fohte/armyknife/issues/1298)) ([6fd42cf](https://github.com/fohte/armyknife/commit/6fd42cf76be30ef66bccba4eeca98c6a05d83ded))
+
+## [0.1.476](https://github.com/fohte/armyknife/compare/v0.1.475...v0.1.476) (2026-10-28)
+
+
+### Bug Fixes
+
+* **config:** validate settings at use time ([#1296](https://github.com/fohte/armyknife/issues/1296)) ([1297bda](https://github.com/fohte/armyknife/commit/1297bda30809d3595818eafdd95c887e9de25a81))
+
+## [0.1.475](https://github.com/fohte/armyknife/compare/v0.1.474...v0.1.475) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue work after record failures ([#1293](https://github.com/fohte/armyknife/issues/1293)) ([e830de5](https://github.com/fohte/armyknife/commit/e830de5b463592a985047bf707d0454043249fe1))
+
+## [0.1.474](https://github.com/fohte/armyknife/compare/v0.1.473...v0.1.474) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue after rejected thread reads ([#1291](https://github.com/fohte/armyknife/issues/1291)) ([7869285](https://github.com/fohte/armyknife/commit/7869285a5c09d65411b5190bd891dbfb5c70dbc2))
+* **agent:** continue sweep after auto-pause errors ([#1290](https://github.com/fohte/armyknife/issues/1290)) ([d595c8c](https://github.com/fohte/armyknife/commit/d595c8c64c42467ab0cb278cc68d32229e101937))
+
+## [0.1.473](https://github.com/fohte/armyknife/compare/v0.1.472...v0.1.473) (2026-10-27)
+
+
+### Features
+
+* **config:** support standalone fork metadata ([#1288](https://github.com/fohte/armyknife/issues/1288)) ([83ca893](https://github.com/fohte/armyknife/commit/83ca893e4200cee675ebd4d9ca856e5e5e3fcac1))
+
+## [0.1.472](https://github.com/fohte/armyknife/compare/v0.1.471...v0.1.472) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** use session IDs for commit trailers ([#1285](https://github.com/fohte/armyknife/issues/1285)) ([04bc3bc](https://github.com/fohte/armyknife/commit/04bc3bced0560475de9590d7791410106bf4a985))
+
+## [0.1.471](https://github.com/fohte/armyknife/compare/v0.1.470...v0.1.471) (2026-10-27)
+
+
+### Features
+
+* **agent:** store model and effort from hooks ([#1283](https://github.com/fohte/armyknife/issues/1283)) ([aac8ca0](https://github.com/fohte/armyknife/commit/aac8ca0e049d1d0c2439d49b01bc7d3388973fb5))
+
 ## [0.1.470](https://github.com/fohte/armyknife/compare/v0.1.469...v0.1.470) (2026-10-27)
 
 
