@@ -130,7 +130,7 @@ pub struct TestSetup<'a> {
     pub remote_labels: Vec<&'a str>,
     pub remote_comments: Vec<RemoteComment<'a>>,
     pub remote_comments_updated_at: &'a str,
-    pub comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
+    pub comments_after_initial_fetch: Option<(Vec<RemoteComment<'a>>, &'a str)>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
     pub local_body: &'a str,
@@ -152,7 +152,7 @@ impl<'a> TestSetup<'a> {
             remote_labels: vec!["bug"],
             remote_comments: vec![],
             remote_comments_updated_at: "2024-01-01T12:00:00Z",
-            comments_after_initial_fetch: vec![],
+            comments_after_initial_fetch: None,
             local_title: "Title",
             local_body: "Body",
             local_labels: vec!["bug"],
@@ -170,7 +170,7 @@ impl<'a> TestSetup<'a> {
         remote_labels: Vec<&'a str>,
         remote_comments: Vec<RemoteComment<'a>>,
         remote_comments_updated_at: &'a str,
-        comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
+        comments_after_initial_fetch: Option<(Vec<RemoteComment<'a>>, &'a str)>,
         local_title: &'a str,
         local_body: &'a str,
         local_labels: Vec<&'a str>,
@@ -197,19 +197,22 @@ impl<'a> TestSetup<'a> {
         issue_builder.get().await;
 
         // Set up remote comments mock
-        let has_comments_after_initial_fetch = !self.comments_after_initial_fetch.is_empty();
-        ctx.graphql_comments_with_options(
-            &self.remote_comments,
-            self.remote_comments_updated_at,
-            has_comments_after_initial_fetch.then_some(1),
-        )
-        .await;
-        let snapshot_count = self.comments_after_initial_fetch.len();
-        for (index, (comments, updated_at)) in self.comments_after_initial_fetch.iter().enumerate()
-        {
-            let max_matches = (index + 1 < snapshot_count).then_some(1);
-            ctx.graphql_comments_with_options(comments, updated_at, max_matches)
+        if let Some((comments, updated_at)) = self.comments_after_initial_fetch {
+            ctx.graphql_comments_with_options(
+                &self.remote_comments,
+                self.remote_comments_updated_at,
+                Some(1),
+            )
+            .await;
+            ctx.graphql_comments_with_options(&comments, updated_at, None)
                 .await;
+        } else {
+            ctx.graphql_comments_with_options(
+                &self.remote_comments,
+                self.remote_comments_updated_at,
+                None,
+            )
+            .await;
         }
 
         // Set up remote sub-issues mock (empty by default)

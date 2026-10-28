@@ -10,7 +10,7 @@ use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
 use crate::infra::github::{GitHubMockServer, RemoteComment};
 use indoc::formatdoc;
-use rstest::rstest;
+use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 fn make_args(dry_run: bool, force: bool, edit_others: bool) -> PushArgs {
@@ -491,10 +491,10 @@ async fn test_refreshes_own_comment_after_push(test_dir: TempDir) {
         .remote_comments(vec![make_remote_comment(
             "testuser", "IC_abc", 12345, "Original",
         )])
-        .comments_after_initial_fetch(vec![(
+        .comments_after_initial_fetch(Some((
             vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
             "2024-01-02T12:00:00Z",
-        )])
+        )))
         .build()
         .await;
     setup_local_comment(
@@ -553,25 +553,10 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
             "testuser", "IC_abc", 12345, "Original",
         )])
         .remote_comments_updated_at("2024-01-01T12:00:00Z")
-        .comments_after_initial_fetch(vec![
-            (
-                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
-                "2024-01-02T12:00:00Z",
-            ),
-            (
-                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
-                "2024-01-02T12:00:00Z",
-            ),
-            (
-                vec![make_remote_comment(
-                    "testuser",
-                    "IC_abc",
-                    12345,
-                    "Updated again",
-                )],
-                "2024-01-03T12:00:00Z",
-            ),
-        ])
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+            "2024-01-02T12:00:00Z",
+        )))
         .build()
         .await;
     setup_local_comment(
@@ -602,19 +587,10 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
     .await
     .map_err(|error| error.to_string());
     let comment_after_first_push = std::fs::read_to_string(&comment_path).unwrap();
-    let mut refreshed_comments = storage.read_comments().unwrap();
-    let refreshed_comment = refreshed_comments.remove(0);
     setup_local_comment(
         test_dir.path(),
         "001_comment_12345.md",
-        &create_comment_file_with_updated_at(
-            refreshed_comment.metadata.author.as_deref().unwrap(),
-            refreshed_comment.metadata.created_at.as_deref().unwrap(),
-            refreshed_comment.metadata.updated_at.as_deref().unwrap(),
-            refreshed_comment.metadata.id.as_deref().unwrap(),
-            refreshed_comment.metadata.database_id.unwrap() as u64,
-            "Updated again",
-        ),
+        &comment_after_first_push.replacen("Updated", "Updated again", 1),
     );
     approve_file(&comment_path);
     approve_file(&test_dir.path().join("issue.md"));
@@ -627,38 +603,13 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
     )
     .await
     .map_err(|error| error.to_string());
-    let comment_after_second_push = std::fs::read_to_string(comment_path).unwrap();
     let comment_requests = comment_write_requests(&mock).await;
 
     assert_eq!(
-        (
-            first_result,
-            comment_after_first_push,
-            second_result,
-            comment_after_second_push,
-            comment_requests,
-        ),
+        (first_result, second_result, comment_requests),
         (
             Ok(()),
-            formatdoc! {"
-                <!-- author: testuser -->
-                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
-                <!-- id: IC_abc -->
-                <!-- databaseId: 12345 -->
-
-                Updated
-            "},
             Ok(()),
-            formatdoc! {"
-                <!-- author: testuser -->
-                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-                <!-- updatedAt: 2024-01-03T12:00:00+00:00 -->
-                <!-- id: IC_abc -->
-                <!-- databaseId: 12345 -->
-
-                Updated again
-            "},
             vec![
                 (
                     "PATCH".to_string(),
@@ -673,11 +624,10 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
     );
 }
 
-#[rstest]
-#[tokio::test]
-async fn test_creates_new_comment(test_dir: TempDir) {
+#[fixture]
+async fn new_comment_setup(test_dir: TempDir) -> (TempDir, GitHubMockServer, IssueStorage) {
     let (mock, storage) = TestSetup::new(test_dir.path())
-        .comments_after_initial_fetch(vec![(
+        .comments_after_initial_fetch(Some((
             vec![make_remote_comment(
                 "testuser",
                 "IC_new_comment",
@@ -685,7 +635,7 @@ async fn test_creates_new_comment(test_dir: TempDir) {
                 "New comment",
             )],
             "2024-01-02T12:00:00Z",
-        )])
+        )))
         .build()
         .await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
@@ -693,7 +643,15 @@ async fn test_creates_new_comment(test_dir: TempDir) {
     let ctx = mock.repo("owner", "repo");
     ctx.issue(123).create_comment().await;
     ctx.issue(123).get().await;
+    (test_dir, mock, storage)
+}
 
+#[rstest]
+#[tokio::test]
+async fn test_creates_new_comment(
+    #[future] new_comment_setup: (TempDir, GitHubMockServer, IssueStorage),
+) {
+    let (test_dir, mock, storage) = new_comment_setup.await;
     let client = mock.client();
     let result = run_with_client_and_storage(
         &make_args(false, false, false),
@@ -703,9 +661,46 @@ async fn test_creates_new_comment(test_dir: TempDir) {
     )
     .await;
     let new_comment_path = test_dir.path().join("comments/001_comment_99999.md");
-    let comment_after_first_push = std::fs::read_to_string(&new_comment_path).ok();
-    let first_result = result.map_err(|error| error.to_string());
+    let comment_after_push = std::fs::read_to_string(new_comment_path).unwrap();
 
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            test_dir.path().join("comments/new_my_comment.md").exists(),
+            comment_after_push,
+        ),
+        (
+            Ok(()),
+            false,
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_new_comment -->
+                <!-- databaseId: 99999 -->
+
+                New comment
+            "
+            },
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_does_not_delete_created_comment_on_second_push(
+    #[future] new_comment_setup: (TempDir, GitHubMockServer, IssueStorage),
+) {
+    let (_test_dir, mock, storage) = new_comment_setup.await;
+    let client = mock.client();
+    let first_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
     let second_result = run_with_client_and_storage(
         &make_args(false, false, false),
         &client,
@@ -714,40 +709,13 @@ async fn test_creates_new_comment(test_dir: TempDir) {
     )
     .await
     .map_err(|error| error.to_string());
-    let comment_after_second_push = std::fs::read_to_string(new_comment_path).ok();
     let comment_requests = comment_write_requests(&mock).await;
 
     assert_eq!(
-        (
-            first_result,
-            test_dir.path().join("comments/new_my_comment.md").exists(),
-            comment_after_first_push,
-            second_result,
-            comment_after_second_push,
-            comment_requests,
-        ),
+        (first_result, second_result, comment_requests),
         (
             Ok(()),
-            false,
-            Some(formatdoc! {"
-                <!-- author: testuser -->
-                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
-                <!-- id: IC_new_comment -->
-                <!-- databaseId: 99999 -->
-
-                New comment
-            "}),
             Ok(()),
-            Some(formatdoc! {"
-                <!-- author: testuser -->
-                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
-                <!-- id: IC_new_comment -->
-                <!-- databaseId: 99999 -->
-
-                New comment
-            "}),
             vec![(
                 "POST".to_string(),
                 Some(serde_json::json!({"body": "New comment"})),
