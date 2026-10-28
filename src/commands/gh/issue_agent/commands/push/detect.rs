@@ -13,6 +13,34 @@ use super::changeset::{
 };
 use super::field_comparison::IssueFieldComparisons;
 
+type BaseCommentMap<'a> = HashMap<&'a str, &'a CommentSnapshot>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum CommentBodyComparison {
+    Unchanged,
+    LocalOnly,
+    RemoteOnly,
+    Converged,
+    Divergent,
+}
+
+fn index_base_comments(base_comments: Option<&[CommentSnapshot]>) -> Option<BaseCommentMap<'_>> {
+    base_comments.map(|comments| comments.iter().map(|c| (c.id.as_str(), c)).collect())
+}
+
+fn compare_comment_bodies(local: &str, base: &str, remote: &str) -> CommentBodyComparison {
+    let local_changed = !comment_bodies_equal(local, base);
+    let remote_changed = !comment_bodies_equal(remote, base);
+
+    match (local_changed, remote_changed) {
+        (false, false) => CommentBodyComparison::Unchanged,
+        (true, false) => CommentBodyComparison::LocalOnly,
+        (false, true) => CommentBodyComparison::RemoteOnly,
+        (true, true) if comment_bodies_equal(local, remote) => CommentBodyComparison::Converged,
+        (true, true) => CommentBodyComparison::Divergent,
+    }
+}
+
 pub(super) fn detect_body_change<'a>(
     local_body: &'a str,
     remote_issue: &'a Issue,
@@ -155,8 +183,7 @@ pub(super) fn detect_comment_changes<'a>(
 ) -> anyhow::Result<Vec<CommentChange<'a>>> {
     let remote_comments_map: HashMap<&str, &Comment> =
         remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
-    let base_comments_map: Option<HashMap<&str, &CommentSnapshot>> =
-        base_comments.map(|comments| comments.iter().map(|c| (c.id.as_str(), c)).collect());
+    let base_comments_map = index_base_comments(base_comments);
 
     // Build a set of local comment IDs (excluding new comments)
     let local_comment_ids: HashSet<&str> = local_comments
@@ -182,16 +209,23 @@ pub(super) fn detect_comment_changes<'a>(
             continue;
         };
 
-        let local_changed = if let Some(base_comments) = &base_comments_map {
+        let needs_update = if let Some(base_comments) = &base_comments_map {
             let Some(base_comment) = base_comments.get(comment_id.as_str()) else {
                 continue;
             };
-            !comment_bodies_equal(&local_comment.body, &base_comment.body)
+            matches!(
+                compare_comment_bodies(
+                    &local_comment.body,
+                    &base_comment.body,
+                    &remote_comment.body,
+                ),
+                CommentBodyComparison::LocalOnly | CommentBodyComparison::Divergent
+            )
         } else {
             !comment_bodies_equal(&local_comment.body, &remote_comment.body)
         };
 
-        if !local_changed || comment_bodies_equal(&local_comment.body, &remote_comment.body) {
+        if !needs_update {
             continue;
         }
 
@@ -421,9 +455,7 @@ pub(super) fn check_conflicts(
         .map(|c| (c.id.as_str(), c))
         .collect();
 
-    let base_comments_map: Option<HashMap<&str, &CommentSnapshot>> = input
-        .base_comments
-        .map(|comments| comments.iter().map(|c| (c.id.as_str(), c)).collect());
+    let base_comments_map = index_base_comments(input.base_comments);
 
     for local_comment in input.local_comments {
         // Skip new comments - they can't have conflicts
@@ -444,14 +476,15 @@ pub(super) fn check_conflicts(
             let Some(base_comment) = base_comments.get(comment_id.as_str()) else {
                 continue;
             };
-            let local_changed = !comment_bodies_equal(&local_comment.body, &base_comment.body);
-            let remote_changed = !comment_bodies_equal(&remote_comment.body, &base_comment.body);
-            if local_changed
-                && remote_changed
-                && !comment_bodies_equal(&local_comment.body, &remote_comment.body)
+            if compare_comment_bodies(
+                &local_comment.body,
+                &base_comment.body,
+                &remote_comment.body,
+            ) == CommentBodyComparison::Divergent
             {
                 conflicts.push(Conflict::Comment {
                     database_id: remote_comment.database_id,
+                    // Snapshot bodies still detect conflicts when an older file lacks updatedAt.
                     local_timestamp: local_comment
                         .metadata
                         .updated_at
@@ -721,21 +754,17 @@ mod tests {
         }
 
         #[rstest]
-        #[case::remote_only("base", "remote", false)]
-        #[case::local_only("local", "base", false)]
-        #[case::both_sides_same("shared", "shared", false)]
-        #[case::crlf_baseline("first\nsecond", "remote", false)]
-        #[case::divergent("local", "remote", true)]
+        #[case::remote_only("base", "base", "remote", false)]
+        #[case::local_only("base", "local", "base", false)]
+        #[case::both_sides_same("base", "shared", "shared", false)]
+        #[case::crlf_baseline("first\r\nsecond", "first\nsecond", "remote", false)]
+        #[case::divergent("base", "local", "remote", true)]
         fn test_snapshot_conflict_requires_divergent_changes(
+            #[case] baseline_body: &str,
             #[case] local_body: &str,
             #[case] remote_body: &str,
             #[case] expected_conflict: bool,
         ) {
-            let baseline_body = if local_body == "first\nsecond" {
-                "first\r\nsecond"
-            } else {
-                "base"
-            };
             let metadata = metadata();
             let issue = factories::issue_with(|issue| {
                 issue.title = "Test".to_string();
@@ -766,6 +795,27 @@ mod tests {
             };
 
             assert_eq!(check_conflicts(&input, None), expected);
+        }
+
+        #[rstest]
+        fn test_comment_missing_from_snapshot_does_not_conflict() {
+            let metadata = metadata();
+            let issue = factories::issue_with(|issue| {
+                issue.title = "Test".to_string();
+                issue.body = Some("Issue body".to_string());
+            });
+            let local_comments = vec![local_comment("local")];
+            let remote_comments = vec![remote_comment("remote")];
+            let input = ConflictCheckInput {
+                local_metadata: &metadata,
+                local_body: "Issue body",
+                local_comments: &local_comments,
+                base_comments: Some(&[]),
+                remote_issue: &issue,
+                remote_comments: &remote_comments,
+            };
+
+            assert_eq!(check_conflicts(&input, None), Vec::new());
         }
     }
 
@@ -1171,6 +1221,24 @@ mod tests {
                 false,
             )
             .expect("converged edits do not need another push");
+
+            assert_eq!(changes, Vec::<CommentChange<'_>>::new());
+        }
+
+        #[rstest]
+        fn test_comment_missing_from_snapshot_is_not_detected() {
+            let local_comments = vec![make_local_comment("IC_123", 12345, "local", "bob")];
+            let remote_comments = vec![make_remote_comment("IC_123", 12345, "remote", "bob")];
+
+            let changes = detect_comment_changes(
+                &local_comments,
+                &remote_comments,
+                Some(&[]),
+                "alice",
+                false,
+                false,
+            )
+            .expect("comments absent from the snapshot are not synchronized");
 
             assert_eq!(changes, Vec::<CommentChange<'_>>::new());
         }

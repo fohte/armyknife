@@ -422,6 +422,64 @@ mod tests {
     use rstest::rstest;
     use tempfile::TempDir;
 
+    mod advance_comment_snapshot_tests {
+        use super::*;
+        use crate::commands::gh::issue_agent::testing::factories;
+
+        fn local_comment(id: &str, body: &str) -> LocalComment {
+            factories::local_comment_with(|comment| {
+                comment.filename = "001_comment_12345.md".to_string();
+                comment.body = body.to_string();
+                comment.metadata.id = Some(id.to_string());
+            })
+        }
+
+        fn remote_comment(id: &str, database_id: i64, body: &str) -> Comment {
+            factories::comment_with(|comment| {
+                comment.id = id.to_string();
+                comment.database_id = database_id;
+                comment.body = body.to_string();
+            })
+        }
+
+        #[rstest]
+        fn test_converged_comment_advances_snapshot() {
+            let base_comments = vec![CommentSnapshot {
+                id: "IC_123".to_string(),
+                body: "original".to_string(),
+            }];
+            let local_comments = vec![local_comment("IC_123", "shared")];
+            let remote_comments = vec![remote_comment("IC_123", 12345, "shared")];
+
+            assert_eq!(
+                advance_comment_snapshot(&base_comments, &local_comments, &remote_comments, &[],),
+                vec![CommentSnapshot {
+                    id: "IC_123".to_string(),
+                    body: "shared".to_string(),
+                }],
+            );
+        }
+
+        #[rstest]
+        fn test_deleted_comment_is_removed_from_snapshot() {
+            let base_comments = vec![CommentSnapshot {
+                id: "IC_123".to_string(),
+                body: "original".to_string(),
+            }];
+            let remote_comments = vec![remote_comment("IC_123", 12345, "original")];
+            let changes = vec![CommentChange::Deleted {
+                database_id: 12345,
+                body: "original",
+                author: "alice",
+            }];
+
+            assert_eq!(
+                advance_comment_snapshot(&base_comments, &[], &remote_comments, &changes),
+                Vec::<CommentSnapshot>::new(),
+            );
+        }
+    }
+
     mod parse_target_tests {
         use super::*;
 
