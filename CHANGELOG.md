@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.490](https://github.com/fohte/armyknife/compare/v0.1.489...v0.1.490) (2026-10-28)
+
+
+### Bug Fixes
+
+* **human-in-the-loop:** recover stale review locks ([#1327](https://github.com/fohte/armyknife/issues/1327)) ([9d8de2d](https://github.com/fohte/armyknife/commit/9d8de2d654dcb92424656209da7d74634cfba26e))
+
 ## [0.1.489](https://github.com/fohte/armyknife/compare/v0.1.488...v0.1.489) (2026-10-28)
 
 
