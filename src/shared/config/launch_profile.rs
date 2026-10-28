@@ -45,7 +45,7 @@ pub struct AgentProfileTypeConfig {
     /// Coding agent CLI configured for this type.
     pub engine: AgentProfileTypeEngine,
 
-    /// Model passed to the selected engine when set; `a agent new --type` requires a non-empty value or `--model`.
+    /// Model passed to the selected engine when set; `a agent new --type` rejects an empty configured value even if `--model` is given, while `--model` can supply a missing value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "schema-gen", schemars(length(min = 1)))]
     pub model: Option<String>,

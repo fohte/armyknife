@@ -53,12 +53,6 @@ pub(super) fn resolve_profile_type_launch_options(
         );
     }
 
-    if resolved.settings.engine == AgentProfileTypeEngine::Agy
-        && resolved.settings.reasoning_effort.is_some()
-    {
-        bail!("reasoning_effort is not supported for the agy engine");
-    }
-
     let profile_engine = match resolved.settings.engine {
         AgentProfileTypeEngine::Claude => Engine::Claude,
         AgentProfileTypeEngine::Codex => Engine::Codex,
@@ -290,7 +284,6 @@ mod tests {
     #[rstest]
     #[case::empty_model(&["a", "--type", "review"], AgentProfileTypeEngine::Codex, Some(""), None, "agent type `review` in profile `sample-profile` has an empty model; configure a non-empty model")]
     #[case::empty_model_with_cli_override(&["a", "--type", "review", "--model", "model-raven"], AgentProfileTypeEngine::Codex, Some(""), None, "agent type `review` in profile `sample-profile` has an empty model; configure a non-empty model")]
-    #[case::agy_reasoning_effort(&["a", "--type", "review"], AgentProfileTypeEngine::Agy, None, Some(ReasoningEffort::Low), "reasoning_effort is not supported for the agy engine")]
     fn rejects_invalid_profile_type_settings_at_use_time(
         #[case] argv: &[&str],
         #[case] engine: AgentProfileTypeEngine,
