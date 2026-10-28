@@ -161,11 +161,11 @@ pub fn run_review(args: &ReviewArgs) -> anyhow::Result<()> {
 pub fn run_review_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
     let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
-    let lock_id = args
-        .review_lock_id
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("Missing internal review lock identifier"))?;
-    let cleanup_guard = CleanupGuard::new(&args.filepath, lock_id, args.tmux_target.clone())?;
+    let cleanup_guard = CleanupGuard::from_launcher_args(
+        &args.filepath,
+        args.review_lock_id.as_deref(),
+        args.tmux_target.clone(),
+    )?;
 
     let config = load_config()?;
 

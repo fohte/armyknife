@@ -61,7 +61,7 @@ impl LockGuard {
     /// Check whether a live review holder exists for the given document.
     pub fn is_locked(document_path: &Path) -> bool {
         matches!(
-            inspect_lock(&Self::lock_path(document_path), is_process_alive),
+            inspect_lock(&Self::lock_path(document_path), is_process_alive, |_| ()),
             LockState::Active
         )
     }
@@ -169,7 +169,11 @@ fn write_staging_record(lock_path: &Path, record: &LockRecord) -> io::Result<Pat
     Ok(staging_path)
 }
 
-fn inspect_lock(path: &Path, mut is_alive: impl FnMut(u32) -> bool) -> LockState {
+fn inspect_lock<T>(
+    path: &Path,
+    mut is_alive: impl FnMut(u32) -> bool,
+    mut on_stale: impl FnMut(&File) -> T,
+) -> LockState<T> {
     for _ in 0..8 {
         let file = match open_existing_lock(path) {
             Ok(Some(file)) => file,
@@ -194,7 +198,7 @@ fn inspect_lock(path: &Path, mut is_alive: impl FnMut(u32) -> bool) -> LockState
         return if record.pids.iter().any(|pid| is_alive(*pid)) {
             LockState::Active
         } else {
-            LockState::Stale
+            LockState::Stale(on_stale(&file))
         };
     }
 
@@ -223,10 +227,10 @@ fn read_record(file: &File) -> io::Result<Option<LockRecord>> {
     Ok(LockRecord::parse(&contents))
 }
 
-enum LockState {
+enum LockState<T> {
     Missing,
     Active,
-    Stale,
+    Stale(T),
 }
 
 enum StaleRemoval {
@@ -236,36 +240,27 @@ enum StaleRemoval {
 }
 
 fn try_remove_stale_lock(path: &Path) -> StaleRemoval {
-    let file = match open_existing_lock(path) {
-        Ok(Some(file)) => file,
-        Ok(None) => return StaleRemoval::Replaced,
-        Err(_) => return StaleRemoval::Active,
-    };
-    let Ok(_file_lock) = AdvisoryLock::exclusive(&file) else {
-        return StaleRemoval::Active;
-    };
-    if !same_file_at_path(&file, path) {
-        return StaleRemoval::Active;
-    }
+    try_remove_stale_lock_with(path, is_process_alive)
+}
 
-    let record = match read_record(&file) {
-        Ok(Some(record)) => record,
-        Ok(None) | Err(_) => return StaleRemoval::Active,
-    };
-    if record.pids.iter().any(|pid| is_process_alive(*pid)) {
-        return StaleRemoval::Active;
-    }
-    if !same_file_at_path(&file, path) {
-        return StaleRemoval::Active;
-    }
-
-    match fs::remove_file(path) {
-        Ok(()) => {
-            sync_parent_dir(path);
-            StaleRemoval::Removed
+fn try_remove_stale_lock_with(path: &Path, is_alive: impl FnMut(u32) -> bool) -> StaleRemoval {
+    match inspect_lock(path, is_alive, |file| {
+        if !same_file_at_path(file, path) {
+            return StaleRemoval::Active;
         }
-        Err(error) if error.kind() == io::ErrorKind::NotFound => StaleRemoval::Replaced,
-        Err(_) => StaleRemoval::Active,
+
+        match fs::remove_file(path) {
+            Ok(()) => {
+                sync_parent_dir(path);
+                StaleRemoval::Removed
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => StaleRemoval::Replaced,
+            Err(_) => StaleRemoval::Active,
+        }
+    }) {
+        LockState::Missing => StaleRemoval::Replaced,
+        LockState::Active => StaleRemoval::Active,
+        LockState::Stale(removal) => removal,
     }
 }
 
@@ -427,6 +422,15 @@ impl CleanupGuard {
             tmux_target,
         })
     }
+
+    pub fn from_launcher_args(
+        document_path: &Path,
+        lock_id: Option<&str>,
+        tmux_target: Option<String>,
+    ) -> Result<Self> {
+        let lock_id = lock_id.ok_or(HumanInTheLoopError::MissingReviewLockId)?;
+        Self::new(document_path, lock_id, tmux_target)
+    }
 }
 
 impl Drop for CleanupGuard {
@@ -549,6 +553,19 @@ mod tests {
     }
 
     #[rstest]
+    fn stale_lock_removal_uses_injected_process_liveness(review_document: ReviewDocumentFixture) {
+        let lock_path = LockGuard::lock_path(&review_document.path);
+        write_record(&lock_path, "test-lock", &[202]);
+
+        let was_removed = matches!(
+            try_remove_stale_lock_with(&lock_path, |_| false),
+            StaleRemoval::Removed
+        );
+
+        assert_eq!((was_removed, lock_path.exists()), (true, false));
+    }
+
+    #[rstest]
     #[case::empty("")]
     #[case::legacy("legacy lock")]
     #[case::partial(indoc! {"
@@ -578,7 +595,7 @@ mod tests {
             pid == 202
         });
         let after_parent = LockRecord::parse(&fs::read(&lock_path).unwrap()).unwrap();
-        let locked_after_parent = inspect_lock(&lock_path, |pid| pid == 202);
+        let locked_after_parent = inspect_lock(&lock_path, |pid| pid == 202, |_| ());
         release_holder_with(&lock_path, parent_guard.lock_id(), 202, |_| false);
 
         assert_eq!(
@@ -636,6 +653,24 @@ mod tests {
         drop(parent_guard);
 
         assert_eq!((existed_before_cleanup, lock_path.exists()), (true, false));
+    }
+
+    #[rstest]
+    #[case::missing_id(None, "Missing internal review lock identifier")]
+    #[case::unregistered_id(
+        Some("unregistered-lock"),
+        "Review lock is no longer active; refusing to open the editor"
+    )]
+    fn cleanup_guard_rejects_invalid_launcher_lock_id(
+        review_document: ReviewDocumentFixture,
+        #[case] lock_id: Option<&str>,
+        #[case] expected_error: &str,
+    ) {
+        let actual = CleanupGuard::from_launcher_args(&review_document.path, lock_id, None)
+            .err()
+            .map(|error| error.to_string());
+
+        assert_eq!(actual, Some(expected_error.to_string()));
     }
 
     #[rstest]

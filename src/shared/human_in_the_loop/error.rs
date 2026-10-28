@@ -27,6 +27,9 @@ pub enum HumanInTheLoopError {
     #[error("Review lock is no longer active; refusing to open the editor")]
     ReviewLockLost,
 
+    #[error("Missing internal review lock identifier")]
+    MissingReviewLockId,
+
     #[error("Not approved. Run 'review' and set 'submit: true'")]
     NotApproved,
 
