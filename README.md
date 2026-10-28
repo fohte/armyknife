@@ -370,6 +370,12 @@ detection and body/title timestamp conflict checks. Directories without a
 comment snapshot keep legacy two-way comment detection and timestamp conflict
 checks until the next pull saves one.
 
+`pull` compares local issue fields and existing comments against their saved
+snapshots when available, so remote-only updates do not block refreshes.
+Directories without snapshots keep legacy comparisons against remote values.
+Local edits and deletions stop a pull unless `--force` is used. New `new_*.md`
+comment files are preserved without blocking pull.
+
 | Option           | Description                                                          |
 | ---------------- | -------------------------------------------------------------------- |
 | `-R <repo>`      | Target repository (default: current repo)                            |

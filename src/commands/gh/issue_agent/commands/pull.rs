@@ -1046,6 +1046,96 @@ mod tests {
         }
 
         #[rstest]
+        #[case::labels("labels")]
+        #[case::sub_issues("sub-issues")]
+        #[case::parent_issue("parent issue")]
+        fn test_issue_relationship_and_label_changes(test_dir: TempDir, #[case] field: &str) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let mut local_metadata = IssueMetadata {
+                number: 123,
+                title: "Test Issue".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
+            };
+            let changes = match field {
+                "labels" => {
+                    local_metadata.labels = vec!["bug".to_string()];
+                    LocalChanges {
+                        labels_changed: true,
+                        ..LocalChanges::default()
+                    }
+                }
+                "sub-issues" => {
+                    local_metadata.sub_issues = vec!["owner/repo#456".to_string()];
+                    LocalChanges {
+                        sub_issues_changed: true,
+                        ..LocalChanges::default()
+                    }
+                }
+                "parent issue" => {
+                    local_metadata.parent_issue = Some("owner/repo#789".to_string());
+                    LocalChanges {
+                        parent_issue_changed: true,
+                        ..LocalChanges::default()
+                    }
+                }
+                _ => unreachable!(),
+            };
+            storage.save_metadata(&local_metadata).unwrap();
+
+            let remote_issue = factories::issue_with(|issue| {
+                issue.labels = vec![];
+                issue.sub_issues = vec![];
+                issue.parent_issue = None;
+            });
+
+            let expected = match field {
+                "labels" => indoc! {"
+
+                    === Local changes detected ===
+
+                    === Labels ===
+                    - bug
+                    + (none)
+
+                "},
+                "sub-issues" => indoc! {"
+
+                    === Local changes detected ===
+
+                    === Sub-issues ===
+                    - owner/repo#456
+                    + (none)
+
+                "},
+                "parent issue" => indoc! {"
+
+                    === Local changes detected ===
+
+                    === Parent issue ===
+                    - owner/repo#789
+                    + (none)
+
+                "},
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                to_string(|writer| {
+                    write_local_changes(writer, &storage, &remote_issue, &[], &changes)
+                }),
+                expected
+            );
+        }
+
+        #[rstest]
         fn test_modified_comments(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
@@ -1088,6 +1178,45 @@ mod tests {
                     === Comment: 001_comment_12345.md ===
                     -Local comment
                     +Remote comment
+
+                "}
+            );
+        }
+
+        #[rstest]
+        fn test_modified_comment_removed_remotely(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: testuser -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Local comment
+                "},
+            )
+            .unwrap();
+
+            let changes = LocalChanges {
+                modified_comment_ids: vec!["IC_abc123".to_string()],
+                ..LocalChanges::default()
+            };
+
+            assert_eq!(
+                to_string(|writer| {
+                    write_local_changes(writer, &storage, &factories::issue(), &[], &changes)
+                }),
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Comment: 001_comment_12345.md ===
+                    Comment removed remotely:
+                    - Local comment
 
                 "}
             );

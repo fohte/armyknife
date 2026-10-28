@@ -3,7 +3,7 @@
 pub(crate) mod changeset;
 mod create;
 pub(crate) mod detect;
-pub(in crate::commands::gh::issue_agent) mod field_comparison;
+mod field_comparison;
 #[cfg(test)]
 mod integration_tests;
 mod links;

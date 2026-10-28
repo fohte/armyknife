@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use super::error::Result;
 use super::issue_storage::IssueStorage;
 use crate::commands::gh::issue_agent::body_compare::{bodies_equal, comment_bodies_equal};
-use crate::commands::gh::issue_agent::commands::push::field_comparison::compare_issue_fields;
+use crate::commands::gh::issue_agent::field_comparison::compare_issue_fields;
 use crate::commands::gh::issue_agent::models::{Comment, Issue};
 
 /// Local edits that would be overwritten by pulling remote data.
@@ -48,14 +48,15 @@ impl IssueStorage {
         remote_comments: &[Comment],
     ) -> Result<LocalChanges> {
         let mut changes = LocalChanges::default();
-        let base_issue = self.read_base_issue()?;
+        self.detect_issue_changes(remote_issue, &mut changes);
+        self.detect_comment_changes(remote_comments, &mut changes);
 
-        if let Some(base_issue) = base_issue {
+        Ok(changes)
+    }
+
+    fn detect_issue_changes(&self, remote_issue: &Issue, changes: &mut LocalChanges) {
+        if let Some(base_issue) = self.read_base_issue().ok().flatten() {
             let local_body = self.read_body().ok();
-            if let Some(local_body) = &local_body {
-                changes.body_changed = !bodies_equal(local_body, &base_issue.body);
-            }
-
             if let Ok(local_metadata) = self.read_metadata() {
                 let comparison_body = local_body.as_deref().unwrap_or(&base_issue.body);
                 let comparisons = compare_issue_fields(
@@ -69,6 +70,8 @@ impl IssueStorage {
                 changes.labels_changed = comparisons.labels.local_changed;
                 changes.sub_issues_changed = comparisons.sub_issues.local_changed;
                 changes.parent_issue_changed = comparisons.parent_issue.local_changed;
+            } else if let Some(local_body) = local_body {
+                changes.body_changed = !bodies_equal(&local_body, &base_issue.body);
             }
         } else {
             if let Ok(local_body) = self.read_body() {
@@ -80,66 +83,65 @@ impl IssueStorage {
                 changes.title_changed = local_metadata.title != remote_issue.title;
             }
         }
+    }
 
-        let base_comments = self.read_base_comments()?;
-        if let Ok(local_comments) = self.read_comments() {
-            let remote_comments_map: HashMap<&str, &Comment> =
-                remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+    fn detect_comment_changes(&self, remote_comments: &[Comment], changes: &mut LocalChanges) {
+        let Ok(local_comments) = self.read_comments() else {
+            return;
+        };
 
-            if let Some(base_comments) = base_comments {
-                let base_comments_map: HashMap<&str, _> = base_comments
-                    .iter()
-                    .map(|comment| (comment.id.as_str(), comment))
-                    .collect();
-                let local_comment_ids: HashSet<&str> = local_comments
-                    .iter()
-                    .filter_map(|comment| comment.metadata.id.as_deref())
-                    .collect();
+        changes.new_comment_files.extend(
+            local_comments
+                .iter()
+                .filter(|comment| comment.is_new())
+                .map(|comment| comment.filename.clone()),
+        );
 
-                for local_comment in &local_comments {
-                    if local_comment.is_new() {
-                        changes
-                            .new_comment_files
-                            .push(local_comment.filename.clone());
-                    } else if let Some(comment_id) = &local_comment.metadata.id {
-                        if let Some(base_comment) = base_comments_map.get(comment_id.as_str()) {
-                            if !comment_bodies_equal(&local_comment.body, &base_comment.body) {
-                                changes.modified_comment_ids.push(comment_id.clone());
-                            }
-                        } else if let Some(remote_comment) =
-                            remote_comments_map.get(comment_id.as_str())
-                        {
-                            if !comment_bodies_equal(&local_comment.body, &remote_comment.body) {
-                                changes.modified_comment_ids.push(comment_id.clone());
-                            }
-                        } else {
-                            changes.modified_comment_ids.push(comment_id.clone());
+        let remote_comments_map: HashMap<&str, &Comment> =
+            remote_comments.iter().map(|c| (c.id.as_str(), c)).collect();
+        if let Some(base_comments) = self.read_base_comments().ok().flatten() {
+            let base_comments_map: HashMap<&str, _> = base_comments
+                .iter()
+                .map(|comment| (comment.id.as_str(), comment))
+                .collect();
+            let local_comment_ids: HashSet<&str> = local_comments
+                .iter()
+                .filter(|comment| !comment.is_new())
+                .filter_map(|comment| comment.metadata.id.as_deref())
+                .collect();
+
+            for local_comment in local_comments.iter().filter(|comment| !comment.is_new()) {
+                if let Some(comment_id) = &local_comment.metadata.id {
+                    let base_comment = base_comments_map.get(comment_id.as_str());
+                    let remote_comment = remote_comments_map.get(comment_id.as_str());
+                    let changed = match (base_comment, remote_comment) {
+                        (Some(base), _) => !comment_bodies_equal(&local_comment.body, &base.body),
+                        (None, Some(remote)) => {
+                            !comment_bodies_equal(&local_comment.body, &remote.body)
                         }
-                    }
-                }
-
-                for base_comment in &base_comments {
-                    if !local_comment_ids.contains(base_comment.id.as_str()) {
-                        changes.deleted_comment_ids.push(base_comment.id.clone());
-                    }
-                }
-            } else {
-                for local_comment in &local_comments {
-                    if local_comment.is_new() {
-                        changes
-                            .new_comment_files
-                            .push(local_comment.filename.clone());
-                    } else if let Some(comment_id) = &local_comment.metadata.id
-                        && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
-                        && !comment_bodies_equal(&local_comment.body, &remote_comment.body)
-                    {
+                        (None, None) => true,
+                    };
+                    if changed {
                         changes.modified_comment_ids.push(comment_id.clone());
                     }
                 }
             }
-        }
 
-        Ok(changes)
+            for base_comment in &base_comments {
+                if !local_comment_ids.contains(base_comment.id.as_str()) {
+                    changes.deleted_comment_ids.push(base_comment.id.clone());
+                }
+            }
+        } else {
+            for local_comment in local_comments.iter().filter(|comment| !comment.is_new()) {
+                if let Some(comment_id) = &local_comment.metadata.id
+                    && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
+                    && !comment_bodies_equal(&local_comment.body, &remote_comment.body)
+                {
+                    changes.modified_comment_ids.push(comment_id.clone());
+                }
+            }
+        }
     }
 }
 
@@ -317,6 +319,34 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn test_corrupt_snapshots_fall_back_to_remote_comparison(
+        test_dir: TempDir,
+        test_issue: Issue,
+        test_comment: Comment,
+    ) {
+        let storage = IssueStorage::from_dir(test_dir.path());
+        storage
+            .save_issue(&IssueFrontmatter::from_issue(&test_issue), "Original body")
+            .unwrap();
+        storage
+            .save_comments(std::slice::from_ref(&test_comment))
+            .unwrap();
+        fs::write(test_dir.path().join(".issue.base.md"), "invalid snapshot").unwrap();
+        fs::write(
+            test_dir.path().join(".comments.base.json"),
+            "invalid snapshot",
+        )
+        .unwrap();
+
+        assert_eq!(
+            storage
+                .detect_changes(&test_issue, &[test_comment])
+                .unwrap(),
+            LocalChanges::default()
+        );
+    }
+
     /// Pull writes the raw remote body into issue.md, and `read_body` strips
     /// trailing newlines on read. Without normalization in detect_changes, a
     /// no-op pull whose remote body ends with `\n` or `\n\n` would always be
@@ -448,6 +478,37 @@ mod tests {
             storage
                 .detect_changes(&test_issue, &[remote_comment])
                 .unwrap(),
+            LocalChanges {
+                modified_comment_ids: vec!["IC_abc123".to_string()],
+                ..LocalChanges::default()
+            }
+        );
+    }
+
+    #[rstest]
+    fn test_detects_local_comment_missing_from_snapshot_and_remote(
+        test_dir: TempDir,
+        test_issue: Issue,
+    ) {
+        let storage = IssueStorage::from_dir(test_dir.path());
+        storage.save_base_comments(&[]).unwrap();
+        let comments_dir = test_dir.path().join("comments");
+        fs::create_dir_all(&comments_dir).unwrap();
+        fs::write(
+            comments_dir.join("001_comment_12345.md"),
+            indoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T00:00:00Z -->
+                <!-- id: IC_abc123 -->
+                <!-- databaseId: 12345 -->
+
+                Local comment
+            "},
+        )
+        .unwrap();
+
+        assert_eq!(
+            storage.detect_changes(&test_issue, &[]).unwrap(),
             LocalChanges {
                 modified_comment_ids: vec!["IC_abc123".to_string()],
                 ..LocalChanges::default()
