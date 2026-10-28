@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.482](https://github.com/fohte/armyknife/compare/v0.1.481...v0.1.482) (2026-10-28)
+
+
+### Features
+
+* **review:** show one review per agent pane ([#1277](https://github.com/fohte/armyknife/issues/1277)) ([b41613e](https://github.com/fohte/armyknife/commit/b41613eb8f79d918bdc37de8f52054eae3943bee))
+
 ## [0.1.481](https://github.com/fohte/armyknife/compare/v0.1.480...v0.1.481) (2026-10-28)
 
 
