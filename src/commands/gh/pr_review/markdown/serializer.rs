@@ -43,6 +43,13 @@ pub struct SerializeOutcome {
     pub parse_failed_threads: Vec<String>,
 }
 
+/// A re-pull regenerates thread content from GitHub, so local actions are passed separately.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PreservedThreadActions {
+    pub draft_reply: Option<String>,
+    pub resolve: bool,
+}
+
 impl MarkdownSerializer {
     /// Generate a Markdown string from PrData and frontmatter metadata.
     pub fn serialize(pr_data: &PrData, frontmatter: &ThreadsFrontmatter) -> String {
@@ -64,12 +71,33 @@ impl MarkdownSerializer {
         .text
     }
 
-    /// Full-form serializer used by `reply pull`. `existing_drafts` preserves
-    /// the user's in-progress reply text across re-pulls.
+    /// Keep draft-only callers from needing to model resolve actions.
     pub fn serialize_with_options(
         pr_data: &PrData,
         frontmatter: &ThreadsFrontmatter,
         existing_drafts: &HashMap<String, String>,
+        options: &SerializeOptions,
+    ) -> SerializeOutcome {
+        let existing_actions = existing_drafts
+            .iter()
+            .map(|(thread_id, draft_reply)| {
+                (
+                    thread_id.clone(),
+                    PreservedThreadActions {
+                        draft_reply: Some(draft_reply.clone()),
+                        resolve: false,
+                    },
+                )
+            })
+            .collect();
+        Self::serialize_with_actions(pr_data, frontmatter, &existing_actions, options)
+    }
+
+    /// Generate Markdown while preserving local actions by thread node ID.
+    pub fn serialize_with_actions(
+        pr_data: &PrData,
+        frontmatter: &ThreadsFrontmatter,
+        existing_actions: &HashMap<String, PreservedThreadActions>,
         options: &SerializeOptions,
     ) -> SerializeOutcome {
         let mut output = String::new();
@@ -92,7 +120,7 @@ impl MarkdownSerializer {
             output.push('\n');
             output.push_str(&serialize_thread(
                 thread,
-                existing_drafts,
+                existing_actions,
                 options,
                 &mut parse_failed_threads,
             ));
@@ -151,7 +179,7 @@ fn serialize_reviews_section(reviews: &[Review], options: &SerializeOptions) -> 
 
 fn serialize_thread(
     thread: &ReviewThread,
-    existing_drafts: &HashMap<String, String>,
+    existing_actions: &HashMap<String, PreservedThreadActions>,
     options: &SerializeOptions,
     parse_failed_threads: &mut Vec<String>,
 ) -> String {
@@ -182,7 +210,8 @@ fn serialize_thread(
     ));
 
     // Resolve checkbox
-    if thread.is_resolved {
+    let existing = existing_actions.get(node_id);
+    if thread.is_resolved || existing.is_some_and(|actions| actions.resolve) {
         output.push_str("- [x] resolve\n");
     } else {
         output.push_str("- [ ] resolve\n");
@@ -225,7 +254,7 @@ fn serialize_thread(
     }
 
     // Existing draft reply (preserved from previous pull)
-    if let Some(draft) = existing_drafts.get(node_id)
+    if let Some(draft) = existing.and_then(|actions| actions.draft_reply.as_ref())
         && !draft.trim().is_empty()
     {
         output.push_str(draft);
@@ -470,6 +499,53 @@ mod tests {
             My draft reply
         "#};
         assert_eq!(result, expected);
+    }
+
+    #[rstest]
+    fn test_serialize_with_actions_preserves_draft_and_resolve_tick() {
+        let pr_data = PrData {
+            reviews: vec![],
+            threads: vec![make_thread(
+                Some("RT_example"),
+                vec![Comment {
+                    path: Some("src/example.rs".to_string()),
+                    line: Some(9),
+                    ..make_comment(1, "reviewer", "Fix this")
+                }],
+                false,
+            )],
+        };
+        let actions = HashMap::from([(
+            "RT_example".to_string(),
+            PreservedThreadActions {
+                draft_reply: Some("Draft reply".to_string()),
+                resolve: true,
+            },
+        )]);
+
+        let result = MarkdownSerializer::serialize_with_actions(
+            &pr_data,
+            &default_frontmatter(),
+            &actions,
+            &SerializeOptions::default(),
+        );
+        let expected = indoc! {r#"
+            ---
+            pr: 42
+            repo: "fohte/armyknife"
+            pulled_at: "2024-01-15T10:00:00Z"
+            submit: false
+            ---
+
+            <!-- thread: RT_example path: src/example.rs:9 author: @reviewer -->
+            - [x] resolve
+            <!-- comment: @reviewer 2024-01-15T10:30:00Z -->
+            Fix this
+            <!-- /comment -->
+            Draft reply
+        "#};
+
+        assert_eq!(result.text, expected);
     }
 
     #[rstest]
