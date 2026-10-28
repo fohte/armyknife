@@ -119,7 +119,8 @@ Stop hook (parent process):
 | event                                        | meaning                                                                                                                         |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `agent.sweep.start`                          | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`)                                                              |
-| `agent.sweep.auto_pause_failed`              | The auto-pause pass failed; the sweep proceeds to the Codex status pass and attempts merged-session close if that pass succeeds |
+| `agent.sweep.auto_pause_failed`              | The auto-pause pass failed; the sweep continues to Codex status handling and merged-session close                               |
+| `agent.sweep.codex_status_failed`            | The Codex status pass failed; merged-session close continues, while the summary counters report zero Codex updates              |
 | `agent.sweep.sessions_read_failed`           | Session records could not be read; merged-session cleanup was skipped                                                           |
 | `agent.bg_run.registry_read_failed`          | The background-task registry could not be read; the session was treated as pending                                              |
 | `agent.sweep.github_client_unavailable`      | The GitHub client could not be initialized; merged-session cleanup was skipped                                                  |
