@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.476](https://github.com/fohte/armyknife/compare/v0.1.475...v0.1.476) (2026-10-28)
+
+
+### Bug Fixes
+
+* **config:** validate settings at use time ([#1296](https://github.com/fohte/armyknife/issues/1296)) ([1297bda](https://github.com/fohte/armyknife/commit/1297bda30809d3595818eafdd95c887e9de25a81))
+
 ## [0.1.475](https://github.com/fohte/armyknife/compare/v0.1.474...v0.1.475) (2026-10-28)
 
 
