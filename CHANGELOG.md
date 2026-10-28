@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.487](https://github.com/fohte/armyknife/compare/v0.1.486...v0.1.487) (2026-10-28)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** widen PR series diagram labels ([#1316](https://github.com/fohte/armyknife/issues/1316)) ([82c904f](https://github.com/fohte/armyknife/commit/82c904f2de74e26a4521c2f62ca76344c5811c69))
+
+## [0.1.486](https://github.com/fohte/armyknife/compare/v0.1.485...v0.1.486) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** skip repo check for comments ([#1315](https://github.com/fohte/armyknife/issues/1315)) ([759fbcd](https://github.com/fohte/armyknife/commit/759fbcdb0e4f09ea990fecee9a495e0fc6313bbb))
+
+## [0.1.485](https://github.com/fohte/armyknife/compare/v0.1.484...v0.1.485) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/close:** keep shared worktrees ([#1312](https://github.com/fohte/armyknife/issues/1312)) ([803349d](https://github.com/fohte/armyknife/commit/803349d249bdfd90a4762a24675d51da3ad5fd96))
+
+## [0.1.484](https://github.com/fohte/armyknife/compare/v0.1.483...v0.1.484) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** guard close for sessions without tmux ([#1311](https://github.com/fohte/armyknife/issues/1311)) ([94209e5](https://github.com/fohte/armyknife/commit/94209e51b15a2fe2f9f0099c7b0986643e862ae7))
+
 ## [0.1.483](https://github.com/fohte/armyknife/compare/v0.1.482...v0.1.483) (2026-10-28)
 
 
