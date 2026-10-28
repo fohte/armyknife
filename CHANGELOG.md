@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.491](https://github.com/fohte/armyknife/compare/v0.1.490...v0.1.491) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** update sessions after errors ([#1328](https://github.com/fohte/armyknife/issues/1328)) ([a180c5e](https://github.com/fohte/armyknife/commit/a180c5ecd8f631af17ed3fb55b794c00e20e3831))
+* **pr-review:** block re-pulls only on data loss ([#1323](https://github.com/fohte/armyknife/issues/1323)) ([1a962a1](https://github.com/fohte/armyknife/commit/1a962a1a62cac236cc231da77bb44f052b127bb8))
+
 ## [0.1.490](https://github.com/fohte/armyknife/compare/v0.1.489...v0.1.490) (2026-10-28)
 
 
