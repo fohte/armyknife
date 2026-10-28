@@ -137,11 +137,14 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             args.dry_run,
         )
     };
-    let (report, codex_updates, merged_closed) =
-        run_sweep_passes(pause_enabled, pause_pass, codex_status_pass, || {
-            merged_close::close_merged_sessions(args.dry_run)
-        })
-        .await?;
+    let (report, codex_updates, merged_closed) = run_sweep_passes(
+        pause_enabled,
+        pause_pass,
+        codex_status_pass,
+        || merged_close::close_merged_sessions(args.dry_run),
+        |warning| eprintln!("{warning}"),
+    )
+    .await?;
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -181,20 +184,34 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_sweep_passes<P, C, M, Fut>(
+async fn run_sweep_passes<P, C, M, Fut, W>(
     pause_enabled: bool,
     pause_pass: P,
     codex_status_pass: C,
     merged_close_pass: M,
+    on_pause_failure: W,
 ) -> Result<(SweepReport, codex_turn_status::CodexTurnUpdates, usize)>
 where
     P: FnOnce() -> Result<SweepReport>,
     C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
     M: FnOnce() -> Fut,
     Fut: Future<Output = usize>,
+    W: FnOnce(&str),
 {
     let report = if pause_enabled {
-        pause_pass()?
+        match pause_pass() {
+            Ok(report) => report,
+            Err(error) => {
+                let error_chain = format!("{error:#}");
+                tracing::warn!(
+                    event = "agent.sweep.auto_pause_failed",
+                    error = %error_chain,
+                );
+                let warning = format!("[armyknife] agent sweep: auto-pause failed: {error_chain}");
+                on_pause_failure(&warning);
+                SweepReport::default()
+            }
+        }
     } else {
         SweepReport::default()
     };
@@ -750,19 +767,43 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::auto_pause_disabled(false, false, 0, 0, None)]
+    #[case::auto_pause_failed(
+        true,
+        true,
+        1,
+        0,
+        Some(
+            "[armyknife] agent sweep: auto-pause failed: failed to parse auto-pause timeout: invalid duration"
+        )
+    )]
+    #[case::auto_pause_succeeded(true, false, 1, 1, None)]
     #[tokio::test]
-    async fn disabling_auto_pause_still_runs_codex_and_merged_passes() {
+    async fn run_sweep_passes_continues_after_auto_pause_result(
+        #[case] pause_enabled: bool,
+        #[case] pause_fails: bool,
+        #[case] expected_pause_calls: usize,
+        #[case] expected_scanned: usize,
+        #[case] expected_warning: Option<&str>,
+    ) {
         let pause_calls = Cell::new(0);
         let codex_status_calls = Cell::new(0);
         let close_calls = Cell::new(0);
+        let warning_output = RefCell::new(None::<String>);
         let result = run_sweep_passes(
-            false,
+            pause_enabled,
             || {
                 pause_calls.set(pause_calls.get() + 1);
-                Ok(SweepReport {
-                    scanned: 1,
-                    ..SweepReport::default()
-                })
+                if pause_fails {
+                    Err(anyhow::anyhow!("invalid duration")
+                        .context("failed to parse auto-pause timeout"))
+                } else {
+                    Ok(SweepReport {
+                        scanned: 1,
+                        ..SweepReport::default()
+                    })
+                }
             },
             || {
                 codex_status_calls.set(codex_status_calls.get() + 1);
@@ -775,6 +816,7 @@ mod tests {
                 close_calls.set(close_calls.get() + 1);
                 2
             },
+            |warning| *warning_output.borrow_mut() = Some(warning.to_string()),
         )
         .await
         .expect("sweep passes");
@@ -785,19 +827,24 @@ mod tests {
                 pause_calls.get(),
                 codex_status_calls.get(),
                 close_calls.get(),
+                warning_output.into_inner(),
             ),
             (
                 (
-                    SweepReport::default(),
+                    SweepReport {
+                        scanned: expected_scanned,
+                        ..SweepReport::default()
+                    },
                     codex_turn_status::CodexTurnUpdates {
                         failed: 3,
                         interrupted: 0,
                     },
                     2,
                 ),
-                0,
+                expected_pause_calls,
                 1,
                 1,
+                expected_warning.map(str::to_string),
             ),
         );
     }
