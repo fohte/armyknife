@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.481](https://github.com/fohte/armyknife/compare/v0.1.480...v0.1.481) (2026-10-28)
+
+
+### Features
+
+* **ai:** support automatic split-PR overview sync ([#1305](https://github.com/fohte/armyknife/issues/1305)) ([4d03ad5](https://github.com/fohte/armyknife/commit/4d03ad5a6928474265c798115fc9e34fe309253b))
+
 ## [0.1.480](https://github.com/fohte/armyknife/compare/v0.1.479...v0.1.480) (2026-10-28)
 
 
