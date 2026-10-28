@@ -144,7 +144,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         || merged_close::close_merged_sessions(args.dry_run),
         |warning| eprintln!("{warning}"),
     )
-    .await?;
+    .await;
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -190,7 +190,7 @@ async fn run_sweep_passes<P, C, M, Fut, W>(
     codex_status_pass: C,
     merged_close_pass: M,
     mut on_pass_failure: W,
-) -> Result<(SweepReport, codex_turn_status::CodexTurnUpdates, usize)>
+) -> (SweepReport, codex_turn_status::CodexTurnUpdates, usize)
 where
     P: FnOnce() -> Result<SweepReport>,
     C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
@@ -199,37 +199,45 @@ where
     W: FnMut(&str),
 {
     let report = if pause_enabled {
-        match pause_pass() {
-            Ok(report) => report,
-            Err(error) => {
-                let error_chain = format!("{error:#}");
-                tracing::warn!(
-                    event = "agent.sweep.auto_pause_failed",
-                    error = %error_chain,
-                );
-                let warning = format!("[armyknife] agent sweep: auto-pause failed: {error_chain}");
-                on_pass_failure(&warning);
-                SweepReport::default()
-            }
-        }
+        recover_sweep_pass(
+            pause_pass(),
+            "agent.sweep.auto_pause_failed",
+            "auto-pause failed",
+            &mut on_pass_failure,
+        )
     } else {
         SweepReport::default()
     };
-    let codex_updates = match codex_status_pass() {
-        Ok(updates) => updates,
+    let codex_updates = recover_sweep_pass(
+        codex_status_pass(),
+        "agent.sweep.codex_status_failed",
+        "Codex status failed",
+        &mut on_pass_failure,
+    );
+    let merged_closed = merged_close_pass().await;
+    (report, codex_updates, merged_closed)
+}
+
+fn recover_sweep_pass<T, W>(
+    result: Result<T>,
+    event: &'static str,
+    failure_label: &str,
+    on_pass_failure: &mut W,
+) -> T
+where
+    T: Default,
+    W: FnMut(&str),
+{
+    match result {
+        Ok(value) => value,
         Err(error) => {
             let error_chain = format!("{error:#}");
-            tracing::warn!(
-                event = "agent.sweep.codex_status_failed",
-                error = %error_chain,
-            );
-            let warning = format!("[armyknife] agent sweep: Codex status failed: {error_chain}");
+            tracing::warn!(event = event, error = %error_chain);
+            let warning = format!("[armyknife] agent sweep: {failure_label}: {error_chain}");
             on_pass_failure(&warning);
-            codex_turn_status::CodexTurnUpdates::default()
+            T::default()
         }
-    };
-    let merged_closed = merged_close_pass().await;
-    Ok((report, codex_updates, merged_closed))
+    }
 }
 
 /// Adds the "which pid hosts this session?" question on top of the shared
@@ -830,8 +838,7 @@ mod tests {
             },
             |warning| *warning_output.borrow_mut() = Some(warning.to_string()),
         )
-        .await
-        .expect("sweep passes");
+        .await;
 
         assert_eq!(
             (
@@ -891,7 +898,7 @@ mod tests {
             ));
             let mut context = Context::from_waker(Waker::noop());
             match std::future::Future::poll(passes.as_mut(), &mut context) {
-                Poll::Ready(result) => Some(result.map_err(|error| format!("{error:#}"))),
+                Poll::Ready(result) => Some(result),
                 Poll::Pending => None,
             }
         });
@@ -905,11 +912,11 @@ mod tests {
                 warning_output.into_inner(),
             ),
             (
-                Some(Ok((
+                Some((
                     SweepReport::default(),
                     codex_turn_status::CodexTurnUpdates::default(),
                     2,
-                ))),
+                )),
                 vec![serde_json::json!({
                     "event": "agent.sweep.codex_status_failed",
                     "error": "failed to read Codex sessions: session store unavailable",
