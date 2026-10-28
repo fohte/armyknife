@@ -680,12 +680,17 @@ mod tests {
                 app.selected_session_row_occurrence(),
                 app.progress_inline_expanded,
                 app.progress_session_id.as_deref(),
+                app.initial_progress_selection.clone(),
             ),
             (
                 Some("delegate"),
                 Some(0),
                 true,
                 Some("intermediate-delegate"),
+                Some(InitialProgressSelection::new(
+                    "intermediate-delegate".to_string(),
+                    "delegate".to_string(),
+                )),
             ),
         );
     }
