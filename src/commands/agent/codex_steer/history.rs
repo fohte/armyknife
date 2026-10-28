@@ -111,7 +111,6 @@ where
     Sleep: FnMut(Duration),
 {
     ensure!(!thread_id.is_empty(), "Codex thread ID is empty");
-    ensure!(!turn_id.is_empty(), "Codex turn ID is empty");
     ensure!(
         !last_assistant_message.trim().is_empty(),
         "Codex final assistant message is empty"
@@ -327,6 +326,12 @@ where
     Ok(())
 }
 
+pub(super) fn require_turn_id(turn_id: Option<&str>) -> Result<&str> {
+    turn_id
+        .filter(|turn_id| !turn_id.is_empty())
+        .context("Codex Stop snapshot has no turn_id")
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -336,7 +341,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
-    use super::{CodexThreadMetadata, HistoryTimeouts, read_complete_thread_with};
+    use super::{CodexThreadMetadata, HistoryTimeouts, read_complete_thread_with, require_turn_id};
 
     const THREAD_ID: &str = "fixture-thread";
     const TURN_ID: &str = "fixture-turn";
@@ -378,6 +383,20 @@ mod tests {
             fetch: Duration::from_secs(1),
             final_message_reflection: Duration::from_secs(1),
         }
+    }
+
+    #[rstest]
+    #[case::missing(None, Err("Codex Stop snapshot has no turn_id".to_string()))]
+    #[case::empty(Some(""), Err("Codex Stop snapshot has no turn_id".to_string()))]
+    #[case::valid(Some(TURN_ID), Ok(TURN_ID.to_string()))]
+    fn requires_non_empty_turn_id(
+        #[case] turn_id: Option<&str>,
+        #[case] expected: std::result::Result<String, String>,
+    ) {
+        let actual = require_turn_id(turn_id)
+            .map(ToOwned::to_owned)
+            .map_err(|error| format!("{error:#}"));
+        assert_eq!(actual, expected,);
     }
 
     #[rstest]
