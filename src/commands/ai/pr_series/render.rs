@@ -515,6 +515,82 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::submitted_section_wins(
+        (indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        (indoc! {"
+            Updated body
+
+            <!-- pr-series:start -->
+            Draft diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        Ok((indoc! {"
+            Updated body
+
+            <!-- pr-series:start -->
+            Draft diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n')),
+    )]
+    #[case::existing_without_section("Existing body", "Updated body", Ok("Updated body"))]
+    #[case::existing_section_is_carried_forward(
+        (indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        "Updated body",
+        Ok((indoc! {"
+            Updated body
+
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n')),
+    )]
+    #[case::existing_partial_marker(
+        (indoc! {"
+            Existing body
+            <!-- pr-series:start -->
+        "}).trim_end_matches('\n'),
+        "Updated body",
+        Err("PR series markers must occur exactly once"),
+    )]
+    #[case::submitted_partial_marker(
+        (indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        (indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+        "}).trim_end_matches('\n'),
+        Err("PR series markers must occur exactly once"),
+    )]
+    fn preserves_the_existing_managed_section(
+        #[case] existing_body: &str,
+        #[case] submitted_body: &str,
+        #[case] expected: std::result::Result<&str, &str>,
+    ) {
+        assert_eq!(
+            preserve_managed_section(existing_body, submitted_body)
+                .map_err(|error| error.to_string()),
+            expected.map(str::to_string).map_err(str::to_string),
+        );
+    }
+
+    #[rstest::rstest]
     #[case::partial("<!-- pr-series:start -->\nbody")]
     #[case::duplicate(indoc! {"
         <!-- pr-series:start -->
