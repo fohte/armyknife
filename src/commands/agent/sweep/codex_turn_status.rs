@@ -68,9 +68,18 @@ where
     let mut updates = CodexTurnUpdates::default();
 
     for listed_session in store::list_all_sessions_from(sessions_dir)? {
-        let Some(session) = store::load_session_from(sessions_dir, &listed_session.session_id)?
-        else {
-            continue;
+        let session = match store::load_session_from(sessions_dir, &listed_session.session_id) {
+            Ok(Some(session)) => session,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.sweep.codex_session_status_failed",
+                    session = %listed_session.session_id,
+                    operation = "load",
+                    error = %format!("{error:#}"),
+                );
+                continue;
+            }
         };
         if session.archived_at.is_some()
             || session.engine != Engine::Codex
@@ -111,7 +120,7 @@ where
         }
 
         let mut updated_session = None;
-        store::update_session_in(sessions_dir, &session.session_id, |current| {
+        if let Err(error) = store::update_session_in(sessions_dir, &session.session_id, |current| {
             if current.engine != Engine::Codex
                 || current.status != SessionStatus::Running
                 || current.updated_at != expected_updated_at
@@ -131,7 +140,15 @@ where
             current.updated_at = Utc::now();
             updated_session = Some(current.clone());
             true
-        })?;
+        }) {
+            tracing::warn!(
+                event = "agent.sweep.codex_session_status_failed",
+                session = %session.session_id,
+                operation = "update",
+                error = %format!("{error:#}"),
+            );
+            continue;
+        }
 
         if let Some(session) = updated_session {
             let event = if is_failed {
@@ -169,12 +186,15 @@ mod tests {
 
     use chrono::{DateTime, TimeDelta, Utc};
     use rstest::{fixture, rstest};
+    use rusqlite::Connection;
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
     use crate::commands::agent::store::save_session_to;
     use crate::commands::agent::tmux_sync::test_support::{RecordingTmuxStatusSyncer, SyncCall};
     use crate::commands::agent::types::{Session, TmuxInfo};
+    use crate::shared::testing::capture_json_events;
 
     #[fixture]
     fn sessions_dir() -> TempDir {
@@ -423,6 +443,132 @@ mod tests {
                     "fixture-error-session".to_string(),
                     "fixture-failed-session".to_string(),
                 ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::load_failure("load")]
+    #[case::update_failure("update")]
+    fn session_store_error_does_not_stop_other_sessions(
+        sessions_dir: TempDir,
+        #[case] operation: &str,
+    ) {
+        let failed_session_id = match operation {
+            "load" => "../fixture-load-error-session",
+            "update" => "fixture-update-error-session",
+            _ => unreachable!(),
+        };
+        let successful_session_id = "fixture-success-session";
+        let successful_session = session(
+            successful_session_id,
+            SessionStatus::Running,
+            Engine::Codex,
+            Utc::now(),
+        );
+        save_session_to(sessions_dir.path(), &successful_session).expect("save session");
+
+        let failed_session = session(
+            failed_session_id,
+            SessionStatus::Running,
+            Engine::Codex,
+            successful_session.updated_at + TimeDelta::days(1),
+        );
+        if operation == "load" {
+            let connection = Connection::open(sessions_dir.path().join("sessions.db"))
+                .expect("session database should open");
+            connection
+                .execute(
+                    "INSERT INTO sessions (session_id, data, rev) VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        failed_session_id,
+                        store::serialize_session(&failed_session).expect("serialize session"),
+                        0,
+                    ],
+                )
+                .expect("invalid-ID session should be listed");
+        } else {
+            save_session_to(sessions_dir.path(), &failed_session).expect("save session");
+            let connection = Connection::open(sessions_dir.path().join("sessions.db"))
+                .expect("session database should open");
+            connection
+                .execute_batch(
+                    "CREATE TRIGGER fail_fixture_session_update
+                     BEFORE UPDATE ON sessions
+                     WHEN OLD.session_id = 'fixture-update-error-session'
+                     BEGIN
+                         SELECT RAISE(ABORT, 'fixture update failed');
+                     END;",
+                )
+                .expect("update failure trigger should be created");
+        }
+
+        let expected_error = match operation {
+            "load" => {
+                let error = store::load_session_from(sessions_dir.path(), failed_session_id)
+                    .expect_err("invalid session ID should fail to load");
+                format!("{error:#}")
+            }
+            "update" => {
+                let error =
+                    store::update_session_in(sessions_dir.path(), failed_session_id, |_| true)
+                        .expect_err("trigger should fail the session update");
+                format!("{error:#}")
+            }
+            _ => unreachable!(),
+        };
+
+        let syncer = RecordingTmuxStatusSyncer::default();
+        let mut requested_threads = Vec::new();
+        let (updates, warning_events) = capture_json_events(tracing::Level::WARN, || {
+            mark_finished_codex_sessions_with_reader(
+                sessions_dir.path(),
+                &syncer,
+                false,
+                |thread_id| {
+                    requested_threads.push(thread_id.to_string());
+                    Ok(Some("failed".to_string()))
+                },
+            )
+        });
+
+        let expected_requested_threads = if operation == "load" {
+            vec![successful_session_id.to_string()]
+        } else {
+            vec![
+                failed_session_id.to_string(),
+                successful_session_id.to_string(),
+            ]
+        };
+        let actual = (
+            updates.expect("session-level errors must not fail sweep"),
+            load_session(sessions_dir.path(), successful_session_id).status,
+            requested_threads,
+            syncer.calls.borrow().clone(),
+            warning_events,
+        );
+        let expected_sync = vec![(
+            None,
+            Some(SessionStatus::Failed),
+            Some(successful_session_id.to_string()),
+            sessions_dir.path().to_path_buf(),
+        )];
+        assert_eq!(
+            actual,
+            (
+                CodexTurnUpdates {
+                    failed: 1,
+                    interrupted: 0,
+                },
+                SessionStatus::Failed,
+                expected_requested_threads,
+                expected_sync,
+                vec![json!({
+                    "event": "agent.sweep.codex_session_status_failed",
+                    "session": failed_session_id,
+                    "operation": operation,
+                    "error": expected_error,
+                })],
             ),
         );
     }
