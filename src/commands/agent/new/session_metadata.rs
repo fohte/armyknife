@@ -133,6 +133,8 @@ fn record_in(
         agent_status: None,
         agent_status_clear_pending: false,
         engine: Engine::Codex,
+        model: None,
+        effort: None,
     });
 
     if let Some(label) = metadata.label {
@@ -206,6 +208,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Codex,
+            model: None,
+            effort: None,
         }
     }
 

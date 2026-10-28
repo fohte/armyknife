@@ -1,15 +1,7 @@
-use std::path::Path;
-
 use anyhow::Result;
 
-use super::context::{self, unix_timestamp};
-
-pub(super) fn prepare(path: &Path, message: &str) -> Result<String> {
-    let context = context::claim(path, unix_timestamp()?)?;
-    let Some(trailer) = context.coauthor_trailer() else {
-        return Ok(message.to_owned());
-    };
-    add_coauthor_trailer(message, &trailer)
+pub(super) fn prepare_with_trailer(message: &str, trailer: &str) -> Result<String> {
+    add_coauthor_trailer(message, trailer)
 }
 
 fn add_coauthor_trailer(message: &str, trailer: &str) -> Result<String> {
@@ -121,171 +113,61 @@ fn is_legacy_attribution_trailer(line: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::Provider;
-    use super::prepare;
-    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
+    use super::prepare_with_trailer;
     use indoc::indoc;
-    use rstest::{fixture, rstest};
-    use tempfile::TempDir;
-
-    #[fixture]
-    fn context_dir() -> TempDir {
-        tempfile::tempdir().expect("create test context directory")
-    }
-
-    fn create_context(
-        directory: &TempDir,
-        provider: Provider,
-        model: ModelIdentity,
-        tool_use_id: &str,
-    ) -> std::path::PathBuf {
-        let context = OperationContext::new(provider, model, tool_use_id.to_owned())
-            .expect("create fixture operation context");
-        context::create(&context, directory.path()).expect("persist fixture operation context")
-    }
+    use rstest::rstest;
 
     #[rstest]
-    #[case::codex(
-        Provider::Codex,
-        "fixture-model-blue",
-        "Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>"
-    )]
-    #[case::claude_code(
-        Provider::ClaudeCode,
-        "fixture-claude-model-blue",
-        "Co-authored-by: Claude Code (fixture-claude-model-blue) <noreply@anthropic.com>"
-    )]
-    fn prepare_appends_provider_coauthor_and_cleans_legacy_trailers(
-        context_dir: TempDir,
-        #[case] provider: Provider,
-        #[case] model: &str,
-        #[case] trailer: &str,
-    ) {
-        let path = create_context(
-            &context_dir,
-            provider,
-            ModelIdentity::known(model.to_owned()).expect("valid model slug"),
-            "fixture-tool-use-blue",
-        );
+    #[case::codex("Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>")]
+    #[case::claude_code("Co-authored-by: Claude Code (fixture-model-blue) <noreply@anthropic.com>")]
+    fn prepare_appends_provider_coauthor_and_cleans_legacy_trailers(#[case] trailer: &str) {
         let message = indoc! {"
             Fixture subject
 
             Fixture body.
 
             Co-authored-by: Example Person <person@example.invalid>
-            Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
             AI-Tool: Legacy Tool
              Legacy continuation.
             AI-Model: fixture-model-green
             AI-Model-Reason: legacy fixture
             Signed-off-by: Example Maintainer <maintainer@example.invalid>
         "};
-        let mut expected = indoc! {"
-            Fixture subject
+        let expected = format!(
+            "{}{}\n",
+            indoc! {"
+                Fixture subject
 
-            Fixture body.
+                Fixture body.
 
-            Co-authored-by: Example Person <person@example.invalid>
-            Co-authored-by: Example Tool (fixture-model-green) <tool@example.invalid>
-            Signed-off-by: Example Maintainer <maintainer@example.invalid>
-        "}
-        .to_owned();
-        expected.push_str(trailer);
-        expected.push('\n');
+                Co-authored-by: Example Person <person@example.invalid>
+                Signed-off-by: Example Maintainer <maintainer@example.invalid>
+            "},
+            trailer,
+        );
 
         assert_eq!(
-            prepare(&path, message).expect("prepare attributed message"),
+            prepare_with_trailer(message, trailer).expect("prepare attributed message"),
             expected
         );
     }
 
     #[rstest]
-    #[case::codex(
-        Provider::Codex,
-        "fixture-model-blue",
-        "Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>"
-    )]
-    #[case::claude_code(
-        Provider::ClaudeCode,
-        "fixture-claude-model-blue",
-        "Co-authored-by: Claude Code (fixture-claude-model-blue) <noreply@anthropic.com>"
-    )]
-    fn existing_identical_coauthor_is_not_duplicated(
-        context_dir: TempDir,
-        #[case] provider: Provider,
-        #[case] model: &str,
-        #[case] trailer: &str,
-    ) {
-        let path = create_context(
-            &context_dir,
-            provider,
-            ModelIdentity::known(model.to_owned()).expect("valid model slug"),
-            "fixture-tool-use-existing-coauthor",
-        );
-        let mut message = indoc! {"
-            Fixture subject
+    #[case::codex("Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>")]
+    #[case::claude_code("Co-authored-by: Claude Code (fixture-model-blue) <noreply@anthropic.com>")]
+    fn existing_identical_coauthor_is_not_duplicated(#[case] trailer: &str) {
+        let message = format!(
+            indoc! {"
+                Fixture subject
 
-        "}
-        .to_owned();
-        message.push_str(trailer);
-        message.push('\n');
+                {}
+            "},
+            trailer,
+        );
 
         assert_eq!(
-            prepare(&path, &message).expect("prepare attributed message"),
+            prepare_with_trailer(&message, trailer).expect("prepare attributed message"),
             message
-        );
-    }
-
-    #[rstest]
-    fn legacy_unknown_context_does_not_add_a_trailer(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            Provider::Codex,
-            ModelIdentity::Unknown {
-                reason: "fixture model was unavailable".to_owned(),
-            },
-            "fixture-tool-use-unknown",
-        );
-        let message = indoc! {"
-            Fixture subject
-
-            Co-authored-by: Example Person <person@example.invalid>
-        "};
-
-        assert_eq!(
-            prepare(&path, message).expect("prepare message without model"),
-            message
-        );
-    }
-
-    #[rstest]
-    fn operation_context_can_be_claimed_for_only_one_commit(context_dir: TempDir) {
-        let path = create_context(
-            &context_dir,
-            Provider::Codex,
-            ModelIdentity::known("fixture-model-red".to_owned()).expect("valid model slug"),
-            "fixture-tool-use-red",
-        );
-        let first = prepare(&path, indoc! {"Fixture subject"}).map_err(|error| error.to_string());
-        let second = prepare(&path, indoc! {"Fixture subject"}).map_err(|error| {
-            error.to_string().replace(
-                path.to_str().expect("context path is UTF-8"),
-                "<context-file>",
-            )
-        });
-
-        assert_eq!(
-            (first, second),
-            (
-                Ok(indoc! {"
-                    Fixture subject
-
-                    Co-authored-by: Codex (fixture-model-red) <noreply@openai.com>
-                "}
-                .to_owned()),
-                Err("attribution context was already claimed or could not be claimed: <context-file>"
-                    .to_owned()),
-            ),
         );
     }
 }

@@ -40,6 +40,7 @@ mod status_inference;
 pub(crate) mod store;
 mod sweep;
 pub(crate) mod tmux_sync;
+mod transcript;
 mod tui;
 pub(crate) mod types;
 pub(crate) mod user_turn;

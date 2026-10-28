@@ -410,6 +410,12 @@ pub struct RepoConfig {
     #[cfg_attr(feature = "schema-gen", schemars(default))]
     pub direct_commit: bool,
 
+    /// Whether this fork is maintained independently without contributing upstream.
+    /// Consumed by external tools; armyknife only stores and exposes the value.
+    #[serde(default)]
+    #[cfg_attr(feature = "schema-gen", schemars(default))]
+    pub standalone_fork: bool,
+
     /// Whether vibe mode is allowed for this repository. When omitted, the org setting applies.
     #[serde(default)]
     pub vibe: Option<bool>,
@@ -1694,6 +1700,49 @@ mod tests {
 
         assert_eq!(config.repos.len(), 1);
         assert_eq!(config.repos[repo_id].direct_commit, expected);
+    }
+
+    #[rstest]
+    #[case::enabled(
+        "example-org/standalone-tool",
+        indoc! {"
+            repos:
+              example-org/standalone-tool:
+                standalone_fork: true
+        "},
+        true
+    )]
+    #[case::disabled(
+        "example-org/managed-fork",
+        indoc! {"
+            repos:
+              example-org/managed-fork:
+                standalone_fork: false
+        "},
+        false
+    )]
+    #[case::unset_defaults_to_false(
+        "example-org/unset-fork",
+        indoc! {"
+            repos:
+              example-org/unset-fork: {}
+        "},
+        false
+    )]
+    fn parse_repos_config_standalone_fork(
+        #[case] repo_id: &str,
+        #[case] yaml: &str,
+        #[case] expected: bool,
+    ) {
+        let config: Config = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            config.repos[repo_id],
+            RepoConfig {
+                standalone_fork: expected,
+                ..RepoConfig::default()
+            }
+        );
     }
 
     #[test]
