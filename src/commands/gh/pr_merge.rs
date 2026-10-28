@@ -1,4 +1,4 @@
-use std::{future::Future, io::Write, path::PathBuf, process::Output, time::Duration};
+use std::{future::Future, io::Write, path::PathBuf, process::Output};
 
 use anyhow::{Context, bail};
 use clap::Args;
@@ -8,7 +8,6 @@ use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
     github::PrState,
-    process,
 };
 use crate::shared::{
     config::{Config, load_config},
@@ -18,7 +17,7 @@ use crate::shared::{
     worktree::{LinkedWorktree, list_linked_worktrees},
 };
 
-const REQUIRED_CHECKS_TIMEOUT: Duration = Duration::from_secs(300);
+mod checks;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct PrMergeArgs {
@@ -131,15 +130,22 @@ fn run_merge(
         return Err(merge_error);
     }
 
-    let merged = client.view_pr(owner, repo, pr_number)?;
-    if merged.state != PrState::Merged {
-        bail!(
-            "The squash merge command succeeded, but PR #{pr_number} is not merged (state: {:?}).",
-            merged.state,
-        );
+    match client.view_pr(owner, repo, pr_number) {
+        Ok(merged) if merged.state == PrState::Merged => Ok(merged),
+        Ok(refreshed) => {
+            eprintln!(
+                "PR #{pr_number} was merged, but GitHub reports state {:?}; continuing with worktree close.",
+                refreshed.state,
+            );
+            Ok(refreshed)
+        }
+        Err(error) => {
+            eprintln!(
+                "PR #{pr_number} was merged, but its state could not be refreshed: {error:#}; continuing with worktree close."
+            );
+            Ok(current)
+        }
     }
-
-    Ok(merged)
 }
 
 async fn run_merge_and_close<C, F>(
@@ -348,44 +354,7 @@ impl PrMergeClient for GhCli {
         repo: &str,
         pr_number: u64,
     ) -> anyhow::Result<()> {
-        let repository = format!("{owner}/{repo}");
-        let args = [
-            "pr".to_string(),
-            "checks".to_string(),
-            pr_number.to_string(),
-            "--repo".to_string(),
-            repository,
-            "--required".to_string(),
-            "--watch".to_string(),
-            "--fail-fast".to_string(),
-        ];
-        let mut command = ExternalTool::Gh.command();
-        command.args(&args);
-        println!(
-            "Waiting for required checks (up to {} seconds)...",
-            REQUIRED_CHECKS_TIMEOUT.as_secs()
-        );
-        let output = match process::run_with_timeout(command, REQUIRED_CHECKS_TIMEOUT) {
-            Ok(output) => output,
-            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => {
-                bail!(
-                    "Timed out after {} seconds waiting for required checks.",
-                    REQUIRED_CHECKS_TIMEOUT.as_secs()
-                );
-            }
-            Err(error) => return Err(error).context("Failed to wait for required checks"),
-        };
-
-        let output_text = format!(
-            "{}\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        if required_checks_succeeded(output.status.success(), &output_text) {
-            return Ok(());
-        }
-
-        bail!("Required checks failed: {}", output_text.trim());
+        checks::wait_for_required_checks(owner, repo, pr_number)
     }
 
     fn squash_merge(
@@ -448,12 +417,6 @@ fn parse_pr_state(state: &str) -> anyhow::Result<PrState> {
         "MERGED" => Ok(PrState::Merged),
         _ => bail!("Unknown PR state returned by gh: {state}"),
     }
-}
-
-fn required_checks_succeeded(status_success: bool, output: &str) -> bool {
-    status_success
-        || output.contains("no required checks reported")
-        || output.contains("no checks reported on the")
 }
 
 #[cfg(test)]
@@ -606,6 +569,102 @@ mod tests {
                     merged_pr.head_repository.unwrap_or_default(),
                 ));
                 anyhow::bail!("fake close failed")
+            }
+        };
+
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
+
+        assert_eq!(
+            (result.is_ok(), events.borrow().clone()),
+            (
+                true,
+                vec![
+                    "view".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "close:topic/example-branch:sample-org/sample-repo".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::open(PrState::Open)]
+    #[case::closed(PrState::Closed)]
+    #[tokio::test]
+    async fn run_merge_and_close_continues_when_post_merge_state_is_not_merged(
+        #[case] post_merge_state: PrState,
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(post_merge_state, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+        let close = |merged_pr: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events.borrow_mut().push(format!(
+                    "close:{}:{}",
+                    merged_pr.head_ref_name,
+                    merged_pr.head_repository.unwrap_or_default(),
+                ));
+                Ok(())
+            }
+        };
+
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
+
+        assert_eq!(
+            (result.is_ok(), events.borrow().clone()),
+            (
+                true,
+                vec![
+                    "view".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "close:topic/example-branch:sample-org/sample-repo".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_and_close_continues_when_post_merge_state_cannot_be_refreshed(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+        let close = |merged_pr: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events.borrow_mut().push(format!(
+                    "close:{}:{}",
+                    merged_pr.head_ref_name,
+                    merged_pr.head_repository.unwrap_or_default(),
+                ));
+                Ok(())
             }
         };
 
@@ -849,19 +908,6 @@ mod tests {
             .map_err(|error| error.to_string()),
             expected.map_err(str::to_owned),
         );
-    }
-
-    #[rstest]
-    #[case::checks_succeeded(true, "", true)]
-    #[case::required_checks_absent(false, "no required checks reported", true)]
-    #[case::checks_absent(false, "no checks reported on the head commit", true)]
-    #[case::checks_failed(false, "Required checks are pending", false)]
-    fn required_checks_succeeded_cases(
-        #[case] status_success: bool,
-        #[case] output: &str,
-        #[case] expected: bool,
-    ) {
-        assert_eq!(required_checks_succeeded(status_success, output), expected);
     }
 
     #[rstest]
