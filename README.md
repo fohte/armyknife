@@ -370,13 +370,13 @@ detection and body/title timestamp conflict checks. Directories without a
 comment snapshot keep legacy two-way comment detection and timestamp conflict
 checks until the next pull saves one.
 
-| Option           | Description                                                          |
-| ---------------- | -------------------------------------------------------------------- |
-| `-R <repo>`      | Target repository (default: current repo)                            |
-| `--dry-run`      | Show what would be changed without applying                          |
-| `--force`        | Bypass conflict checks; applied local changes still require approval |
-| `--edit-others`  | Allow editing other users' comments                                  |
-| `--allow-delete` | Allow deleting comments removed locally                              |
+| Option           | Description                                                                                                   |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)                                                                     |
+| `--dry-run`      | Preview all changes without applying; live comment changes may still need `--edit-others` or `--allow-delete` |
+| `--force`        | Bypass conflict checks; applied local changes still require approval                                          |
+| `--edit-others`  | Allow editing other users' comments                                                                           |
+| `--allow-delete` | Allow deleting comments removed locally                                                                       |
 
 ##### `a gh issue-agent init issue`
 

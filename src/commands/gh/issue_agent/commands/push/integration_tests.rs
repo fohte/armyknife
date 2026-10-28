@@ -695,7 +695,7 @@ async fn test_dry_run_shows_other_users_comment_changes(
         "testuser",
     )
     .await;
-    assert!(result.is_ok());
+    assert_eq!(result.map_err(|error| error.to_string()), Ok(()));
 }
 
 #[rstest]
