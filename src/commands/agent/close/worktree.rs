@@ -75,20 +75,12 @@ async fn close_worktree_with<P, F>(
 where
     F: Future<Output = Result<()>>,
 {
-    child::ensure_target_sessions(context.sessions, context.child_parent_session_id)?;
-
-    if refuse_current_session {
-        ensure_not_closing_current_session(
-            context.sessions,
-            context.caller_session_id,
-            context.caller_pane_id,
-        )?;
-    }
-    for session in context.sessions {
-        if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
-            validate_session(session, context.args.force, context.caller_pane_id)?;
-        }
-    }
+    validate_worktree_sessions(
+        context.sessions,
+        &context,
+        refuse_current_session,
+        &mut validate_session,
+    )?;
     close_with_worktree_plan(
         prepare,
         || {
@@ -105,49 +97,72 @@ where
                 }
             }
             let refreshed_session_refs = refreshed_sessions.iter().collect::<Vec<&Session>>();
-            child::ensure_target_sessions(
+            validate_worktree_sessions(
                 &refreshed_session_refs,
-                context.child_parent_session_id,
+                &context,
+                refuse_current_session,
+                &mut validate_session,
             )?;
-            if refuse_current_session {
-                ensure_not_closing_current_session(
-                    &refreshed_session_refs,
-                    context.caller_session_id,
-                    context.caller_pane_id,
-                )?;
-            }
-            for session in &refreshed_sessions {
-                if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
-                    validate_session(session, context.args.force, context.caller_pane_id)?;
-                }
-            }
-
-            let mut closed_session_ids = Vec::new();
-            for session in &refreshed_sessions {
-                if !should_gracefully_close_worktree_session(session, context.caller_pane_id) {
-                    continue;
-                }
-                if let Err(error) =
-                    close_session(session, context.args.force, context.caller_pane_id)
-                {
-                    if closed_session_ids.is_empty() {
-                        return Err(error);
-                    }
-                    return Err(error).with_context(|| {
-                        format!(
-                            "Failed to close agent session `{}`; already closed sessions: {}",
-                            session.session_id,
-                            closed_session_ids.join(", ")
-                        )
-                    });
-                }
-                closed_session_ids.push(session.session_id.clone());
-            }
-            Ok(())
+            close_worktree_sessions(
+                &refreshed_sessions,
+                context.args.force,
+                context.caller_pane_id,
+                &mut close_session,
+            )
         },
         remove_worktree,
     )
     .await
+}
+
+fn validate_worktree_sessions(
+    sessions: &[&Session],
+    context: &WorktreeCloseContext<'_>,
+    refuse_current_session: bool,
+    validate_session: &mut impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
+) -> Result<()> {
+    child::ensure_target_sessions(sessions, context.child_parent_session_id)?;
+    if refuse_current_session {
+        ensure_not_closing_current_session(
+            sessions,
+            context.caller_session_id,
+            context.caller_pane_id,
+        )?;
+    }
+    for session in sessions {
+        if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
+            validate_session(session, context.args.force, context.caller_pane_id)?;
+        }
+    }
+    Ok(())
+}
+
+fn close_worktree_sessions(
+    sessions: &[Session],
+    force: bool,
+    current_pane_id: Option<&str>,
+    close_session: &mut impl FnMut(&Session, bool, Option<&str>) -> Result<()>,
+) -> Result<()> {
+    let mut closed_session_ids = Vec::new();
+    for session in sessions {
+        if !should_gracefully_close_worktree_session(session, current_pane_id) {
+            continue;
+        }
+        if let Err(error) = close_session(session, force, current_pane_id) {
+            if closed_session_ids.is_empty() {
+                return Err(error);
+            }
+            return Err(error).with_context(|| {
+                format!(
+                    "Failed to close agent session `{}`; already closed sessions: {}",
+                    session.session_id,
+                    closed_session_ids.join(", ")
+                )
+            });
+        }
+        closed_session_ids.push(session.session_id.clone());
+    }
+    Ok(())
 }
 
 fn ensure_not_closing_current_session(
@@ -688,6 +703,66 @@ mod tests {
                     "prepare".to_string(),
                     "load session-1".to_string(),
                     "remove worktree".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_aborts_when_a_session_disappears_after_confirmation() {
+        let target_session = session();
+        let sessions = [&target_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("validate session".to_string());
+                Ok(())
+            },
+            |session_id| {
+                calls.borrow_mut().push(format!("load {session_id}"));
+                Ok(None)
+            },
+            |_, _, _| {
+                calls.borrow_mut().push("close session".to_string());
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (
+                Err(
+                    "Could not reload agent session `session-1` after worktree confirmation"
+                        .to_string(),
+                ),
+                vec![
+                    "validate session".to_string(),
+                    "prepare".to_string(),
+                    "load session-1".to_string(),
                 ],
             ),
         );

@@ -236,7 +236,14 @@ struct SessionClosePlan<'a> {
     tmux_info: &'a TmuxInfo,
     agent_pid: Option<u32>,
     should_end_codex_session: bool,
-    draft_state_unavailable: bool,
+    draft_inspection: DraftInspection,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DraftInspection {
+    NotChecked,
+    NoDraft,
+    Unavailable,
 }
 
 fn prepare_close_session<'a, R: CloseRuntime>(
@@ -275,32 +282,32 @@ fn prepare_close_session<'a, R: CloseRuntime>(
         ensure_session_is_idle(session, effective_status)?;
     }
 
-    let (agent_pid, should_end_codex_session, draft_state_unavailable) = match runtime
+    let (agent_pid, should_end_codex_session, draft_inspection) = match runtime
         .resolve_agent_pid(tmux_info, session.engine)?
     {
         Some(pid) => {
-            let draft_state_unavailable = if force {
-                false
+            let draft_inspection = if force {
+                DraftInspection::NotChecked
             } else {
-                ensure_no_unsent_draft(runtime, tmux_info, session)?
+                check_draft_state(runtime, tmux_info, session)?
             };
-            (Some(pid), true, draft_state_unavailable)
+            (Some(pid), true, draft_inspection)
         }
-        None if force => (None, true, false),
+        None if force => (None, true, DraftInspection::NotChecked),
         None if !matches!(session.status, SessionStatus::Ended | SessionStatus::Paused) => {
             bail!(
                 "Could not find a running agent process for session `{}`; its pane was left open",
                 session.session_id
             );
         }
-        None => (None, true, false),
+        None => (None, true, DraftInspection::NotChecked),
     };
 
     Ok(Some(SessionClosePlan {
         tmux_info,
         agent_pid,
         should_end_codex_session,
-        draft_state_unavailable,
+        draft_inspection,
     }))
 }
 
@@ -321,7 +328,7 @@ fn close_session_with_warning_writer<R: CloseRuntime>(
     let tmux_info = plan.tmux_info;
     let pane_id = tmux_info.pane_id.as_str();
 
-    if plan.draft_state_unavailable
+    if plan.draft_inspection == DraftInspection::Unavailable
         && let Err(error) = write_draft_unavailable_warning(warning_writer, &session.session_id)
     {
         tracing::warn!(
@@ -422,13 +429,13 @@ fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) ->
     Ok(())
 }
 
-fn ensure_no_unsent_draft<R: CloseRuntime>(
+fn check_draft_state<R: CloseRuntime>(
     runtime: &R,
     tmux_info: &TmuxInfo,
     session: &Session,
-) -> Result<bool> {
+) -> Result<DraftInspection> {
     match runtime.has_draft(tmux_info, session.engine) {
-        Some(false) => Ok(false),
+        Some(false) => Ok(DraftInspection::NoDraft),
         Some(true) => bail!(
             "Agent session `{}` has an unsent draft; pass --force to close it",
             session.session_id
@@ -454,7 +461,7 @@ fn ensure_no_unsent_draft<R: CloseRuntime>(
                     session.session_id
                 );
             }
-            Ok(true)
+            Ok(DraftInspection::Unavailable)
         }
     }
 }
