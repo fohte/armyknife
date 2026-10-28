@@ -189,14 +189,14 @@ async fn run_sweep_passes<P, C, M, Fut, W>(
     pause_pass: P,
     codex_status_pass: C,
     merged_close_pass: M,
-    on_pause_failure: W,
+    mut on_pass_failure: W,
 ) -> Result<(SweepReport, codex_turn_status::CodexTurnUpdates, usize)>
 where
     P: FnOnce() -> Result<SweepReport>,
     C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
     M: FnOnce() -> Fut,
     Fut: Future<Output = usize>,
-    W: FnOnce(&str),
+    W: FnMut(&str),
 {
     let report = if pause_enabled {
         match pause_pass() {
@@ -208,14 +208,26 @@ where
                     error = %error_chain,
                 );
                 let warning = format!("[armyknife] agent sweep: auto-pause failed: {error_chain}");
-                on_pause_failure(&warning);
+                on_pass_failure(&warning);
                 SweepReport::default()
             }
         }
     } else {
         SweepReport::default()
     };
-    let codex_updates = codex_status_pass()?;
+    let codex_updates = match codex_status_pass() {
+        Ok(updates) => updates,
+        Err(error) => {
+            let error_chain = format!("{error:#}");
+            tracing::warn!(
+                event = "agent.sweep.codex_status_failed",
+                error = %error_chain,
+            );
+            let warning = format!("[armyknife] agent sweep: Codex status failed: {error_chain}");
+            on_pass_failure(&warning);
+            codex_turn_status::CodexTurnUpdates::default()
+        }
+    };
     let merged_closed = merged_close_pass().await;
     Ok((report, codex_updates, merged_closed))
 }
@@ -845,6 +857,66 @@ mod tests {
                 1,
                 1,
                 expected_warning.map(str::to_string),
+            ),
+        );
+    }
+
+    #[test]
+    fn run_sweep_passes_continues_after_codex_status_error() {
+        use std::cell::Cell;
+        use std::cell::RefCell;
+        use std::task::{Context, Poll, Waker};
+
+        use crate::shared::testing::capture_json_events;
+
+        let pause_calls = Cell::new(0);
+        let close_calls = Cell::new(0);
+        let warning_output = RefCell::new(Vec::<String>::new());
+        let (result, warning_events) = capture_json_events(tracing::Level::WARN, || {
+            let mut passes = Box::pin(run_sweep_passes(
+                false,
+                || {
+                    pause_calls.set(pause_calls.get() + 1);
+                    Ok(SweepReport::default())
+                },
+                || {
+                    Err(anyhow::anyhow!("session store unavailable")
+                        .context("failed to read Codex sessions"))
+                },
+                || async {
+                    close_calls.set(close_calls.get() + 1);
+                    2
+                },
+                |warning| warning_output.borrow_mut().push(warning.to_string()),
+            ));
+            let mut context = Context::from_waker(Waker::noop());
+            match std::future::Future::poll(passes.as_mut(), &mut context) {
+                Poll::Ready(result) => Some(result.map_err(|error| format!("{error:#}"))),
+                Poll::Pending => None,
+            }
+        });
+
+        assert_eq!(
+            (
+                result,
+                warning_events,
+                pause_calls.get(),
+                close_calls.get(),
+                warning_output.into_inner(),
+            ),
+            (
+                Some(Ok((
+                    SweepReport::default(),
+                    codex_turn_status::CodexTurnUpdates::default(),
+                    2,
+                ))),
+                vec![serde_json::json!({
+                    "event": "agent.sweep.codex_status_failed",
+                    "error": "failed to read Codex sessions: session store unavailable",
+                })],
+                0,
+                1,
+                vec!["[armyknife] agent sweep: Codex status failed: failed to read Codex sessions: session store unavailable".to_string()],
             ),
         );
     }
