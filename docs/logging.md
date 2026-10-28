@@ -148,7 +148,9 @@ Stop hook (parent process):
 | event                                         | meaning                                                 |
 | --------------------------------------------- | ------------------------------------------------------- |
 | `agent.crit.add.registered`                   | A review URL was associated with a session              |
+| `agent.crit.add.session_record_failed`        | Session review URL could not be recorded                |
 | `agent.crit.add.pane_sync_failed`             | The `@crit` pane option or layout hook could not update |
+| `agent.crit.add.review_display_failed`        | An unrecorded review could not be displayed             |
 | `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started              |
 | `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                |
 | `agent.crit.monitor.start`                    | The detached monitor began watching a daemon            |
