@@ -104,7 +104,7 @@ pub struct AgentConfig {
     #[serde(default)]
     pub active_profile: Option<String>,
 
-    /// Named profiles containing exact settings for each arbitrary launch type.
+    /// Named profiles containing execution settings for each arbitrary type.
     #[serde(default)]
     pub profiles: HashMap<String, HashMap<String, AgentProfileTypeConfig>>,
 
@@ -174,6 +174,17 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
+    pub(super) fn selected_profile_value(&self, path: Option<&str>) -> Option<serde_json::Value> {
+        let active_profile = self.active_profile.as_deref()?;
+        let profile = self.profiles.get(active_profile)?;
+        let value = serde_json::to_value(profile).ok()?;
+
+        match path {
+            Some(path) => super::resolve_json_path(&value, path),
+            None => Some(value),
+        }
+    }
+
     /// Return the prompt when status inference is configured and usable.
     pub fn configured_status_inference_prompt(&self) -> Option<&str> {
         if self.statuses.is_empty() {
@@ -214,8 +225,21 @@ impl AgentConfig {
 
     /// Return the Codex inference settings only when the complete opt-in config is valid.
     pub fn configured_codex_status_inference(&self) -> Option<&CodexStatusInferenceConfig> {
-        (self.codex_status_inference.enabled && self.validate().is_ok())
-            .then_some(&self.codex_status_inference)
+        if !self.codex_status_inference.enabled {
+            return None;
+        }
+
+        match self.validate() {
+            Ok(()) => Some(&self.codex_status_inference),
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.status_inference.config_invalid",
+                    error = %error,
+                    "Codex status inference is disabled because its configuration is invalid",
+                );
+                None
+            }
+        }
     }
 
     /// Look up the display configuration for a skill name.

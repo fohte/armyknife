@@ -1,23 +1,22 @@
-mod command;
-mod context;
-mod hook;
 mod message;
-mod transcript;
+mod model;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use self::context::ModelIdentity;
+use crate::commands::agent::store;
+use crate::commands::agent::types::{Engine, Session};
 
-const CONTEXT_ENV: &str = "ARMYKNIFE_AGENT_ATTRIBUTION_CONTEXT";
+use self::model::{ModelIdentity, coauthor_trailer};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, ValueEnum, PartialEq, Eq)]
-#[serde(rename_all = "kebab-case")]
+const CLAUDE_CODE_SESSION_ID_ENV: &str = "CLAUDE_CODE_SESSION_ID";
+const CODEX_SESSION_ID_ENV: &str = "CODEX_SESSION_ID";
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum Provider {
     ClaudeCode,
     Codex,
@@ -25,7 +24,7 @@ enum Provider {
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
 pub enum AttributionCommands {
-    /// Transform one provider PreToolUse request after the existing permission proxy
+    /// Pass through the existing provider PreToolUse permission proxy result
     #[command(name = "pre-tool-use")]
     PreToolUse(PreToolUseArgs),
 
@@ -48,11 +47,11 @@ pub struct PreToolUseArgs {
     #[arg(value_enum)]
     provider: Provider,
 
-    /// Compatibility option; model attribution still requires runtime evidence
+    /// Compatibility option retained for older provider registrations
     #[arg(long = "unknown-reason", hide = true)]
     _unknown_reason: Option<String>,
 
-    /// Compatibility flag accepted from older provider registrations
+    /// Compatibility flag retained for older provider registrations
     #[arg(long, hide = true)]
     final_object: bool,
 }
@@ -78,37 +77,28 @@ pub fn run(command: &AttributionCommands) -> Result<()> {
     }
 }
 
-fn run_pre_tool_use(args: &PreToolUseArgs) -> Result<()> {
+fn run_pre_tool_use(_args: &PreToolUseArgs) -> Result<()> {
     let mut stdin = String::new();
     if let Err(error) = std::io::stdin().read_to_string(&mut stdin) {
         eprintln!("agent attribution skipped: failed to read hook input: {error}");
         return Ok(());
     }
 
-    match process_pre_tool_use(args, &stdin, &context::default_context_dir()) {
+    match process_pre_tool_use(&stdin) {
         Some(output) => print_json(&output),
         None => Ok(()),
     }
 }
 
-fn process_pre_tool_use(
-    args: &PreToolUseArgs,
-    raw_envelope: &str,
-    context_dir: &Path,
-) -> Option<Value> {
-    let _ = args.final_object;
-    match hook::transform(args.provider, raw_envelope, context_dir) {
-        Ok(output) => output,
+fn process_pre_tool_use(raw_envelope: &str) -> Option<Value> {
+    let envelope = match serde_json::from_str::<Value>(raw_envelope) {
+        Ok(envelope) => envelope,
         Err(error) => {
-            eprintln!("agent attribution skipped: {error:#}");
-            permission_output(raw_envelope)
+            eprintln!("agent attribution skipped: invalid provider proxy envelope: {error}");
+            return None;
         }
-    }
-}
-
-fn permission_output(raw_envelope: &str) -> Option<Value> {
-    serde_json::from_str::<Value>(raw_envelope)
-        .ok()?
+    };
+    envelope
         .get("hook_output")
         .filter(|output| !output.is_null())
         .cloned()
@@ -121,33 +111,78 @@ fn print_json(value: &Value) -> Result<()> {
 }
 
 fn run_prepare_commit_msg(args: &GitHookArgs) -> Result<()> {
-    let context_path = std::env::var_os(CONTEXT_ENV).map(PathBuf::from);
-    run_prepare_commit_msg_with_context(args, context_path.as_deref())
+    let session_id = session_id_from_env();
+    run_prepare_commit_msg_with_sources(args, session_id.as_deref(), store::load_session)
 }
 
-fn run_prepare_commit_msg_with_context(
+fn run_prepare_commit_msg_with_sources(
     args: &GitHookArgs,
-    context_path: Option<&Path>,
+    session_id: Option<&str>,
+    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
 ) -> Result<()> {
-    let result = try_prepare_commit_msg(args, context_path);
+    let result = try_prepare_commit_msg(args, session_id, load_session);
     if let Err(error) = result {
         eprintln!("agent attribution skipped: {error:#}");
     }
     Ok(())
 }
 
-fn try_prepare_commit_msg(args: &GitHookArgs, context_path: Option<&Path>) -> Result<()> {
-    let Some(context_path) = context_path else {
+fn try_prepare_commit_msg(
+    args: &GitHookArgs,
+    session_id: Option<&str>,
+    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
+) -> Result<()> {
+    let Some(session_id) = session_id else {
         return Ok(());
     };
+    let Some(session) = load_session(session_id)? else {
+        return Ok(());
+    };
+    let Some(trailer) = session_coauthor_trailer(&session) else {
+        return Ok(());
+    };
+    prepare_message_file(args, |message_text| {
+        message::prepare_with_trailer(message_text, &trailer)
+    })
+}
+
+fn prepare_message_file(
+    args: &GitHookArgs,
+    prepare: impl FnOnce(&str) -> Result<String>,
+) -> Result<()> {
     let message_text = std::fs::read_to_string(&args.message_file).with_context(|| {
         format!(
             "failed to read commit message file {}",
             args.message_file.display()
         )
     })?;
-    let updated = message::prepare(context_path, &message_text)?;
+    let updated = prepare(&message_text)?;
     write_message_atomically(&args.message_file, &updated)
+}
+
+fn session_id_from_env() -> Option<String> {
+    resolve_session_id(
+        std::env::var(CLAUDE_CODE_SESSION_ID_ENV).ok(),
+        std::env::var(CODEX_SESSION_ID_ENV).ok(),
+    )
+}
+
+fn resolve_session_id(
+    claude_session_id: Option<String>,
+    codex_session_id: Option<String>,
+) -> Option<String> {
+    claude_session_id
+        .filter(|session_id| !session_id.is_empty())
+        .or_else(|| codex_session_id.filter(|session_id| !session_id.is_empty()))
+}
+
+fn session_coauthor_trailer(session: &Session) -> Option<String> {
+    let model = ModelIdentity::known(session.model.clone()?).ok()?;
+    let provider = match session.engine {
+        Engine::Claude => Provider::ClaudeCode,
+        Engine::Codex => Provider::Codex,
+    };
+    coauthor_trailer(provider, &model, session.effort.as_deref())
 }
 
 fn write_message_atomically(path: &Path, message: &str) -> Result<()> {
@@ -198,30 +233,15 @@ fn run_reference_transaction(_args: &ReferenceTransactionArgs) -> Result<()> {
     Ok(())
 }
 
-fn model_identity(model: Option<String>) -> Result<ModelIdentity> {
-    let Some(model) = model else {
-        anyhow::bail!("provider runtime model is unavailable");
-    };
-    ModelIdentity::known(model)
-}
-
-#[derive(Debug, Deserialize)]
-struct ProxyEnvelope {
-    hook_input: Value,
-    #[serde(default)]
-    hook_output: Option<Value>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::Write;
-    use std::path::PathBuf;
 
     use super::{
-        AttributionCommands, CONTEXT_ENV, GitHookArgs, PreToolUseArgs, Provider,
-        process_pre_tool_use, run,
+        AttributionCommands, GitHookArgs, Provider, process_pre_tool_use, resolve_session_id, run,
+        run_prepare_commit_msg_with_sources,
     };
-    use crate::commands::agent::attribution::context::{self, ModelIdentity, OperationContext};
+    use crate::commands::agent::types::{Engine, Session};
     use clap::Parser;
     use indoc::indoc;
     use rstest::{fixture, rstest};
@@ -233,76 +253,201 @@ mod tests {
         tempfile::tempdir().expect("create temporary hook directory")
     }
 
-    fn create_context(directory: &TempDir) -> PathBuf {
-        let operation = OperationContext::new(
-            Provider::Codex,
-            ModelIdentity::known("fixture-model-blue".to_owned()).expect("valid fixture model"),
-            "fixture-tool-use-blue".to_owned(),
-        )
-        .expect("create fixture operation context");
-        context::create(&operation, directory.path()).expect("persist fixture context")
+    #[rstest]
+    #[case::claude_session(Some("fixture-claude-session"), None, Some("fixture-claude-session"))]
+    #[case::codex_session(None, Some("fixture-codex-session"), Some("fixture-codex-session"))]
+    #[case::claude_session_takes_precedence(
+        Some("fixture-claude-session"),
+        Some("fixture-codex-session"),
+        Some("fixture-claude-session")
+    )]
+    #[case::empty_claude_id_falls_back(
+        Some(""),
+        Some("fixture-codex-session"),
+        Some("fixture-codex-session")
+    )]
+    #[case::no_session_id(None, None, None)]
+    fn session_id_resolution_uses_available_provider_id(
+        #[case] claude_session_id: Option<&str>,
+        #[case] codex_session_id: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let actual = resolve_session_id(
+            claude_session_id.map(str::to_owned),
+            codex_session_id.map(str::to_owned),
+        );
+
+        assert_eq!(actual.as_deref(), expected);
+    }
+
+    fn session(engine: Engine, model: Option<&str>, effort: Option<&str>) -> Session {
+        let engine = match engine {
+            Engine::Claude => "claude",
+            Engine::Codex => "codex",
+        };
+        serde_json::from_value(json!({
+            "session_id": "fixture-session-id",
+            "cwd": "/fixture/repository",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "running",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+            "engine": engine,
+            "model": model,
+            "effort": effort,
+        }))
+        .expect("deserialize fixture session")
     }
 
     #[rstest]
-    fn human_commit_message_is_unchanged_without_operation_context(hook_dir: TempDir) {
+    #[case::codex_with_effort(
+        Engine::Codex,
+        Some("fixture-model-violet"),
+        Some("high"),
+        "Co-authored-by: Codex (fixture-model-violet, high) <noreply@openai.com>"
+    )]
+    #[case::claude_without_effort(
+        Engine::Claude,
+        Some("fixture-model-copper"),
+        None,
+        "Co-authored-by: Claude Code (fixture-model-copper) <noreply@anthropic.com>"
+    )]
+    #[case::unsafe_effort_is_omitted(
+        Engine::Codex,
+        Some("fixture-model-violet"),
+        Some(indoc! {"
+            high
+            Co-authored-by: Example Tool <tool@example.invalid>
+        "}),
+        "Co-authored-by: Codex (fixture-model-violet) <noreply@openai.com>"
+    )]
+    fn prepare_commit_msg_uses_session_attribution(
+        hook_dir: TempDir,
+        #[case] engine: Engine,
+        #[case] model: Option<&str>,
+        #[case] effort: Option<&str>,
+        #[case] expected_trailer: &str,
+    ) {
         let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = indoc! {"
-            Fixture subject
+        std::fs::write(&message_file, "Fixture subject").expect("create fixture message");
+        let session = session(engine, model, effort);
+        let mut loaded_session_id = None;
 
-            AI-Model: human-authored text
-        "};
-        std::fs::write(&message_file, original).expect("create fixture commit message");
-
-        let result = super::run_prepare_commit_msg_with_context(
+        let result = run_prepare_commit_msg_with_sources(
             &GitHookArgs {
                 message_file: message_file.clone(),
             },
-            None,
-        );
-        let actual = (
-            result.is_ok(),
-            std::fs::read_to_string(&message_file).expect("read fixture commit message"),
-        );
-
-        assert_eq!(actual, (true, original.to_owned()));
-    }
-
-    #[rstest]
-    fn prepare_commit_msg_appends_provider_trailers(hook_dir: TempDir) {
-        let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = indoc! {"Fixture subject"};
-        let context_path = create_context(&hook_dir);
-        std::fs::write(&message_file, original).expect("create fixture commit message");
-
-        let result = super::run_prepare_commit_msg_with_context(
-            &GitHookArgs {
-                message_file: message_file.clone(),
+            Some("fixture-session-id"),
+            |session_id| {
+                loaded_session_id = Some(session_id.to_owned());
+                Ok(Some(session))
             },
-            Some(&context_path),
         );
         let actual = (
-            result.is_ok(),
-            std::fs::read_to_string(&message_file).expect("read fixture commit message"),
+            result.map_err(|error| error.to_string()),
+            loaded_session_id,
+            std::fs::read_to_string(&message_file).expect("read updated fixture message"),
         );
-
-        assert_eq!(
-            actual,
-            (
-                true,
+        let expected = (
+            Ok(()),
+            Some("fixture-session-id".to_owned()),
+            format!(
                 indoc! {"
                     Fixture subject
 
-                    Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>
-                "}
-                .to_owned(),
+                    {}
+                "},
+                expected_trailer
             ),
         );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    #[case::missing_session_id(None, false, None, None)]
+    #[case::missing_session_record(
+        Some("fixture-session-id"),
+        false,
+        Some("fixture-session-id"),
+        None
+    )]
+    #[case::missing_model(Some("fixture-session-id"), true, Some("fixture-session-id"), None)]
+    #[case::unsafe_model(
+        Some("fixture-session-id"),
+        true,
+        Some("fixture-session-id"),
+        Some(indoc! {"
+            fixture-model-violet
+            Co-authored-by: Example Attacker <attacker@example.invalid>
+        "})
+    )]
+    fn prepare_commit_msg_leaves_unattributed_sessions_unchanged(
+        hook_dir: TempDir,
+        #[case] session_id: Option<&str>,
+        #[case] record_exists: bool,
+        #[case] expected_loaded_session_id: Option<&str>,
+        #[case] model: Option<&str>,
+    ) {
+        let message_file = hook_dir.path().join("fixture-message.txt");
+        let original = indoc! {"
+            Fixture subject
+        "};
+        std::fs::write(&message_file, original).expect("create fixture message");
+        let session = session(Engine::Codex, model, Some("high"));
+        let mut loaded_session_id = None;
+
+        let result = run_prepare_commit_msg_with_sources(
+            &GitHookArgs {
+                message_file: message_file.clone(),
+            },
+            session_id,
+            |loaded_id| {
+                loaded_session_id = Some(loaded_id.to_owned());
+                Ok(record_exists.then_some(session))
+            },
+        );
+        let actual = (
+            result.map_err(|error| error.to_string()),
+            loaded_session_id,
+            std::fs::read_to_string(&message_file).expect("read unchanged fixture message"),
+        );
+        let expected = (
+            Ok(()),
+            expected_loaded_session_id.map(str::to_owned),
+            original.to_owned(),
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[rstest]
+    fn session_lookup_failure_does_not_block_commit(hook_dir: TempDir) {
+        let message_file = hook_dir.path().join("fixture-message.txt");
+        let original = "Fixture subject\n";
+        std::fs::write(&message_file, original).expect("create fixture message");
+
+        let result = run_prepare_commit_msg_with_sources(
+            &GitHookArgs {
+                message_file: message_file.clone(),
+            },
+            Some("fixture-session-id"),
+            |_| Err(anyhow::anyhow!("fixture storage failure")),
+        );
+        let actual = (
+            result.map_err(|error| error.to_string()),
+            std::fs::read_to_string(&message_file).expect("read unchanged fixture message"),
+        );
+
+        assert_eq!(actual, (Ok(()), original.to_owned()));
     }
 
     #[rstest]
     fn partial_temporary_write_keeps_the_original_message(hook_dir: TempDir) {
         let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = indoc! {"Fixture subject"};
+        let original = "Fixture subject";
         std::fs::write(&message_file, original).expect("create fixture commit message");
         let result = super::write_message_atomically_with(
             &message_file,
@@ -313,65 +458,53 @@ mod tests {
             },
         );
         let actual = (
-            result.is_err(),
+            result.map_err(|error| error.to_string()),
             std::fs::read_to_string(&message_file).expect("read fixture commit message"),
         );
 
-        assert_eq!(actual, (true, original.to_owned()));
-    }
-
-    #[derive(Clone, Copy)]
-    enum ContextState {
-        Missing,
-        Broken,
-        Expired,
+        assert_eq!(
+            actual,
+            (
+                Err("failed to write updated commit message".to_owned()),
+                original.to_owned()
+            )
+        );
     }
 
     #[rstest]
-    #[case::missing_context(ContextState::Missing)]
-    #[case::broken_context(ContextState::Broken)]
-    #[case::expired_context(ContextState::Expired)]
-    fn unusable_context_leaves_the_commit_message_unchanged(
-        hook_dir: TempDir,
-        #[case] context_state: ContextState,
-    ) {
-        let message_file = hook_dir.path().join("fixture-message.txt");
-        let original = indoc! {"Fixture subject"};
-        let context_path = match context_state {
-            ContextState::Missing => hook_dir.path().join("fixture-missing-context.json"),
-            ContextState::Broken => {
-                let path = hook_dir.path().join("fixture-broken-context.json");
-                std::fs::write(&path, "not-json").expect("create broken context");
-                path
-            }
-            ContextState::Expired => {
-                let path = create_context(&hook_dir);
-                let mut value: Value =
-                    serde_json::from_slice(&std::fs::read(&path).expect("read fixture context"))
-                        .expect("parse fixture context");
-                value["created_at"] = json!(context::unix_timestamp().expect("read clock") - 601);
-                std::fs::write(
-                    &path,
-                    serde_json::to_vec(&value).expect("serialize expired context"),
-                )
-                .expect("expire fixture context");
-                path
-            }
-        };
-        std::fs::write(&message_file, original).expect("create fixture commit message");
-
-        let result = super::run_prepare_commit_msg_with_context(
-            &GitHookArgs {
-                message_file: message_file.clone(),
+    #[case::allow(
+        r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"git commit -m 'Fixture subject'"}}}"#
+    )]
+    #[case::ask(
+        r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"fixture rule"}}"#
+    )]
+    #[case::deny(
+        r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"fixture rule"}}"#
+    )]
+    fn pre_tool_use_returns_the_proxy_result_unchanged(#[case] hook_output_json: &str) {
+        let hook_output: Value =
+            serde_json::from_str(hook_output_json).expect("parse fixture proxy output");
+        let raw_envelope = json!({
+            "hook_input": {
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_use_id": "fixture-tool-use-blue",
+                "model": "fixture-model-blue",
+                "tool_input": {"command": "git commit -m 'Fixture subject'"},
             },
-            Some(&context_path),
-        );
-        let actual = (
-            result.is_ok(),
-            std::fs::read_to_string(&message_file).expect("read fixture commit message"),
-        );
+            "hook_output": hook_output,
+        })
+        .to_string();
 
-        assert_eq!(actual, (true, original.to_owned()));
+        assert_eq!(process_pre_tool_use(&raw_envelope), Some(hook_output));
+    }
+
+    #[rstest]
+    #[case::missing_proxy_result(r#"{"hook_input":{}}"#)]
+    #[case::null_proxy_result(r#"{"hook_input":{},"hook_output":null}"#)]
+    #[case::malformed_envelope("not-json")]
+    fn pre_tool_use_emits_nothing_without_proxy_result(#[case] raw_envelope: &str) {
+        assert_eq!(process_pre_tool_use(raw_envelope), None);
     }
 
     #[derive(clap::Parser)]
@@ -381,109 +514,27 @@ mod tests {
     }
 
     #[rstest]
-    fn legacy_final_object_flag_is_accepted_without_enabling_validation(hook_dir: TempDir) {
-        let parsed = TestCli::try_parse_from(["a", "pre-tool-use", "codex", "--final-object"])
-            .expect("parse compatibility flag");
-        let args = match parsed.command {
-            AttributionCommands::PreToolUse(args) => args,
+    #[case::codex("codex", vec![])]
+    #[case::claude_final_object("claude-code", vec!["--final-object"])]
+    #[case::codex_unknown_reason("codex", vec!["--unknown-reason", "fixture reason"])]
+    fn pre_tool_use_compatibility_arguments_are_accepted(
+        #[case] provider: &str,
+        #[case] compatibility_args: Vec<&str>,
+    ) {
+        let mut args = vec!["a", "pre-tool-use", provider];
+        args.extend(compatibility_args);
+        let parsed = TestCli::try_parse_from(args).expect("parse compatibility invocation");
+        let actual = match parsed.command {
+            AttributionCommands::PreToolUse(args) => args.provider,
             _ => panic!("expected PreToolUse command"),
         };
-        let raw = json!({
-            "hook_input": {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_use_id": "fixture-tool-use-final-object",
-                "model": "fixture-model-blue",
-                "tool_input": {"command": "git commit -m 'Fixture subject'"},
-            },
-            "hook_output": null,
-        })
-        .to_string();
-        let output =
-            process_pre_tool_use(&args, &raw, hook_dir.path()).expect("transformed output");
-        let command = output
-            .pointer("/hookSpecificOutput/updatedInput/command")
-            .and_then(Value::as_str)
-            .expect("transformed command");
-        let context_path = command
-            .strip_prefix(&format!("{CONTEXT_ENV}="))
-            .and_then(|command| command.split_once(' '))
-            .map(|(path, _)| path)
-            .expect("context assignment");
-        let normalized = output.to_string().replace(context_path, "<context-file>");
-
-        assert_eq!(
-            serde_json::from_str::<Value>(&normalized).expect("parse normalized output"),
-            json!({
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "allow",
-                    "updatedInput": {
-                        "command": format!("{CONTEXT_ENV}=<context-file> git commit -m 'Fixture subject'"),
-                    },
-                },
-            }),
-        );
-    }
-
-    #[rstest]
-    fn legacy_unknown_reason_flag_does_not_change_proxy_output(hook_dir: TempDir) {
-        let parsed = TestCli::try_parse_from([
-            "a",
-            "pre-tool-use",
-            "codex",
-            "--unknown-reason",
-            "fixture model unavailable",
-        ])
-        .expect("parse compatibility option");
-        let args = match parsed.command {
-            AttributionCommands::PreToolUse(args) => args,
-            _ => panic!("expected PreToolUse command"),
-        };
-        let proxy_output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "allow",
-            },
-        });
-        let raw = json!({
-            "hook_input": {
-                "hook_event_name": "PreToolUse",
-                "tool_name": "Bash",
-                "tool_use_id": "fixture-tool-use-unknown-model",
-                "tool_input": {"command": "git commit -m 'Fixture subject'"},
-            },
-            "hook_output": proxy_output,
-        })
-        .to_string();
-        let output = process_pre_tool_use(&args, &raw, hook_dir.path());
-        let context_count = std::fs::read_dir(hook_dir.path())
-            .expect("read context directory")
-            .count();
-
-        assert_eq!((output, context_count), (Some(proxy_output), 0),);
-    }
-
-    #[rstest]
-    fn malformed_envelope_preserves_existing_permission_output(hook_dir: TempDir) {
-        let permission_output = json!({
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "ask",
-                "permissionDecisionReason": "fixture rule",
-            },
-        });
-        let raw = json!({"hook_output": permission_output}).to_string();
-        let args = PreToolUseArgs {
-            provider: Provider::Codex,
-            _unknown_reason: None,
-            final_object: false,
+        let expected = match provider {
+            "codex" => Provider::Codex,
+            "claude-code" => Provider::ClaudeCode,
+            _ => panic!("unexpected provider fixture"),
         };
 
-        assert_eq!(
-            process_pre_tool_use(&args, &raw, hook_dir.path()),
-            Some(permission_output),
-        );
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
@@ -504,6 +555,9 @@ mod tests {
         }
         .expect("parse compatibility command");
 
-        assert!(run(&parsed.command).is_ok());
+        assert_eq!(
+            run(&parsed.command).map_err(|error| error.to_string()),
+            Ok(())
+        );
     }
 }

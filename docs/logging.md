@@ -83,6 +83,12 @@ tail -F "$LOG" | jq -c .
 
 ## Event reference
 
+### `agent status inference`
+
+| event                          | meaning                                                                                                                                                            |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `agent.status_inference.usage` | Session correlation and numeric input, cached-input, and output token counts from one Responses usage record; no response body or fork-process cumulative counters |
+
 ### `agent auto-compact`
 
 Stop hook (parent process):
@@ -113,6 +119,7 @@ Stop hook (parent process):
 | event                                        | meaning                                                                                                                         |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `agent.sweep.start`                          | One sweep pass is starting (`timeout`, `dry_run`, `pause_enabled`)                                                              |
+| `agent.sweep.auto_pause_failed`              | The auto-pause pass failed; the sweep proceeds to the Codex status pass and attempts merged-session close if that pass succeeds |
 | `agent.sweep.sessions_read_failed`           | Session records could not be read; merged-session cleanup was skipped                                                           |
 | `agent.bg_run.registry_read_failed`          | The background-task registry could not be read; the session was treated as pending                                              |
 | `agent.sweep.github_client_unavailable`      | The GitHub client could not be initialized; merged-session cleanup was skipped                                                  |
@@ -144,22 +151,25 @@ Stop hook (parent process):
 
 ### `agent crit`
 
-| event                                         | meaning                                                 |
-| --------------------------------------------- | ------------------------------------------------------- |
-| `agent.crit.add.registered`                   | A review URL was associated with a session              |
-| `agent.crit.add.pane_sync_failed`             | The `@crit` pane option or layout hook could not update |
-| `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started              |
-| `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                |
-| `agent.crit.monitor.start`                    | The detached monitor began watching a daemon            |
-| `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port             |
-| `agent.crit.monitor.replacement_check_failed` | The monitor could not check for a replacement daemon    |
-| `agent.crit.monitor.exit`                     | The daemon and associated pane links were cleaned up    |
-| `agent.crit.cleanup.*`                        | A best-effort cleanup step failed or was skipped        |
-| `agent.crit.notification.failed`              | The desktop notification could not be sent              |
-| `agent.crit.open.floating_pane_requested`     | A tmux floating pane was requested for a review         |
-| `agent.crit.open.floating_pane_closed`        | A tmux floating pane was closed                         |
-| `agent.crit.open.failed`                      | Opening or closing the crit pane failed                 |
-| `agent.crit.open.failure_notice_failed`       | tmux could not display an open failure notice           |
+| event                                         | meaning                                                                      |
+| --------------------------------------------- | ---------------------------------------------------------------------------- |
+| `agent.crit.add.registered`                   | A review URL was associated with a session                                   |
+| `agent.crit.add.session_record_failed`        | Session review URL could not be recorded                                     |
+| `agent.crit.add.pane_sync_failed`             | The review queue pane options or layout hook could not update                |
+| `agent.crit.add.review_display_failed`        | An unrecorded review could not be displayed                                  |
+| `hitl.review_queue.session_not_alive`         | The editor session did not come alive before the queue labels were refreshed |
+| `agent.crit.monitor.start_failed`             | The lifecycle monitor could not be started                                   |
+| `agent.crit.monitor.started`                  | A detached lifecycle monitor was spawned                                     |
+| `agent.crit.monitor.start`                    | The detached monitor began watching a daemon                                 |
+| `agent.crit.monitor.replacement_found`        | A replacement daemon is using the same port                                  |
+| `agent.crit.monitor.replacement_check_failed` | The monitor could not check for a replacement daemon                         |
+| `agent.crit.monitor.exit`                     | The daemon and associated pane links were cleaned up                         |
+| `agent.crit.cleanup.*`                        | A best-effort cleanup step failed or was skipped                             |
+| `agent.crit.notification.failed`              | The desktop notification could not be sent                                   |
+| `agent.crit.open.floating_pane_requested`     | A tmux floating pane was requested for a review                              |
+| `agent.crit.open.floating_pane_closed`        | A tmux floating pane was closed                                              |
+| `agent.crit.open.failed`                      | Opening or closing the crit pane failed                                      |
+| `agent.crit.open.failure_notice_failed`       | tmux could not display an open failure notice                                |
 
 ## Debugging recipes
 

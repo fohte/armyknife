@@ -476,6 +476,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             })
             .collect();
 
@@ -983,6 +985,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             },
             Session {
                 archived_at: None,
@@ -1016,6 +1020,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             },
             Session {
                 archived_at: None,
@@ -1049,6 +1055,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             },
             Session {
                 archived_at: None,
@@ -1082,6 +1090,8 @@ mod tests {
                 agent_status: None,
                 agent_status_clear_pending: false,
                 engine: Engine::Claude,
+                model: None,
+                effort: None,
             },
         ];
         App::with_sessions(sessions)
@@ -1241,6 +1251,8 @@ mod tests {
             agent_status: None,
             agent_status_clear_pending: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         }
     }
 

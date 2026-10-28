@@ -3,6 +3,7 @@
 mod batch;
 mod command;
 mod crit_pane;
+mod editor_pane;
 mod floating_pane;
 mod format;
 pub mod layout;
@@ -22,7 +23,11 @@ pub use batch::{PaneInfoWithPid, list_all_panes, run_batch};
 pub(crate) use command::{run_tmux_output, run_tmux_output_untrimmed};
 pub(crate) use crit_pane::{
     CritPaneSpec, close_crit_pane, find_crit_panes_for_parent, find_crit_panes_for_port,
-    get_crit_pane_parent_id, get_crit_pane_port, is_crit_pane, open_crit_pane,
+    get_crit_pane_parent_id, get_crit_pane_port, open_crit_pane,
+};
+pub(crate) use editor_pane::{
+    EditorPaneSpec, find_editor_panes_for_parent, get_editor_pane_parent_id,
+    new_editor_session_name, open_editor_pane, start_hidden_editor_session,
 };
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;

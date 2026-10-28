@@ -5,8 +5,8 @@
 //! detected from the `›` line in an ANSI-styled capture; its dim placeholder
 //! marks an empty composer without depending on placeholder wording.
 //! [`pane_has_draft_for_socket`] returns `None` when capture or layout cannot be parsed.
-//! The active-session probe then falls back to `session.updated_at`; `agent close`
-//! refuses an unrecognized capture unless `--force` is used.
+//! The active-session probe and `agent close` fall back to `session.updated_at`;
+//! close protects recent activity for the configured auto-pause timeout.
 
 use crate::commands::agent::types::Engine;
 use crate::infra::tmux;
