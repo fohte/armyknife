@@ -49,10 +49,37 @@ pub fn create_comment_file(
     database_id: u64,
     body: &str,
 ) -> String {
+    format_comment_file(author, created_at, None, id, database_id, body)
+}
+
+/// Create a comment file with an update timestamp in its metadata.
+pub fn create_comment_file_with_updated_at(
+    author: &str,
+    created_at: &str,
+    updated_at: &str,
+    id: &str,
+    database_id: u64,
+    body: &str,
+) -> String {
+    format_comment_file(author, created_at, Some(updated_at), id, database_id, body)
+}
+
+fn format_comment_file(
+    author: &str,
+    created_at: &str,
+    updated_at: Option<&str>,
+    id: &str,
+    database_id: u64,
+    body: &str,
+) -> String {
+    let line_ending = '\n';
+    let updated_at_line = updated_at.map_or_else(String::new, |timestamp| {
+        format!("<!-- updatedAt: {timestamp} -->{line_ending}")
+    });
     formatdoc! {"
         <!-- author: {author} -->
         <!-- createdAt: {created_at} -->
-        <!-- id: {id} -->
+        {updated_at_line}<!-- id: {id} -->
         <!-- databaseId: {database_id} -->
 
         {body}"}
@@ -103,7 +130,8 @@ pub struct TestSetup<'a> {
     pub remote_last_edited_at: Option<&'a str>,
     pub remote_labels: Vec<&'a str>,
     pub remote_comments: Vec<RemoteComment<'a>>,
-    pub comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
+    pub remote_comments_updated_at: &'a str,
+    pub comments_after_initial_fetch: Option<(Vec<RemoteComment<'a>>, &'a str)>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
     pub local_body: &'a str,
@@ -124,7 +152,8 @@ impl<'a> TestSetup<'a> {
             remote_last_edited_at: None,
             remote_labels: vec!["bug"],
             remote_comments: vec![],
-            comments_after_initial_fetch: vec![],
+            remote_comments_updated_at: "2024-01-01T12:00:00Z",
+            comments_after_initial_fetch: None,
             local_title: "Title",
             local_body: "Body",
             local_labels: vec!["bug"],
@@ -141,7 +170,8 @@ impl<'a> TestSetup<'a> {
         remote_last_edited_at: Option<&'a str>,
         remote_labels: Vec<&'a str>,
         remote_comments: Vec<RemoteComment<'a>>,
-        comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
+        remote_comments_updated_at: &'a str,
+        comments_after_initial_fetch: Option<(Vec<RemoteComment<'a>>, &'a str)>,
         local_title: &'a str,
         local_body: &'a str,
         local_labels: Vec<&'a str>,
@@ -168,20 +198,22 @@ impl<'a> TestSetup<'a> {
         issue_builder.get().await;
 
         // Set up remote comments mock
-        if self.comments_after_initial_fetch.is_empty() {
-            ctx.graphql_comments(&self.remote_comments).await;
+        if let Some((comments, updated_at)) = self.comments_after_initial_fetch {
+            ctx.graphql_comments_with_options(
+                &self.remote_comments,
+                self.remote_comments_updated_at,
+                Some(1),
+            )
+            .await;
+            ctx.graphql_comments_with_options(&comments, updated_at, None)
+                .await;
         } else {
-            ctx.graphql_comments_once(&self.remote_comments).await;
-            let mut snapshots = self.comments_after_initial_fetch.into_iter().peekable();
-            while let Some((comments, updated_at)) = snapshots.next() {
-                if snapshots.peek().is_some() {
-                    ctx.graphql_comments_with_updated_at_once(&comments, updated_at)
-                        .await;
-                } else {
-                    ctx.graphql_comments_with_updated_at(&comments, updated_at)
-                        .await;
-                }
-            }
+            ctx.graphql_comments_with_options(
+                &self.remote_comments,
+                self.remote_comments_updated_at,
+                None,
+            )
+            .await;
         }
 
         // Set up remote sub-issues mock (empty by default)

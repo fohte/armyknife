@@ -636,33 +636,18 @@ impl<'a> MockRepoContext<'a> {
     ///
     /// Uses `body_string_contains` to distinguish from timeline events query.
     pub async fn graphql_comments(&self, comments: &[RemoteComment<'_>]) {
-        self.mount_graphql_comments(comments, "2024-01-01T12:00:00Z", None)
+        self.graphql_comments_with_options(comments, "2024-01-01T12:00:00Z", None)
             .await;
     }
 
-    /// Mock a comments response that only matches the first request.
-    pub async fn graphql_comments_once(&self, comments: &[RemoteComment<'_>]) {
-        self.mount_graphql_comments(comments, "2024-01-01T12:00:00Z", Some(1))
-            .await;
-    }
-
-    /// Mock GraphQL comments with a specified update timestamp.
-    pub async fn graphql_comments_with_updated_at(
+    /// Mock GraphQL comments with a custom update timestamp and match limit.
+    pub async fn graphql_comments_with_options(
         &self,
         comments: &[RemoteComment<'_>],
         updated_at: &str,
+        max_matches: Option<u64>,
     ) {
-        self.mount_graphql_comments(comments, updated_at, None)
-            .await;
-    }
-
-    /// Mock a comments response with a specified update timestamp for one request.
-    pub async fn graphql_comments_with_updated_at_once(
-        &self,
-        comments: &[RemoteComment<'_>],
-        updated_at: &str,
-    ) {
-        self.mount_graphql_comments(comments, updated_at, Some(1))
+        self.mount_graphql_comments(comments, updated_at, max_matches)
             .await;
     }
 

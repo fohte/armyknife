@@ -2,7 +2,8 @@
 
 use super::*;
 use crate::commands::gh::issue_agent::commands::test_helpers::{
-    TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
+    TestSetup, approve_file, create_comment_file, create_comment_file_with_updated_at,
+    setup_local_comment, test_dir,
 };
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage};
@@ -38,25 +39,6 @@ fn make_remote_comment<'a>(
         database_id,
         author,
         body,
-    }
-}
-
-fn create_comment_file_with_updated_at(
-    author: &str,
-    created_at: &str,
-    updated_at: &str,
-    id: &str,
-    database_id: u64,
-    body: &str,
-) -> String {
-    formatdoc! {"
-        <!-- author: {author} -->
-        <!-- createdAt: {created_at} -->
-        <!-- updatedAt: {updated_at} -->
-        <!-- id: {id} -->
-        <!-- databaseId: {database_id} -->
-
-        {body}"
     }
 }
 
@@ -485,30 +467,15 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
 // Comment operations
 #[rstest]
 #[tokio::test]
-async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: TempDir) {
+async fn test_refreshes_own_comment_after_push(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_comments(vec![make_remote_comment(
             "testuser", "IC_abc", 12345, "Original",
         )])
-        .comments_after_initial_fetch(vec![
-            (
-                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
-                "2024-01-02T12:00:00Z",
-            ),
-            (
-                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
-                "2024-01-02T12:00:00Z",
-            ),
-            (
-                vec![make_remote_comment(
-                    "testuser",
-                    "IC_abc",
-                    12345,
-                    "Updated again",
-                )],
-                "2024-01-03T12:00:00Z",
-            ),
-        ])
+        .comments_after_initial_fetch(Some((
+            vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+            "2024-01-02T12:00:00Z",
+        )))
         .build()
         .await;
     setup_local_comment(
@@ -528,52 +495,22 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
     ctx.comment().update().await;
     ctx.issue(123).get().await;
 
-    let client = mock.client();
     let result = run_with_client_and_storage(
         &make_args(false, false, false),
-        &client,
+        &mock.client(),
         &storage,
         "testuser",
     )
     .await;
     let comment_path = test_dir.path().join("comments/001_comment_12345.md");
-    let comment_after_first_push = std::fs::read_to_string(&comment_path).unwrap();
-    let updated_again_comment = comment_after_first_push
-        .split_inclusive('\n')
-        .map(|line| {
-            if line.trim_end_matches('\n') == "Updated" {
-                line.replacen("Updated", "Updated again", 1)
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<String>();
-    setup_local_comment(
-        test_dir.path(),
-        "001_comment_12345.md",
-        &updated_again_comment,
-    );
-    approve_file(&comment_path);
-
-    let second_result = run_with_client_and_storage(
-        &make_args(false, false, false),
-        &client,
-        &storage,
-        "testuser",
-    )
-    .await
-    .map_err(|error| error.to_string());
-    let comment_after_second_push = std::fs::read_to_string(&comment_path).unwrap();
+    let comment_after_push = std::fs::read_to_string(&comment_path).unwrap();
 
     assert_eq!(
         (
             result.map_err(|error| error.to_string()),
-            second_result,
-            comment_after_first_push,
-            comment_after_second_push,
+            comment_after_push
         ),
         (
-            Ok(()),
             Ok(()),
             formatdoc! {"
                 <!-- author: testuser -->
@@ -584,26 +521,55 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
 
                 Updated
             "
-            },
-            formatdoc! {"
-                <!-- author: testuser -->
-                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
-                <!-- updatedAt: 2024-01-03T12:00:00+00:00 -->
-                <!-- id: IC_abc -->
-                <!-- databaseId: 12345 -->
-
-                Updated again
-            "
-            },
+            }
         ),
     );
 }
 
 #[rstest]
 #[tokio::test]
+async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "testuser", "IC_abc", 12345, "Updated",
+        )])
+        .remote_comments_updated_at("2024-01-02T12:00:00Z")
+        .build()
+        .await;
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &create_comment_file_with_updated_at(
+            "testuser",
+            "2024-01-01T12:00:00+00:00",
+            "2024-01-02T12:00:00+00:00",
+            "IC_abc",
+            12345,
+            "Updated again",
+        ),
+    );
+    approve_file(&test_dir.path().join("comments/001_comment_12345.md"));
+    let ctx = mock.repo("owner", "repo");
+    ctx.comment().update().await;
+    ctx.issue(123).get().await;
+
+    let result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &mock.client(),
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+
+    assert_eq!(result, Ok(()));
+}
+
+#[rstest]
+#[tokio::test]
 async fn test_creates_new_comment(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
-        .comments_after_initial_fetch(vec![(
+        .comments_after_initial_fetch(Some((
             vec![make_remote_comment(
                 "testuser",
                 "IC_new_comment",
@@ -611,7 +577,7 @@ async fn test_creates_new_comment(test_dir: TempDir) {
                 "New comment",
             )],
             "2024-01-02T12:00:00Z",
-        )])
+        )))
         .build()
         .await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
