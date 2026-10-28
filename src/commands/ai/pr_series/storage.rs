@@ -11,8 +11,8 @@ use crate::infra::git::file_lock::{lock_exclusive, open_lock_file};
 
 const PLAN_DIRECTORY: &str = "pr-series";
 
-pub fn save_plan(task_id: &str, plan: &PrSeriesPlan) -> Result<()> {
-    plan_storage()?.save_plan(task_id, plan)
+pub fn save_plan_for_task(task_id: &str, task_number: u32, plan: &PrSeriesPlan) -> Result<()> {
+    plan_storage()?.save_plan_for_task(task_id, task_number, plan)
 }
 
 pub fn load_plan(task_id: &str) -> Result<PrSeriesPlan> {
@@ -43,15 +43,102 @@ impl PrSeriesPlanStorage {
         save_plan_at(&self.directory, &task_id, plan)
     }
 
+    pub fn save_plan_for_task(
+        &self,
+        task_id: &str,
+        task_number: u32,
+        plan: &PrSeriesPlan,
+    ) -> Result<()> {
+        let task_id = canonical_task_id(task_id)?;
+        self.save_plan(&task_id, plan)?;
+        save_task_number_alias_at(&self.directory, task_number, &task_id)
+    }
+
     pub fn load_plan(&self, task_id: &str) -> Result<PrSeriesPlan> {
         let task_id = canonical_task_id(task_id)?;
         load_plan_at(&self.directory, &task_id)
     }
 
     pub fn load_plan_if_present(&self, task_id: &str) -> Result<Option<PrSeriesPlan>> {
-        let task_id = canonical_task_id(task_id)?;
+        let task_id = match Uuid::parse_str(task_id) {
+            Ok(task_id) => task_id.to_string(),
+            Err(_) => {
+                let task_number = task_id
+                    .parse::<u32>()
+                    .with_context(|| format!("invalid tq task ID `{task_id}`"))?;
+                let Some(task_id) = load_task_number_alias_at(&self.directory, task_number)? else {
+                    return Ok(None);
+                };
+                task_id
+            }
+        };
         load_plan_if_present_at(&self.directory, &task_id)
     }
+}
+
+fn save_task_number_alias_at(directory: &Path, task_number: u32, task_id: &str) -> Result<()> {
+    create_dir_secure(directory)?;
+    let path = task_number_alias_path(directory, task_number);
+    let lock_path = directory.join(format!("task-number-{task_number}.lock"));
+    let lock_file = open_lock_file(&lock_path, "PR series task number alias")?;
+    lock_exclusive(&lock_file, "PR series task number alias")?;
+    reject_symlink(&path)?;
+
+    let mut temp_file = tempfile::NamedTempFile::new_in(directory).with_context(|| {
+        format!(
+            "failed to create a temporary task number alias in {}",
+            directory.display()
+        )
+    })?;
+    temp_file.write_all(task_id.as_bytes())?;
+    temp_file.as_file().sync_all()?;
+    temp_file
+        .persist(&path)
+        .with_context(|| format!("failed to save task number alias: {}", path.display()))?;
+    Ok(())
+}
+
+fn load_task_number_alias_at(directory: &Path, task_number: u32) -> Result<Option<String>> {
+    let path = task_number_alias_path(directory, task_number);
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "refusing to use a symlink for PR series task number alias: {}",
+                path.display()
+            );
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            bail!(
+                "PR series task number alias is not a regular file: {}",
+                path.display()
+            );
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!(
+                    "failed to inspect PR series task number alias: {}",
+                    path.display()
+                )
+            });
+        }
+    }
+    let lock_path = directory.join(format!("task-number-{task_number}.lock"));
+    let lock_file = open_lock_file(&lock_path, "PR series task number alias")?;
+    lock_exclusive(&lock_file, "PR series task number alias")?;
+    reject_symlink(&path)?;
+    let task_id = fs::read_to_string(&path).with_context(|| {
+        format!(
+            "failed to read PR series task number alias: {}",
+            path.display()
+        )
+    })?;
+    Ok(Some(canonical_task_id(task_id.trim())?))
+}
+
+fn task_number_alias_path(directory: &Path, task_number: u32) -> PathBuf {
+    directory.join(format!("task-number-{task_number}.alias"))
 }
 
 fn save_plan_at(directory: &Path, task_id: &str, plan: &PrSeriesPlan) -> Result<()> {
@@ -234,13 +321,29 @@ mod tests {
     }
 
     #[rstest]
-    fn returns_none_when_a_task_has_no_saved_plan(plan_storage: TestPlanStorage) {
+    #[case::uuid("00000000-0000-4000-8000-000000000001")]
+    #[case::task_number("4242")]
+    fn returns_none_when_a_task_has_no_saved_plan(
+        plan_storage: TestPlanStorage,
+        #[case] task_id: &str,
+    ) {
         assert_eq!(
-            plan_storage
-                .storage
-                .load_plan_if_present("00000000-0000-4000-8000-000000000001")
-                .unwrap(),
+            plan_storage.storage.load_plan_if_present(task_id).unwrap(),
             None,
+        );
+    }
+
+    #[rstest]
+    fn loads_a_plan_by_its_task_number_alias(plan_storage: TestPlanStorage) {
+        let expected = plan();
+        plan_storage
+            .storage
+            .save_plan_for_task("00000000-0000-4000-8000-000000000001", 4242, &expected)
+            .unwrap();
+
+        assert_eq!(
+            plan_storage.storage.load_plan_if_present("4242").unwrap(),
+            Some(expected),
         );
     }
 

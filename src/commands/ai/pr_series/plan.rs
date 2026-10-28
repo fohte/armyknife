@@ -30,7 +30,7 @@ pub async fn run(args: &SetArgs) -> Result<()> {
     let task = tq_client.task_details(&args.task_id).await?;
     let checklists = tq_client.list_checklists(&task.id).await?;
     validate_checklist_leaf_ids(&plan, &checklists)?;
-    storage::save_plan(&task.id, &plan)?;
+    storage::save_plan_for_task(&task.id, task.number, &plan)?;
 
     println!("Saved PR series plan for tq task {}.", task.number);
     Ok(())

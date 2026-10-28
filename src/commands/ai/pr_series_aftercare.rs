@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use uuid::Uuid;
 
 use super::pr_series::{
     PrSeriesPlan, Repository, load_plan_if_present, resolve_created_pull_requests,
@@ -95,20 +96,6 @@ impl SubmitSyncTqClient for TqClient {
     }
 }
 
-impl<T: SubmitSyncTqClient + ?Sized> SubmitSyncTqClient for &T {
-    async fn task_details(&self, task_id: &str) -> Result<TqTaskDetails> {
-        (**self).task_details(task_id).await
-    }
-
-    async fn list_checklists(&self, task_id: &str) -> Result<Vec<TqChecklist>> {
-        (**self).list_checklists(task_id).await
-    }
-
-    async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
-        (**self).link_checklist_item(item_id, github_url).await
-    }
-}
-
 pub(super) async fn link_and_sync_after_submit_with<Tq, Detect, LoadPlan>(
     detect_tq_client: Detect,
     load_plan: LoadPlan,
@@ -118,19 +105,36 @@ pub(super) async fn link_and_sync_after_submit_with<Tq, Detect, LoadPlan>(
 where
     Tq: SubmitSyncTqClient,
     Detect: FnOnce() -> Result<Tq>,
-    LoadPlan: FnOnce(&str) -> Result<Option<PrSeriesPlan>>,
+    LoadPlan: FnMut(&str) -> Result<Option<PrSeriesPlan>>,
 {
-    let Some(plan) = load_plan(context.task_id)
-        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?
-    else {
+    let mut load_plan = load_plan;
+    let local_plan = load_plan(context.task_id)
+        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
+    let (tq_client, task, plan) = if let Some(plan) = local_plan {
+        let tq_client = detect_tq_client()
+            .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
+        let task = tq_client
+            .task_details(context.task_id)
+            .await
+            .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
+        (tq_client, task, plan)
+    } else if Uuid::parse_str(context.task_id).is_ok() {
         return Ok(SubmitSyncOutcome::NoPlan);
+    } else {
+        // Numeric task IDs need tq's canonical UUID when no local alias is available.
+        let Ok(tq_client) = detect_tq_client() else {
+            return Ok(SubmitSyncOutcome::NoPlan);
+        };
+        let Ok(task) = tq_client.task_details(context.task_id).await else {
+            return Ok(SubmitSyncOutcome::NoPlan);
+        };
+        let Some(plan) = load_plan(&task.id)
+            .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?
+        else {
+            return Ok(SubmitSyncOutcome::NoPlan);
+        };
+        (tq_client, task, plan)
     };
-    let tq_client = detect_tq_client()
-        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
-    let task = tq_client
-        .task_details(context.task_id)
-        .await
-        .map_err(|error| SubmitSyncFailure::new(SubmitSyncStage::Prepare, error))?;
     let checklists = tq_client
         .list_checklists(&task.id)
         .await
@@ -213,7 +217,7 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use anyhow::{Result, bail};
     use rstest::rstest;
@@ -224,6 +228,8 @@ mod tests {
     };
     use crate::infra::github::{PrBodyClient, UpdatePrBodyParams};
     use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
+
+    const CANONICAL_TASK_ID: &str = "00000000-0000-4000-8000-000000000058";
 
     #[derive(Default)]
     struct FakeGitHub {
@@ -293,10 +299,11 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
     struct FakeSubmitTq {
-        task: Mutex<TqTaskDetails>,
-        checklists: Mutex<Vec<TqChecklist>>,
-        link_calls: Mutex<Vec<(String, String)>>,
+        task: Arc<Mutex<TqTaskDetails>>,
+        checklists: Arc<Mutex<Vec<TqChecklist>>>,
+        link_calls: Arc<Mutex<Vec<(String, String)>>>,
         link_error: Option<String>,
         link_visible: bool,
     }
@@ -356,8 +363,8 @@ mod tests {
 
     fn fake_submit_tq(link_error: Option<&str>, link_visible: bool) -> FakeSubmitTq {
         FakeSubmitTq {
-            task: Mutex::new(TqTaskDetails {
-                id: "sample-task-id".to_string(),
+            task: Arc::new(Mutex::new(TqTaskDetails {
+                id: CANONICAL_TASK_ID.to_string(),
                 number: 58,
                 github_links: vec![TqGithubLink {
                     id: "link-schema".to_string(),
@@ -369,8 +376,8 @@ mod tests {
                     url: Some("https://github.com/acme/notify-api/pull/12".to_string()),
                     state: Some("open".to_string()),
                 }],
-            }),
-            checklists: Mutex::new(vec![TqChecklist {
+            })),
+            checklists: Arc::new(Mutex::new(vec![TqChecklist {
                 id: "checklist-1".to_string(),
                 name: "Implementation".to_string(),
                 items: vec![TqChecklistItem {
@@ -395,8 +402,8 @@ mod tests {
                         },
                     ],
                 }],
-            }]),
-            link_calls: Mutex::new(Vec::new()),
+            }])),
+            link_calls: Arc::new(Mutex::new(Vec::new())),
             link_error: link_error.map(str::to_string),
             link_visible,
         }
@@ -495,10 +502,15 @@ mod tests {
                 expected_body(&plan, "settings", "Settings PR body", &pull_requests),
             ),
         ]);
+        let plan_for_loader = plan.clone();
+        let plan_lookups = Mutex::new(Vec::new());
 
         let result = link_and_sync_after_submit_with(
-            || Ok(&tq),
-            |_| Ok(Some(plan)),
+            || Ok(tq.clone()),
+            |task_id| {
+                plan_lookups.lock().unwrap().push(task_id.to_string());
+                Ok((task_id == CANONICAL_TASK_ID).then(|| plan_for_loader.clone()))
+            },
             &github,
             &current_pr_context(),
         )
@@ -508,11 +520,13 @@ mod tests {
         assert_eq!(
             (
                 result,
+                plan_lookups.lock().unwrap().clone(),
                 tq.link_calls.lock().unwrap().clone(),
                 github.bodies(),
             ),
             (
                 Ok(SubmitSyncOutcome::Synchronized),
+                vec!["58".to_string(), CANONICAL_TASK_ID.to_string()],
                 vec![(
                     "leaf-settings".to_string(),
                     "https://github.com/acme/notify-web/pull/17".to_string(),
@@ -529,15 +543,17 @@ mod tests {
         github.add_body("acme/notify-api", 12, "Schema PR body");
         let expected_bodies = github.bodies();
         let detect_called = std::cell::Cell::new(false);
+        let mut context = current_pr_context();
+        context.task_id = CANONICAL_TASK_ID;
 
         let result = link_and_sync_after_submit_with(
-            || -> Result<&FakeSubmitTq> {
+            || -> Result<FakeSubmitTq> {
                 detect_called.set(true);
                 bail!("tq CLI is unavailable")
             },
             |_| Ok(None),
             &github,
-            &current_pr_context(),
+            &context,
         )
         .await
         .map_err(|failure| (failure.stage, failure.error.to_string()));
@@ -559,6 +575,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn silently_skips_a_task_number_without_a_saved_plan_when_tq_is_unavailable() {
+        let tq = fake_submit_tq(None, true);
+        let github = FakeGitHub::default();
+        github.add_body("acme/notify-api", 12, "Schema PR body");
+        let expected_bodies = github.bodies();
+        let detect_called = std::cell::Cell::new(false);
+
+        let result = link_and_sync_after_submit_with(
+            || -> Result<FakeSubmitTq> {
+                detect_called.set(true);
+                bail!("tq CLI is unavailable")
+            },
+            |_| Ok(None),
+            &github,
+            &current_pr_context(),
+        )
+        .await
+        .map_err(|failure| (failure.stage, failure.error.to_string()));
+
+        assert_eq!(
+            (
+                result,
+                detect_called.get(),
+                tq.link_calls.lock().unwrap().clone(),
+                github.bodies(),
+            ),
+            (
+                Ok(SubmitSyncOutcome::NoPlan),
+                true,
+                Vec::new(),
+                expected_bodies,
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_tq_detection_failure_when_a_plan_exists() {
+        let github = FakeGitHub::default();
+        github.add_body("acme/notify-api", 12, "Schema PR body");
+        let expected_bodies = github.bodies();
+
+        let result = link_and_sync_after_submit_with(
+            || -> Result<FakeSubmitTq> { bail!("tq CLI is unavailable") },
+            |_| Ok(Some(sample_plan())),
+            &github,
+            &current_pr_context(),
+        )
+        .await
+        .map_err(|failure| (failure.stage, failure.error.to_string()));
+
+        assert_eq!(
+            (result, github.bodies()),
+            (
+                Err((
+                    SubmitSyncStage::Prepare,
+                    "tq CLI is unavailable".to_string(),
+                )),
+                expected_bodies,
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn reports_link_errors_without_syncing_bodies() {
         let tq = fake_submit_tq(Some("temporary tq failure"), true);
         let github = FakeGitHub::default();
@@ -567,7 +646,7 @@ mod tests {
         let expected_bodies = github.bodies();
 
         let result = link_and_sync_after_submit_with(
-            || Ok(&tq),
+            || Ok(tq.clone()),
             |_| Ok(Some(sample_plan())),
             &github,
             &current_pr_context(),
@@ -618,7 +697,7 @@ mod tests {
         context.repo = repo;
 
         let result = link_and_sync_after_submit_with(
-            || Ok(&tq),
+            || Ok(tq.clone()),
             |_| Ok(Some(sample_plan())),
             &github,
             &context,
@@ -663,8 +742,8 @@ mod tests {
         ]);
 
         let result = link_and_sync_after_submit_with(
-            || Ok(&tq),
-            |_| Ok(Some(plan)),
+            || Ok(tq.clone()),
+            |_| Ok(Some(plan.clone())),
             &github,
             &current_pr_context(),
         )
@@ -712,8 +791,8 @@ mod tests {
         ]);
 
         let result = link_and_sync_after_submit_with(
-            || Ok(&tq),
-            |_| Ok(Some(plan)),
+            || Ok(tq.clone()),
+            |_| Ok(Some(plan.clone())),
             &github,
             &current_pr_context(),
         )
