@@ -94,6 +94,9 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::progress::{
+        PrProgressRow, ProgressFetchState, ProgressMark, ProgressRow, StageMarks,
+    };
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::ui::helpers::DIM_FG;
     use crate::commands::agent::tui::ui::test_support::{
@@ -211,6 +214,91 @@ mod tests {
 
 
              ?: keys   /: search   Tab: toggle progress   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    const PLANNED_WORKER_SCREEN: &str = indoc! {"
+         agent watch                                                                                                0 needs you · 2 running · 0 idle
+         ── TASKS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        >● project                 Design source                                                                                            just now
+         ▾                       └─   Implementation plan · 0/1 PRs merged
+         ▾                          └─   Batch: Batch A · 0 PRs merged
+         ● project                     └─   Worker session · Planned PR · Placeholder change · I:● R:○ B:○ CI:○ M:○                         just now
+
+
+
+         ?: keys   /: search   Tab: toggle progress   q: quit"};
+    const NUMBERED_WORKER_SCREEN: &str = indoc! {"
+         agent watch                                                                                                0 needs you · 2 running · 0 idle
+         ── TASKS ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        >● project                 Design source                                                                                            just now
+         ▾                       └─   Implementation plan · 0/1 PRs merged
+         ▾                          └─   Batch: Batch A · 0 PRs merged
+         ● project                     └─   Worker session · PR #17 I:● R:○ B:○ CI:○ M:○                                                    just now
+
+
+
+         ?: keys   /: search   Tab: toggle progress   q: quit"};
+
+    #[rstest]
+    #[case::planned_without_pr(None, None, PLANNED_WORKER_SCREEN)]
+    #[case::number_without_url(Some(17), None, NUMBERED_WORKER_SCREEN)]
+    fn render_inline_checklist_worker_annotation(
+        #[case] number: Option<u64>,
+        #[case] url: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let now = Utc::now();
+        let mut design = create_test_session("design");
+        design.updated_at = now;
+        design.label = Some("Design source".to_string());
+        let mut worker = create_test_session("worker");
+        worker.updated_at = now;
+        worker.label = Some("Worker session".to_string());
+        worker.ancestor_session_ids = vec![design.session_id.clone()];
+
+        let output = render_to_string_with(&[design, worker], Some(1), now, 140, 10, |app| {
+            app.progress_inline_expanded = true;
+            app.progress_session_id = Some("design".to_string());
+            app.progress_fetch_states
+                .insert("design".to_string(), ProgressFetchState::Ready);
+            app.progress_rows = vec![
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-a".to_string(),
+                    title: "Batch A".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-a".to_string(),
+                    checklist_item_id: "item-a".to_string(),
+                    row: PrProgressRow {
+                        session_id: "worker".to_string(),
+                        repo: Some("example-project".to_string()),
+                        title: "Placeholder change".to_string(),
+                        number,
+                        url: url.map(str::to_string),
+                        pane_id: None,
+                        is_ended: false,
+                        lookup_unavailable: false,
+                        stages: StageMarks {
+                            implementation: ProgressMark::Working,
+                            diff_review: ProgressMark::NotStarted,
+                            pr_body: ProgressMark::NotStarted,
+                            ci: ProgressMark::NotStarted,
+                            merge: ProgressMark::NotStarted,
+                        },
+                    },
+                },
+            ];
+            app.update_row_order(&[None, Some("design"), Some("worker")]);
+        });
 
         assert_eq!(output, expected);
     }

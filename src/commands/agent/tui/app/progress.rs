@@ -7,7 +7,8 @@ use super::super::progress::{
     build_task_progress_rows, refresh_task_rows_from_sessions, table_selection_index,
 };
 use super::super::progress_batches::{
-    ImplementationPlan, build_task_progress_rows as build_checklist_progress_rows,
+    ImplementationPlan, attach_session_workers,
+    build_task_progress_rows as build_checklist_progress_rows,
 };
 use super::App;
 use super::progress_cache::{expand_initial_target_batch, same_implementation_scope};
@@ -349,6 +350,7 @@ impl App {
         let Some(selected) = self.session_by_id(source_session_id) else {
             return Vec::new();
         };
+        let plan = attach_session_workers(plan, work_sessions, delegated);
         let use_current_expansion =
             self.progress_session_id.as_deref() == Some(selected.session_id.as_str());
         let mut expanded_batches = if use_current_expansion {
@@ -357,7 +359,7 @@ impl App {
             HashMap::new()
         };
         let initial_target = self.initial_progress_target(source_session_id);
-        expand_initial_target_batch(plan, initial_target, &mut expanded_batches);
+        expand_initial_target_batch(&plan, initial_target, &mut expanded_batches);
         let unmatched_expanded = initial_target
             .is_some_and(|target| plan.batch_id_for_worker(target).is_none())
             || !use_current_expansion
@@ -365,7 +367,7 @@ impl App {
         build_checklist_progress_rows(
             work_sessions,
             delegated,
-            plan,
+            &plan,
             initial_target.is_some()
                 || !use_current_expansion
                 || self.progress_implementation_expanded,
@@ -384,6 +386,19 @@ impl App {
             return cached_rows.to_vec();
         };
         let scope = self.progress_scope(&selected);
+        let request_scope = scope.kind.fetch_scope();
+        let cached = self.cached_progress(session_id);
+        let reusable_cache = cached.filter(|snapshot| {
+            same_implementation_scope(snapshot.request_scope.as_ref(), request_scope.as_ref())
+        });
+        if let Some(plan) = reusable_cache.and_then(|snapshot| snapshot.implementation.as_ref()) {
+            let cached_delegates = reusable_cache
+                .map(|snapshot| snapshot.delegated_sessions.as_slice())
+                .unwrap_or_default();
+            let delegated =
+                self.delegates_with_missing_cached_sessions(&scope.children, cached_delegates);
+            return self.checklist_rows(session_id, &scope.work_sessions, &delegated, plan);
+        }
         let refreshed_rows = refresh_task_rows_from_sessions(
             &scope.work_sessions,
             session_id,

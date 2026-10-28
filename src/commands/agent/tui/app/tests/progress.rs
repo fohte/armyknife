@@ -13,7 +13,7 @@ use crate::commands::agent::tui::progress_batches::{
 };
 use crate::commands::agent::tui::session_rows::{SessionRowKey, SessionTask};
 use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
-use crate::commands::agent::types::{Session, SessionStatus, TmuxInfo};
+use crate::commands::agent::types::{Session, SessionPrContext, SessionStatus, TmuxInfo};
 use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
 use crate::shared::config::AgentConfig;
@@ -234,6 +234,187 @@ fn inline_planned_item_uses_its_worker_session_without_a_pr_url(timestamp: DateT
             Some("worker"),
             Some("%9"),
             None,
+        ),
+    );
+}
+
+#[rstest]
+fn cached_planned_item_attaches_worker_from_saved_checklist_context(timestamp: DateTime<Utc>) {
+    let mut design = create_test_session_at("design", timestamp);
+    design.work_type = Some("design".to_string());
+    let mut worker = create_test_session_at("worker", timestamp);
+    worker.ancestor_session_ids = vec![design.session_id.clone()];
+    worker.pr_context = Some(SessionPrContext {
+        owner: "example-owner".to_string(),
+        repo: "example-project".to_string(),
+        branch: "sample-branch".to_string(),
+        checklist_item_id: Some("item-a".to_string()),
+    });
+    worker.tmux_info = Some(TmuxInfo {
+        session_name: "sample-session".to_string(),
+        window_name: "main".to_string(),
+        window_index: 0,
+        pane_id: "%9".to_string(),
+        socket_path: None,
+    });
+
+    let mut app = create_test_app(vec![design, worker]);
+    app.update_row_order(&[None, Some("design"), Some("worker")]);
+    app.list_state.select(Some(2));
+    app.set_tq_snapshot(TqSnapshot::new(HashMap::from([
+        ("design".to_string(), vec![task_link("task-a")]),
+        ("worker".to_string(), vec![task_link("task-a")]),
+    ])));
+    app.progress_inline_expanded = true;
+    app.progress_implementation_expanded = true;
+    app.progress_session_id = Some("design".to_string());
+
+    let checklist = TqChecklist {
+        id: "checklist-a".to_string(),
+        name: "実装".to_string(),
+        items: vec![TqChecklistItem {
+            id: "batch-a".to_string(),
+            content: "Batch A".to_string(),
+            checked_at: None,
+            github_link_id: None,
+            children: vec![TqChecklistItem {
+                id: "item-a".to_string(),
+                content: "PR 1: Placeholder change".to_string(),
+                checked_at: None,
+                github_link_id: None,
+                children: Vec::new(),
+            }],
+        }],
+    };
+    let plan = build_implementation_plan(&checklist, &[], &[], &HashMap::new(), false);
+    app.set_cached_progress(
+        "design",
+        CachedProgress {
+            rows: vec![
+                expected_work_row("design", "design"),
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "worker".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: Some("%9".to_string()),
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-a".to_string(),
+                    title: "Batch A".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::PlannedPullRequest {
+                    batch_id: "batch-a".to_string(),
+                    checklist_item_id: "item-a".to_string(),
+                    title: "Placeholder change".to_string(),
+                },
+            ],
+            error: None,
+            implementation: Some(plan),
+            request_scope: Some(ProgressFetchScope {
+                task_id: Some("task-a".to_string()),
+                session_ids: Some(vec!["design".to_string(), "worker".to_string()]),
+                other_task_session_ids: Vec::new(),
+            }),
+            delegated_sessions: Vec::new(),
+            fetched_at: Some(timestamp),
+            last_attempt_at: Some(timestamp),
+        },
+    );
+
+    app.begin_progress_refresh("design");
+    app.rebuild_row_order();
+
+    assert_eq!(
+        (
+            app.progress_rows.clone(),
+            app.row_keys.clone(),
+            app.selected_row_key().cloned(),
+            app.selected_session_id(),
+        ),
+        (
+            vec![
+                expected_work_row("design", "design"),
+                ProgressRow::Work(WorkProgressRow {
+                    session_id: "worker".to_string(),
+                    role: "session".to_string(),
+                    mark: ProgressMark::Working,
+                    status_label: None,
+                    note: None,
+                    pane_id: Some("%9".to_string()),
+                }),
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-a".to_string(),
+                    title: "Batch A".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::ChecklistPullRequest {
+                    batch_id: "batch-a".to_string(),
+                    checklist_item_id: "item-a".to_string(),
+                    row: PrProgressRow {
+                        session_id: "worker".to_string(),
+                        repo: Some("example-project".to_string()),
+                        title: "Placeholder change".to_string(),
+                        number: None,
+                        url: None,
+                        pane_id: Some("%9".to_string()),
+                        is_ended: false,
+                        lookup_unavailable: false,
+                        stages: StageMarks {
+                            implementation: ProgressMark::Working,
+                            diff_review: ProgressMark::NotStarted,
+                            pr_body: ProgressMark::NotStarted,
+                            ci: ProgressMark::NotStarted,
+                            merge: ProgressMark::NotStarted,
+                        },
+                    },
+                },
+            ],
+            vec![
+                None,
+                Some(SessionRowKey::Task("design".to_string())),
+                Some(SessionRowKey::Progress {
+                    source_session_id: "design".to_string(),
+                    selection_key: ProgressSelectionKey::Implementation,
+                    session_id: None,
+                }),
+                Some(SessionRowKey::Progress {
+                    source_session_id: "design".to_string(),
+                    selection_key: ProgressSelectionKey::Batch("batch-a".to_string()),
+                    session_id: None,
+                }),
+                Some(SessionRowKey::Progress {
+                    source_session_id: "design".to_string(),
+                    selection_key: ProgressSelectionKey::ChecklistItem {
+                        batch_id: "batch-a".to_string(),
+                        item_id: "item-a".to_string(),
+                    },
+                    session_id: Some("worker".to_string()),
+                }),
+            ],
+            Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-a".to_string(),
+                    item_id: "item-a".to_string(),
+                },
+                session_id: Some("worker".to_string()),
+            }),
+            Some("worker"),
         ),
     );
 }

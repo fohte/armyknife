@@ -31,6 +31,42 @@ impl ImplementationPlan {
     }
 }
 
+pub(super) fn attach_session_workers(
+    plan: &ImplementationPlan,
+    work_sessions: &[Session],
+    delegates: &[Session],
+) -> ImplementationPlan {
+    let candidates = work_sessions.iter().chain(delegates).collect::<Vec<_>>();
+    let mut plan = plan.clone();
+
+    for item in plan.batches.iter_mut().flat_map(|batch| &mut batch.items) {
+        let worker = candidates.iter().find(|session| {
+            session
+                .pr_context
+                .as_ref()
+                .and_then(|context| context.checklist_item_id.as_deref())
+                == Some(item.id.as_str())
+        });
+        let Some(worker) = worker else {
+            continue;
+        };
+
+        item.worker_session_id = Some(worker.session_id.clone());
+        if let Some(unmatched) = plan
+            .unmatched_delegates
+            .iter()
+            .find(|delegate| delegate.session_id == worker.session_id)
+        {
+            if item.pull_request.is_none() {
+                item.pull_request = unmatched.pull_request.clone();
+            }
+            item.lookup_unavailable |= unmatched.lookup_unavailable;
+        }
+    }
+
+    plan
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct ImplementationBatch {
     id: String,
