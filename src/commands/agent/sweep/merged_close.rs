@@ -16,14 +16,15 @@ pub(super) struct MergedSession {
     pr: PrInfo,
 }
 
-pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
-    let sessions = match list_sessions_with_bg_run_status() {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            tracing::warn!(event = "agent.sweep.sessions_read_failed", error = %error);
-            return 0;
-        }
-    };
+pub(super) async fn close_merged_sessions(dry_run: bool) -> Result<usize> {
+    close_merged_sessions_with_session_reader(dry_run, list_sessions_with_bg_run_status).await
+}
+
+pub(super) async fn close_merged_sessions_with_session_reader(
+    dry_run: bool,
+    read_sessions: impl FnOnce() -> Result<Vec<Session>>,
+) -> Result<usize> {
+    let sessions = read_sessions()?;
 
     let mut queries_by_session = HashMap::new();
     let mut queries = Vec::new();
@@ -44,21 +45,21 @@ pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
     }
 
     if queries.is_empty() {
-        return 0;
+        return Ok(0);
     }
 
     let client = match GitHubClient::get() {
         Ok(client) => client,
         Err(error) => {
             tracing::warn!(event = "agent.sweep.github_client_unavailable", error = %error);
-            return 0;
+            return Ok(0);
         }
     };
     let prs = match client.get_prs_for_branches_batch(&queries).await {
         Ok(prs) => prs,
         Err(error) => {
             tracing::warn!(event = "agent.sweep.pull_requests_fetch_failed", error = %error);
-            return 0;
+            return Ok(0);
         }
     };
     let closed = close_merged_sessions_with(
@@ -86,7 +87,7 @@ pub(super) async fn close_merged_sessions(dry_run: bool) -> usize {
         }
     }
 
-    closed.len()
+    Ok(closed.len())
 }
 
 fn branch_query_for(session: &Session) -> Option<BranchPrQuery> {
