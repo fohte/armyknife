@@ -71,7 +71,7 @@ impl MarkdownSerializer {
         .text
     }
 
-    /// Keep draft-only callers from needing to model resolve actions.
+    /// Keep the existing draft-only API so callers need not construct resolve state.
     pub fn serialize_with_options(
         pr_data: &PrData,
         frontmatter: &ThreadsFrontmatter,
@@ -522,17 +522,21 @@ mod tests {
                 resolve: true,
             },
         )]);
+        let frontmatter = ThreadsFrontmatter {
+            repo: "example/project".to_string(),
+            ..default_frontmatter()
+        };
 
         let result = MarkdownSerializer::serialize_with_actions(
             &pr_data,
-            &default_frontmatter(),
+            &frontmatter,
             &actions,
             &SerializeOptions::default(),
         );
         let expected = indoc! {r#"
             ---
             pr: 42
-            repo: "fohte/armyknife"
+            repo: "example/project"
             pulled_at: "2024-01-15T10:00:00Z"
             submit: false
             ---
