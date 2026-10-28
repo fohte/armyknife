@@ -76,20 +76,22 @@ impl LocalComment {
     pub fn parse(content: &str, filename: String, path: &Path) -> Result<Self> {
         let lines: Vec<&str> = content.lines().collect();
 
-        // Split into header lines (metadata comments) and body lines
         let header_end = lines
             .iter()
-            .position(|line| !line.starts_with("<!--") && !line.is_empty())
-            .unwrap_or(lines.len());
+            .take_while(|line| line.starts_with("<!--"))
+            .count();
 
         let metadata = CommentFileMetadata::parse_from_lines(&lines[..header_end], path)?;
 
-        // Body starts after first empty line following headers, or at first non-metadata line
-        let body_start = lines[header_end..]
-            .iter()
-            .position(|line| !line.is_empty())
-            .map(|pos| header_end + pos)
-            .unwrap_or(lines.len());
+        // Without a metadata header, preserve the legacy handling of initial blank lines.
+        let body_start = match header_end {
+            0 => lines
+                .iter()
+                .position(|line| !line.is_empty())
+                .unwrap_or(lines.len()),
+            _ if lines.get(header_end) == Some(&"") => header_end + 1,
+            _ => header_end,
+        };
 
         let body = lines[body_start..].join("\n");
 
@@ -130,7 +132,24 @@ impl LocalComment {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
+    use chrono::{TimeZone, Utc};
+    use indoc::indoc;
+    use rstest::{fixture, rstest};
+
+    #[fixture]
+    fn comment() -> Comment {
+        let timestamp = Utc.with_ymd_and_hms(2031, 4, 5, 6, 7, 8).unwrap();
+        Comment {
+            id: "IC_sample".to_string(),
+            database_id: 17,
+            author: Some(crate::commands::gh::issue_agent::models::Author {
+                login: "sample-author".to_string(),
+            }),
+            created_at: timestamp,
+            updated_at: timestamp,
+            body: "Comment text".to_string(),
+        }
+    }
 
     #[rstest]
     #[case("<!-- author: testuser -->", Some(("author", "testuser".to_string())))]
@@ -144,5 +163,172 @@ mod tests {
         #[case] expected: Option<(&str, String)>,
     ) {
         assert_eq!(CommentFileMetadata::extract_key_value(line), expected);
+    }
+
+    #[rstest]
+    #[case::single_html_comment(indoc!("<!-- sticky marker -->"))]
+    #[case::html_comment_before_text(indoc! {"
+        <!-- sticky marker -->
+        Comment text"})]
+    #[case::html_comment_before_blank_line(indoc! {"
+        <!-- sticky marker -->
+
+        Comment text"})]
+    fn test_format_and_parse_preserve_body_starting_with_html_comment(
+        #[case] body: &str,
+        mut comment: Comment,
+    ) {
+        comment.body = body.to_string();
+
+        let content = LocalComment::format_from_comment(&comment);
+        let parsed =
+            LocalComment::parse(&content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some(comment.created_at.to_rfc3339()),
+                Some(comment.updated_at.to_rfc3339()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                body.to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    fn test_parse_preserves_extra_blank_line_in_body() {
+        let content = indoc! {"
+            <!-- author: sample-author -->
+            <!-- createdAt: 2031-04-05T06:07:08+00:00 -->
+            <!-- updatedAt: 2031-04-05T06:07:08+00:00 -->
+            <!-- id: IC_sample -->
+            <!-- databaseId: 17 -->
+
+
+            Comment text"};
+        let parsed =
+            LocalComment::parse(content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                indoc! {"
+
+                    Comment text"}
+                .to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::no_leading_blank_lines(&["Comment text"], "Comment text")]
+    #[case::multiple_leading_blank_lines(&["", "", "Comment text"], "Comment text")]
+    fn test_parse_new_comment_without_header(#[case] lines: &[&str], #[case] expected_body: &str) {
+        let content = lines.join("\n");
+        let parsed = LocalComment::parse(
+            &content,
+            "new_comment.md".to_string(),
+            Path::new("new_comment.md"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (
+                parsed.filename,
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                "new_comment.md".to_string(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                expected_body.to_string(),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::single_line_body(
+        &[
+            "<!-- author: sample-author -->",
+            "<!-- createdAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- updatedAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- id: IC_sample -->",
+            "<!-- databaseId: 17 -->",
+            "Comment text",
+        ],
+        "Comment text",
+    )]
+    #[case::multiple_body_lines(
+        &[
+            "<!-- author: sample-author -->",
+            "<!-- createdAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- updatedAt: 2031-04-05T06:07:08+00:00 -->",
+            "<!-- id: IC_sample -->",
+            "<!-- databaseId: 17 -->",
+            "Comment text",
+            "Additional text",
+        ],
+        indoc! {"
+            Comment text
+            Additional text"},
+    )]
+    fn test_parse_header_without_blank_separator(
+        #[case] lines: &[&str],
+        #[case] expected_body: &str,
+    ) {
+        let content = lines.join("\n");
+        let parsed =
+            LocalComment::parse(&content, "comment.md".to_string(), Path::new("comment.md"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                parsed.metadata.author,
+                parsed.metadata.created_at,
+                parsed.metadata.updated_at,
+                parsed.metadata.id,
+                parsed.metadata.database_id,
+                parsed.body,
+            ),
+            (
+                Some("sample-author".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("2031-04-05T06:07:08+00:00".to_string()),
+                Some("IC_sample".to_string()),
+                Some(17),
+                expected_body.to_string(),
+            ),
+        );
     }
 }
