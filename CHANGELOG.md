@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.487](https://github.com/fohte/armyknife/compare/v0.1.486...v0.1.487) (2026-10-28)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** widen PR series diagram labels ([#1316](https://github.com/fohte/armyknife/issues/1316)) ([82c904f](https://github.com/fohte/armyknife/commit/82c904f2de74e26a4521c2f62ca76344c5811c69))
+
 ## [0.1.486](https://github.com/fohte/armyknife/compare/v0.1.485...v0.1.486) (2026-10-28)
 
 
