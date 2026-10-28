@@ -76,7 +76,11 @@ where
                 session = %thread_id,
                 error = %error,
             );
-            MatchingItemSnapshot::default()
+            if error.is_thread_without_turns_error() {
+                matching_user_message_snapshot(&json!({"turns": []}), content)
+            } else {
+                MatchingItemSnapshot::default()
+            }
         }
         Err(error) => {
             return Err(DeliveryError::NotDelivered(
@@ -711,18 +715,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::paginated(json!({"code": -32601, "message": "list_turns is not supported yet"}))]
+    #[case::paginated(
+        json!({"code": -32601, "message": "list_turns is not supported yet"}),
+        None,
+    )]
     #[case::legacy(json!({
         "code": -32600,
         "message": "thread thread-a is not materialized yet; includeTurns is unavailable before first user message",
-    }))]
+    }), None)]
     #[case::changed_message(json!({
         "code": -32000,
         "message": "thread history is temporarily unavailable",
-    }))]
+    }), Some(CLIENT_USER_MESSAGE_ID))]
     fn proceeds_when_pre_turn_read_is_rejected(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
         #[case] error: Value,
+        #[case] client_user_message_id: Option<&'static str>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
@@ -743,11 +751,7 @@ mod tests {
             send_response(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
-                thread_response(
-                    "inProgress",
-                    Some(CLIENT_USER_MESSAGE_ID),
-                    Some("hello there"),
-                ),
+                thread_response("inProgress", client_user_message_id, Some("hello there")),
             )?;
             Ok(vec![snapshot_request, turn_request, resume_request])
         });
