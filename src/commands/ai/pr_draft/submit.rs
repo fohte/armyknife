@@ -49,6 +49,8 @@ struct TqBranchMetadata {
 trait PostSubmitProcessor {
     fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
 
+    fn has_public_plan(&self, metadata: &TqBranchMetadata) -> bool;
+
     async fn link_and_sync(
         &self,
         metadata: &TqBranchMetadata,
@@ -64,6 +66,20 @@ struct PrSeriesPostSubmitProcessor<'a> {
 impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
     fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata> {
         read_current_branch_tq_metadata(branch)
+    }
+
+    fn has_public_plan(&self, metadata: &TqBranchMetadata) -> bool {
+        match crate::commands::ai::pr_series::load_plan_if_present(&metadata.task_id) {
+            Ok(plan) => plan.is_some(),
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %metadata.task_id,
+                    error = %error,
+                    "failed to check for a PR series plan"
+                );
+                false
+            }
+        }
     }
 
     async fn link_and_sync(
@@ -191,6 +207,21 @@ async fn run_impl(
         _ => None,
     };
 
+    let target_is_current_repo = if args.filepath.is_some() {
+        current_repo_identity()
+            .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
+    } else {
+        true
+    };
+    let tq_metadata = if target_is_current_repo {
+        post_submit_processor.metadata_for_branch(&target.branch)
+    } else {
+        None
+    };
+    let has_public_plan = tq_metadata
+        .as_ref()
+        .is_some_and(|metadata| post_submit_processor.has_public_plan(metadata));
+
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
     // lets users enforce custom rules (e.g., forbid cross-org issue links).
@@ -212,10 +243,15 @@ async fn run_impl(
     let pr_url = match update_target {
         Some(number) => {
             // Update existing PR
-            let existing_body = gh_client
-                .get_pull_request_body(&target.owner, &target.repo, number)
-                .await?;
-            let body = preserve_managed_section(&existing_body, &draft.body)?;
+            let body = body_for_existing_pr_update(
+                gh_client,
+                &target.owner,
+                &target.repo,
+                number,
+                &draft.body,
+                has_public_plan,
+            )
+            .await;
             gh_client
                 .update_pull_request(UpdatePrParams {
                     owner: target.owner.clone(),
@@ -242,17 +278,6 @@ async fn run_impl(
         }
     };
 
-    let target_is_current_repo = if args.filepath.is_some() {
-        current_repo_identity()
-            .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
-    } else {
-        true
-    };
-    let tq_metadata = if target_is_current_repo {
-        post_submit_processor.metadata_for_branch(&target.branch)
-    } else {
-        None
-    };
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -281,6 +306,47 @@ async fn run_impl(
     draft.cleanup()?;
 
     Ok(())
+}
+
+async fn body_for_existing_pr_update(
+    gh_client: &impl PrBodyClient,
+    owner: &str,
+    repo: &str,
+    number: u64,
+    submitted_body: &str,
+    has_public_plan: bool,
+) -> String {
+    if !has_public_plan {
+        return submitted_body.to_string();
+    }
+
+    let existing_body = match gh_client.get_pull_request_body(owner, repo, number).await {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(
+                owner,
+                repo,
+                number,
+                error = %error,
+                "failed to read the existing PR body; continuing with the submitted body"
+            );
+            return submitted_body.to_string();
+        }
+    };
+
+    match preserve_managed_section(&existing_body, submitted_body) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::warn!(
+                owner,
+                repo,
+                number,
+                error = %error,
+                "failed to preserve the PR series section; continuing with the submitted body"
+            );
+            submitted_body.to_string()
+        }
+    }
 }
 
 fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
@@ -378,6 +444,10 @@ mod tests {
             None
         }
 
+        fn has_public_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+            false
+        }
+
         async fn link_and_sync(
             &self,
             _metadata: &TqBranchMetadata,
@@ -412,11 +482,16 @@ mod tests {
         calls: Mutex<Vec<PostSubmitCall>>,
         failure_stage: Option<SubmitSyncStage>,
         metadata: Option<TqBranchMetadata>,
+        public_plan: bool,
     }
 
     impl PostSubmitProcessor for PostSubmitSpy {
         fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
             self.metadata.clone()
+        }
+
+        fn has_public_plan(&self, _metadata: &TqBranchMetadata) -> bool {
+            self.public_plan
         }
 
         async fn link_and_sync(
@@ -1046,18 +1121,19 @@ mod tests {
         repo: &str,
         branch: &str,
         pr_number: u64,
-        existing_body: &str,
+        existing_body: Option<&str>,
         updated_body: &str,
     ) -> TestEnv {
         crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
-        ctx.list_pull_requests_with(pr_number, "Old title", existing_body, branch)
+        ctx.list_pull_requests_with(pr_number, "Old title", existing_body.unwrap_or(""), branch)
             .await;
-        ctx.pull_request(pr_number)
-            .get_body(Some(existing_body))
-            .await;
+        match existing_body {
+            Some(body) => ctx.pull_request(pr_number).get_body(Some(body)).await,
+            None => ctx.pull_request(pr_number).get_body_error(503).await,
+        }
         ctx.update_pull_request(pr_number, "Updated title", updated_body, branch)
             .await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
@@ -1099,7 +1175,7 @@ mod tests {
             "repo_submit_update",
             "feature/existing-pr",
             42,
-            existing_body,
+            Some(existing_body),
             updated_body,
         )
         .await;
@@ -1127,25 +1203,201 @@ mod tests {
             Ok(())
         };
         let current_repo = || Some((env.owner.clone(), env.repo.clone()));
+        let processor = PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            public_plan: true,
+            ..PostSubmitSpy::default()
+        };
         let result = run_impl(
             &args,
             &client,
             &noop_hook,
             write_config,
             current_repo,
-            &NoopPostSubmitProcessor,
+            &processor,
             no_vibe_access,
         )
         .await;
+        let update_payloads = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/owner/repo_submit_update/pulls/42"
+            })
+            .map(|request| request.body_json::<serde_json::Value>())
+            .collect::<serde_json::Result<Vec<_>>>()
+            .expect("decode update request body");
 
         assert_eq!(
-            result
-                .map(|()| cached_config.into_inner().expect("cache spy mutex"))
-                .map_err(|error| error.to_string()),
-            Ok(Some((
-                "branch.feature/existing-pr.pr-url".to_string(),
-                "https://github.com/owner/repo_submit_update/pull/42".to_string(),
-            ))),
+            (
+                result
+                    .map(|()| cached_config.into_inner().expect("cache spy mutex"))
+                    .map_err(|error| error.to_string()),
+                update_payloads,
+            ),
+            (
+                Ok(Some((
+                    "branch.feature/existing-pr.pr-url".to_string(),
+                    "https://github.com/owner/repo_submit_update/pull/42".to_string(),
+                ))),
+                vec![serde_json::json!({
+                    "title": "Updated title",
+                    "body": updated_body,
+                })],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::malformed_markers(Some("Existing body\n<!-- pr-series:start -->"))]
+    #[case::body_read_failure(None)]
+    #[tokio::test]
+    async fn submit_updates_with_draft_body_when_existing_section_cannot_be_preserved(
+        #[case] existing_body: Option<&str>,
+    ) {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            "repo_submit_preserve_fallback",
+            "feature/preserve-fallback",
+            42,
+            existing_body,
+            "Updated body",
+        )
+        .await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/preserve-fallback",
+            "Updated title",
+            "Updated body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+        let processor = PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            public_plan: true,
+            ..PostSubmitSpy::default()
+        };
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await;
+        let update_payloads = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| {
+                request.method.as_str() == "PATCH"
+                    && request.url.path() == "/repos/owner/repo_submit_preserve_fallback/pulls/42"
+            })
+            .map(|request| request.body_json::<serde_json::Value>())
+            .collect::<serde_json::Result<Vec<_>>>()
+            .expect("decode update request body");
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), update_payloads),
+            (
+                Ok(()),
+                vec![serde_json::json!({
+                    "title": "Updated title",
+                    "body": "Updated body\n",
+                })],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_skips_existing_body_fetch_without_public_plan() {
+        let env = setup_test_env_with_existing_pr(
+            "owner",
+            "repo_submit_without_plan",
+            "feature/without-plan",
+            42,
+            Some("Existing body"),
+            "Updated body",
+        )
+        .await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/without-plan",
+            "Updated title",
+            "Updated body",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+        let processor = PostSubmitSpy {
+            metadata: Some(TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            ..PostSubmitSpy::default()
+        };
+
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await;
+        let requests = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .map(|request| (request.method.to_string(), request.url.path().to_string()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), requests),
+            (
+                Ok(()),
+                vec![
+                    (
+                        "GET".to_string(),
+                        "/repos/owner/repo_submit_without_plan".to_string()
+                    ),
+                    (
+                        "GET".to_string(),
+                        "/repos/owner/repo_submit_without_plan/pulls".to_string(),
+                    ),
+                    (
+                        "PATCH".to_string(),
+                        "/repos/owner/repo_submit_without_plan/pulls/42".to_string(),
+                    ),
+                ],
+            ),
         );
     }
 
@@ -1331,7 +1583,7 @@ mod tests {
             "repo_submit_hook_update",
             "feature/hook-update",
             42,
-            "Old body",
+            Some("Old body"),
             "Updated body",
         )
         .await;

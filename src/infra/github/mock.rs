@@ -405,6 +405,14 @@ impl GitHubMockServer {
         GitHubClient::with_base_url(&self.server.uri(), "test-token").unwrap()
     }
 
+    #[cfg(test)]
+    pub async fn received_requests(&self) -> Vec<wiremock::Request> {
+        self.server
+            .received_requests()
+            .await
+            .expect("mock server is available")
+    }
+
     /// Create a repository context for building mocks.
     ///
     /// This is the preferred way to set up mocks. Example:
@@ -1076,6 +1084,17 @@ impl<'a> MockPullRequestBuilder<'a> {
                 "body": body,
                 "merged_at": null,
             })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mount a failing GET /repos/{owner}/{repo}/pulls/{number} response.
+    pub async fn get_body_error(self, status: u16) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .respond_with(ResponseTemplate::new(status))
             .mount(self.server)
             .await;
     }
