@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.480](https://github.com/fohte/armyknife/compare/v0.1.479...v0.1.480) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/close:** unblock safe session cleanup ([#1303](https://github.com/fohte/armyknife/issues/1303)) ([dad4e1e](https://github.com/fohte/armyknife/commit/dad4e1e5dbc8763a64ae382abfe3eaa614286a02))
+
 ## [0.1.479](https://github.com/fohte/armyknife/compare/v0.1.478...v0.1.479) (2026-10-28)
 
 
