@@ -10,7 +10,7 @@ pub(super) async fn close_session_value(
     args: &CloseArgs,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
-    let Some(worktree_root) = super::linked_worktree_root(&session.cwd) else {
+    let Some(worktree_root) = super::worktree::linked_worktree_root(&session.cwd) else {
         return close_session_value_without_worktree(
             session,
             args,
@@ -31,7 +31,7 @@ pub(super) async fn close_session_value(
         super::close_tracked_session,
         || {
             let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
-            super::close_worktree_session(session, args.force, current_pane_id.as_deref())
+            super::worktree::close_worktree_session(session, args.force, current_pane_id.as_deref())
         },
         |plan| crate::shared::worktree_delete::execute(plan, args.skip_hooks),
     )
@@ -69,7 +69,12 @@ where
         return Ok(());
     }
 
-    super::close_with_worktree_plan(prepare_worktree, close_worktree_session, remove_worktree).await
+    super::worktree::close_with_worktree_plan(
+        prepare_worktree,
+        close_worktree_session,
+        remove_worktree,
+    )
+    .await
 }
 
 fn close_session_value_without_worktree(
@@ -106,7 +111,7 @@ fn caller_session_is_in_worktree(
     load_session: impl FnOnce(&str) -> Result<Option<Session>>,
 ) -> Result<bool> {
     Ok(match load_session(caller_session_id)? {
-        Some(session) => super::path_is_within_worktree(&session.cwd, worktree_root),
+        Some(session) => super::worktree::path_is_within_worktree(&session.cwd, worktree_root),
         None => true,
     })
 }
