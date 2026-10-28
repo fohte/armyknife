@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.492](https://github.com/fohte/armyknife/compare/v0.1.491...v0.1.492) (2026-10-28)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** sync comments after push ([#1331](https://github.com/fohte/armyknife/issues/1331)) ([1c0cf2c](https://github.com/fohte/armyknife/commit/1c0cf2caa0dcbcdadbb37a3c1b506fbf867bd42c))
+
 ## [0.1.491](https://github.com/fohte/armyknife/compare/v0.1.490...v0.1.491) (2026-10-28)
 
 
