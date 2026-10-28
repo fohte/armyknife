@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.485](https://github.com/fohte/armyknife/compare/v0.1.484...v0.1.485) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/close:** keep shared worktrees ([#1312](https://github.com/fohte/armyknife/issues/1312)) ([803349d](https://github.com/fohte/armyknife/commit/803349d249bdfd90a4762a24675d51da3ad5fd96))
+
 ## [0.1.484](https://github.com/fohte/armyknife/compare/v0.1.483...v0.1.484) (2026-10-28)
 
 
