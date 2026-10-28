@@ -275,6 +275,7 @@ fn parse_threads(body: &str) -> Result<Vec<ParsedThread>, PrReviewError> {
     let mut line_start = 0;
 
     for line in body.split_inclusive('\n') {
+        // Diff context lines can contain marker text without starting a thread.
         if line.starts_with(thread_marker) {
             thread_starts.push(line_start);
         }
@@ -495,64 +496,6 @@ mod tests {
         assert_eq!(parsed.threads[1].path, "src/b.rs");
         assert_eq!(parsed.threads[1].line, Some(20));
         assert!(parsed.threads[1].resolve);
-    }
-
-    #[rstest]
-    fn test_parse_serialized_thread_marker_in_diff_hunk() {
-        let content = indoc! {r#"
-            ---
-            pr: 7
-            repo: "example/project"
-            pulled_at: "2025-03-04T05:06:07Z"
-            ---
-
-            <!-- thread: RT_sample path: src/example.rs:12 author: @sample-author -->
-            - [ ] resolve
-            <!-- diff -->
-            ```diff
-            @@ -1 +1 @@
-             <!-- thread: ignored path: docs/example.md -->
-            ```
-            <!-- /diff -->
-            <!-- comment: @sample-author 2025-03-04T05:06:07Z -->
-            Review comment
-            <!-- /comment -->
-            Draft response
-
-            <!-- thread: RT_next path: docs/next.md:4 author: @another-author -->
-            - [x] resolve
-            "#};
-
-        let parsed = MarkdownParser::parse(content).unwrap();
-
-        assert_eq!(
-            parsed,
-            ParsedThreadsFile {
-                frontmatter: ThreadsFrontmatter {
-                    pr: 7,
-                    repo: "example/project".to_string(),
-                    pulled_at: "2025-03-04T05:06:07Z".to_string(),
-                    submit: false,
-                },
-                reviews: vec![],
-                threads: vec![
-                    ParsedThread {
-                        thread_id: "RT_sample".to_string(),
-                        path: "src/example.rs".to_string(),
-                        line: Some(12),
-                        resolve: false,
-                        draft_reply: Some("Draft response".to_string()),
-                    },
-                    ParsedThread {
-                        thread_id: "RT_next".to_string(),
-                        path: "docs/next.md".to_string(),
-                        line: Some(4),
-                        resolve: true,
-                        draft_reply: None,
-                    },
-                ],
-            },
-        );
     }
 
     #[rstest]
@@ -1007,7 +950,9 @@ mod tests {
     }
 
     #[rstest]
-    fn test_roundtrip_serialize_parse() {
+    #[case::serialized_body_spacing(false)]
+    #[case::thread_at_body_start(true)]
+    fn test_roundtrip_thread_marker_in_diff_hunk(#[case] thread_at_body_start: bool) {
         use super::super::serializer::{MarkdownSerializer, ThreadsFrontmatter};
         use crate::commands::gh::pr_review::models::{
             Comment, PrData, ReviewThread,
@@ -1018,45 +963,110 @@ mod tests {
         let pr_data = PrData {
             reviews: vec![],
             threads: vec![ReviewThread {
-                id: Some("RT_roundtrip".to_string()),
+                id: Some("RT_sample".to_string()),
                 is_resolved: false,
                 comments: CommentsNode {
                     nodes: vec![Comment {
                         database_id: 1,
                         author: Some(Author {
-                            login: "reviewer".to_string(),
+                            login: "sample-author".to_string(),
                         }),
-                        body: "Please fix this".to_string(),
-                        created_at: "2024-01-15T10:30:00Z".to_string(),
-                        path: Some("src/main.rs".to_string()),
-                        line: Some(42),
+                        body: "Review summary".to_string(),
+                        created_at: "2025-01-02T00:00:00Z".to_string(),
+                        path: Some("src/example.rs".to_string()),
+                        line: Some(1),
                         start_line: None,
                         original_line: None,
                         original_start_line: None,
-                        diff_hunk: Some("@@ -40,3 +40,5 @@\n context\n-old\n+new".to_string()),
+                        diff_hunk: Some(
+                            indoc! {r#"
+                                @@ -1,2 +1,2 @@
+                                 <!-- thread: RT_embedded path: docs/embedded.md:9 -->
+                                 context after marker
+                            "#}
+                            .to_string(),
+                        ),
                         reply_to: None,
-                        pull_request_review: Some(PullRequestReview { database_id: 100 }),
+                        pull_request_review: Some(PullRequestReview { database_id: 200 }),
                     }],
                 },
             }],
         };
 
         let frontmatter = ThreadsFrontmatter {
-            pr: 42,
-            repo: "fohte/armyknife".to_string(),
-            pulled_at: "2024-01-15T10:00:00Z".to_string(),
+            pr: 17,
+            repo: "example/project".to_string(),
+            pulled_at: "2025-01-01T00:00:00Z".to_string(),
             submit: false,
         };
 
-        let serialized = MarkdownSerializer::serialize(&pr_data, &frontmatter);
+        let mut existing_drafts = std::collections::HashMap::new();
+        existing_drafts.insert("RT_sample".to_string(), "Draft response".to_string());
+        let serialized =
+            MarkdownSerializer::serialize_with_drafts(&pr_data, &frontmatter, &existing_drafts);
+        let mut expected_serialized = indoc! {r#"
+            ---
+            pr: 17
+            repo: "example/project"
+            pulled_at: "2025-01-01T00:00:00Z"
+            submit: false
+            ---
+
+            <!-- thread: RT_sample path: src/example.rs:1 author: @sample-author -->
+            - [ ] resolve
+            <!-- diff -->
+            ```diff
+            @@ -1,2 +1,2 @@
+             <!-- thread: RT_embedded path: docs/embedded.md:9 -->
+             context after marker
+            ```
+            <!-- /diff -->
+            <!-- comment: @sample-author 2025-01-02T00:00:00Z -->
+            Review summary
+            <!-- /comment -->
+            Draft response
+        "#}
+        .to_string();
+
+        let serialized = if thread_at_body_start {
+            remove_frontmatter_separator(&serialized)
+        } else {
+            serialized
+        };
+        if thread_at_body_start {
+            expected_serialized = remove_frontmatter_separator(&expected_serialized);
+        }
         let parsed = MarkdownParser::parse(&serialized).unwrap();
 
-        assert_eq!(parsed.frontmatter, frontmatter);
-        assert_eq!(parsed.threads.len(), 1);
-        assert_eq!(parsed.threads[0].thread_id, "RT_roundtrip");
-        assert_eq!(parsed.threads[0].path, "src/main.rs");
-        assert_eq!(parsed.threads[0].line, Some(42));
-        assert!(!parsed.threads[0].resolve);
-        assert!(parsed.threads[0].draft_reply.is_none());
+        assert_eq!(
+            (serialized, parsed),
+            (
+                expected_serialized,
+                ParsedThreadsFile {
+                    frontmatter,
+                    reviews: vec![],
+                    threads: vec![ParsedThread {
+                        thread_id: "RT_sample".to_string(),
+                        path: "src/example.rs".to_string(),
+                        line: Some(1),
+                        resolve: false,
+                        draft_reply: Some("Draft response".to_string()),
+                    }],
+                },
+            ),
+        );
+    }
+
+    fn remove_frontmatter_separator(content: &str) -> String {
+        let separator_start = content
+            .split_inclusive('\n')
+            .take_while(|line| !line.trim().is_empty())
+            .map(str::len)
+            .sum::<usize>();
+        format!(
+            "{}{}",
+            &content[..separator_start],
+            &content[separator_start + 1..]
+        )
     }
 }
