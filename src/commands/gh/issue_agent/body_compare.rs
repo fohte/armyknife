@@ -23,3 +23,23 @@ pub(crate) fn normalize_body_for_compare(body: &str) -> String {
 pub(crate) fn bodies_equal(a: &str, b: &str) -> bool {
     normalize_body_for_compare(a) == normalize_body_for_compare(b)
 }
+
+/// Compare comment bodies after normalizing GitHub line endings and trimming
+/// surrounding whitespace, as comment files have historically done.
+pub(crate) fn comment_bodies_equal(a: &str, b: &str) -> bool {
+    a.replace("\r\n", "\n").trim() == b.replace("\r\n", "\n").trim()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::comment_bodies_equal;
+    use rstest::rstest;
+
+    #[rstest]
+    #[case::crlf("first\nsecond", "first\r\nsecond", true)]
+    #[case::trimmed(" body ", "body", true)]
+    #[case::different_content("first\nsecond", "first\nthird", false)]
+    fn test_comment_bodies_equal(#[case] left: &str, #[case] right: &str, #[case] expected: bool) {
+        assert_eq!(comment_bodies_equal(left, right), expected);
+    }
+}

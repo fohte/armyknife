@@ -4,6 +4,7 @@ use indoc::formatdoc;
 
 use super::error::Result;
 use super::issue_storage::IssueStorage;
+use super::issue_storage_read::CommentSnapshot;
 use super::read::LocalComment;
 #[cfg(test)]
 use crate::commands::gh::issue_agent::models::IssueMetadata;
@@ -28,6 +29,14 @@ impl IssueStorage {
 
     fn save_base_issue_content(&self, content: &str) -> Result<()> {
         fs::write(self.dir.join(".issue.base.md"), content)?;
+        Ok(())
+    }
+
+    /// Save the managed comment snapshot without changing editable comment files.
+    pub fn save_base_comments(&self, comments: &[CommentSnapshot]) -> Result<()> {
+        fs::create_dir_all(&self.dir)?;
+        let content = serde_json::to_string_pretty(comments)?;
+        fs::write(self.dir.join(".comments.base.json"), content)?;
         Ok(())
     }
 
@@ -76,6 +85,15 @@ impl IssueStorage {
             fs::write(&path, content)?;
             saved_filenames.insert(filename);
         }
+
+        let snapshot: Vec<CommentSnapshot> = comments
+            .iter()
+            .map(|comment| CommentSnapshot {
+                id: comment.id.clone(),
+                body: comment.body.clone(),
+            })
+            .collect();
+        self.save_base_comments(&snapshot)?;
 
         // Remove stale comment files (but preserve new_*.md files)
         self.remove_stale_comment_files(&comments_dir, &saved_filenames)?;
@@ -299,6 +317,19 @@ mod tests {
         .unwrap();
         assert_eq!(second_comment.metadata.author, Some("unknown".to_string()));
         assert_eq!(second_comment.body, "Second comment");
+        assert_eq!(
+            storage.read_base_comments().unwrap(),
+            Some(vec![
+                CommentSnapshot {
+                    id: "IC_abc123".to_string(),
+                    body: "First comment".to_string(),
+                },
+                CommentSnapshot {
+                    id: "IC_def456".to_string(),
+                    body: "Second comment".to_string(),
+                },
+            ]),
+        );
     }
 
     #[rstest]

@@ -5,7 +5,7 @@ use crate::commands::gh::issue_agent::commands::test_helpers::{
     TestSetup, approve_file, create_comment_file, setup_local_comment, test_dir,
 };
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
-use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage};
+use crate::commands::gh::issue_agent::storage::{CommentSnapshot, IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
 use crate::infra::github::RemoteComment;
 use indoc::formatdoc;
@@ -473,6 +473,12 @@ async fn test_updates_own_comment(test_dir: TempDir) {
         )])
         .build()
         .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
     setup_local_comment(
         test_dir.path(),
         "001_comment_12345.md",
@@ -497,7 +503,96 @@ async fn test_updates_own_comment(test_dir: TempDir) {
         "testuser",
     )
     .await;
-    assert!(result.is_ok());
+    assert_eq!(
+        result
+            .map(|_| storage.read_base_comments().unwrap())
+            .unwrap(),
+        Some(vec![CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Updated".to_string(),
+        }]),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_remote_comment_posted_after_pull_is_not_deleted(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "otheruser",
+            "IC_new",
+            12346,
+            "New",
+        )])
+        .build()
+        .await;
+    storage.save_base_comments(&[]).unwrap();
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args_full(false, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+
+    assert_eq!(
+        result
+            .map(|_| storage.read_base_comments().unwrap())
+            .unwrap(),
+        Some(vec![]),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn test_remote_only_edit_does_not_require_edit_others(test_dir: TempDir) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "otheruser",
+            "IC_abc",
+            12345,
+            "Remote edit",
+        )])
+        .build()
+        .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &create_comment_file(
+            "otheruser",
+            "2024-01-01T12:00:00+00:00",
+            "IC_abc",
+            12345,
+            "Original",
+        ),
+    );
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args_full(false, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+
+    assert_eq!(
+        result
+            .map(|_| storage.read_base_comments().unwrap())
+            .unwrap(),
+        Some(vec![CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }]),
+    );
 }
 
 #[rstest]
