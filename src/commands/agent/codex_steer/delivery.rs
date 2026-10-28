@@ -60,16 +60,27 @@ fn send_and_confirm_with_reader<R>(
 where
     R: FnMut(&mut WebSocket<UnixStream>) -> tungstenite::Result<Message>,
 {
-    // A thread without a user message yet has no history to read, so the app-server
-    // rejects `includeTurns`; treat it as having no turns.
-    let snapshot_thread = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
-        Ok((response, _)) => response.get("thread").cloned().ok_or_else(|| {
-            DeliveryError::NotDelivered(anyhow!(
-                "Codex app-server thread/read response did not contain a thread before turn/start"
-            ))
-        })?,
-        Err(RequestError::Rejected(error)) if error.is_thread_without_turns_error() => {
-            json!({"turns": []})
+    // History is only used as a comparison baseline; a rejected read must not block delivery.
+    let snapshot = match read_thread(socket, thread_id, PRE_TURN_READ_REQUEST_ID) {
+        Ok((response, _)) => {
+            let thread = response.get("thread").cloned().ok_or_else(|| {
+                DeliveryError::NotDelivered(anyhow!(
+                    "Codex app-server thread/read response did not contain a thread before turn/start"
+                ))
+            })?;
+            matching_user_message_snapshot(&thread, content)
+        }
+        Err(RequestError::Rejected(error)) => {
+            tracing::warn!(
+                event = "agent.codex_steer.pre_turn_read_rejected",
+                session = %thread_id,
+                error = %error,
+            );
+            if error.is_thread_without_turns_error() {
+                matching_user_message_snapshot(&json!({"turns": []}), content)
+            } else {
+                MatchingItemSnapshot::default()
+            }
         }
         Err(error) => {
             return Err(DeliveryError::NotDelivered(
@@ -78,7 +89,6 @@ where
             ));
         }
     };
-    let snapshot = matching_user_message_snapshot(&snapshot_thread, content);
 
     let (turn_start_response, next_thread_read_request_id) =
         start_turn_with_recovery(socket, thread_id, content, effort, client_user_message_id)?;
@@ -330,7 +340,13 @@ fn confirm_after_turn_end(
     ) {
         return Ok(());
     }
-    Err(not_delivered())
+    if delivery.snapshot.baseline_available() {
+        Err(not_delivered())
+    } else {
+        Err(DeliveryError::Unconfirmed(anyhow!(
+            "Codex app-server turn ended without a matching client user message ID in thread history"
+        )))
+    }
 }
 
 fn read_thread(
@@ -664,7 +680,7 @@ mod tests {
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, _server_socket) = connected_sockets?;
-        let snapshot = MatchingItemSnapshot::default();
+        let snapshot = matching_user_message_snapshot(&json!({"turns": []}), "hello there");
         let delivery = DeliveryContext {
             thread_id: THREAD_ID,
             turn_id: TURN_ID,
@@ -699,14 +715,22 @@ mod tests {
     }
 
     #[rstest]
-    #[case::paginated(json!({"code": -32601, "message": "list_turns is not supported yet"}))]
+    #[case::paginated(
+        json!({"code": -32601, "message": "list_turns is not supported yet"}),
+        None,
+    )]
     #[case::legacy(json!({
         "code": -32600,
         "message": "thread thread-a is not materialized yet; includeTurns is unavailable before first user message",
-    }))]
-    fn proceeds_when_pre_turn_read_is_rejected_for_new_thread(
+    }), None)]
+    #[case::changed_message(json!({
+        "code": -32000,
+        "message": "thread history is temporarily unavailable",
+    }), Some(CLIENT_USER_MESSAGE_ID))]
+    fn proceeds_when_pre_turn_read_is_rejected(
         connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
         #[case] error: Value,
+        #[case] client_user_message_id: Option<&'static str>,
     ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
@@ -727,7 +751,7 @@ mod tests {
             send_response(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
-                thread_response("inProgress", None, Some("hello there")),
+                thread_response("inProgress", client_user_message_id, Some("hello there")),
             )?;
             Ok(vec![snapshot_request, turn_request, resume_request])
         });
@@ -742,6 +766,104 @@ mod tests {
         let requests = join_server(&client_socket, &result, server)?;
 
         assert_eq!((result, requests), (Ok(()), start_and_subscribe_requests()));
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::rejected_snapshot(-32000, "thread history is temporarily unavailable")]
+    fn does_not_confirm_same_body_notification_after_rejected_pre_turn_read(
+        connected_sockets: anyhow::Result<(WebSocket<UnixStream>, WebSocket<UnixStream>)>,
+        #[case] rejection_code: i64,
+        #[case] rejection_message: &'static str,
+    ) -> anyhow::Result<()> {
+        let (mut client_socket, server_socket) = connected_sockets?;
+        let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
+            let mut socket = server_socket;
+            let snapshot_request = read_request(&mut socket)?;
+            send_error(
+                &mut socket,
+                PRE_TURN_READ_REQUEST_ID,
+                rejection_code,
+                rejection_message,
+            )?;
+            let turn_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                TURN_START_REQUEST_ID,
+                json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
+            )?;
+            let resume_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                THREAD_RESUME_REQUEST_ID,
+                thread_response("inProgress", None, None),
+            )?;
+            let history_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                THREAD_READ_REQUEST_ID,
+                thread_response("inProgress", None, None),
+            )?;
+            let final_history_request = read_request(&mut socket)?;
+            send_response(
+                &mut socket,
+                NEXT_THREAD_READ_REQUEST_ID,
+                thread_response("interrupted", None, Some("hello there")),
+            )?;
+            Ok(vec![
+                snapshot_request,
+                turn_request,
+                resume_request,
+                history_request,
+                final_history_request,
+            ])
+        });
+        let mut notifications = [
+            Ok(Message::Text(
+                user_message_notification().to_string().into(),
+            )),
+            Ok(Message::Text(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": THREAD_ID,
+                        "turn": {"id": TURN_ID, "status": "interrupted", "items": []},
+                    },
+                })
+                .to_string()
+                .into(),
+            )),
+        ]
+        .into_iter();
+
+        let result = result_text(send_and_confirm_with_reader(
+            &mut client_socket,
+            THREAD_ID,
+            "hello there",
+            None,
+            CLIENT_USER_MESSAGE_ID,
+            |_| {
+                notifications
+                    .next()
+                    .unwrap_or(Err(tungstenite::Error::ConnectionClosed))
+            },
+        ));
+        let requests = join_server(&client_socket, &result, server)?;
+        let expected_requests = start_and_subscribe_requests()
+            .into_iter()
+            .chain([
+                thread_read_request(THREAD_READ_REQUEST_ID),
+                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+            ])
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            (result, requests),
+            (
+                Err("Codex app-server delivery is unconfirmed: Codex app-server turn ended without a matching client user message ID in thread history".to_string()),
+                expected_requests,
+            ),
+        );
         Ok(())
     }
 
@@ -1155,19 +1277,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_not_delivered_when_pre_turn_read_fails_for_other_reasons() -> anyhow::Result<()> {
+    fn reports_not_delivered_when_pre_turn_read_response_has_no_thread() -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets()?;
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            let snapshot_request = read_request(&mut socket)?;
-            socket.send(Message::Text(
-                json!({
-                    "id": PRE_TURN_READ_REQUEST_ID,
-                    "error": {"code": -32600, "message": "thread not found"},
-                })
-                .to_string()
-                .into(),
-            ))?;
+            let snapshot_request = read_snapshot(&mut socket, json!({"unavailable": true}))?;
             Ok(vec![snapshot_request])
         });
 
@@ -1183,7 +1297,7 @@ mod tests {
         assert_eq!(
             (result, requests),
             (
-                Err("Codex app-server did not deliver the message: could not read Codex thread before starting the turn: Codex app-server `thread/read` failed: thread not found (code -32600)".to_string()),
+                Err("Codex app-server did not deliver the message: Codex app-server thread/read response did not contain a thread before turn/start".to_string()),
                 vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
             ),
         );
@@ -1461,8 +1575,19 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn ignores_same_body_message_that_existed_before_the_turn() -> anyhow::Result<()> {
+    #[rstest]
+    #[case::snapshot_available(
+        false,
+        "Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history"
+    )]
+    #[case::snapshot_rejected(
+        true,
+        "Codex app-server delivery is unconfirmed: Codex app-server turn ended without a matching client user message ID in thread history"
+    )]
+    fn ignores_same_body_message_without_a_new_client_id(
+        #[case] reject_snapshot: bool,
+        #[case] expected_result: &str,
+    ) -> anyhow::Result<()> {
         let (mut client_socket, server_socket) = connected_sockets()?;
         let prior_message = json!({
             "thread": {"turns": [{
@@ -1477,7 +1602,17 @@ mod tests {
         });
         let server = std::thread::spawn(move || -> anyhow::Result<Vec<Value>> {
             let mut socket = server_socket;
-            let snapshot_request = read_snapshot(&mut socket, prior_message)?;
+            let snapshot_request = read_request(&mut socket)?;
+            if reject_snapshot {
+                send_error(
+                    &mut socket,
+                    PRE_TURN_READ_REQUEST_ID,
+                    -32000,
+                    "thread history is temporarily unavailable",
+                )?;
+            } else {
+                send_response(&mut socket, PRE_TURN_READ_REQUEST_ID, prior_message)?;
+            }
             let turn_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
@@ -1485,10 +1620,21 @@ mod tests {
                 json!({"turn": {"id": TURN_ID, "status": "inProgress"}}),
             )?;
             let resume_request = read_request(&mut socket)?;
+            socket.send(Message::Text(
+                json!({
+                    "method": "turn/completed",
+                    "params": {
+                        "threadId": THREAD_ID,
+                        "turn": {"id": TURN_ID, "status": "interrupted", "items": []},
+                    },
+                })
+                .to_string()
+                .into(),
+            ))?;
             send_response(
                 &mut socket,
                 THREAD_RESUME_REQUEST_ID,
-                thread_response("inProgress", None, Some("hello there")),
+                thread_response("interrupted", None, Some("hello there")),
             )?;
             let history_request = read_request(&mut socket)?;
             send_response(
@@ -1529,10 +1675,7 @@ mod tests {
 
         assert_eq!(
             (result, requests),
-            (
-                Err("Codex app-server did not deliver the message: Codex app-server turn ended before a matching user message appeared in thread history".to_string()),
-                expected_requests,
-            ),
+            (Err(expected_result.to_string()), expected_requests,),
         );
         Ok(())
     }

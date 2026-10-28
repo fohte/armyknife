@@ -43,6 +43,8 @@ pub(in crate::commands::agent::tui) fn create_test_session(id: &str) -> Session 
         agent_status: None,
         agent_status_clear_pending: false,
         engine: Engine::Claude,
+        model: None,
+        effort: None,
     }
 }
 

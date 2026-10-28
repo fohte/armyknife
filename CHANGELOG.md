@@ -1,5 +1,55 @@
 # Changelog
 
+## [0.1.475](https://github.com/fohte/armyknife/compare/v0.1.474...v0.1.475) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue work after record failures ([#1293](https://github.com/fohte/armyknife/issues/1293)) ([e830de5](https://github.com/fohte/armyknife/commit/e830de5b463592a985047bf707d0454043249fe1))
+
+## [0.1.474](https://github.com/fohte/armyknife/compare/v0.1.473...v0.1.474) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** continue after rejected thread reads ([#1291](https://github.com/fohte/armyknife/issues/1291)) ([7869285](https://github.com/fohte/armyknife/commit/7869285a5c09d65411b5190bd891dbfb5c70dbc2))
+* **agent:** continue sweep after auto-pause errors ([#1290](https://github.com/fohte/armyknife/issues/1290)) ([d595c8c](https://github.com/fohte/armyknife/commit/d595c8c64c42467ab0cb278cc68d32229e101937))
+
+## [0.1.473](https://github.com/fohte/armyknife/compare/v0.1.472...v0.1.473) (2026-10-27)
+
+
+### Features
+
+* **config:** support standalone fork metadata ([#1288](https://github.com/fohte/armyknife/issues/1288)) ([83ca893](https://github.com/fohte/armyknife/commit/83ca893e4200cee675ebd4d9ca856e5e5e3fcac1))
+
+## [0.1.472](https://github.com/fohte/armyknife/compare/v0.1.471...v0.1.472) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** use session IDs for commit trailers ([#1285](https://github.com/fohte/armyknife/issues/1285)) ([04bc3bc](https://github.com/fohte/armyknife/commit/04bc3bced0560475de9590d7791410106bf4a985))
+
+## [0.1.471](https://github.com/fohte/armyknife/compare/v0.1.470...v0.1.471) (2026-10-27)
+
+
+### Features
+
+* **agent:** store model and effort from hooks ([#1283](https://github.com/fohte/armyknife/issues/1283)) ([aac8ca0](https://github.com/fohte/armyknife/commit/aac8ca0e049d1d0c2439d49b01bc7d3388973fb5))
+
+## [0.1.470](https://github.com/fohte/armyknife/compare/v0.1.469...v0.1.470) (2026-10-27)
+
+
+### Bug Fixes
+
+* **agent:** tolerate transient tmux query failures ([#1281](https://github.com/fohte/armyknife/issues/1281)) ([6d9f0fc](https://github.com/fohte/armyknife/commit/6d9f0fc53209336c3c1a415d40282dd714a4f000))
+
+## [0.1.469](https://github.com/fohte/armyknife/compare/v0.1.468...v0.1.469) (2026-10-27)
+
+
+### Features
+
+* **ai:** add PR series plan sync ([#1279](https://github.com/fohte/armyknife/issues/1279)) ([1d0c976](https://github.com/fohte/armyknife/commit/1d0c976a588bcf049d7031746f6f4e3796f1b218))
+
 ## [0.1.468](https://github.com/fohte/armyknife/compare/v0.1.467...v0.1.468) (2026-10-27)
 
 

@@ -1061,6 +1061,44 @@ impl<'a> MockPullRequestBuilder<'a> {
             .mount(self.server)
             .await;
     }
+
+    /// Mount mock for GET /repos/{owner}/{repo}/pulls/{number}.
+    pub async fn get_body(self, body: Option<&str>) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "number": self.number,
+                "title": "A sample pull request",
+                "state": "open",
+                "html_url": format!("https://github.com/{owner}/{repo}/pull/{}", self.number),
+                "body": body,
+                "merged_at": null,
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Require a body-only request when updating a pull request.
+    pub async fn update_body_matching(self, body: &str) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let expected_body = json!({ "body": body });
+        Mock::given(method("PATCH"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{}", self.number)))
+            .and(body_json(expected_body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "number": self.number,
+                "title": "A sample pull request",
+                "state": "open",
+                "html_url": format!("https://github.com/{owner}/{repo}/pull/{}", self.number),
+                "body": body,
+                "merged_at": null,
+            })))
+            .mount(self.server)
+            .await;
+    }
 }
 
 #[cfg(test)]

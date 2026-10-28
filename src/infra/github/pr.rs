@@ -62,6 +62,15 @@ pub struct UpdatePrParams {
     pub body: String,
 }
 
+/// Parameters for updating only a pull request body.
+#[derive(Debug, Clone)]
+pub struct UpdatePrBodyParams {
+    pub owner: String,
+    pub repo: String,
+    pub number: u64,
+    pub body: String,
+}
+
 /// Query parameter for batch PR lookup across repos and branches.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BranchPrQuery {
@@ -94,6 +103,15 @@ pub trait PrClient: Send + Sync {
     ) -> Result<Option<PrInfo>>;
 }
 
+/// Pull request body operations that do not alter its title.
+pub trait PrBodyClient: Send + Sync {
+    /// Get the body of a pull request.
+    async fn get_pull_request_body(&self, owner: &str, repo: &str, number: u64) -> Result<String>;
+
+    /// Update only a pull request's body, return its URL.
+    async fn update_pull_request_body(&self, params: UpdatePrBodyParams) -> Result<String>;
+}
+
 /// REST API response for PR create/update/list.
 #[derive(Debug, Deserialize)]
 struct PrResponse {
@@ -102,6 +120,7 @@ struct PrResponse {
     state: Option<String>,
     html_url: Option<String>,
     merged_at: Option<String>,
+    body: Option<String>,
 }
 
 impl PrClient for GitHubClient {
@@ -178,6 +197,24 @@ impl PrClient for GitHubClient {
             state,
             url,
         }))
+    }
+}
+
+impl PrBodyClient for GitHubClient {
+    async fn get_pull_request_body(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{number}");
+        let pr: PrResponse = self.rest_get(&route).await?;
+        Ok(pr.body.unwrap_or_default())
+    }
+
+    async fn update_pull_request_body(&self, params: UpdatePrBodyParams) -> Result<String> {
+        let route = format!(
+            "/repos/{}/{}/pulls/{}",
+            params.owner, params.repo, params.number
+        );
+        let payload = serde_json::json!({ "body": params.body });
+        let pr: PrResponse = self.rest_patch(&route, &payload).await?;
+        pr.html_url.ok_or_else(|| GitHubError::MissingPrUrl.into())
     }
 }
 
@@ -396,8 +433,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        BranchPrQuery, PrCiState, PrInfo, PrProgressInfo, PrState, parse_pr_node,
-        parse_pr_progress_node,
+        BranchPrQuery, PrBodyClient, PrCiState, PrInfo, PrProgressInfo, PrState,
+        UpdatePrBodyParams, parse_pr_node, parse_pr_progress_node,
     };
 
     #[tokio::test]
@@ -482,6 +519,51 @@ mod tests {
                 }),
             )]),
         );
+    }
+
+    #[tokio::test]
+    async fn body_update_sends_only_the_body_field() {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.repo("acme", "notify-api")
+            .pull_request(17)
+            .update_body_matching("Updated series section")
+            .await;
+
+        let client = mock.client();
+        let actual = client
+            .update_pull_request_body(UpdatePrBodyParams {
+                owner: "acme".to_string(),
+                repo: "notify-api".to_string(),
+                number: 17,
+                body: "Updated series section".to_string(),
+            })
+            .await
+            .expect("body update");
+
+        assert_eq!(actual, "https://github.com/acme/notify-api/pull/17");
+    }
+
+    #[rstest]
+    #[case::body(Some("Existing body"), "Existing body")]
+    #[case::null_body(None, "")]
+    #[tokio::test]
+    async fn body_lookup_returns_the_pull_request_body(
+        #[case] body: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let mock = crate::infra::github::mock::GitHubMockServer::start().await;
+        mock.repo("acme", "notify-api")
+            .pull_request(17)
+            .get_body(body)
+            .await;
+
+        let client = mock.client();
+        let actual = client
+            .get_pull_request_body("acme", "notify-api", 17)
+            .await
+            .expect("body lookup");
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
