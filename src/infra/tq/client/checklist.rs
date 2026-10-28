@@ -87,6 +87,25 @@ impl TqClient {
         }
     }
 
+    /// Links a pull request URL to a checklist item.
+    pub async fn link_checklist_item(&self, item_id: &str, github_url: &str) -> Result<()> {
+        let args = build_checklist_item_update_args(item_id, github_url);
+        let task_id = item_id.to_string();
+        let github_url = github_url.to_string();
+        let join_result = tokio::task::spawn_blocking(move || {
+            run_tq_command(&build_checklist_item_update_args(&task_id, &github_url))
+        })
+        .await;
+        match join_result {
+            Ok(result) => result,
+            Err(error) => Err(TqError::command_failed(
+                &args,
+                format!("task panicked: {error}"),
+                None,
+            )),
+        }
+    }
+
     /// Lists GitHub links attached to a task.
     pub async fn task_github_links(&self, task_id: &str) -> Result<Vec<TqGithubLink>> {
         let args = build_task_get_args(task_id);
@@ -127,6 +146,17 @@ fn build_checklist_list_args(task_id: &str) -> Vec<String> {
     ]
 }
 
+fn build_checklist_item_update_args(item_id: &str, github_url: &str) -> Vec<String> {
+    vec![
+        "checklist".to_string(),
+        "item".to_string(),
+        "update".to_string(),
+        item_id.to_string(),
+        "--github".to_string(),
+        github_url.to_string(),
+    ]
+}
+
 fn build_task_get_args(task_id: &str) -> Vec<String> {
     vec!["task".to_string(), "get".to_string(), task_id.to_string()]
 }
@@ -163,11 +193,48 @@ fn run_tq_json<T: serde::de::DeserializeOwned>(args: &[String]) -> Result<T> {
     Ok(serde_json::from_slice(&output.stdout)?)
 }
 
+fn run_tq_command(args: &[String]) -> Result<()> {
+    let mut command = ExternalTool::Tq.command();
+    command.args(args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|error| TqError::command_failed(args, error.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
 
     use super::*;
+
+    #[test]
+    fn builds_checklist_link_update_args() {
+        assert_eq!(
+            build_checklist_item_update_args(
+                "sample-checklist-item",
+                "https://github.com/acme/notify-api/pull/17",
+            ),
+            vec![
+                "checklist",
+                "item",
+                "update",
+                "sample-checklist-item",
+                "--github",
+                "https://github.com/acme/notify-api/pull/17",
+            ],
+        );
+    }
 
     #[test]
     fn parses_nested_checklist_items_and_optional_progress_fields() {

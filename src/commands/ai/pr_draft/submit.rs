@@ -4,7 +4,10 @@ use std::path::{Path, PathBuf};
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::infra::git::cmd::run_git;
+use crate::commands::ai::pr_series_aftercare::{
+    SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
+};
+use crate::infra::git::cmd::{run_git, run_git_optional};
 use crate::infra::github::{
     CreatePrParams, GitHubClient, PrClient, PrState, RepoClient, UpdatePrParams,
 };
@@ -36,14 +39,60 @@ struct PrTarget {
     is_private: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TqBranchMetadata {
+    task_id: String,
+    checklist_item_id: String,
+}
+
+trait PostSubmitProcessor {
+    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
+
+    async fn link_and_sync(
+        &self,
+        metadata: &TqBranchMetadata,
+        target: &PrTarget,
+        pr_url: &str,
+    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
+}
+
+struct PrSeriesPostSubmitProcessor<'a> {
+    github: &'a GitHubClient,
+}
+
+impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
+    fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata> {
+        read_current_branch_tq_metadata(branch)
+    }
+
+    async fn link_and_sync(
+        &self,
+        metadata: &TqBranchMetadata,
+        target: &PrTarget,
+        pr_url: &str,
+    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+        link_and_sync_after_submit(
+            self.github,
+            &metadata.task_id,
+            &metadata.checklist_item_id,
+            &target.owner,
+            &target.repo,
+            pr_url,
+        )
+        .await
+    }
+}
+
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
     let client = GitHubClient::get()?;
-    run_impl(
+    let post_submit_processor = PrSeriesPostSubmitProcessor { github: client };
+    run_impl_with_post_submit(
         args,
         client,
         default_runner(),
         write_pr_url_config,
         read_current_repo_identity,
+        &post_submit_processor,
         |owner, repo| ensure_no_review_access(is_vibe_enabled, load_config, owner, repo),
     )
     .await
@@ -61,12 +110,34 @@ fn ensure_no_review_access(
     ensure_repo_vibe_access(&load_config()?, owner, repo)
 }
 
+#[cfg(test)]
 async fn run_impl(
     args: &SubmitArgs,
     gh_client: &(impl PrClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+    vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    run_impl_with_post_submit(
+        args,
+        gh_client,
+        run_hook,
+        write_config,
+        current_repo_identity,
+        &NoopPostSubmitProcessor,
+        vibe_access_check,
+    )
+    .await
+}
+
+async fn run_impl_with_post_submit(
+    args: &SubmitArgs,
+    gh_client: &(impl PrClient + RepoClient),
+    run_hook: HookRunner<'_>,
+    write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
+    current_repo_identity: impl FnOnce() -> Option<(String, String)>,
+    post_submit_processor: &impl PostSubmitProcessor,
     vibe_access_check: impl FnOnce(&str, &str) -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
     // Get draft path and target repo info
@@ -193,6 +264,11 @@ async fn run_impl(
     } else {
         true
     };
+    let tq_metadata = if target_is_current_repo {
+        post_submit_processor.metadata_for_branch(&target.branch)
+    } else {
+        None
+    };
     if target_is_current_repo {
         let config_key = format!("branch.{}.pr-url", target.branch);
         if let Err(error) = write_config(&config_key, &pr_url) {
@@ -206,10 +282,86 @@ async fn run_impl(
 
     println!("{pr_url}");
 
+    if let Some(metadata) = tq_metadata
+        && let Err(failure) = post_submit_processor
+            .link_and_sync(&metadata, &target, &pr_url)
+            .await
+    {
+        eprintln!(
+            "{}",
+            format_post_submit_failure(&failure, &metadata, &pr_url)
+        );
+    }
+
     // Cleanup
     draft.cleanup()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+struct NoopPostSubmitProcessor;
+
+#[cfg(test)]
+impl PostSubmitProcessor for NoopPostSubmitProcessor {
+    fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+        None
+    }
+
+    async fn link_and_sync(
+        &self,
+        _metadata: &TqBranchMetadata,
+        _target: &PrTarget,
+        _pr_url: &str,
+    ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+        Ok(SubmitSyncOutcome::NoPlan)
+    }
+}
+
+fn read_current_branch_tq_metadata(branch: &str) -> Option<TqBranchMetadata> {
+    tq_branch_metadata(
+        read_branch_config_value(branch, "x-tq-task-id"),
+        read_branch_config_value(branch, "x-tq-checklist-item-id"),
+    )
+}
+
+fn tq_branch_metadata(
+    task_id: Option<String>,
+    checklist_item_id: Option<String>,
+) -> Option<TqBranchMetadata> {
+    let task_id = task_id.filter(|value| !value.trim().is_empty())?;
+    let checklist_item_id = checklist_item_id.filter(|value| !value.trim().is_empty())?;
+    Some(TqBranchMetadata {
+        task_id,
+        checklist_item_id,
+    })
+}
+
+fn read_branch_config_value(branch: &str, name: &str) -> Option<String> {
+    let key = format!("branch.{branch}.{name}");
+    run_git_optional(Path::new("."), ["config", "--local", "--get", &key])
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn format_post_submit_failure(
+    failure: &SubmitSyncFailure,
+    metadata: &TqBranchMetadata,
+    pr_url: &str,
+) -> String {
+    match failure.stage {
+        SubmitSyncStage::Prepare => format!(
+            "PR submit completed, but PR series setup failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
+            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
+        ),
+        SubmitSyncStage::Link => format!(
+            "PR submit completed, but its tq checklist link failed: {}\nAfter resolving the error, run `tq checklist item update {} --github {}` and then `a ai pr-series sync {}`.",
+            failure.error, metadata.checklist_item_id, pr_url, metadata.task_id
+        ),
+        SubmitSyncStage::Sync => format!(
+            "PR submit completed and linked, but PR series synchronization failed: {}\nAfter resolving the listed errors, run `a ai pr-series sync {}`.",
+            failure.error, metadata.task_id
+        ),
+    }
 }
 
 fn write_pr_url_config(key: &str, url: &str) -> anyhow::Result<()> {
@@ -267,6 +419,43 @@ mod tests {
     #[derive(Default)]
     struct HookSpy {
         calls: Mutex<Vec<HookCall>>,
+    }
+
+    type PostSubmitCall = (String, String, String, String, String);
+
+    #[derive(Default)]
+    struct PostSubmitSpy {
+        calls: Mutex<Vec<PostSubmitCall>>,
+        failure_stage: Option<SubmitSyncStage>,
+        metadata: Option<TqBranchMetadata>,
+    }
+
+    impl PostSubmitProcessor for PostSubmitSpy {
+        fn metadata_for_branch(&self, _branch: &str) -> Option<TqBranchMetadata> {
+            self.metadata.clone()
+        }
+
+        async fn link_and_sync(
+            &self,
+            metadata: &TqBranchMetadata,
+            target: &PrTarget,
+            pr_url: &str,
+        ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+            self.calls.lock().expect("post-submit spy mutex").push((
+                metadata.task_id.clone(),
+                metadata.checklist_item_id.clone(),
+                target.owner.clone(),
+                target.repo.clone(),
+                pr_url.to_string(),
+            ));
+            match self.failure_stage {
+                Some(stage) => Err(SubmitSyncFailure {
+                    stage,
+                    error: anyhow::anyhow!("sample synchronization failure"),
+                }),
+                None => Ok(SubmitSyncOutcome::Synchronized),
+            }
+        }
     }
 
     #[derive(Clone)]
@@ -580,6 +769,122 @@ mod tests {
             "submit should pass the draft branch when --filepath is used: {:?}",
             result.err()
         );
+    }
+
+    #[tokio::test]
+    async fn post_submit_sync_failure_does_not_undo_pr_creation() {
+        let env = setup_test_env("acme", "notify-api").await;
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/notify-setting",
+            "Add notification setting",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let metadata = TqBranchMetadata {
+            task_id: "sample-task-id".to_string(),
+            checklist_item_id: "sample-leaf-id".to_string(),
+        };
+        let processor = PostSubmitSpy {
+            failure_stage: Some(SubmitSyncStage::Link),
+            metadata: Some(metadata.clone()),
+            ..PostSubmitSpy::default()
+        };
+        let client = env.mock.client();
+
+        let result = run_impl_with_post_submit(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (
+                result,
+                processor
+                    .calls
+                    .lock()
+                    .expect("post-submit spy mutex")
+                    .clone()
+            ),
+            (
+                Ok(()),
+                vec![(
+                    "sample-task-id".to_string(),
+                    "sample-leaf-id".to_string(),
+                    "acme".to_string(),
+                    "notify-api".to_string(),
+                    "https://github.com/acme/notify-api/pull/1".to_string(),
+                )],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::prepare(
+        SubmitSyncStage::Prepare,
+        "PR submit completed, but PR series setup failed: sample synchronization failure\nAfter resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`."
+    )]
+    #[case::link(
+        SubmitSyncStage::Link,
+        "PR submit completed, but its tq checklist link failed: sample synchronization failure\nAfter resolving the error, run `tq checklist item update sample-leaf-id --github https://github.com/acme/notify-api/pull/17` and then `a ai pr-series sync sample-task-id`."
+    )]
+    #[case::sync(
+        SubmitSyncStage::Sync,
+        "PR submit completed and linked, but PR series synchronization failed: sample synchronization failure\nAfter resolving the listed errors, run `a ai pr-series sync sample-task-id`."
+    )]
+    fn formats_post_submit_recovery_instructions(
+        #[case] stage: SubmitSyncStage,
+        #[case] expected: &str,
+    ) {
+        let failure = SubmitSyncFailure {
+            stage,
+            error: anyhow::anyhow!("sample synchronization failure"),
+        };
+        let metadata = TqBranchMetadata {
+            task_id: "sample-task-id".to_string(),
+            checklist_item_id: "sample-leaf-id".to_string(),
+        };
+
+        assert_eq!(
+            format_post_submit_failure(
+                &failure,
+                &metadata,
+                "https://github.com/acme/notify-api/pull/17",
+            ),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::both_ids(
+        Some("sample-task-id".to_string()),
+        Some("sample-leaf-id".to_string()),
+        Some(TqBranchMetadata {
+            task_id: "sample-task-id".to_string(),
+            checklist_item_id: "sample-leaf-id".to_string(),
+        })
+    )]
+    #[case::missing_task_id(None, Some("sample-leaf-id".to_string()), None)]
+    #[case::missing_leaf_id(Some("sample-task-id".to_string()), None, None)]
+    fn requires_both_branch_tq_ids(
+        #[case] task_id: Option<String>,
+        #[case] checklist_item_id: Option<String>,
+        #[case] expected: Option<TqBranchMetadata>,
+    ) {
+        assert_eq!(tq_branch_metadata(task_id, checklist_item_id), expected);
     }
 
     #[tokio::test]

@@ -19,6 +19,10 @@ pub fn load_plan(task_id: &str) -> Result<PrSeriesPlan> {
     plan_storage()?.load_plan(task_id)
 }
 
+pub fn load_plan_if_present(task_id: &str) -> Result<Option<PrSeriesPlan>> {
+    plan_storage()?.load_plan_if_present(task_id)
+}
+
 fn plan_storage() -> Result<PrSeriesPlanStorage> {
     Ok(PrSeriesPlanStorage::new(
         state_dir()?.join("armyknife").join(PLAN_DIRECTORY),
@@ -42,6 +46,11 @@ impl PrSeriesPlanStorage {
     pub fn load_plan(&self, task_id: &str) -> Result<PrSeriesPlan> {
         let task_id = canonical_task_id(task_id)?;
         load_plan_at(&self.directory, &task_id)
+    }
+
+    pub fn load_plan_if_present(&self, task_id: &str) -> Result<Option<PrSeriesPlan>> {
+        let task_id = canonical_task_id(task_id)?;
+        load_plan_if_present_at(&self.directory, &task_id)
     }
 }
 
@@ -71,9 +80,28 @@ fn save_plan_at(directory: &Path, task_id: &str, plan: &PrSeriesPlan) -> Result<
 }
 
 fn load_plan_at(directory: &Path, task_id: &str) -> Result<PrSeriesPlan> {
+    load_plan_if_present_at(directory, task_id)?
+        .with_context(|| format!("no PR series plan is saved for tq task `{task_id}`"))
+}
+
+fn load_plan_if_present_at(directory: &Path, task_id: &str) -> Result<Option<PrSeriesPlan>> {
     let path = plan_path(directory, task_id)?;
-    if !directory.exists() {
-        bail!("no PR series plan is saved for tq task `{task_id}`");
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            bail!(
+                "refusing to use a symlink for PR series plan: {}",
+                path.display()
+            );
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            bail!("PR series plan is not a regular file: {}", path.display());
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("failed to inspect PR series plan: {}", path.display()));
+        }
     }
     let lock_path = directory.join(format!("{task_id}.lock"));
     let lock_file = open_lock_file(&lock_path, "PR series plan")?;
@@ -84,7 +112,7 @@ fn load_plan_at(directory: &Path, task_id: &str) -> Result<PrSeriesPlan> {
     let plan: PrSeriesPlan = serde_json::from_str(&content)
         .with_context(|| format!("failed to parse PR series plan: {}", path.display()))?;
     plan.validate()?;
-    Ok(plan)
+    Ok(Some(plan))
 }
 
 fn plan_path(directory: &Path, task_id: &str) -> Result<PathBuf> {
@@ -202,6 +230,17 @@ mod tests {
                 .load_plan("00000000-0000-4000-8000-000000000001")
                 .unwrap(),
             expected,
+        );
+    }
+
+    #[rstest]
+    fn returns_none_when_a_task_has_no_saved_plan(plan_storage: TestPlanStorage) {
+        assert_eq!(
+            plan_storage
+                .storage
+                .load_plan_if_present("00000000-0000-4000-8000-000000000001")
+                .unwrap(),
+            None,
         );
     }
 

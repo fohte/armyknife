@@ -1,8 +1,8 @@
-mod model;
+pub(super) mod model;
 mod plan;
 mod render;
-mod storage;
-mod sync;
+pub(super) mod storage;
+pub(super) mod sync;
 
 use clap::Subcommand;
 

@@ -242,11 +242,11 @@ Open a file in editor for review (no approval flow). After the editor exits, a u
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                                                                                                                                        |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `new`    | Create a new PR body draft file                                                                                                                                                                                    |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL as `branch.<branch>.pr-url` when the target is the current repo                                 |
+| Action   | Description                                                                                                                                                                                                                                                                                  |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`    | Create a new PR body draft file                                                                                                                                                                                                                                                              |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion)                                                                           |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode). For the current repo, it caches the PR URL and best-effort links the PR and synchronizes linked PR diagrams when the branch has tq task and checklist item IDs plus a saved PR series plan |
 
 `new` options:
 
