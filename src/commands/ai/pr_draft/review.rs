@@ -7,8 +7,8 @@ use super::common::{DraftFile, Frontmatter, RepoInfo};
 use super::hooks::{HookContext, HookRunner, PRE_PR_REVIEW_HOOK, default_runner, run_pr_hook};
 use crate::shared::config::load_config;
 use crate::shared::human_in_the_loop::{
-    Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler, complete_review,
-    start_review,
+    CleanupGuard, Document, DocumentSchema, FifoSignalGuard, Result as HilResult, ReviewHandler,
+    complete_review, start_review,
 };
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -35,6 +35,10 @@ pub struct ReviewCompleteArgs {
     /// Internal: FIFO path to signal completion to the waiting start_review process
     #[arg(long, hide = true)]
     pub done_fifo: Option<PathBuf>,
+
+    /// Internal: identifier of the lock created by the review launcher
+    #[arg(long, hide = true)]
+    pub review_lock_id: Option<String>,
 }
 
 /// Handler for PR draft review sessions.
@@ -178,15 +182,20 @@ fn run_impl(args: &ReviewArgs, run_hook: HookRunner<'_>) -> anyhow::Result<()> {
 pub fn run_complete(args: &ReviewCompleteArgs) -> anyhow::Result<()> {
     // Create FIFO guard first to ensure signaling even if load_config fails
     let _fifo_guard = args.done_fifo.as_deref().map(FifoSignalGuard::new);
+    let lock_id = args
+        .review_lock_id
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("Missing internal review lock identifier"))?;
+    let cleanup_guard = CleanupGuard::new(&args.filepath, lock_id, args.tmux_target.clone())?;
 
     let config = load_config()?;
 
     complete_review::<Frontmatter, _>(
         &args.filepath,
-        args.tmux_target.as_deref(),
         args.window_title.as_deref(),
         &PrDraftReviewHandler,
         &config.editor,
+        cleanup_guard,
     )?;
 
     Ok(())

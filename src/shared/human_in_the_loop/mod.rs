@@ -86,9 +86,8 @@ pub trait ReviewHandler<S: DocumentSchema> {
 /// 3. Launches the review-complete command in a tmux floating pane or terminal
 /// 4. Blocks until the review-complete process signals completion via the FIFO
 ///
-/// The parent keeps the lock's file handle through the FIFO wait and removes
-/// the lock if the child exits without cleanup. The child removes it on normal
-/// completion so the lock is released if the parent exits early.
+/// The parent and child both record their process IDs. The lock remains active
+/// while either process is alive and is reclaimed when all recorded processes exit.
 ///
 /// Returns the final document state after the user finishes editing, or `None`
 /// if the editor was already open. Returns `TerminalLaunchFailed` if the
@@ -118,23 +117,23 @@ where
         document_path.to_path_buf()
     };
 
-    let labels = launch::ReviewLabels {
-        window_title,
-        command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
-    };
-
     let mut session_watch = session_watch::SessionWatch::new();
     // Held until the review ends, then shows the next queued review.
     let mut queue_entry = None;
     start_review_with_marker::<S, _, _>(
         &document_path,
         <H as ReviewHandler<S>>::PENDING_REVIEW_MARKER,
-        |document_path, done_fifo_path| {
+        |document_path, done_fifo_path, lock_id| {
+            let context = launch::ReviewContext {
+                lock_id,
+                window_title,
+                command_name: <H as ReviewHandler<S>>::NOTIFICATION_COMMAND_NAME,
+            };
             let (session, entry) = launch::launch_review::<S, H>(
                 tmux_pane_id.as_deref(),
                 document_path,
                 done_fifo_path,
-                &labels,
+                &context,
                 handler,
                 editor_config,
                 notifications_enabled,
@@ -159,7 +158,7 @@ fn start_review_with_launcher<S, L, P>(
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path) -> Result<Option<String>>,
+    L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
     P: FnMut(&str) -> Result<bool>,
 {
     start_review_with_marker(document_path, None, launch_review, is_session_alive)
@@ -173,15 +172,16 @@ fn start_review_with_marker<S, L, P>(
 ) -> Result<Option<Document<S>>>
 where
     S: DocumentSchema,
-    L: FnOnce(&Path, &Path) -> Result<Option<String>>,
+    L: FnOnce(&Path, &Path, &str) -> Result<Option<String>>,
     P: FnMut(&str) -> Result<bool>,
 {
-    let _lock_guard = match LockGuard::acquire(document_path) {
+    let lock_path = LockGuard::lock_path(document_path);
+    let lock_guard = match LockGuard::acquire(document_path) {
         Ok(guard) => guard,
         Err(HumanInTheLoopError::Io(error))
             if error.kind() == std::io::ErrorKind::AlreadyExists =>
         {
-            eprintln!("Skipped: Editor is already open for this file.");
+            eprintln!("{}", editor_already_open_message(&lock_path));
             return Ok(None);
         }
         Err(error) => return Err(error),
@@ -203,7 +203,7 @@ where
     // signal cannot race with the read call.
     let done_fifo_reader = open_fifo_reader(&done_fifo_path)?;
 
-    let review_session = launch_review(document_path, &done_fifo_path)?;
+    let review_session = launch_review(document_path, &done_fifo_path, lock_guard.lock_id())?;
 
     {
         let _pending_review =
@@ -235,6 +235,13 @@ where
     Ok(Some(document))
 }
 
+fn editor_already_open_message(lock_path: &Path) -> String {
+    format!(
+        "Skipped: Editor is already open for this file (lock: {}).",
+        lock_path.display()
+    )
+}
+
 /// Write a unified diff of pre/post edit content to stdout, or `(no edits)`
 /// when unchanged. Color is enabled only when stdout is a TTY.
 fn print_edit_diff(pre: &str, post: &str) -> std::io::Result<()> {
@@ -262,29 +269,30 @@ fn write_edit_diff<W: Write>(
 /// Complete a review session after the user closes the editor.
 ///
 /// This function:
-/// 1. Sets up cleanup guards for lock file and tmux restoration
+/// 1. Holds the caller-provided cleanup guard for lock file and tmux restoration
 /// 2. Launches the configured editor for the user to edit the document
 /// 3. After the editor exits, parses the document and calls the handler's callback
 ///
 /// If `window_title` is provided and the editor is nvim, it will be displayed in the title bar.
 ///
-/// The caller is responsible for creating a `FifoSignalGuard` before calling this
-/// function to ensure the FIFO is signaled even if earlier initialization fails.
+/// The caller creates a `FifoSignalGuard` before calling this function so the FIFO is
+/// signaled even if earlier initialization fails.
+/// The child is registered before loading configuration so the parent cannot
+/// mistake a live editor process for a stale lock.
 ///
 /// This is typically called by the review-complete subcommand that the terminal runs.
 pub fn complete_review<S, H>(
     document_path: &Path,
-    tmux_target: Option<&str>,
     window_title: Option<&str>,
     handler: &H,
     editor_config: &EditorConfig,
+    cleanup_guard: CleanupGuard,
 ) -> Result<()>
 where
     S: DocumentSchema,
     H: ReviewHandler<S>,
 {
-    // Ensure cleanup happens even on panic.
-    let _cleanup_guard = CleanupGuard::new(document_path, tmux_target.map(String::from));
+    let _cleanup_guard = cleanup_guard;
 
     // Launch editor
     let status = run_editor(&editor_config.editor_command, document_path, window_title)?;
@@ -604,6 +612,7 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+    use indoc::indoc;
     use rstest::{fixture, rstest};
     use serde::{Deserialize, Serialize};
     use tempfile::TempDir;
@@ -852,7 +861,44 @@ mod tests {
 
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
-            |path, done_fifo_path| {
+            |path, done_fifo_path, _lock_id| {
+                lock_was_held_during_launch = LockGuard::is_locked(path);
+                signal_fifo(done_fifo_path);
+                Ok(None)
+            },
+            |_| Ok(true),
+        )
+        .expect("start review")
+        .map(|document| (document.path, document.frontmatter));
+
+        assert_eq!(
+            (
+                result,
+                lock_was_held_during_launch,
+                LockGuard::is_locked(&document_path),
+            ),
+            (Some((document_path, ReviewTestSchema)), true, false,),
+        );
+    }
+
+    #[rstest]
+    fn start_review_replaces_a_stale_lock_and_proceeds(review_document: ReviewDocumentFixture) {
+        let document_path = review_document.path;
+        let lock_path = LockGuard::lock_path(&document_path);
+        std::fs::write(
+            &lock_path,
+            indoc! {"
+                armyknife-review-lock-v1
+                id=expired-session
+                pid=4294967295
+            "},
+        )
+        .expect("write stale lock");
+        let mut lock_was_held_during_launch = false;
+
+        let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
+            &document_path,
+            |path, done_fifo_path, _lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
                 signal_fifo(done_fifo_path);
                 Ok(None)
@@ -877,7 +923,7 @@ mod tests {
         let document_path = review_document.path;
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
-            |_, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
+            |_, _, _| Err(HumanInTheLoopError::CommandFailed("launch failed".into())),
             |_| Ok(true),
         )
         .map(|document| document.map(|document| document.path))
@@ -897,9 +943,9 @@ mod tests {
 
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
-            |path, done_fifo_path| {
+            |path, done_fifo_path, lock_id| {
                 lock_was_held_during_launch = LockGuard::is_locked(path);
-                drop(CleanupGuard::new(path, None));
+                drop(CleanupGuard::new(path, lock_id, None).expect("register child lock"));
                 newer_review_lock = Some(LockGuard::acquire(path).expect("new review lock"));
                 signal_fifo(done_fifo_path);
                 Ok(None)
@@ -933,7 +979,7 @@ mod tests {
 
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
-            |_, _| {
+            |_, _, _| {
                 launch_called = true;
                 Ok(None)
             },
@@ -950,6 +996,19 @@ mod tests {
     }
 
     #[rstest]
+    fn editor_already_open_message_names_the_lock_file(review_document: ReviewDocumentFixture) {
+        let lock_path = LockGuard::lock_path(&review_document.path);
+
+        assert_eq!(
+            editor_already_open_message(&lock_path),
+            format!(
+                "Skipped: Editor is already open for this file (lock: {}).",
+                lock_path.display()
+            ),
+        );
+    }
+
+    #[rstest]
     fn start_review_cleans_lock_and_done_fifo_when_review_session_disappears(
         review_document: ReviewDocumentFixture,
     ) {
@@ -958,7 +1017,7 @@ mod tests {
 
         let result = start_review_with_launcher::<ReviewTestSchema, _, _>(
             &document_path,
-            |_, fifo_path| {
+            |_, fifo_path, _lock_id| {
                 done_fifo_path = Some(fifo_path.to_path_buf());
                 Ok(Some("review-session".to_string()))
             },

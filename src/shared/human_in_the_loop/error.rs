@@ -24,6 +24,9 @@ pub enum HumanInTheLoopError {
     #[error("Review editor session ended before the review completed")]
     ReviewSessionClosed,
 
+    #[error("Review lock is no longer active; refusing to open the editor")]
+    ReviewLockLost,
+
     #[error("Not approved. Run 'review' and set 'submit: true'")]
     NotApproved,
 
