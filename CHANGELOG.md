@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.483](https://github.com/fohte/armyknife/compare/v0.1.482...v0.1.483) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** continue after Codex errors ([#1309](https://github.com/fohte/armyknife/issues/1309)) ([c1dd564](https://github.com/fohte/armyknife/commit/c1dd564df565c15bd94f32624f99d1c8b22cab02))
+
 ## [0.1.482](https://github.com/fohte/armyknife/compare/v0.1.481...v0.1.482) (2026-10-28)
 
 
