@@ -1,9 +1,12 @@
+use std::cell::RefCell;
 use std::future::Future;
+use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::Result;
 
-use super::{CloseArgs, Session};
+use super::{CloseArgs, Session, TmuxInfo};
+use crate::infra::tmux;
 
 pub(super) async fn close_session_value(
     session: &Session,
@@ -19,6 +22,8 @@ pub(super) async fn close_session_value(
         );
     };
 
+    let stderr = io::stderr();
+    let mut warning_writer = stderr.lock();
     close_session_value_with_worktree(
         SessionWorktreeContext {
             session,
@@ -26,14 +31,15 @@ pub(super) async fn close_session_value(
             parent_session_id: child_parent_session_id,
             worktree_root: &worktree_root,
         },
+        find_shared_worktree_session_ids,
         crate::shared::worktree_delete::prepare(&worktree_root, args.force),
-        super::super::store::load_session,
         super::close_tracked_session,
         || {
             let current_pane_id = crate::shared::caller_pane::resolve_caller_pane_id();
             super::worktree::close_worktree_session(session, args.force, current_pane_id.as_deref())
         },
         |plan| crate::shared::worktree_delete::execute(plan, args.skip_hooks),
+        &mut warning_writer,
     )
     .await
 }
@@ -47,25 +53,27 @@ struct SessionWorktreeContext<'a> {
 
 async fn close_session_value_with_worktree<P, F>(
     context: SessionWorktreeContext<'_>,
+    find_shared_sessions: impl FnOnce(&SessionWorktreeContext<'_>) -> Result<Vec<String>>,
     prepare_worktree: impl Future<Output = Result<P>>,
-    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
     close_shared_session: impl FnOnce(&Session, bool) -> Result<()>,
     close_worktree_session: impl FnOnce() -> Result<()>,
     remove_worktree: impl FnOnce(P) -> F,
+    warning_writer: &mut impl Write,
 ) -> Result<()>
 where
     F: Future<Output = Result<()>>,
 {
     super::child::ensure_target_session(Some(context.session), context.parent_session_id)?;
 
-    if close_child_session_if_sharing_worktree(
-        context.session,
-        context.force,
-        context.parent_session_id,
-        context.worktree_root,
-        load_session,
-        close_shared_session,
-    )? {
+    let shared_session_ids = find_shared_sessions(&context)?;
+    if !shared_session_ids.is_empty() {
+        close_shared_session(context.session, context.force)?;
+        if let Err(error) = write_worktree_kept_warning(warning_writer, &shared_session_ids) {
+            tracing::warn!(
+                event = "agent.close.worktree_kept_warning_failed",
+                error = %error,
+            );
+        }
         return Ok(());
     }
 
@@ -75,6 +83,67 @@ where
         remove_worktree,
     )
     .await
+}
+
+fn find_shared_worktree_session_ids(context: &SessionWorktreeContext<'_>) -> Result<Vec<String>> {
+    let sessions = super::super::store::list_sessions()?;
+    let pane_liveness = RefCell::new(tmux::PaneLiveness::default());
+    collect_shared_worktree_session_ids(
+        context,
+        &sessions,
+        super::super::store::load_session,
+        |info| {
+            pane_liveness.borrow_mut().cache_socket(
+                info.socket_path.as_deref(),
+                tmux::list_all_pane_ids_for_socket,
+            );
+            pane_liveness
+                .borrow()
+                .is_alive(info.socket_path.as_deref(), &info.pane_id)
+        },
+    )
+}
+
+fn collect_shared_worktree_session_ids(
+    context: &SessionWorktreeContext<'_>,
+    sessions: &[Session],
+    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
+    mut is_pane_alive: impl FnMut(&TmuxInfo) -> Option<bool>,
+) -> Result<Vec<String>> {
+    let mut session_ids = sessions
+        .iter()
+        .filter(|session| {
+            session.session_id != context.session.session_id
+                && super::worktree::path_is_within_worktree(&session.cwd, context.worktree_root)
+                && !session
+                    .tmux_info
+                    .as_ref()
+                    .is_some_and(|info| is_pane_alive(info) == Some(false))
+        })
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+
+    // A missing caller record cannot establish that its cwd is outside this worktree.
+    if let Some(parent_session_id) = context.parent_session_id
+        && !sessions
+            .iter()
+            .any(|session| session.session_id == parent_session_id)
+        && load_session(parent_session_id)?.is_none()
+    {
+        session_ids.push(parent_session_id.to_string());
+    }
+
+    session_ids.sort();
+    session_ids.dedup();
+    Ok(session_ids)
+}
+
+fn write_worktree_kept_warning(writer: &mut impl Write, session_ids: &[String]) -> io::Result<()> {
+    writeln!(
+        writer,
+        "Keeping worktree because these agent sessions still use it: {}",
+        session_ids.join(", ")
+    )
 }
 
 fn close_session_value_without_worktree(
@@ -87,35 +156,6 @@ fn close_session_value_without_worktree(
     close_session(session, args.force)
 }
 
-fn close_child_session_if_sharing_worktree(
-    session: &Session,
-    force: bool,
-    child_parent_session_id: Option<&str>,
-    worktree_root: &Path,
-    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
-    close_session: impl FnOnce(&Session, bool) -> Result<()>,
-) -> Result<bool> {
-    let Some(parent_session_id) = child_parent_session_id else {
-        return Ok(false);
-    };
-    if !caller_session_is_in_worktree(parent_session_id, worktree_root, load_session)? {
-        return Ok(false);
-    }
-    close_session(session, force)?;
-    Ok(true)
-}
-
-fn caller_session_is_in_worktree(
-    caller_session_id: &str,
-    worktree_root: &Path,
-    load_session: impl FnOnce(&str) -> Result<Option<Session>>,
-) -> Result<bool> {
-    Ok(match load_session(caller_session_id)? {
-        Some(session) => super::worktree::path_is_within_worktree(&session.cwd, worktree_root),
-        None => true,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -126,71 +166,31 @@ mod tests {
     use super::super::test_support::session;
     use super::*;
 
-    #[rstest]
-    #[case::caller_in_worktree(Some("/tmp/worktrees/feature/src"), Ok(true))]
-    #[case::caller_outside_worktree(Some("/tmp/other-repo"), Ok(false))]
-    #[case::caller_record_missing(None, Ok(true))]
-    fn detects_when_child_worktree_is_shared_with_the_caller(
-        mut session: Session,
-        #[case] caller_cwd: Option<&str>,
-        #[case] expected: std::result::Result<bool, String>,
-    ) {
-        if let Some(caller_cwd) = caller_cwd {
-            session.cwd = PathBuf::from(caller_cwd);
+    fn linked_session(session_id: &str, cwd: &str, pane_id: Option<&str>) -> Session {
+        let mut session = session();
+        session.session_id = session_id.to_string();
+        session.cwd = PathBuf::from(cwd);
+        if let Some(pane_id) = pane_id {
+            if let Some(info) = &mut session.tmux_info {
+                info.pane_id = pane_id.to_string();
+            }
+        } else {
+            session.tmux_info = None;
         }
-        let caller_session = caller_cwd.map(|_| session.clone());
-
-        let actual = caller_session_is_in_worktree(
-            "parent-session",
-            Path::new("/tmp/worktrees/feature"),
-            |_| Ok(caller_session),
-        )
-        .map_err(|error| error.to_string());
-
-        assert_eq!(actual, expected);
+        session
     }
 
-    #[rstest]
-    #[case::shared_worktree(true, vec!["close child session"])]
-    #[case::separate_worktree(false, Vec::new())]
-    fn closes_shared_worktree_child_without_removing_its_worktree(
-        mut session: Session,
-        #[case] caller_shares_worktree: bool,
-        #[case] expected_calls: Vec<&str>,
-    ) {
-        session.ancestor_session_ids = vec!["parent-session".to_string()];
-        let mut parent = session.clone();
-        parent.cwd = PathBuf::from(if caller_shares_worktree {
-            "/tmp/worktrees/feature/src"
-        } else {
-            "/tmp/other-repo"
-        });
-        let args = CloseArgs {
-            target: Some(session.session_id.clone()),
-            child: true,
-            ..CloseArgs::default()
-        };
-        let calls = RefCell::new(Vec::new());
-
-        let result = close_child_session_if_sharing_worktree(
-            &session,
-            args.force,
-            Some("parent-session"),
-            Path::new("/tmp/worktrees/feature"),
-            |_| Ok(Some(parent)),
-            |_, _| {
-                calls.borrow_mut().push("close child session");
-                Ok(())
-            },
-        );
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                calls.into_inner()
-            ),
-            (Ok(caller_shares_worktree), expected_calls),
-        );
+    fn context<'a>(
+        session: &'a Session,
+        force: bool,
+        parent_session_id: Option<&'a str>,
+    ) -> SessionWorktreeContext<'a> {
+        SessionWorktreeContext {
+            session,
+            force,
+            parent_session_id,
+            worktree_root: Path::new("/tmp/worktrees/feature"),
+        }
     }
 
     #[rstest]
@@ -242,27 +242,182 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_id_child_close_rejects_non_children_before_worktree_prepare_even_with_force() {
-        let mut target_session = session();
-        target_session.ancestor_session_ids = vec!["other-parent".to_string()];
-        let caller_session = session();
-        let context = SessionWorktreeContext {
-            session: &target_session,
-            force: true,
-            parent_session_id: Some("parent-session"),
-            worktree_root: Path::new("/tmp/worktrees/feature"),
-        };
+    async fn forced_close_keeps_worktree_for_active_sessions_and_reports_their_ids() {
+        let mut target_session =
+            linked_session("target", "/tmp/worktrees/feature", Some("%target"));
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let sessions = vec![
+            target_session.clone(),
+            linked_session(
+                "parent-session",
+                "/tmp/worktrees/feature/src",
+                Some("%parent"),
+            ),
+            linked_session("live-session", "/tmp/worktrees/feature", Some("%live")),
+            linked_session(
+                "unknown-session",
+                "/tmp/worktrees/feature/src",
+                Some("%unknown"),
+            ),
+            linked_session("untracked-session", "/tmp/worktrees/feature", None),
+            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
+            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
+        ];
         let calls = RefCell::new(Vec::new());
+        let mut warning = Vec::new();
 
         let result = close_session_value_with_worktree(
-            context,
+            context(&target_session, true, Some("parent-session")),
+            |context| {
+                calls.borrow_mut().push("find shared sessions");
+                collect_shared_worktree_session_ids(
+                    context,
+                    &sessions,
+                    |_| {
+                        Err(anyhow::anyhow!(
+                            "the registered caller should not be loaded"
+                        ))
+                    },
+                    |info| match info.pane_id.as_str() {
+                        "%live" | "%parent" | "%outside" => Some(true),
+                        "%dead" => Some(false),
+                        "%unknown" => None,
+                        _ => None,
+                    },
+                )
+            },
             async {
                 calls.borrow_mut().push("prepare worktree");
                 Ok::<(), anyhow::Error>(())
             },
+            |session, force| {
+                calls
+                    .borrow_mut()
+                    .push(if force && session.session_id == "target" {
+                        "close target with force"
+                    } else {
+                        "close target safely"
+                    });
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("close worktree session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+            &mut warning,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+                String::from_utf8(warning).unwrap(),
+            ),
+            (
+                Ok(()),
+                vec!["find shared sessions", "close target with force"],
+                "Keeping worktree because these agent sessions still use it: live-session, parent-session, unknown-session, untracked-session\n".to_string(),
+            ),
+        );
+    }
+
+    #[test]
+    fn collects_only_other_non_stale_sessions_inside_the_worktree() {
+        let mut target_session =
+            linked_session("target", "/tmp/worktrees/feature", Some("%target"));
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        let sessions = vec![
+            target_session.clone(),
+            linked_session(
+                "parent-session",
+                "/tmp/worktrees/feature/src",
+                Some("%parent"),
+            ),
+            linked_session("live-session", "/tmp/worktrees/feature", Some("%live")),
+            linked_session(
+                "unknown-session",
+                "/tmp/worktrees/feature/src",
+                Some("%unknown"),
+            ),
+            linked_session("untracked-session", "/tmp/worktrees/feature", None),
+            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
+            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
+        ];
+
+        let actual = collect_shared_worktree_session_ids(
+            &context(&target_session, false, Some("parent-session")),
+            &sessions,
             |_| {
-                calls.borrow_mut().push("load caller session");
-                Ok(Some(caller_session))
+                Err(anyhow::anyhow!(
+                    "the registered caller should not be loaded"
+                ))
+            },
+            |info| match info.pane_id.as_str() {
+                "%live" | "%parent" | "%outside" => Some(true),
+                "%dead" => Some(false),
+                "%unknown" => None,
+                _ => None,
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            actual,
+            Ok(vec![
+                "live-session".to_string(),
+                "parent-session".to_string(),
+                "unknown-session".to_string(),
+                "untracked-session".to_string(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn treats_an_unresolved_child_caller_as_using_the_worktree() {
+        let mut target_session = linked_session("child", "/tmp/worktrees/feature", Some("%child"));
+        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        let actual = collect_shared_worktree_session_ids(
+            &context(&target_session, false, Some("parent-session")),
+            &[target_session.clone()],
+            |_| Ok(None),
+            |_| None,
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(actual, Ok(vec!["parent-session".to_string()]));
+    }
+
+    #[tokio::test]
+    async fn removes_worktree_when_only_stale_or_unrelated_sessions_remain() {
+        let target_session = linked_session("target", "/tmp/worktrees/feature", Some("%target"));
+        let sessions = vec![
+            target_session.clone(),
+            linked_session("dead-session", "/tmp/worktrees/feature", Some("%dead")),
+            linked_session("outside-session", "/tmp/other-repo", Some("%outside")),
+        ];
+        let calls = RefCell::new(Vec::new());
+        let mut warning = Vec::new();
+
+        let result = close_session_value_with_worktree(
+            context(&target_session, false, None),
+            |context| {
+                calls.borrow_mut().push("find shared sessions");
+                collect_shared_worktree_session_ids(
+                    context,
+                    &sessions,
+                    |_| Ok(None),
+                    |info| Some(info.pane_id != "%dead"),
+                )
+            },
+            async {
+                calls.borrow_mut().push("prepare worktree");
+                Ok::<(), anyhow::Error>(())
             },
             |_, _| {
                 calls.borrow_mut().push("close shared session");
@@ -276,6 +431,65 @@ mod tests {
                 calls.borrow_mut().push("remove worktree");
                 Ok(())
             },
+            &mut warning,
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+                String::from_utf8(warning).unwrap(),
+            ),
+            (
+                Ok(()),
+                vec![
+                    "find shared sessions",
+                    "prepare worktree",
+                    "close worktree session",
+                    "remove worktree",
+                ],
+                String::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn session_id_child_close_rejects_non_children_before_worktree_prepare_even_with_force() {
+        let mut target_session = session();
+        target_session.ancestor_session_ids = vec!["other-parent".to_string()];
+        let context = SessionWorktreeContext {
+            session: &target_session,
+            force: true,
+            parent_session_id: Some("parent-session"),
+            worktree_root: Path::new("/tmp/worktrees/feature"),
+        };
+        let calls = RefCell::new(Vec::new());
+        let mut warning = Vec::new();
+
+        let result = close_session_value_with_worktree(
+            context,
+            |_| {
+                calls.borrow_mut().push("find shared sessions");
+                Ok(vec![])
+            },
+            async {
+                calls.borrow_mut().push("prepare worktree");
+                Ok::<(), anyhow::Error>(())
+            },
+            |_, _| {
+                calls.borrow_mut().push("close shared session");
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push("close worktree session");
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree");
+                Ok(())
+            },
+            &mut warning,
         )
         .await;
 
@@ -291,53 +505,6 @@ mod tests {
                 ),
                 vec![],
             ),
-        );
-    }
-
-    #[tokio::test]
-    async fn session_id_child_close_skips_worktree_removal_when_shared_with_caller() {
-        let mut target_session = session();
-        target_session.ancestor_session_ids = vec!["parent-session".to_string()];
-        let mut caller_session = session();
-        caller_session.cwd = PathBuf::from("/tmp/worktrees/example/src");
-        let calls = RefCell::new(Vec::new());
-
-        let result = close_session_value_with_worktree(
-            SessionWorktreeContext {
-                session: &target_session,
-                force: false,
-                parent_session_id: Some("parent-session"),
-                worktree_root: Path::new("/tmp/worktrees/example"),
-            },
-            async {
-                calls.borrow_mut().push("prepare worktree");
-                Ok::<(), anyhow::Error>(())
-            },
-            |_| {
-                calls.borrow_mut().push("load caller session");
-                Ok(Some(caller_session))
-            },
-            |_, _| {
-                calls.borrow_mut().push("close child session");
-                Ok(())
-            },
-            || {
-                calls.borrow_mut().push("close worktree session");
-                Ok(())
-            },
-            |_| async {
-                calls.borrow_mut().push("remove worktree");
-                Ok(())
-            },
-        )
-        .await;
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                calls.into_inner(),
-            ),
-            (Ok(()), vec!["load caller session", "close child session"],),
         );
     }
 }
