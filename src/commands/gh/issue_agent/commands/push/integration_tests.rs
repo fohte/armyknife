@@ -657,6 +657,48 @@ async fn test_edit_others_comment_denied_without_flag(test_dir: TempDir) {
 }
 
 #[rstest]
+#[case::edit_other_users_comment(Some("Modified"))]
+#[case::delete_other_users_comment(None)]
+#[tokio::test]
+async fn test_dry_run_shows_other_users_comment_changes(
+    test_dir: TempDir,
+    #[case] local_body: Option<&str>,
+) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "otheruser",
+            "IC_abc",
+            12345,
+            "Original",
+        )])
+        .build()
+        .await;
+    if let Some(body) = local_body {
+        setup_local_comment(
+            test_dir.path(),
+            "001_comment_12345.md",
+            &create_comment_file(
+                "otheruser",
+                "2024-01-01T12:00:00+00:00",
+                "IC_abc",
+                12345,
+                body,
+            ),
+        );
+    }
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args_full(true, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    assert!(result.is_ok());
+}
+
+#[rstest]
 #[tokio::test]
 async fn test_edit_others_comment_allowed_with_flag(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
