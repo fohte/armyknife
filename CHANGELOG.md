@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.488](https://github.com/fohte/armyknife/compare/v0.1.487...v0.1.488) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/sweep:** log session list read errors ([#1319](https://github.com/fohte/armyknife/issues/1319)) ([f24eb0f](https://github.com/fohte/armyknife/commit/f24eb0f7ad04d1f14a612b26bdfc3c7d8edb2b35))
+* **gh/pr-review:** parse line-start thread markers ([#1320](https://github.com/fohte/armyknife/issues/1320)) ([28480db](https://github.com/fohte/armyknife/commit/28480db7edf71fc4a3993ad0f48b0ce258a38e8f))
+
 ## [0.1.487](https://github.com/fohte/armyknife/compare/v0.1.486...v0.1.487) (2026-10-28)
 
 
