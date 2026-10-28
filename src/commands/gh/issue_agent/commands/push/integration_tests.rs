@@ -8,7 +8,7 @@ use crate::commands::gh::issue_agent::commands::test_helpers::{
 use crate::commands::gh::issue_agent::models::IssueFrontmatter;
 use crate::commands::gh::issue_agent::storage::{IssueContent, IssueStorage};
 use crate::commands::gh::issue_agent::testing::factories;
-use crate::infra::github::RemoteComment;
+use crate::infra::github::{GitHubMockServer, RemoteComment};
 use indoc::formatdoc;
 use rstest::rstest;
 use tempfile::TempDir;
@@ -40,6 +40,25 @@ fn make_remote_comment<'a>(
         author,
         body,
     }
+}
+
+async fn comment_write_requests(
+    mock: &GitHubMockServer,
+) -> Vec<(String, Option<serde_json::Value>)> {
+    mock.received_requests()
+        .await
+        .into_iter()
+        .filter(|request| {
+            let path = request.url.path();
+            path.ends_with("/comments") || path.contains("/issues/comments/")
+        })
+        .map(|request| {
+            (
+                request.method.to_string(),
+                serde_json::from_slice(&request.body).ok(),
+            )
+        })
+        .collect()
 }
 
 fn issue_frontmatter(title: &str, labels: &[&str]) -> IssueFrontmatter {
@@ -472,10 +491,10 @@ async fn test_refreshes_own_comment_after_push(test_dir: TempDir) {
         .remote_comments(vec![make_remote_comment(
             "testuser", "IC_abc", 12345, "Original",
         )])
-        .comments_after_initial_fetch(Some((
+        .comments_after_initial_fetch(vec![(
             vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
             "2024-01-02T12:00:00Z",
-        )))
+        )])
         .build()
         .await;
     setup_local_comment(
@@ -531,9 +550,28 @@ async fn test_refreshes_own_comment_after_push(test_dir: TempDir) {
 async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_comments(vec![make_remote_comment(
-            "testuser", "IC_abc", 12345, "Updated",
+            "testuser", "IC_abc", 12345, "Original",
         )])
-        .remote_comments_updated_at("2024-01-02T12:00:00Z")
+        .remote_comments_updated_at("2024-01-01T12:00:00Z")
+        .comments_after_initial_fetch(vec![
+            (
+                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+                "2024-01-02T12:00:00Z",
+            ),
+            (
+                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+                "2024-01-02T12:00:00Z",
+            ),
+            (
+                vec![make_remote_comment(
+                    "testuser",
+                    "IC_abc",
+                    12345,
+                    "Updated again",
+                )],
+                "2024-01-03T12:00:00Z",
+            ),
+        ])
         .build()
         .await;
     setup_local_comment(
@@ -542,34 +580,104 @@ async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: Tem
         &create_comment_file_with_updated_at(
             "testuser",
             "2024-01-01T12:00:00+00:00",
-            "2024-01-02T12:00:00+00:00",
+            "2024-01-01T12:00:00+00:00",
             "IC_abc",
             12345,
-            "Updated again",
+            "Updated",
         ),
     );
-    approve_file(&test_dir.path().join("comments/001_comment_12345.md"));
+    let comment_path = test_dir.path().join("comments/001_comment_12345.md");
+    approve_file(&comment_path);
     let ctx = mock.repo("owner", "repo");
     ctx.comment().update().await;
     ctx.issue(123).get().await;
 
-    let result = run_with_client_and_storage(
+    let client = mock.client();
+    let first_result = run_with_client_and_storage(
         &make_args(false, false, false),
-        &mock.client(),
+        &client,
         &storage,
         "testuser",
     )
     .await
     .map_err(|error| error.to_string());
+    let comment_after_first_push = std::fs::read_to_string(&comment_path).unwrap();
+    let mut refreshed_comments = storage.read_comments().unwrap();
+    let refreshed_comment = refreshed_comments.remove(0);
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &create_comment_file_with_updated_at(
+            refreshed_comment.metadata.author.as_deref().unwrap(),
+            refreshed_comment.metadata.created_at.as_deref().unwrap(),
+            refreshed_comment.metadata.updated_at.as_deref().unwrap(),
+            refreshed_comment.metadata.id.as_deref().unwrap(),
+            refreshed_comment.metadata.database_id.unwrap() as u64,
+            "Updated again",
+        ),
+    );
+    approve_file(&comment_path);
+    approve_file(&test_dir.path().join("issue.md"));
 
-    assert_eq!(result, Ok(()));
+    let second_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let comment_after_second_push = std::fs::read_to_string(comment_path).unwrap();
+    let comment_requests = comment_write_requests(&mock).await;
+
+    assert_eq!(
+        (
+            first_result,
+            comment_after_first_push,
+            second_result,
+            comment_after_second_push,
+            comment_requests,
+        ),
+        (
+            Ok(()),
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_abc -->
+                <!-- databaseId: 12345 -->
+
+                Updated
+            "},
+            Ok(()),
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-03T12:00:00+00:00 -->
+                <!-- id: IC_abc -->
+                <!-- databaseId: 12345 -->
+
+                Updated again
+            "},
+            vec![
+                (
+                    "PATCH".to_string(),
+                    Some(serde_json::json!({"body": "Updated"}))
+                ),
+                (
+                    "PATCH".to_string(),
+                    Some(serde_json::json!({"body": "Updated again"})),
+                ),
+            ],
+        ),
+    );
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_creates_new_comment(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
-        .comments_after_initial_fetch(Some((
+        .comments_after_initial_fetch(vec![(
             vec![make_remote_comment(
                 "testuser",
                 "IC_new_comment",
@@ -577,7 +685,7 @@ async fn test_creates_new_comment(test_dir: TempDir) {
                 "New comment",
             )],
             "2024-01-02T12:00:00Z",
-        )))
+        )])
         .build()
         .await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
@@ -595,18 +703,33 @@ async fn test_creates_new_comment(test_dir: TempDir) {
     )
     .await;
     let new_comment_path = test_dir.path().join("comments/001_comment_99999.md");
-    let new_comment = std::fs::read_to_string(new_comment_path).unwrap();
+    let comment_after_first_push = std::fs::read_to_string(&new_comment_path).ok();
+    let first_result = result.map_err(|error| error.to_string());
+
+    let second_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let comment_after_second_push = std::fs::read_to_string(new_comment_path).ok();
+    let comment_requests = comment_write_requests(&mock).await;
 
     assert_eq!(
         (
-            result.map_err(|error| error.to_string()),
+            first_result,
             test_dir.path().join("comments/new_my_comment.md").exists(),
-            new_comment,
+            comment_after_first_push,
+            second_result,
+            comment_after_second_push,
+            comment_requests,
         ),
         (
             Ok(()),
             false,
-            formatdoc! {"
+            Some(formatdoc! {"
                 <!-- author: testuser -->
                 <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
                 <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
@@ -614,8 +737,21 @@ async fn test_creates_new_comment(test_dir: TempDir) {
                 <!-- databaseId: 99999 -->
 
                 New comment
-            "
-            },
+            "}),
+            Ok(()),
+            Some(formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_new_comment -->
+                <!-- databaseId: 99999 -->
+
+                New comment
+            "}),
+            vec![(
+                "POST".to_string(),
+                Some(serde_json::json!({"body": "New comment"})),
+            )],
         ),
     );
 }

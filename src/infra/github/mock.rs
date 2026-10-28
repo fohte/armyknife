@@ -647,16 +647,6 @@ impl<'a> MockRepoContext<'a> {
         updated_at: &str,
         max_matches: Option<u64>,
     ) {
-        self.mount_graphql_comments(comments, updated_at, max_matches)
-            .await;
-    }
-
-    async fn mount_graphql_comments(
-        &self,
-        comments: &[RemoteComment<'_>],
-        updated_at: &str,
-        max_matches: Option<u64>,
-    ) {
         let nodes: Vec<serde_json::Value> = comments
             .iter()
             .map(|c| {
