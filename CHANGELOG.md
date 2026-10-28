@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.477](https://github.com/fohte/armyknife/compare/v0.1.476...v0.1.477) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent/status-inference:** accept extra fields ([#1298](https://github.com/fohte/armyknife/issues/1298)) ([6fd42cf](https://github.com/fohte/armyknife/commit/6fd42cf76be30ef66bccba4eeca98c6a05d83ded))
+
 ## [0.1.476](https://github.com/fohte/armyknife/compare/v0.1.475...v0.1.476) (2026-10-28)
 
 
