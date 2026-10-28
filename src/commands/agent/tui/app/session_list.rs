@@ -91,9 +91,11 @@ impl App {
         row_heights: &[usize],
         viewport_height: usize,
     ) {
+        let selection = self.selection_anchor();
         self.update_rendered_row_keys(row_keys);
         self.row_heights = row_heights.to_vec();
         self.list_viewport_height = viewport_height;
+        self.resync_selection(selection);
         self.restore_pending_selection_line();
     }
 

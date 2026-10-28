@@ -598,7 +598,9 @@ mod tests {
     }
 
     #[test]
-    fn child_focus_selects_the_child_and_opens_its_parent_progress() {
+    fn child_focus_survives_rendering_of_its_inline_checklist_row() {
+        use crate::commands::agent::tui::progress::{PrProgressRow, ProgressMark, StageMarks};
+
         let timestamp = Utc.timestamp_opt(1_800_000_000, 0).single().unwrap();
         let root = create_test_session_at("root", timestamp);
         let mut task = create_test_session_at("task", timestamp);
@@ -618,30 +620,72 @@ mod tests {
             task.session_id.clone(),
             intermediate_delegate.session_id.clone(),
         ];
-        let app = App::with_initial_selection(
+        let mut app = App::with_initial_selection(
             vec![root, task, intermediate_delegate, delegate],
             AgentConfig::default(),
             Some("delegate"),
             None,
         );
 
+        app.progress_rows = vec![
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 1,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch".to_string(),
+                title: "batch".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch".to_string(),
+                checklist_item_id: "item".to_string(),
+                row: PrProgressRow {
+                    session_id: "delegate".to_string(),
+                    repo: Some("example/repo".to_string()),
+                    title: "Pull request".to_string(),
+                    number: Some(1),
+                    url: Some("https://example.test/pull/1".to_string()),
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+        ];
+        app.progress_fetch_states.insert(
+            "intermediate-delegate".to_string(),
+            ProgressFetchState::Ready,
+        );
+        let rendered_rows = app.build_display_rows();
+        let row_keys = rendered_rows
+            .iter()
+            .map(|row| row.row_key())
+            .collect::<Vec<_>>();
+        drop(rendered_rows);
+        let row_heights = vec![1; row_keys.len()];
+        app.update_rendered_rows(&row_keys, &row_heights, 60);
+
         assert_eq!(
             (
                 app.selected_session_id(),
                 app.selected_session_row_occurrence(),
                 app.progress_inline_expanded,
-                app.progress_session_id.clone(),
-                app.initial_progress_selection.clone(),
+                app.progress_session_id.as_deref(),
             ),
             (
                 Some("delegate"),
                 Some(0),
                 true,
-                Some("intermediate-delegate".to_string()),
-                Some(InitialProgressSelection::new(
-                    "intermediate-delegate".to_string(),
-                    "delegate".to_string(),
-                )),
+                Some("intermediate-delegate"),
             ),
         );
     }
