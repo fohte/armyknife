@@ -270,14 +270,21 @@ fn parse_review_header(
 
 fn parse_threads(body: &str) -> Result<Vec<ParsedThread>, PrReviewError> {
     let mut threads = Vec::new();
+    let thread_marker = "<!-- thread: ";
+    let mut thread_starts = Vec::new();
+    let mut line_start = 0;
 
-    // Split by thread headers
-    let parts: Vec<&str> = body.split("<!-- thread: ").collect();
+    for line in body.split_inclusive('\n') {
+        if line.starts_with(thread_marker) {
+            thread_starts.push(line_start);
+        }
+        line_start += line.len();
+    }
 
-    // Skip the first part (before any thread header)
-    for part in parts.iter().skip(1) {
-        let thread = parse_single_thread(part)?;
-        threads.push(thread);
+    for (index, marker_start) in thread_starts.iter().enumerate() {
+        let part_start = marker_start + thread_marker.len();
+        let part_end = thread_starts.get(index + 1).copied().unwrap_or(body.len());
+        threads.push(parse_single_thread(&body[part_start..part_end])?);
     }
 
     Ok(threads)
@@ -488,6 +495,64 @@ mod tests {
         assert_eq!(parsed.threads[1].path, "src/b.rs");
         assert_eq!(parsed.threads[1].line, Some(20));
         assert!(parsed.threads[1].resolve);
+    }
+
+    #[rstest]
+    fn test_parse_serialized_thread_marker_in_diff_hunk() {
+        let content = indoc! {r#"
+            ---
+            pr: 7
+            repo: "example/project"
+            pulled_at: "2025-03-04T05:06:07Z"
+            ---
+
+            <!-- thread: RT_sample path: src/example.rs:12 author: @sample-author -->
+            - [ ] resolve
+            <!-- diff -->
+            ```diff
+            @@ -1 +1 @@
+             <!-- thread: ignored path: docs/example.md -->
+            ```
+            <!-- /diff -->
+            <!-- comment: @sample-author 2025-03-04T05:06:07Z -->
+            Review comment
+            <!-- /comment -->
+            Draft response
+
+            <!-- thread: RT_next path: docs/next.md:4 author: @another-author -->
+            - [x] resolve
+            "#};
+
+        let parsed = MarkdownParser::parse(content).unwrap();
+
+        assert_eq!(
+            parsed,
+            ParsedThreadsFile {
+                frontmatter: ThreadsFrontmatter {
+                    pr: 7,
+                    repo: "example/project".to_string(),
+                    pulled_at: "2025-03-04T05:06:07Z".to_string(),
+                    submit: false,
+                },
+                reviews: vec![],
+                threads: vec![
+                    ParsedThread {
+                        thread_id: "RT_sample".to_string(),
+                        path: "src/example.rs".to_string(),
+                        line: Some(12),
+                        resolve: false,
+                        draft_reply: Some("Draft response".to_string()),
+                    },
+                    ParsedThread {
+                        thread_id: "RT_next".to_string(),
+                        path: "docs/next.md".to_string(),
+                        line: Some(4),
+                        resolve: true,
+                        draft_reply: None,
+                    },
+                ],
+            },
+        );
     }
 
     #[rstest]
