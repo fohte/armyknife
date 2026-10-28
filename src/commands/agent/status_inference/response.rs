@@ -73,9 +73,7 @@ pub(super) fn parse_status_response(text: &str) -> Result<AgentStatus> {
 }
 
 fn is_single_line(note: &str) -> bool {
-    !note.contains([
-        '\n', '\r', '\u{000B}', '\u{000C}', '\u{0085}', '\u{2028}', '\u{2029}',
-    ])
+    !note.contains('\n') && !note.contains('\r')
 }
 
 #[cfg(test)]
@@ -119,6 +117,12 @@ mod tests {
     #[case::unknown_kind(r#"{"kind":"unknown","note":"review the proposal"}"#, Ok(("unknown".to_string(), "review the proposal".to_string())))]
     #[case::empty_note(r#"{"kind":"needs_user","note":"  "}"#, Err("inferred status note is empty".to_string()))]
     #[case::multiline_note(r#"{"kind":"needs_user","note":"first line\nsecond line"}"#, Err("inferred status note is not a single line".to_string()))]
+    #[case::carriage_return_note(r#"{"kind":"needs_user","note":"first line\rsecond line"}"#, Err("inferred status note is not a single line".to_string()))]
+    #[case::vertical_tab_note(r#"{"kind":"needs_user","note":"first line\u000bsecond line"}"#, Ok(("needs_user".to_string(), "first line\u{000b}second line".to_string())))]
+    #[case::form_feed_note(r#"{"kind":"needs_user","note":"first line\u000csecond line"}"#, Ok(("needs_user".to_string(), "first line\u{000c}second line".to_string())))]
+    #[case::next_line_note(r#"{"kind":"needs_user","note":"first line\u0085second line"}"#, Ok(("needs_user".to_string(), "first line\u{0085}second line".to_string())))]
+    #[case::line_separator_note(r#"{"kind":"needs_user","note":"first line\u2028second line"}"#, Ok(("needs_user".to_string(), "first line\u{2028}second line".to_string())))]
+    #[case::paragraph_separator_note(r#"{"kind":"needs_user","note":"first line\u2029second line"}"#, Ok(("needs_user".to_string(), "first line\u{2029}second line".to_string())))]
     #[case::extra_field(r#"{"kind":"needs_user","note":"review the proposal","extra":true}"#, Ok(("needs_user".to_string(), "review the proposal".to_string())))]
     fn status_response_is_deserialized(
         #[case] text: &str,
