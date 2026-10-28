@@ -73,14 +73,7 @@ fn verify_push_approval(path: &std::path::Path, content: &str) -> anyhow::Result
     let document = Document::<ThreadsFrontmatter>::from_content(path.to_path_buf(), content)?;
     document
         .approval_manager()
-        .verify_content(content.as_bytes())?;
-
-    if std::fs::read(path)? != content.as_bytes() {
-        return Err(
-            crate::shared::human_in_the_loop::HumanInTheLoopError::ModifiedAfterApproval.into(),
-        );
-    }
-
+        .verify_content_matches_file(content.as_bytes())?;
     Ok(())
 }
 
@@ -216,6 +209,7 @@ pub async fn run_push(args: &ReplyPushArgs) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::commands::gh::pr_review::changeset::ReplyAction;
+    use crate::shared::human_in_the_loop::HumanInTheLoopError;
     use indoc::indoc;
     use rstest::rstest;
     use tempfile::TempDir;
@@ -309,9 +303,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            verify_push_approval(&path, &parsed_content).map_err(|_| ()),
-            Err(())
-        );
+        let error = verify_push_approval(&path, &parsed_content).unwrap_err();
+
+        assert!(matches!(
+            error.downcast_ref::<HumanInTheLoopError>(),
+            Some(HumanInTheLoopError::ModifiedAfterApproval)
+        ));
     }
 }

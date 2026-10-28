@@ -97,6 +97,17 @@ impl ApprovalManager {
         self.verify_mac(&saved, content)
     }
 
+    /// Verify loaded content and ensure it still matches the document on disk.
+    pub fn verify_content_matches_file(&self, content: &[u8]) -> Result<()> {
+        self.verify_content(content)?;
+
+        if fs::read(&self.document_path)? != content {
+            return Err(HumanInTheLoopError::ModifiedAfterApproval);
+        }
+
+        Ok(())
+    }
+
     fn verify_mac(&self, saved: &str, content: &[u8]) -> Result<()> {
         let current = Self::compute_mac_for_content(content);
         if !constant_time_eq(saved.as_bytes(), current.as_bytes()) {
