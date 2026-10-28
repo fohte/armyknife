@@ -62,22 +62,6 @@ impl MarkdownSerializer {
         frontmatter: &ThreadsFrontmatter,
         existing_drafts: &HashMap<String, String>,
     ) -> String {
-        Self::serialize_with_options(
-            pr_data,
-            frontmatter,
-            existing_drafts,
-            &SerializeOptions::default(),
-        )
-        .text
-    }
-
-    /// Keep the existing draft-only API so callers need not construct resolve state.
-    pub fn serialize_with_options(
-        pr_data: &PrData,
-        frontmatter: &ThreadsFrontmatter,
-        existing_drafts: &HashMap<String, String>,
-        options: &SerializeOptions,
-    ) -> SerializeOutcome {
         let existing_actions = existing_drafts
             .iter()
             .map(|(thread_id, draft_reply)| {
@@ -90,7 +74,13 @@ impl MarkdownSerializer {
                 )
             })
             .collect();
-        Self::serialize_with_actions(pr_data, frontmatter, &existing_actions, options)
+        Self::serialize_with_actions(
+            pr_data,
+            frontmatter,
+            &existing_actions,
+            &SerializeOptions::default(),
+        )
+        .text
     }
 
     /// Generate Markdown while preserving local actions by thread node ID.
@@ -646,7 +636,7 @@ mod tests {
             )],
         };
 
-        let outcome = MarkdownSerializer::serialize_with_options(
+        let outcome = MarkdownSerializer::serialize_with_actions(
             &pr_data,
             &default_frontmatter(),
             &HashMap::new(),
@@ -690,7 +680,7 @@ mod tests {
         assert_eq!(collapsed_default, expected_collapsed);
 
         let opts = SerializeOptions { open_details: true };
-        let preserved = MarkdownSerializer::serialize_with_options(
+        let preserved = MarkdownSerializer::serialize_with_actions(
             &pr_data,
             &default_frontmatter(),
             &HashMap::new(),
