@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use super::child;
-use super::{CloseArgs, EnvVars, LiveCloseRuntime, Session, close_tracked_session};
+use super::{CloseArgs, CloseRuntime, EnvVars, LiveCloseRuntime, Session, close_tracked_session};
 use super::{prepare_close_session, worktree_delete};
 use crate::infra::git::GitRepo;
 
@@ -130,7 +130,7 @@ fn validate_worktree_sessions(
         )?;
     }
     for session in sessions {
-        if should_gracefully_close_worktree_session(session, context.caller_pane_id) {
+        if should_validate_worktree_session(session, context.args.force, context.caller_pane_id) {
             validate_session(session, context.args.force, context.caller_pane_id)?;
         }
     }
@@ -209,12 +209,31 @@ fn validate_worktree_session(
     current_pane_id: Option<&str>,
     runtime: &LiveCloseRuntime,
 ) -> Result<()> {
+    if session.tmux_info.is_none() {
+        if force || session.status == super::SessionStatus::Paused {
+            return Ok(());
+        }
+        let mut session = session.clone();
+        super::super::session_status::include_pending_status(&mut session);
+        return validate_worktree_session_without_tmux_info(&session, force, || {
+            runtime.unknown_draft_timeout()
+        });
+    }
     if !should_gracefully_close_worktree_session(session, current_pane_id) {
         return Ok(());
     }
     let mut session = session.clone();
     super::super::session_status::include_pending_status(&mut session);
     prepare_close_session(&session, force, runtime).map(|_| ())
+}
+
+fn should_validate_worktree_session(
+    session: &Session,
+    force: bool,
+    current_pane_id: Option<&str>,
+) -> bool {
+    should_gracefully_close_worktree_session(session, current_pane_id)
+        || (session.tmux_info.is_none() && !force && session.status != super::SessionStatus::Paused)
 }
 
 fn should_gracefully_close_worktree_session(
@@ -229,6 +248,19 @@ fn is_caller_pane_session(session: &Session, current_pane_id: Option<&str>) -> b
         .tmux_info
         .as_ref()
         .is_some_and(|info| current_pane_id == Some(info.pane_id.as_str()))
+}
+
+fn validate_worktree_session_without_tmux_info(
+    session: &Session,
+    force: bool,
+    unknown_draft_timeout: impl FnOnce() -> std::time::Duration,
+) -> Result<()> {
+    if force || session.status == super::SessionStatus::Paused {
+        return Ok(());
+    }
+    super::ensure_session_is_idle(session, session.status)?;
+    super::check_unknown_draft_state(session, unknown_draft_timeout())?;
+    Ok(())
 }
 
 pub(super) fn linked_worktree_root(path: &Path) -> Option<PathBuf> {
@@ -255,9 +287,11 @@ fn select_worktree_sessions<'a>(sessions: &'a [Session], worktree_root: &Path) -
 mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     use rstest::rstest;
 
+    use super::super::SessionStatus;
     use super::super::test_support::session;
     use super::*;
 
@@ -316,6 +350,120 @@ mod tests {
             should_gracefully_close_worktree_session(&session, current_pane_id),
             expected
         );
+    }
+
+    #[rstest]
+    #[case::tracked_elsewhere(true, false, SessionStatus::Stopped, Some("%99"), true)]
+    #[case::tracked_caller_pane(true, false, SessionStatus::Stopped, Some("%42"), false)]
+    #[case::tracked_with_force(true, true, SessionStatus::Stopped, None, true)]
+    #[case::no_tmux_info_active(false, false, SessionStatus::Stopped, None, true)]
+    #[case::no_tmux_info_paused(false, false, SessionStatus::Paused, None, false)]
+    #[case::no_tmux_info_with_force(false, true, SessionStatus::Running, None, false)]
+    fn selects_worktree_sessions_for_safety_validation(
+        mut session: Session,
+        #[case] has_tmux_info: bool,
+        #[case] force: bool,
+        #[case] status: SessionStatus,
+        #[case] current_pane_id: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        session.status = status;
+        if !has_tmux_info {
+            session.tmux_info = None;
+        }
+
+        assert_eq!(
+            should_validate_worktree_session(&session, force, current_pane_id),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::running(
+        SessionStatus::Running,
+        false,
+        false,
+        false,
+        false,
+        Some(
+            "Agent session `session-1` is running or waiting for input; pass --force to close it"
+        )
+    )]
+    #[case::waiting_for_input(
+        SessionStatus::WaitingInput,
+        false,
+        false,
+        false,
+        false,
+        Some(
+            "Agent session `session-1` is running or waiting for input; pass --force to close it"
+        )
+    )]
+    #[case::pending_background_task(
+        SessionStatus::Stopped,
+        true,
+        false,
+        false,
+        false,
+        Some(
+            "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+        )
+    )]
+    #[case::pending_agent_task(
+        SessionStatus::Stopped,
+        false,
+        true,
+        false,
+        false,
+        Some(
+            "Agent session `session-1` has pending background or agent tasks; pass --force to close it"
+        )
+    )]
+    #[case::recent_activity(
+        SessionStatus::Ended,
+        false,
+        false,
+        true,
+        false,
+        Some(
+            "Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it"
+        )
+    )]
+    #[case::stale_activity(SessionStatus::Stopped, false, false, false, false, None)]
+    #[case::paused_with_pending_tasks(SessionStatus::Paused, true, true, true, false, None)]
+    #[case::forced_running_with_pending_tasks(SessionStatus::Running, true, true, true, true, None)]
+    fn validates_worktree_session_without_tmux_info(
+        mut session: Session,
+        #[case] status: SessionStatus,
+        #[case] pending_bg_task: bool,
+        #[case] pending_agent_task: bool,
+        #[case] recent_activity: bool,
+        #[case] force: bool,
+        #[case] expected_error: Option<&str>,
+    ) {
+        session.status = status;
+        session.tmux_info = None;
+        session.updated_at = if recent_activity {
+            chrono::Utc::now()
+        } else {
+            chrono::Utc::now() - chrono::TimeDelta::hours(1)
+        };
+        if pending_bg_task {
+            session.pending_bg_task_ids.insert("task-1".to_string());
+        }
+        if pending_agent_task {
+            session
+                .pending_agent_task_ids
+                .insert("agent-task-1".to_string());
+        }
+
+        let actual = validate_worktree_session_without_tmux_info(&session, force, || {
+            Duration::from_secs(30 * 60)
+        })
+        .map_err(|error| error.to_string());
+        let expected = expected_error.map_or_else(|| Ok(()), |error| Err(error.to_string()));
+
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
@@ -582,6 +730,7 @@ mod tests {
     #[tokio::test]
     async fn worktree_close_reloads_activity_after_confirmation() {
         let mut listed_session = session();
+        listed_session.tmux_info = None;
         listed_session.updated_at = chrono::Utc::now() - chrono::TimeDelta::hours(1);
         let latest_session = RefCell::new(listed_session.clone());
         let sessions = [&listed_session];
@@ -608,10 +757,9 @@ mod tests {
                 calls
                     .borrow_mut()
                     .push(format!("validate {}", session.session_id));
-                if session.updated_at > listed_session.updated_at {
-                    anyhow::bail!("recent activity prevents closing the session");
-                }
-                Ok(())
+                validate_worktree_session_without_tmux_info(session, false, || {
+                    Duration::from_secs(30 * 60)
+                })
             },
             |session_id| {
                 calls.borrow_mut().push(format!("load {session_id}"));
@@ -636,13 +784,66 @@ mod tests {
                 calls.into_inner(),
             ),
             (
-                Err("recent activity prevents closing the session".to_string()),
+                Err("Could not check for an unsent draft in agent session `session-1`; recent activity prevents closing it, pass --force to close it".to_string()),
                 vec![
                     "validate session-1".to_string(),
                     "prepare".to_string(),
                     "load session-1".to_string(),
                     "validate session-1".to_string(),
                 ],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn worktree_close_rejects_a_running_session_without_tmux_info_before_preparing() {
+        let mut target_session = session();
+        target_session.tmux_info = None;
+        target_session.status = SessionStatus::Running;
+        let sessions = [&target_session];
+        let args = CloseArgs::default();
+        let calls = RefCell::new(Vec::<String>::new());
+        let context = WorktreeCloseContext {
+            args: &args,
+            sessions: &sessions,
+            worktree_root: Path::new("/tmp/test-repo"),
+            child_parent_session_id: None,
+            caller_session_id: None,
+            caller_pane_id: None,
+        };
+
+        let result = close_worktree_with(
+            context,
+            false,
+            async {
+                calls.borrow_mut().push("prepare".to_string());
+                Ok::<(), anyhow::Error>(())
+            },
+            |session, force, _| {
+                validate_worktree_session_without_tmux_info(session, force, || {
+                    Duration::from_secs(30 * 60)
+                })
+            },
+            |_| Ok(None),
+            |_, _, _| {
+                calls.borrow_mut().push("close session".to_string());
+                Ok(())
+            },
+            |_| async {
+                calls.borrow_mut().push("remove worktree".to_string());
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                calls.into_inner(),
+            ),
+            (
+                Err("Agent session `session-1` is running or waiting for input; pass --force to close it".to_string()),
+                vec![],
             ),
         );
     }
