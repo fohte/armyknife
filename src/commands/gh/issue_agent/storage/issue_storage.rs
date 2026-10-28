@@ -10,6 +10,7 @@ use super::paths::{get_issue_dir, get_new_issue_dir};
 /// <cache_dir>/<owner>/<repo>/<issue_number>/
 /// ├── issue.md
 /// ├── .issue.base.md
+/// ├── .comments.base.json
 /// ├── metadata.json (legacy)
 /// └── comments/
 ///     ├── 001_comment_<databaseId>.md
