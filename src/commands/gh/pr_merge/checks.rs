@@ -62,12 +62,10 @@ fn query_required_check_status(
             Ok(CheckWaitStatus::Pending(format_check_details(&checks)))
         }
         Some(CheckOutcome::Failed(checks)) => {
-            let details = if checks.is_empty() {
-                command_output_text(&output)
-            } else {
-                format_check_details(&checks)
-            };
-            bail!("Required checks failed: {details}");
+            bail!("Required checks failed: {}", format_check_details(&checks));
+        }
+        Some(CheckOutcome::CommandFailed) => {
+            bail!("gh pr checks failed: {}", command_output_text(&output));
         }
         None => {
             let has_required_checks = match *required_checks_configured {
@@ -104,7 +102,7 @@ fn classify_check_result(
     stdout: &[u8],
 ) -> anyhow::Result<Option<CheckOutcome>> {
     if !status_success {
-        return Ok((!stdout.is_empty()).then_some(CheckOutcome::Failed(Vec::new())));
+        return Ok((!stdout.is_empty()).then_some(CheckOutcome::CommandFailed));
     }
 
     let checks = serde_json::from_slice::<Vec<GhCheck>>(stdout)
@@ -114,27 +112,27 @@ fn classify_check_result(
         bail!("gh pr checks returned an empty JSON result");
     }
 
-    let failed_checks = checks
-        .iter()
-        .filter(|check| {
-            matches!(check.bucket, CheckBucket::Fail | CheckBucket::Cancel)
-                || check.state == "STALE"
-        })
-        .cloned()
-        .collect::<Vec<_>>();
+    let mut failed_checks = Vec::new();
+    let mut pending_checks = Vec::new();
+    for check in checks {
+        if is_failed_check(&check) {
+            failed_checks.push(check);
+        } else if check.bucket == CheckBucket::Pending {
+            pending_checks.push(check);
+        }
+    }
     if !failed_checks.is_empty() {
         return Ok(Some(CheckOutcome::Failed(failed_checks)));
     }
-    let pending_checks = checks
-        .iter()
-        .filter(|check| check.bucket == CheckBucket::Pending)
-        .cloned()
-        .collect::<Vec<_>>();
     if !pending_checks.is_empty() {
         return Ok(Some(CheckOutcome::Pending(pending_checks)));
     }
 
     Ok(Some(CheckOutcome::Complete))
+}
+
+fn is_failed_check(check: &GhCheck) -> bool {
+    matches!(check.bucket, CheckBucket::Fail | CheckBucket::Cancel) || check.state == "STALE"
 }
 
 fn format_check_details(checks: &[GhCheck]) -> String {
@@ -320,6 +318,7 @@ enum CheckOutcome {
     Complete,
     Pending(Vec<GhCheck>),
     Failed(Vec<GhCheck>),
+    CommandFailed,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -465,7 +464,7 @@ mod tests {
     #[case::nonzero_with_output_fails(
         false,
         "gh returned an error",
-        Some(CheckOutcome::Failed(Vec::new()))
+        Some(CheckOutcome::CommandFailed)
     )]
     #[case::empty_error_needs_required_check_lookup(false, "", None)]
     fn classify_check_result_cases(
@@ -487,25 +486,38 @@ mod tests {
         );
     }
 
-    #[test]
-    fn format_check_details_includes_names_states_and_links() {
-        assert_eq!(
-            format_check_details(&[
-                gh_check(
-                    "build",
-                    "IN_PROGRESS",
-                    CheckBucket::Pending,
-                    "https://example.invalid/checks/build",
-                ),
-                gh_check(
-                    "docs",
-                    "EXPECTED",
-                    CheckBucket::Pending,
-                    "https://example.invalid/checks/docs",
-                ),
-            ]),
-            "build (IN_PROGRESS) https://example.invalid/checks/build; docs (EXPECTED) https://example.invalid/checks/docs",
-        );
+    #[rstest]
+    #[case::with_links(
+        vec![
+            gh_check(
+                "build",
+                "IN_PROGRESS",
+                CheckBucket::Pending,
+                "https://example.invalid/checks/build",
+            ),
+            gh_check(
+                "docs",
+                "EXPECTED",
+                CheckBucket::Pending,
+                "https://example.invalid/checks/docs",
+            ),
+        ],
+        "build (IN_PROGRESS) https://example.invalid/checks/build; docs (EXPECTED) https://example.invalid/checks/docs"
+    )]
+    #[case::empty_link(
+        vec![gh_check(
+            "build",
+            "IN_PROGRESS",
+            CheckBucket::Pending,
+            "",
+        )],
+        "build (IN_PROGRESS)"
+    )]
+    fn format_check_details_formats_check_entries(
+        #[case] checks: Vec<GhCheck>,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(format_check_details(&checks), expected);
     }
 
     #[rstest]
@@ -625,6 +637,11 @@ mod tests {
         CheckWaitStatus::Pending(
             "gh pr checks returned no status rows: permission denied".to_string()
         )
+    )]
+    #[case::configured_check_without_output(
+        true,
+        "",
+        CheckWaitStatus::Pending("gh pr checks returned no status rows".to_string())
     )]
     #[case::no_configured_check_is_complete(false, "no check rows", CheckWaitStatus::Complete)]
     fn missing_check_output_cases(
