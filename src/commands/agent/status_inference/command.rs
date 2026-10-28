@@ -490,6 +490,8 @@ mod tests {
             sweep_signaled: false,
             stop_blocked_by_armyknife: false,
             engine: Engine::Claude,
+            model: None,
+            effort: None,
         };
         store::save_session_to(&sessions_dir, &session).expect("session should be saved");
         let agent_config: AgentConfig = serde_yaml::from_str(indoc! {

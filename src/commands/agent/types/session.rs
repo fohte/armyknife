@@ -194,6 +194,12 @@ pub struct Session {
     /// Which coding agent CLI this session belongs to. See `Engine`.
     #[serde(default)]
     pub engine: Engine,
+    /// Runtime model currently used by the main thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// Runtime effort currently used by the main thread.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
 }
 
 impl Session {
@@ -232,32 +238,37 @@ mod tests {
             serde_json::from_value(json).expect("legacy session should deserialize");
         assert_eq!(
             (
-                session.archived_at,
-                session.read_at,
-                session.work_type,
-                session.vibe_enabled,
-                session.launched_with_vibe,
-                session.child_launch,
-                session.work_type_pinned,
-                session.pending_human_review_ids,
-                session.agent_status,
-                session.stop_blocked_by_armyknife,
-                session.agent_status_clear_pending,
-                session.pr_context,
+                (
+                    session.archived_at,
+                    session.read_at,
+                    session.work_type,
+                    session.vibe_enabled,
+                    session.launched_with_vibe,
+                    session.child_launch,
+                    session.work_type_pinned,
+                    session.pending_human_review_ids,
+                ),
+                (
+                    session.agent_status,
+                    session.stop_blocked_by_armyknife,
+                    session.agent_status_clear_pending,
+                    session.pr_context,
+                    session.model,
+                    session.effort,
+                ),
             ),
             (
-                None,
-                None,
-                None,
-                false,
-                false,
-                ChildLaunchPermission::Allow,
-                false,
-                BTreeSet::new(),
-                None,
-                false,
-                false,
-                None
+                (
+                    None,
+                    None,
+                    None,
+                    false,
+                    false,
+                    ChildLaunchPermission::Allow,
+                    false,
+                    BTreeSet::new(),
+                ),
+                (None, false, false, None, None, None),
             )
         );
     }

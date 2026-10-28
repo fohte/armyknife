@@ -342,6 +342,26 @@ mod tests {
     }
 
     #[rstest]
+    #[case::enabled("example-org/standalone-tool", "true")]
+    #[case::disabled("example-org/managed-fork", "false")]
+    #[case::repo_entry_without_key_defaults_to_false("example-org/unset-fork", "false")]
+    #[case::repo_entry_absent_defaults_to_false("example-org/unconfigured-fork", "false")]
+    fn get_value_repo_standalone_fork(#[case] repo_id: &str, #[case] expected: &str) {
+        let cfg = config_from_yaml(indoc! {"
+            repos:
+              example-org/standalone-tool:
+                standalone_fork: true
+              example-org/managed-fork:
+                standalone_fork: false
+              example-org/unset-fork: {}
+        "});
+        assert_eq!(
+            scalar(cfg.get_value("repo.standalone_fork", Some(repo_id))).as_deref(),
+            Some(expected)
+        );
+    }
+
+    #[rstest]
     #[case::denied_by_default("{}", "example-org/example-repo", false)]
     #[case::org_value_falls_back(
         indoc! {"

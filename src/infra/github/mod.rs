@@ -16,8 +16,8 @@ pub use error::GitHubError;
 #[cfg(test)]
 pub use mock::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
 pub use pr::{
-    BranchPrQuery, CreatePrParams, PrCiState, PrClient, PrInfo, PrProgressInfo, PrState,
-    UpdatePrParams,
+    BranchPrQuery, CreatePrParams, PrBodyClient, PrCiState, PrClient, PrInfo, PrProgressInfo,
+    PrState, UpdatePrBodyParams, UpdatePrParams,
 };
 pub use pr_number::PrNumberQuery;
 pub use repo::RepoClient;
