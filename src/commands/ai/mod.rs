@@ -1,6 +1,7 @@
 pub mod draft;
 pub mod pr_draft;
 pub mod pr_series;
+mod pr_series_aftercare;
 pub mod review;
 
 use clap::Subcommand;

@@ -56,6 +56,16 @@ pub async fn run(args: &SyncArgs) -> Result<()> {
     Ok(())
 }
 
+pub(super) async fn sync_after_submit(
+    plan: &PrSeriesPlan,
+    created_pull_requests: &[CreatedPullRequest],
+    github: &(impl PrBodyClient + RepoClient),
+) -> Result<usize> {
+    let report = sync_created_pull_requests(plan, created_pull_requests, github).await?;
+    print_report(&report);
+    Ok(report.failed.len())
+}
+
 async fn sync_created_pull_requests(
     plan: &PrSeriesPlan,
     created_pull_requests: &[CreatedPullRequest],
@@ -186,7 +196,7 @@ async fn sync_created_pull_requests(
     Ok(report)
 }
 
-fn synchronized_body(
+pub(super) fn synchronized_body(
     plan: &PrSeriesPlan,
     entry_id: &str,
     body: &str,
