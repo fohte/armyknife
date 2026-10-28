@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.484](https://github.com/fohte/armyknife/compare/v0.1.483...v0.1.484) (2026-10-28)
+
+
+### Bug Fixes
+
+* **agent:** guard close for sessions without tmux ([#1311](https://github.com/fohte/armyknife/issues/1311)) ([94209e5](https://github.com/fohte/armyknife/commit/94209e51b15a2fe2f9f0099c7b0986643e862ae7))
+
 ## [0.1.483](https://github.com/fohte/armyknife/compare/v0.1.482...v0.1.483) (2026-10-28)
 
 
