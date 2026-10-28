@@ -253,15 +253,70 @@ mod tests {
 
          ?: keys   /: search   Tab: toggle progress   q: quit"};
 
+    #[fixture]
+    fn inline_checklist_progress_rows() -> Vec<ProgressRow> {
+        vec![
+            ProgressRow::ImplementationHeader {
+                merged_pr_count: 0,
+                total_pr_count: 1,
+                collapsed: false,
+            },
+            ProgressRow::BatchHeader {
+                batch_id: "batch-a".to_string(),
+                title: "Batch A".to_string(),
+                merged_pr_count: 0,
+                collapsed: false,
+            },
+            ProgressRow::ChecklistPullRequest {
+                batch_id: "batch-a".to_string(),
+                checklist_item_id: "item-a".to_string(),
+                row: PrProgressRow {
+                    session_id: "worker".to_string(),
+                    repo: Some("example-project".to_string()),
+                    title: "Placeholder change".to_string(),
+                    number: None,
+                    url: None,
+                    pane_id: None,
+                    is_ended: false,
+                    lookup_unavailable: false,
+                    stages: StageMarks {
+                        implementation: ProgressMark::Working,
+                        diff_review: ProgressMark::NotStarted,
+                        pr_body: ProgressMark::NotStarted,
+                        ci: ProgressMark::NotStarted,
+                        merge: ProgressMark::NotStarted,
+                    },
+                },
+            },
+        ]
+    }
+
+    fn render_inline_progress_screen(
+        sessions: &[Session],
+        selected_index: Option<usize>,
+        now: DateTime<Utc>,
+        height: u16,
+        progress_rows: Vec<ProgressRow>,
+        row_order: &[Option<&str>],
+    ) -> String {
+        render_to_string_with(sessions, selected_index, now, 140, height, |app| {
+            app.progress_inline_expanded = true;
+            app.progress_session_id = Some("design".to_string());
+            app.progress_fetch_states
+                .insert("design".to_string(), ProgressFetchState::Ready);
+            app.progress_rows = progress_rows;
+            app.update_row_order(row_order);
+        })
+    }
+
     #[rstest]
-    #[case::planned_without_pr(None, None, false, PLANNED_WORKER_SCREEN)]
-    #[case::number_without_url(Some(17), None, false, NUMBERED_WORKER_SCREEN)]
-    #[case::nested_source_keeps_parent_continuation(None, None, true, NESTED_SOURCE_WORKER_SCREEN)]
+    #[case::planned_without_pr(None, None, PLANNED_WORKER_SCREEN)]
+    #[case::number_without_url(Some(17), None, NUMBERED_WORKER_SCREEN)]
     fn render_inline_checklist_worker_annotation(
         #[case] number: Option<u64>,
         #[case] url: Option<&str>,
-        #[case] nested_source: bool,
         #[case] expected: &str,
+        mut inline_checklist_progress_rows: Vec<ProgressRow>,
     ) {
         let now = Utc::now();
         let mut design = create_test_session("design");
@@ -271,93 +326,73 @@ mod tests {
         worker.updated_at = now;
         worker.label = Some("Worker session".to_string());
         worker.ancestor_session_ids = vec![design.session_id.clone()];
-
-        let (sessions, selected_index, row_order) = if nested_source {
-            let mut parent = create_test_session("parent");
-            parent.updated_at = now;
-            parent.status = SessionStatus::Running;
-            parent.label = Some("Parent session".to_string());
-            let mut sibling = create_test_session("sibling");
-            sibling.updated_at = now;
-            sibling.status = SessionStatus::Running;
-            sibling.label = Some("Following sibling".to_string());
-            design.ancestor_session_ids = vec![parent.session_id.clone()];
-            sibling.ancestor_session_ids = vec![parent.session_id.clone()];
-            worker.ancestor_session_ids =
-                vec![parent.session_id.clone(), design.session_id.clone()];
-            let mut worker_child = create_test_session("worker-child");
-            worker_child.updated_at = now;
-            worker_child.status = SessionStatus::Running;
-            worker_child.label = Some("Worker child".to_string());
-            worker_child.ancestor_session_ids = vec![
-                parent.session_id.clone(),
-                design.session_id.clone(),
-                worker.session_id.clone(),
-            ];
-            (
-                vec![parent, design, worker, worker_child, sibling],
-                Some(2),
-                vec![
-                    None,
-                    Some("parent"),
-                    Some("design"),
-                    Some("worker"),
-                    Some("worker-child"),
-                    Some("sibling"),
-                ],
-            )
-        } else {
-            (
-                vec![design, worker],
-                Some(1),
-                vec![None, Some("design"), Some("worker")],
-            )
-        };
-
-        let height = if nested_source { 11 } else { 10 };
-        let output = render_to_string_with(&sessions, selected_index, now, 140, height, |app| {
-            app.progress_inline_expanded = true;
-            app.progress_session_id = Some("design".to_string());
-            app.progress_fetch_states
-                .insert("design".to_string(), ProgressFetchState::Ready);
-            app.progress_rows = vec![
-                ProgressRow::ImplementationHeader {
-                    merged_pr_count: 0,
-                    total_pr_count: 1,
-                    collapsed: false,
-                },
-                ProgressRow::BatchHeader {
-                    batch_id: "batch-a".to_string(),
-                    title: "Batch A".to_string(),
-                    merged_pr_count: 0,
-                    collapsed: false,
-                },
-                ProgressRow::ChecklistPullRequest {
-                    batch_id: "batch-a".to_string(),
-                    checklist_item_id: "item-a".to_string(),
-                    row: PrProgressRow {
-                        session_id: "worker".to_string(),
-                        repo: Some("example-project".to_string()),
-                        title: "Placeholder change".to_string(),
-                        number,
-                        url: url.map(str::to_string),
-                        pane_id: None,
-                        is_ended: false,
-                        lookup_unavailable: false,
-                        stages: StageMarks {
-                            implementation: ProgressMark::Working,
-                            diff_review: ProgressMark::NotStarted,
-                            pr_body: ProgressMark::NotStarted,
-                            ci: ProgressMark::NotStarted,
-                            merge: ProgressMark::NotStarted,
-                        },
-                    },
-                },
-            ];
-            app.update_row_order(&row_order);
-        });
+        for row in &mut inline_checklist_progress_rows {
+            if let ProgressRow::ChecklistPullRequest { row, .. } = row {
+                row.number = number;
+                row.url = url.map(str::to_string);
+            }
+        }
+        let output = render_inline_progress_screen(
+            &[design, worker],
+            Some(1),
+            now,
+            10,
+            inline_checklist_progress_rows,
+            &[None, Some("design"), Some("worker")],
+        );
 
         assert_eq!(output, expected);
+    }
+
+    #[rstest]
+    fn render_inline_progress_keeps_parent_tree_continuation_for_nested_source(
+        inline_checklist_progress_rows: Vec<ProgressRow>,
+    ) {
+        let now = Utc::now();
+        let mut parent = create_test_session("parent");
+        parent.updated_at = now;
+        parent.status = SessionStatus::Running;
+        parent.label = Some("Parent session".to_string());
+        let mut design = create_test_session("design");
+        design.updated_at = now;
+        design.label = Some("Design source".to_string());
+        design.ancestor_session_ids = vec![parent.session_id.clone()];
+        let mut worker = create_test_session("worker");
+        worker.updated_at = now;
+        worker.label = Some("Worker session".to_string());
+        worker.ancestor_session_ids = vec![parent.session_id.clone(), design.session_id.clone()];
+        let mut worker_child = create_test_session("worker-child");
+        worker_child.updated_at = now;
+        worker_child.status = SessionStatus::Running;
+        worker_child.label = Some("Worker child".to_string());
+        worker_child.ancestor_session_ids = vec![
+            parent.session_id.clone(),
+            design.session_id.clone(),
+            worker.session_id.clone(),
+        ];
+        let mut sibling = create_test_session("sibling");
+        sibling.updated_at = now;
+        sibling.status = SessionStatus::Running;
+        sibling.label = Some("Following sibling".to_string());
+        sibling.ancestor_session_ids = vec![parent.session_id.clone()];
+
+        let output = render_inline_progress_screen(
+            &[parent, design, worker, worker_child, sibling],
+            Some(2),
+            now,
+            11,
+            inline_checklist_progress_rows,
+            &[
+                None,
+                Some("parent"),
+                Some("design"),
+                Some("worker"),
+                Some("worker-child"),
+                Some("sibling"),
+            ],
+        );
+
+        assert_eq!(output, NESTED_SOURCE_WORKER_SCREEN);
     }
 
     #[test]
