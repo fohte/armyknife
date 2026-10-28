@@ -103,6 +103,7 @@ pub struct TestSetup<'a> {
     pub remote_last_edited_at: Option<&'a str>,
     pub remote_labels: Vec<&'a str>,
     pub remote_comments: Vec<RemoteComment<'a>>,
+    pub comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
     // Local state (what's in the storage directory)
     pub local_title: &'a str,
     pub local_body: &'a str,
@@ -123,6 +124,7 @@ impl<'a> TestSetup<'a> {
             remote_last_edited_at: None,
             remote_labels: vec!["bug"],
             remote_comments: vec![],
+            comments_after_initial_fetch: vec![],
             local_title: "Title",
             local_body: "Body",
             local_labels: vec!["bug"],
@@ -139,6 +141,7 @@ impl<'a> TestSetup<'a> {
         remote_last_edited_at: Option<&'a str>,
         remote_labels: Vec<&'a str>,
         remote_comments: Vec<RemoteComment<'a>>,
+        comments_after_initial_fetch: Vec<(Vec<RemoteComment<'a>>, &'a str)>,
         local_title: &'a str,
         local_body: &'a str,
         local_labels: Vec<&'a str>,
@@ -165,7 +168,21 @@ impl<'a> TestSetup<'a> {
         issue_builder.get().await;
 
         // Set up remote comments mock
-        ctx.graphql_comments(&self.remote_comments).await;
+        if self.comments_after_initial_fetch.is_empty() {
+            ctx.graphql_comments(&self.remote_comments).await;
+        } else {
+            ctx.graphql_comments_once(&self.remote_comments).await;
+            let mut snapshots = self.comments_after_initial_fetch.into_iter().peekable();
+            while let Some((comments, updated_at)) = snapshots.next() {
+                if snapshots.peek().is_some() {
+                    ctx.graphql_comments_with_updated_at_once(&comments, updated_at)
+                        .await;
+                } else {
+                    ctx.graphql_comments_with_updated_at(&comments, updated_at)
+                        .await;
+                }
+            }
+        }
 
         // Set up remote sub-issues mock (empty by default)
         ctx.sub_issues_empty(123).await;

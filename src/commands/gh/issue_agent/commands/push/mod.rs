@@ -235,6 +235,12 @@ async fn run_with_context(
         let body = new_remote_issue.body.as_deref().unwrap_or("");
         ctx.storage.save_issue(&new_frontmatter, body)?;
 
+        // Refresh comment files so their IDs and update timestamps match GitHub.
+        let new_remote_comments = client
+            .get_comments(&ctx.owner, &ctx.repo_name, ctx.issue_number)
+            .await?;
+        ctx.storage.save_comments(&new_remote_comments)?;
+
         // Clean up approval records after successful push
         cleanup_approval_records(&changeset, ctx);
     } else if !args.dry_run

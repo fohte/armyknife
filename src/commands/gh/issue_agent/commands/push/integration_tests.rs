@@ -41,6 +41,25 @@ fn make_remote_comment<'a>(
     }
 }
 
+fn create_comment_file_with_updated_at(
+    author: &str,
+    created_at: &str,
+    updated_at: &str,
+    id: &str,
+    database_id: u64,
+    body: &str,
+) -> String {
+    formatdoc! {"
+        <!-- author: {author} -->
+        <!-- createdAt: {created_at} -->
+        <!-- updatedAt: {updated_at} -->
+        <!-- id: {id} -->
+        <!-- databaseId: {database_id} -->
+
+        {body}"
+    }
+}
+
 fn issue_frontmatter(title: &str, labels: &[&str]) -> IssueFrontmatter {
     let issue = factories::issue_with(|issue| {
         issue.number = 123;
@@ -466,18 +485,38 @@ async fn test_invalid_repo_format(test_dir: TempDir) {
 // Comment operations
 #[rstest]
 #[tokio::test]
-async fn test_updates_own_comment(test_dir: TempDir) {
+async fn test_updates_own_comment_again_without_pull_after_refresh(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())
         .remote_comments(vec![make_remote_comment(
             "testuser", "IC_abc", 12345, "Original",
         )])
+        .comments_after_initial_fetch(vec![
+            (
+                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+                "2024-01-02T12:00:00Z",
+            ),
+            (
+                vec![make_remote_comment("testuser", "IC_abc", 12345, "Updated")],
+                "2024-01-02T12:00:00Z",
+            ),
+            (
+                vec![make_remote_comment(
+                    "testuser",
+                    "IC_abc",
+                    12345,
+                    "Updated again",
+                )],
+                "2024-01-03T12:00:00Z",
+            ),
+        ])
         .build()
         .await;
     setup_local_comment(
         test_dir.path(),
         "001_comment_12345.md",
-        &create_comment_file(
+        &create_comment_file_with_updated_at(
             "testuser",
+            "2024-01-01T12:00:00+00:00",
             "2024-01-01T12:00:00+00:00",
             "IC_abc",
             12345,
@@ -497,13 +536,84 @@ async fn test_updates_own_comment(test_dir: TempDir) {
         "testuser",
     )
     .await;
-    assert!(result.is_ok());
+    let comment_path = test_dir.path().join("comments/001_comment_12345.md");
+    let comment_after_first_push = std::fs::read_to_string(&comment_path).unwrap();
+    let updated_again_comment = comment_after_first_push
+        .split_inclusive('\n')
+        .map(|line| {
+            if line.trim_end_matches('\n') == "Updated" {
+                line.replacen("Updated", "Updated again", 1)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<String>();
+    setup_local_comment(
+        test_dir.path(),
+        "001_comment_12345.md",
+        &updated_again_comment,
+    );
+    approve_file(&comment_path);
+
+    let second_result = run_with_client_and_storage(
+        &make_args(false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await
+    .map_err(|error| error.to_string());
+    let comment_after_second_push = std::fs::read_to_string(&comment_path).unwrap();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            second_result,
+            comment_after_first_push,
+            comment_after_second_push,
+        ),
+        (
+            Ok(()),
+            Ok(()),
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_abc -->
+                <!-- databaseId: 12345 -->
+
+                Updated
+            "
+            },
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-03T12:00:00+00:00 -->
+                <!-- id: IC_abc -->
+                <!-- databaseId: 12345 -->
+
+                Updated again
+            "
+            },
+        ),
+    );
 }
 
 #[rstest]
 #[tokio::test]
 async fn test_creates_new_comment(test_dir: TempDir) {
-    let (mock, storage) = TestSetup::new(test_dir.path()).build().await;
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .comments_after_initial_fetch(vec![(
+            vec![make_remote_comment(
+                "testuser",
+                "IC_new_comment",
+                99999,
+                "New comment",
+            )],
+            "2024-01-02T12:00:00Z",
+        )])
+        .build()
+        .await;
     setup_local_comment(test_dir.path(), "new_my_comment.md", "New comment");
     approve_file(&test_dir.path().join("comments/new_my_comment.md"));
     let ctx = mock.repo("owner", "repo");
@@ -518,9 +628,30 @@ async fn test_creates_new_comment(test_dir: TempDir) {
         "testuser",
     )
     .await;
-    assert!(result.is_ok());
-    // Verify the new comment file was removed after creation
-    assert!(!test_dir.path().join("comments/new_my_comment.md").exists());
+    let new_comment_path = test_dir.path().join("comments/001_comment_99999.md");
+    let new_comment = std::fs::read_to_string(new_comment_path).unwrap();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            test_dir.path().join("comments/new_my_comment.md").exists(),
+            new_comment,
+        ),
+        (
+            Ok(()),
+            false,
+            formatdoc! {"
+                <!-- author: testuser -->
+                <!-- createdAt: 2024-01-01T12:00:00+00:00 -->
+                <!-- updatedAt: 2024-01-02T12:00:00+00:00 -->
+                <!-- id: IC_new_comment -->
+                <!-- databaseId: 99999 -->
+
+                New comment
+            "
+            },
+        ),
+    );
 }
 
 #[rstest]

@@ -636,6 +636,42 @@ impl<'a> MockRepoContext<'a> {
     ///
     /// Uses `body_string_contains` to distinguish from timeline events query.
     pub async fn graphql_comments(&self, comments: &[RemoteComment<'_>]) {
+        self.mount_graphql_comments(comments, "2024-01-01T12:00:00Z", None)
+            .await;
+    }
+
+    /// Mock a comments response that only matches the first request.
+    pub async fn graphql_comments_once(&self, comments: &[RemoteComment<'_>]) {
+        self.mount_graphql_comments(comments, "2024-01-01T12:00:00Z", Some(1))
+            .await;
+    }
+
+    /// Mock GraphQL comments with a specified update timestamp.
+    pub async fn graphql_comments_with_updated_at(
+        &self,
+        comments: &[RemoteComment<'_>],
+        updated_at: &str,
+    ) {
+        self.mount_graphql_comments(comments, updated_at, None)
+            .await;
+    }
+
+    /// Mock a comments response with a specified update timestamp for one request.
+    pub async fn graphql_comments_with_updated_at_once(
+        &self,
+        comments: &[RemoteComment<'_>],
+        updated_at: &str,
+    ) {
+        self.mount_graphql_comments(comments, updated_at, Some(1))
+            .await;
+    }
+
+    async fn mount_graphql_comments(
+        &self,
+        comments: &[RemoteComment<'_>],
+        updated_at: &str,
+        max_matches: Option<u64>,
+    ) {
         let nodes: Vec<serde_json::Value> = comments
             .iter()
             .map(|c| {
@@ -644,13 +680,13 @@ impl<'a> MockRepoContext<'a> {
                     "databaseId": c.database_id,
                     "author": {"login": c.author},
                     "createdAt": "2024-01-01T12:00:00Z",
-                    "updatedAt": "2024-01-01T12:00:00Z",
+                    "updatedAt": updated_at,
                     "body": c.body
                 })
             })
             .collect();
 
-        Mock::given(method("POST"))
+        let mut mock = Mock::given(method("POST"))
             .and(path("/graphql"))
             .and(body_string_contains("comments(first:"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
@@ -663,9 +699,11 @@ impl<'a> MockRepoContext<'a> {
                         }
                     }
                 }
-            })))
-            .mount(self.server)
-            .await;
+            })));
+        if let Some(max_matches) = max_matches {
+            mock = mock.up_to_n_times(max_matches);
+        }
+        mock.mount(self.server).await;
     }
 
     /// Mock GraphQL endpoint for fetching timeline events.
