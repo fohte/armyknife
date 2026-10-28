@@ -202,7 +202,7 @@ The `editor.terminal` setting selects which terminal emulator opens for human-in
 | `wezterm`        | WezTerm (default) |
 | `ghostty`        | Ghostty           |
 
-When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. This requires tmux 3.7 or later; on older versions, the review command fails. Run it outside tmux to use the configured `editor.terminal` window.
+When a review command runs inside tmux, the editor opens in a floating pane over the invoking pane and uses the review title as its pane title. The editor runs in a `shpool` session, so closing the pane only detaches it and the editor keeps running; the review completes when the editor exits. This requires tmux 3.7 or later and `shpool` on `PATH`; otherwise, the review command fails. Run it outside tmux to use the configured `editor.terminal` window. A closed editor can be brought back with `a agent crit open` (see below); outside an agent pane the review is not queued and cannot be re-opened that way.
 
 ## Commands
 
@@ -244,11 +244,11 @@ Open a file in editor for review (no approval flow). After the editor exits, a u
 
 Manage PR body drafts with human-in-the-loop review.
 
-| Action   | Description                                                                                                                                                                                                        |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `new`    | Create a new PR body draft file                                                                                                                                                                                    |
-| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                             |
+| Action   | Description                                                                                                                                                                                                       |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `new`    | Create a new PR body draft file                                                                                                                                                                                   |
+| `review` | Open the draft in editor for review (blocks until editor closes, exits 0 if steps changed, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `submit` | Create or update a PR from a draft (approval required unless `--no-review` is used in vibe mode) and cache its URL when the target is the current repo                                                            |
 
 `new` options:
 
@@ -344,14 +344,14 @@ Manage GitHub Issues as local files for AI agents.
 a gh issue-agent <command> <issue-number> [options]
 ```
 
-| Command  | Description                                                                                                                                                                              |
-| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                      |
-| `pull`   | Fetch issue and save locally                                                                                                                                                             |
-| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion) |
-| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                         |
-| `diff`   | Show colored diff between local changes and remote                                                                                                                                       |
-| `init`   | Create boilerplate files for new issues or comments                                                                                                                                      |
+| Command  | Description                                                                                                                                                                             |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `view`   | View issue and comments (read-only, no local cache)                                                                                                                                     |
+| `pull`   | Fetch issue and save locally                                                                                                                                                            |
+| `review` | Review a file before pushing (opens editor, exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion) |
+| `push`   | Push local changes to GitHub (requires file approval via review)                                                                                                                        |
+| `diff`   | Show colored diff between local changes and remote                                                                                                                                      |
+| `init`   | Create boilerplate files for new issues or comments                                                                                                                                     |
 
 Each pulled issue directory contains `issue.md` for editable issue fields and
 body, `.issue.base.md` as a managed snapshot, and `comments/` for issue comments.
@@ -464,7 +464,7 @@ a gh pr-review reply push <pr-number> [options]
 
 ##### `a gh pr-review reply review`
 
-Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the tmux review pane disappears before completion.
+Open the local threads.md in an editor for review. Setting `submit: true` in the frontmatter and saving marks the replies as approved. Run `reply push` afterwards to push. Exits 0 if approved, 1 if not, 2 if editor already open, 3 if terminal launch fails, 4 if the review editor session ends before completion.
 
 Requires `reply pull` to have been run first.
 
@@ -518,7 +518,8 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `peer notify <session_id> -m <text>`                       |         | Send a message to another session (SendMessage socket / Codex app-server)                   |
 | `peer notify --parent -m <text>`                           |         | Send a message to the session that delegated to this one                                    |
 | `crit add <url>`                                           |         | Associate a crit review with the calling session                                            |
-| `crit open [--session <id> \| --pane <pane_id>]`           |         | Toggle the latest associated review in a tmux floating pane                                 |
+| `crit open [--session <id> \| --pane <pane_id>]`           |         | Show or switch the review of an agent pane in a tmux floating pane                          |
+| `crit close [--pane <pane_id>]`                            |         | Close the shown review of an agent pane (the review keeps running)                          |
 | `bg run -- <cmd> [args...]`                                |         | Run a command detached and notify this session when it finishes                             |
 | `bg reminder-hook`                                         |         | Internal PostToolUse hook for Claude Code background Bash reminders                         |
 | `sweep`                                                    |         | Reconcile failed or interrupted Codex turns, pause idle sessions, and close merged sessions |
@@ -579,7 +580,7 @@ $ a agent status set awaiting_build "waiting for a build"
 
 If recording the URL to a tracked session fails, the command warns and still attempts to display the review in a tmux pane or browser and send a notification.
 
-`a agent crit open` toggles the latest associated review in a tmux floating pane. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and toggle the review pane. `crit add` mirrors the latest URL to the pane option `@crit` and re-runs the `window-layout-changed` hook, allowing tmux configuration to show a review border:
+`a agent crit open` shows the review waiting on an agent pane in a tmux floating pane, one at a time. Pending editor reviews (in start order) come first and the Crit review last. If none is shown, it shows the last one shown (or the first); if one is shown, it switches to the next, wrapping around. `a agent crit close` closes the shown review without ending it. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. A review that starts while another editor is shown waits hidden until it is switched to or the shown one ends, when the next one is shown. Reviews started outside an agent pane open right away and are not queued. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and show the Crit review. The queue is mirrored to the pane options `@armyknife-review-queue` on the floating pane (for example `[comment 1] · comment 2 · crit`, with the shown review in brackets) and `@armyknife-review-count` on the agent pane (only while nothing is shown), and the `window-layout-changed` hook is re-run so tmux configuration can show them in the pane border:
 
 ```sh
 a agent crit add http://127.0.0.1:12345/review
@@ -587,10 +588,10 @@ a agent watch
 ```
 
 ```tmux
-set -g pane-border-format '#{?#{@crit},crit review,#{pane_index}}'
+set -g pane-border-format '#{?#{@armyknife-review-queue},#{@armyknife-review-queue},#{?#{@armyknife-review-count},review #{@armyknife-review-count},#{pane_index}}}'
 ```
 
-After moving an agent pane to another tmux window, run `a agent crit open` again to close its old review pane and reopen the review beside the moved pane. If another agent's Crit pane uses the same port, the command exits with an error instead of taking over that connection.
+After moving an agent pane to another tmux window, run `a agent crit close` and then `a agent crit open` to bring the review beside the moved pane. If another agent's Crit pane uses the same port, the command exits with an error instead of taking over that connection.
 
 `a agent watch` shows the YOUR TURN/TASKS session list and the PROGRESS pane side by side. `Tab` switches focus between TASKS and PROGRESS, and `Esc` or `←` from PROGRESS returns to TASKS. On narrow terminals, the focused pane uses the full screen. In TASKS, `Esc` clears an active filter or quits. TASKS is focused at startup by default. When opened from a child session pane with a TASKS ancestor, watch selects the nearest such ancestor and focuses PROGRESS on its direct child row.
 

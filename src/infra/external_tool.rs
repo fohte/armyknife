@@ -229,7 +229,7 @@ impl ExternalTool {
             Self::Shpool => Metadata {
                 name: "shpool",
                 binary: "shpool",
-                purpose: "persistent terminal-browser sessions for crit reviews",
+                purpose: "persistent terminal-browser and review editor sessions",
                 version_args: &["--version"],
                 macos_only: false,
                 brew_pkg: None,

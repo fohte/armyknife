@@ -4,5 +4,6 @@ pub mod github;
 pub mod launchd;
 pub mod notification;
 pub mod process;
+pub mod shpool;
 pub mod tmux;
 pub mod tq;

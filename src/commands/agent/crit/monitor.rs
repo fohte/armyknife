@@ -10,8 +10,8 @@ use clap::Args;
 
 use super::super::store;
 use super::super::types::Session;
-use super::pane;
 use super::url::parse_port;
+use crate::commands::agent::review_queue::{self, CRIT_KEY, LiveQueueRuntime};
 use crate::infra::external_tool::ExternalTool;
 use crate::infra::process;
 use crate::infra::tmux;
@@ -364,10 +364,7 @@ fn remove_session_link(port: u16, session_id: &str, fallback_pane_id: Option<&st
         .and_then(|session| session.tmux_info.as_ref())
         .map(|info| info.pane_id.as_str())
         .or(fallback_pane_id);
-    let latest_url = updated
-        .as_ref()
-        .and_then(|session| session.crit_urls.last().map(String::as_str));
-    restore_pane_link(port, pane_id, latest_url, session_id);
+    restore_pane_link(port, pane_id, updated.as_ref(), session_id);
 }
 
 fn drop_port_from_session_in(
@@ -390,14 +387,29 @@ fn drop_port_from_session_in(
     Ok(Some(session))
 }
 
-fn restore_pane_link(port: u16, pane_id: Option<&str>, latest_url: Option<&str>, session: &str) {
+fn restore_pane_link(
+    port: u16,
+    pane_id: Option<&str>,
+    session: Option<&Session>,
+    session_id: &str,
+) {
     let Some(pane_id) = pane_id else {
         return;
     };
-    if let Err(error) = pane::restore_crit_url(pane_id, port, latest_url) {
+    let runtime = session.map_or_else(
+        LiveQueueRuntime::without_crit,
+        LiveQueueRuntime::for_session,
+    );
+    // Other Crit reviews of the session keep the Crit slot of the queue.
+    let result = if session.is_some_and(|session| !session.crit_urls.is_empty()) {
+        review_queue::refresh(&runtime, pane_id)
+    } else {
+        review_queue::review_finished(&runtime, pane_id, CRIT_KEY)
+    };
+    if let Err(error) = result {
         tracing::warn!(
             event = "agent.crit.cleanup.pane_sync_failed",
-            session,
+            session = %session_id,
             pane = %pane_id,
             port,
             error = %error,
