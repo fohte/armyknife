@@ -56,7 +56,9 @@ pub fn render_section(
         .map(|(index, (entry, _))| (entry.id.as_str(), format!("P{}", index + 1)))
         .collect::<HashMap<_, _>>();
 
-    let mut diagram = String::from("flowchart LR\n");
+    // GitHub's 120px default clips labels; 400px exceeds MAX_LABEL_WIDTH_PX (200px).
+    let mut diagram =
+        String::from("---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n");
     let repositories = visible_entries
         .iter()
         .map(|(_, repository)| repository.key())
@@ -366,13 +368,13 @@ mod tests {
                 &created_docs()
             )
             .unwrap(),
-            "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P2(\"Document the settings<br/>This PR\")\n  end\n  click P2 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->",
+            "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\n---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P2(\"Document the settings<br/>This PR\")\n  end\n  click P2 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->",
         );
     }
 
     #[test]
     fn private_repository_views_include_private_dependencies() {
-        let expected = "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P3(\"Document the settings\")\n  end\n  subgraph repo2[\"acme/private-infra\"]\n    P2(\"Rotate mail credentials<br/>今回の PR\")\n  end\n  P1 --> P2\n  P2 --> P3\n  click P2 href \"https://github.com/acme/private-infra/pull/19\" _blank\n  click P3 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->";
+        let expected = "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\n---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P3(\"Document the settings\")\n  end\n  subgraph repo2[\"acme/private-infra\"]\n    P2(\"Rotate mail credentials<br/>今回の PR\")\n  end\n  P1 --> P2\n  P2 --> P3\n  click P2 href \"https://github.com/acme/private-infra/pull/19\" _blank\n  click P3 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->";
 
         assert_eq!(
             render_section(
@@ -409,6 +411,11 @@ mod tests {
             Let users choose which notifications they receive.
 
             ```mermaid
+            ---
+            config:
+              flowchart:
+                wrappingWidth: 400
+            ---
             flowchart LR
               subgraph repo0[\"acme/notify-api\"]
                 P1(\"Add preference tables\")
