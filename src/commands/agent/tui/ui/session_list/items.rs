@@ -401,9 +401,10 @@ fn build_title_spans(
         String::new()
     };
     let badge_width = child_badge.width() + crit_badge.width();
+    let title_reserve = own_title.width().min(MIN_TITLE_WIDTH);
     let label_width = title_width
         .saturating_sub(badge_width + marker_width)
-        .saturating_sub(usize::from(!own_title.is_empty()));
+        .saturating_sub(title_reserve);
     let user_turn_label = raw_user_turn_label.and_then(|label| {
         if label_width == 0 {
             return None;

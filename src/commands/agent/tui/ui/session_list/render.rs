@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn test_narrow_action_label_truncates_configured_name() {
+    fn test_action_label_uses_width_after_minimum_title_reserve() {
         let now = Utc::now();
         let mut session = create_test_session("session");
         session.updated_at = now;
@@ -673,11 +673,11 @@ mod tests {
             note: "choose an option".to_string(),
         });
 
-        let buffer = render_buffer(&[session], Some(1), now, 50, 5);
+        let buffer = render_buffer(&[session], Some(1), now, 55, 5);
 
         assert_eq!(
             rendered_row(&buffer, 2),
-            format!(">◐ project{}s needs_at...  just now", " ".repeat(17))
+            format!(">◐ project{}session... need...  just now", " ".repeat(17))
         );
     }
 
