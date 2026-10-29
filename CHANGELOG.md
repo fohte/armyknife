@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.494](https://github.com/fohte/armyknife/compare/v0.1.493...v0.1.494) (2026-10-29)
+
+
+### Features
+
+* **ai/pr-series:** render ordered steps ([#1335](https://github.com/fohte/armyknife/issues/1335)) ([b483be9](https://github.com/fohte/armyknife/commit/b483be908c1a29cfd7da9f43a415849d1e49e673))
+
 ## [0.1.493](https://github.com/fohte/armyknife/compare/v0.1.492...v0.1.493) (2026-10-28)
 
 
