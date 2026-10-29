@@ -11,7 +11,7 @@ use super::progress_batches::ImplementationPlan;
 
 pub(super) mod marks;
 mod stage;
-pub(super) use stage::{CurrentPrStage, current_pr_stage};
+pub(super) use stage::{CurrentPrStage, PrStageInfo, current_pr_stage};
 
 use marks::{session_mark, session_stage_marks, stage_marks};
 
@@ -194,6 +194,8 @@ pub(super) struct PrProgressRow {
     pub is_ended: bool,
     pub lookup_unavailable: bool,
     pub stages: StageMarks,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr_stage_info: Option<PrStageInfo>,
 }
 
 #[cfg(test)]
@@ -333,6 +335,7 @@ pub(super) fn pr_progress_row(
         is_ended: false,
         lookup_unavailable: delegate.lookup_unavailable,
         stages: stage_marks(&delegate.session, pull_request, agent_config),
+        pr_stage_info: pull_request.map(PrStageInfo::from_progress),
     };
     apply_session_fields(&mut row, &delegate.session);
     row
@@ -583,6 +586,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,
@@ -646,6 +650,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: true,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,
@@ -757,6 +762,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,
@@ -810,6 +816,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: Some(PrStageInfo::Merged),
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::Done,
@@ -895,7 +902,7 @@ mod tests {
                 &[FetchedDelegate {
                     session: delegated_session,
                     checklist_item_id: None,
-                    pull_request: Some(progress_info(pr_state, ci_state)),
+                    pull_request: Some(progress_info(pr_state.clone(), ci_state)),
                     lookup_unavailable: false,
                 }],
                 &AgentConfig::default(),
@@ -918,6 +925,10 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: Some(PrStageInfo::from_progress(&progress_info(
+                        pr_state.clone(),
+                        ci_state,
+                    ))),
                     stages: expected_stages,
                 }),
             ],

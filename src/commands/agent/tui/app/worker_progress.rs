@@ -1,6 +1,6 @@
 use crate::commands::agent::tui::progress::marks::{session_stage_marks, stage_marks};
 use crate::commands::agent::tui::progress::{
-    CurrentPrStage, FetchedDelegate, ProgressOpenTarget, current_pr_stage,
+    CurrentPrStage, FetchedDelegate, PrStageInfo, ProgressOpenTarget, current_pr_stage,
 };
 use crate::commands::agent::types::Session;
 
@@ -55,11 +55,14 @@ impl App {
         self.worker_pr_progress
             .get(&session.session_id)
             .map(|delegate| {
-                current_pr_stage(stage_marks(
-                    session,
-                    delegate.pull_request.as_ref(),
-                    &self.agent_config,
-                ))
+                let pr_stage_info = delegate
+                    .pull_request
+                    .as_ref()
+                    .map(PrStageInfo::from_progress);
+                current_pr_stage(
+                    stage_marks(session, delegate.pull_request.as_ref(), &self.agent_config),
+                    pr_stage_info.as_ref(),
+                )
             })
             .or_else(|| {
                 session
@@ -67,7 +70,10 @@ impl App {
                     .as_ref()
                     .and_then(|context| context.checklist_item_id.as_ref())
                     .map(|_| {
-                        current_pr_stage(session_stage_marks(session, false, &self.agent_config))
+                        current_pr_stage(
+                            session_stage_marks(session, false, &self.agent_config),
+                            None,
+                        )
                     })
             })
     }
@@ -208,7 +214,7 @@ mod tests {
                     ),
                 ],
                 Some("CI running"),
-                Some("crit"),
+                Some("CI running"),
                 Some(ProgressOpenTarget::OpenUrl(
                     "https://example.test/pull/17".to_string()
                 )),

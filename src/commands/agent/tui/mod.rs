@@ -549,6 +549,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::Done,
@@ -1856,6 +1857,7 @@ mod tests {
             pane_id: None,
             is_ended: false,
             lookup_unavailable: false,
+            pr_stage_info: None,
             stages: StageMarks {
                 implementation: ProgressMark::Done,
                 diff_review: ProgressMark::Done,

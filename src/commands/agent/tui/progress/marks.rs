@@ -109,9 +109,11 @@ pub(in crate::commands::agent::tui) fn session_stage_marks(
     } else {
         current
     };
-    let diff_review = if has_crit {
+    let diff_review = if has_pull_request {
+        active_review_mark(turn.as_ref(), UserTurnKind::Crit, ProgressMark::Done)
+    } else if has_crit {
         active_review_mark(turn.as_ref(), UserTurnKind::Crit, current)
-    } else if has_pr_body_review || has_pull_request {
+    } else if has_pr_body_review {
         ProgressMark::Done
     } else {
         ProgressMark::NotStarted

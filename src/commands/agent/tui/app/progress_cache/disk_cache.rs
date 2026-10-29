@@ -307,6 +307,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::User,
@@ -375,6 +376,7 @@ mod tests {
                 pane_id: None,
                 is_ended: true,
                 lookup_unavailable: false,
+                pr_stage_info: None,
                 stages: StageMarks {
                     implementation: ProgressMark::Done,
                     diff_review: ProgressMark::User,
@@ -427,6 +429,7 @@ mod tests {
                         pane_id: None,
                         is_ended: true,
                         lookup_unavailable: false,
+                        pr_stage_info: None,
                         stages: StageMarks {
                             implementation: ProgressMark::Done,
                             diff_review: ProgressMark::User,
@@ -693,6 +696,7 @@ mod tests {
                         pane_id: Some("%998".to_string()),
                         is_ended: false,
                         lookup_unavailable: false,
+                        pr_stage_info: None,
                         stages: StageMarks {
                             implementation: ProgressMark::Done,
                             diff_review: ProgressMark::User,

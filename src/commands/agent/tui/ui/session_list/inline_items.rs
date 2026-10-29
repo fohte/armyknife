@@ -36,7 +36,7 @@ pub(super) fn build_inline_progress_item(
         };
         let stage = app
             .worker_pr_stage_for_session(session.session)
-            .unwrap_or_else(|| current_pr_stage(row.stages));
+            .unwrap_or_else(|| current_pr_stage(row.stages, row.pr_stage_info.as_ref()));
         return build_session_item_with_annotation(
             session,
             app,
@@ -150,7 +150,7 @@ pub(super) fn build_inline_progress_item(
 fn progress_row_stage(progress: Option<&ProgressRow>) -> Option<CurrentPrStage> {
     match progress? {
         ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row) => {
-            Some(current_pr_stage(row.stages))
+            Some(current_pr_stage(row.stages, row.pr_stage_info.as_ref()))
         }
         ProgressRow::PlannedPullRequest { .. } => None,
         ProgressRow::Work(_)

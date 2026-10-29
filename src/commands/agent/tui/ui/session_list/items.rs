@@ -548,13 +548,16 @@ mod tests {
             icon: "P".to_string(),
             color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Magenta),
         };
-        let stage = current_pr_stage(StageMarks {
-            implementation: ProgressMark::Done,
-            diff_review: ProgressMark::User,
-            pr_body: ProgressMark::NotStarted,
-            ci: ProgressMark::NotStarted,
-            merge: ProgressMark::NotStarted,
-        });
+        let stage = current_pr_stage(
+            StageMarks {
+                implementation: ProgressMark::Done,
+                diff_review: ProgressMark::User,
+                pr_body: ProgressMark::NotStarted,
+                ci: ProgressMark::NotStarted,
+                merge: ProgressMark::NotStarted,
+            },
+            None,
+        );
 
         let mut expected = vec![
             Span::styled(
@@ -629,7 +632,10 @@ mod tests {
         #[case] marks: StageMarks,
         #[case] expected: Style,
     ) {
-        assert_eq!(pr_stage_label_style(current_pr_stage(marks)), expected);
+        assert_eq!(
+            pr_stage_label_style(current_pr_stage(marks, None)),
+            expected
+        );
     }
 
     #[rstest]

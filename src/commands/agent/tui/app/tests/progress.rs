@@ -4,9 +4,9 @@ use super::super::progress::CachedProgress;
 use super::super::{App, ProgressScopeKind};
 use super::{create_test_app, create_test_session_at};
 use crate::commands::agent::tui::progress::{
-    FetchedDelegate, FetchedProgress, PrProgressRow, ProgressFetchScope, ProgressFetchState,
-    ProgressMark, ProgressRow, ProgressSelectionKey, StageMarks, WorkProgressRow,
-    build_progress_rows,
+    FetchedDelegate, FetchedProgress, PrProgressRow, PrStageInfo, ProgressFetchScope,
+    ProgressFetchState, ProgressMark, ProgressRow, ProgressSelectionKey, StageMarks,
+    WorkProgressRow, build_progress_rows,
 };
 use crate::commands::agent::tui::progress_batches::{
     ImplementationPlan, build_implementation_plan,
@@ -76,6 +76,7 @@ fn inline_progress_app(timestamp: DateTime<Utc>) -> App {
                 pane_id: None,
                 is_ended: false,
                 lookup_unavailable: false,
+                pr_stage_info: None,
                 stages: StageMarks {
                     implementation: ProgressMark::Done,
                     diff_review: ProgressMark::Done,
@@ -179,6 +180,7 @@ fn inline_planned_item_uses_its_worker_session_without_a_pr_url(timestamp: DateT
                 pane_id: Some("%9".to_string()),
                 is_ended: false,
                 lookup_unavailable: false,
+                pr_stage_info: None,
                 stages: StageMarks {
                     implementation: ProgressMark::Working,
                     diff_review: ProgressMark::NotStarted,
@@ -374,6 +376,7 @@ fn cached_planned_item_attaches_worker_from_saved_checklist_context(timestamp: D
                         pane_id: Some("%9".to_string()),
                         is_ended: false,
                         lookup_unavailable: false,
+                        pr_stage_info: None,
                         stages: StageMarks {
                             implementation: ProgressMark::Working,
                             diff_review: ProgressMark::NotStarted,
@@ -649,6 +652,7 @@ fn expected_unavailable_checklist_rows(session_id: &str) -> Vec<ProgressRow> {
                 pane_id: None,
                 is_ended: true,
                 lookup_unavailable: true,
+                pr_stage_info: Some(PrStageInfo::Open(PrCiState::Unknown)),
                 stages: StageMarks {
                     implementation: ProgressMark::Done,
                     diff_review: ProgressMark::NotStarted,
@@ -682,6 +686,7 @@ fn expected_unlinked_delegate_row(session_id: &str) -> ProgressRow {
         pane_id: None,
         is_ended: false,
         lookup_unavailable: false,
+        pr_stage_info: None,
         stages: StageMarks {
             implementation: ProgressMark::Working,
             diff_review: ProgressMark::NotStarted,
@@ -1214,6 +1219,7 @@ fn local_progress_refresh_uses_current_delegate_state(
                     pane_id: None,
                     is_ended: true,
                     lookup_unavailable: false,
+                    pr_stage_info: Some(PrStageInfo::Open(PrCiState::InProgress)),
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::Done,
@@ -1475,6 +1481,7 @@ fn shows_local_delegates_before_pr_status_is_fetched(
                 pane_id: None,
                 is_ended: false,
                 lookup_unavailable: false,
+                pr_stage_info: None,
                 stages: StageMarks {
                     implementation: ProgressMark::Working,
                     diff_review: ProgressMark::NotStarted,
@@ -1559,6 +1566,7 @@ fn reuses_cached_progress_when_returning_to_a_session(
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: Some(PrStageInfo::Open(PrCiState::Successful)),
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::Done,
@@ -1635,6 +1643,7 @@ fn keeps_fetched_progress_for_ended_delegates_after_local_refresh(
                     pane_id: None,
                     is_ended: true,
                     lookup_unavailable: false,
+                    pr_stage_info: Some(PrStageInfo::Open(PrCiState::InProgress)),
                     stages: StageMarks {
                         implementation: ProgressMark::Done,
                         diff_review: ProgressMark::Done,
@@ -1988,6 +1997,7 @@ fn preserves_local_delegate_rows_and_selection_when_fetch_fails(
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,

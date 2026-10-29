@@ -279,6 +279,7 @@ mod tests {
                     pane_id: None,
                     is_ended: false,
                     lookup_unavailable: false,
+                    pr_stage_info: None,
                     stages: StageMarks {
                         implementation: ProgressMark::Working,
                         diff_review: ProgressMark::NotStarted,

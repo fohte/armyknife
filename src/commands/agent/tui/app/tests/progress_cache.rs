@@ -236,6 +236,7 @@ fn task_rows() -> Vec<ProgressRow> {
                 pane_id: None,
                 is_ended: false,
                 lookup_unavailable: false,
+                pr_stage_info: None,
                 stages: StageMarks {
                     implementation: ProgressMark::Done,
                     diff_review: ProgressMark::User,
