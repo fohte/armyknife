@@ -1,6 +1,6 @@
 use crate::commands::agent::tui::progress::marks::{session_stage_marks, stage_marks};
 use crate::commands::agent::tui::progress::{
-    CurrentPrStage, FetchedDelegate, PrStageInfo, ProgressOpenTarget, current_pr_stage,
+    CurrentPrStage, FetchedDelegate, PrStageInfo, ProgressOpenTarget, ProgressRow, current_pr_stage,
 };
 use crate::commands::agent::types::Session;
 
@@ -52,29 +52,47 @@ impl App {
         &self,
         session: &Session,
     ) -> Option<CurrentPrStage> {
-        self.worker_pr_progress
-            .get(&session.session_id)
-            .map(|delegate| {
-                let pr_stage_info = delegate
-                    .pull_request
-                    .as_ref()
-                    .map(PrStageInfo::from_progress);
-                current_pr_stage(
-                    stage_marks(session, delegate.pull_request.as_ref(), &self.agent_config),
-                    pr_stage_info.as_ref(),
-                )
-            })
-            .or_else(|| {
-                session
+        let delegate = self.worker_pr_progress.get(&session.session_id);
+        let pull_request = delegate.and_then(|delegate| delegate.pull_request.as_ref());
+        let linked_pr_stage_info = self.linked_pr_stage_info(&session.session_id);
+        let pr_stage_info = pull_request
+            .map(PrStageInfo::from_progress)
+            .or(linked_pr_stage_info);
+        let has_checklist_item = delegate.is_some_and(|delegate| {
+            delegate.checklist_item_id.is_some()
+                || delegate
+                    .session
                     .pr_context
                     .as_ref()
                     .and_then(|context| context.checklist_item_id.as_ref())
-                    .map(|_| {
-                        current_pr_stage(
-                            session_stage_marks(session, false, &self.agent_config),
-                            None,
-                        )
-                    })
+                    .is_some()
+        }) || session
+            .pr_context
+            .as_ref()
+            .and_then(|context| context.checklist_item_id.as_ref())
+            .is_some();
+
+        if delegate.is_none() && !has_checklist_item && pr_stage_info.is_none() {
+            return None;
+        }
+
+        let stages = match pull_request {
+            Some(pull_request) => stage_marks(session, Some(pull_request), &self.agent_config),
+            None => session_stage_marks(session, pr_stage_info.is_some(), &self.agent_config),
+        };
+        Some(current_pr_stage(stages, pr_stage_info.as_ref()))
+    }
+
+    fn linked_pr_stage_info(&self, session_id: &str) -> Option<PrStageInfo> {
+        self.progress_rows
+            .iter()
+            .find_map(|progress_row| match progress_row {
+                ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row)
+                    if row.session_id == session_id =>
+                {
+                    row.pr_stage_info
+                }
+                _ => None,
             })
     }
 

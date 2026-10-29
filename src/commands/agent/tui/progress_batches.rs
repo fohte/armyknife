@@ -603,7 +603,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::linked_open_pr_with_unknown_ci("open", PrStageInfo::Open(PrCiState::Unknown), "CI")]
+    #[case::linked_open_pr_with_unknown_ci(
+        "open",
+        PrStageInfo::Open(PrCiState::Unknown),
+        "PR open"
+    )]
     #[case::linked_closed_pr("closed", PrStageInfo::Closed, "closed")]
     #[case::linked_merged_pr_case_insensitive("MERGED", PrStageInfo::Merged, "merged")]
     fn pr_only_rows_show_the_linked_pr_stage_without_a_worker(
@@ -631,11 +635,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::open_pr_with_unknown_ci("open", PrStageInfo::Open(PrCiState::Unknown))]
-    #[case::closed_pr("closed", PrStageInfo::Closed)]
+    #[case::open_pr_with_unknown_ci("open", PrStageInfo::Open(PrCiState::Unknown), "PR open")]
+    #[case::closed_pr("closed", PrStageInfo::Closed, "closed")]
     fn checklist_worker_keeps_linked_pr_stage_when_lookup_fails(
         #[case] linked_state: &str,
         #[case] expected_stage_info: PrStageInfo,
+        #[case] expected_stage_label: &str,
     ) {
         let mut checklist = checklist();
         checklist.items.truncate(1);
@@ -660,60 +665,77 @@ mod tests {
         );
         let rows = build_progress_rows(
             &create_test_session("selected"),
-            &[worker_session],
+            &[worker_session.clone()],
             &plan,
             true,
             &HashMap::new(),
             &AgentConfig::default(),
         );
+        let mut app = crate::commands::agent::tui::app::App::with_sessions(vec![
+            create_test_session("selected"),
+            worker_session.clone(),
+        ]);
+        app.progress_rows.clone_from(&rows);
+        app.apply_worker_pr_progress_result(Ok(vec![FetchedDelegate {
+            session: worker_session.clone(),
+            checklist_item_id: Some("item-1".to_string()),
+            pull_request: None,
+            lookup_unavailable: true,
+        }]));
+        let worker_stage = app
+            .worker_pr_stage_for_session(&worker_session)
+            .map(|stage| stage.label());
 
         assert_eq!(
-            rows,
-            vec![
-                ProgressRow::Work(super::super::progress::WorkProgressRow {
-                    session_id: "selected".to_string(),
-                    role: "session".to_string(),
-                    mark: ProgressMark::Working,
-                    status_label: None,
-                    note: None,
-                    pane_id: None,
-                }),
-                ProgressRow::ImplementationHeader {
-                    merged_pr_count: 0,
-                    total_pr_count: 1,
-                    collapsed: false,
-                },
-                ProgressRow::BatchHeader {
-                    batch_id: "batch-1".to_string(),
-                    title: "Batch 1".to_string(),
-                    merged_pr_count: 0,
-                    collapsed: false,
-                },
-                ProgressRow::ChecklistPullRequest {
-                    batch_id: "batch-1".to_string(),
-                    checklist_item_id: "item-1".to_string(),
-                    row: PrProgressRow {
-                        session_id: "worker".to_string(),
-                        repo: Some("sample-project".to_string()),
-                        title: "Add a sample feature".to_string(),
-                        number: Some(17),
-                        url: Some(
-                            "https://github.com/sample-org/sample-project/pull/17".to_string(),
-                        ),
+            (rows, worker_stage),
+            (
+                vec![
+                    ProgressRow::Work(super::super::progress::WorkProgressRow {
+                        session_id: "selected".to_string(),
+                        role: "session".to_string(),
+                        mark: ProgressMark::Working,
+                        status_label: None,
+                        note: None,
                         pane_id: None,
-                        is_ended: false,
-                        lookup_unavailable: true,
-                        stages: StageMarks {
-                            implementation: ProgressMark::Done,
-                            diff_review: ProgressMark::Working,
-                            pr_body: ProgressMark::NotStarted,
-                            ci: ProgressMark::NotStarted,
-                            merge: ProgressMark::NotStarted,
-                        },
-                        pr_stage_info: Some(expected_stage_info),
+                    }),
+                    ProgressRow::ImplementationHeader {
+                        merged_pr_count: 0,
+                        total_pr_count: 1,
+                        collapsed: false,
                     },
-                },
-            ],
+                    ProgressRow::BatchHeader {
+                        batch_id: "batch-1".to_string(),
+                        title: "Batch 1".to_string(),
+                        merged_pr_count: 0,
+                        collapsed: false,
+                    },
+                    ProgressRow::ChecklistPullRequest {
+                        batch_id: "batch-1".to_string(),
+                        checklist_item_id: "item-1".to_string(),
+                        row: PrProgressRow {
+                            session_id: "worker".to_string(),
+                            repo: Some("sample-project".to_string()),
+                            title: "Add a sample feature".to_string(),
+                            number: Some(17),
+                            url: Some(
+                                "https://github.com/sample-org/sample-project/pull/17".to_string(),
+                            ),
+                            pane_id: None,
+                            is_ended: false,
+                            lookup_unavailable: true,
+                            stages: StageMarks {
+                                implementation: ProgressMark::Done,
+                                diff_review: ProgressMark::Working,
+                                pr_body: ProgressMark::NotStarted,
+                                ci: ProgressMark::NotStarted,
+                                merge: ProgressMark::NotStarted,
+                            },
+                            pr_stage_info: Some(expected_stage_info),
+                        },
+                    },
+                ],
+                Some(expected_stage_label)
+            ),
         );
     }
 

@@ -84,7 +84,7 @@ pub(in crate::commands::agent::tui) fn current_pr_stage(
             PrCiState::Waiting | PrCiState::InProgress => {
                 return CurrentPrStage::new("CI running", false);
             }
-            PrCiState::Unknown => return CurrentPrStage::new("CI", false),
+            PrCiState::Unknown => return CurrentPrStage::new("PR open", false),
             PrCiState::Successful => {}
         }
     }
@@ -127,7 +127,7 @@ mod tests {
             merge: ProgressMark::NotStarted,
         },
         Some(PrStageInfo::Open(PrCiState::Unknown)),
-        "CI",
+        "PR open",
         false,
     )]
     #[case::closed_pr_with_stale_review_activity(
