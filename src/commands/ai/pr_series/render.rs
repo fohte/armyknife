@@ -217,10 +217,31 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
 }
 
 fn escape_markdown_text(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_punctuation() {
+    let characters = value.trim_start().chars().collect::<Vec<_>>();
+    let leading_digit_end = characters
+        .iter()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    let has_leading_ordered_list_marker = leading_digit_end > 0
+        && matches!(characters.get(leading_digit_end), Some(&'.') | Some(&')'));
+
+    characters
+        .iter()
+        .enumerate()
+        .map(|(index, character)| {
+            let has_alphanumeric_neighbors = index > 0
+                && index + 1 < characters.len()
+                && characters[index - 1].is_alphanumeric()
+                && characters[index + 1].is_alphanumeric();
+            let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
+            let is_leading_ordered_list_marker =
+                has_leading_ordered_list_marker && index == leading_digit_end;
+            let should_escape = matches!(character, '\\' | '`' | '*' | '~' | '[' | ']' | '<' | '&')
+                || (*character == '_' && !has_alphanumeric_neighbors)
+                || is_leading_block_marker
+                || is_leading_ordered_list_marker;
+
+            if should_escape {
                 format!("\\{character}")
             } else {
                 character.to_string()
@@ -365,7 +386,7 @@ mod tests {
                 <!-- pr-series:start -->
                 ### Notification preferences
 
-                1. Add preference storage and document the settings\\.
+                1. Add preference storage and document the settings.
                    - Add preference tables (not created yet)
                    - **Document the settings** (this PR)
                 <!-- pr-series:end -->
@@ -438,7 +459,7 @@ mod tests {
                 <!-- pr-series:start -->
                 ### Notification preferences
 
-                1. Group \*storage\* with \[docs\]\(guide\)
+                1. Group \*storage\* with \[docs\](guide)
                    - Build \[preference\] tables (not created yet)
                    - **Document \`settings\`** (this PR)
                 <!-- pr-series:end -->
@@ -480,7 +501,7 @@ mod tests {
                 <!-- pr-series:start -->
                 ### Notification preferences
 
-                1. Store preferences and document the settings\\.
+                1. Store preferences and document the settings.
                    - acme/notify-api#12
                    - **Document the settings** (this PR)
                 <!-- pr-series:end -->
@@ -549,7 +570,7 @@ mod tests {
     #[case::grouped_step_filters_private_entries(grouped_render_case())]
     #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
     #[case::single_visible_pr_omits_step_summary(one_visible_pull_request_render_case())]
-    #[case::summaries_escape_markdown_punctuation(escaped_summary_render_case())]
+    #[case::summaries_escape_markdown_syntax(escaped_summary_render_case())]
     #[case::created_non_current_pr_uses_reference_in_nested_list(
         created_non_current_nested_pr_render_case()
     )]
@@ -566,6 +587,61 @@ mod tests {
             .unwrap(),
             case.expected,
         );
+    }
+
+    #[rstest::rstest]
+    #[case::backslash("\\", "\\\\")]
+    #[case::backtick("`", r"\`")]
+    #[case::asterisk("*", r"\*")]
+    #[case::tilde("~", r"\~")]
+    #[case::left_bracket("[", r"\[")]
+    #[case::right_bracket("]", r"\]")]
+    #[case::less_than("<", r"\<")]
+    #[case::ampersand("&", r"\&")]
+    #[case::underscore_between_ascii_alphanumeric("config_key", "config_key")]
+    #[case::underscore_between_japanese_alphanumeric("設定_項目", "設定_項目")]
+    #[case::underscore_next_to_punctuation("「_x_」", "「\\_x\\_」")]
+    #[case::leading_underscore("_prefix", "\\_prefix")]
+    #[case::trailing_underscore("suffix_", "suffix\\_")]
+    #[case::underscore_next_to_whitespace("before _ middle", "before \\_ middle")]
+    #[case::leading_hash("# heading", r"\# heading")]
+    #[case::leading_quote("> quote", r"\> quote")]
+    #[case::leading_hyphen("- item", r"\- item")]
+    #[case::leading_plus("+ item", r"\+ item")]
+    #[case::leading_thematic_break("---", r"\---")]
+    #[case::leading_numbered_list_period("2026. release", r"2026\. release")]
+    #[case::leading_numbered_list_parenthesis("12) continuation", r"12\) continuation")]
+    #[case::number_sequence_without_list_delimiter("123task. release", "123task. release")]
+    #[case::non_ascii_number_sequence("２０２６. release", "２０２６. release")]
+    #[case::numbered_list_delimiter_after_text("task 2. update", "task 2. update")]
+    #[case::leading_spaces_before_marker("   # heading", r"\# heading")]
+    #[case::leading_tab_before_numbered_list("\t12. item", r"12\. item")]
+    #[case::leading_spaces_are_removed("   plain summary", "plain summary")]
+    #[case::other_ascii_punctuation_is_preserved(
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: @user #12 $x^2$ https://example.test/path"#,
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: @user #12 $x^2$ https://example.test/path"#,
+    )]
+    fn renders_summaries_with_only_required_markdown_escapes(
+        #[case] summary: &str,
+        #[case] expected_summary: &str,
+    ) {
+        let mut plan = plan();
+        plan.pull_requests[2].summary = summary.to_string();
+        let actual =
+            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+        let expected = format!(
+            indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Add preference tables (not created yet)
+                2. **{expected_summary}** (this PR)
+                <!-- pr-series:end -->
+            "},
+            expected_summary = expected_summary,
+        );
+
+        assert_eq!(actual, expected.trim_end_matches('\n'));
     }
 
     #[test]
