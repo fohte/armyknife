@@ -39,7 +39,7 @@ Unknown configuration keys fail parsing. Put worktree settings under `agent.work
 
 `agent.merge_notification` is an optional template sent to the delegator after a delegated PR merges. Use `{branch}` and `{pr_url}` where the branch name and PR URL should appear. When the key is omitted, no merge notification is sent.
 
-`agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear in YOUR TURN and tmux's next action; `waiting` and `done` status names mark TASKS rows without appearing in YOUR TURN. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
+`agent.statuses` maps user-defined names to `user`, `waiting`, or `done` states. `user` status names appear as red labels on TASKS rows and in tmux's next action; `waiting` and `done` status names mark TASKS rows without signaling a user action. `a agent status set` accepts only names from this map. A stored name missing from the current map is treated as `user` so it remains visible.
 
 `agent.stop_hook_instruction` is the optional blocking instruction returned when the hook blocks. Codex uses it when inference is disabled in a valid config, and Claude uses it when status inference is not configured. The hook blocks only when at least one status is configured; an absent or empty `agent.statuses` map disables blocking even when an instruction is present.
 
@@ -269,10 +269,10 @@ Manage PR body drafts with human-in-the-loop review.
 
 #### `a ai pr-series`
 
-Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+Register a task's PR split plan and synchronize its ordered overview into linked PR bodies.
 Both commands require the `tq` CLI to be installed and available on `PATH`.
 
-When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR diagrams if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
+When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
 When updating an existing PR, `submit` keeps its `pr-series` section if the draft does not include one.
 
@@ -281,7 +281,7 @@ a ai pr-series set <task-id> --file plan.json
 a ai pr-series sync <task-id>
 ```
 
-`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. Each `summary` must fit in one line below Mermaid's 200px label width. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`:
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. An optional `steps` array groups PR IDs in execution order. Each step must contain at least one PR, every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not. The `purpose` field remains required for compatibility with existing plan files, but is not included in the synchronized section.
 
 ```json
 {
@@ -290,23 +290,52 @@ a ai pr-series sync <task-id>
   "pullRequests": [
     {
       "id": "schema",
-      "summary": "Add preference tables",
+      "summary": "Add tables for notification preferences",
       "dependsOn": [],
       "repository": "acme/notify-api",
       "tqLeafId": "<schema-leaf-id>"
     },
     {
+      "id": "validation",
+      "summary": "Validate notification preference settings",
+      "dependsOn": ["schema"],
+      "repository": "acme/notify-api",
+      "tqLeafId": "<validation-leaf-id>"
+    },
+    {
       "id": "settings",
-      "summary": "Add the settings page",
+      "summary": "Add the notification settings page",
       "dependsOn": ["schema"],
       "repository": "acme/notify-web",
       "tqLeafId": "<settings-leaf-id>"
+    }
+  ],
+  "steps": [
+    {
+      "pullRequests": ["schema"]
+    },
+    {
+      "summary": "Add validation and the settings page",
+      "pullRequests": ["validation", "settings"]
     }
   ]
 }
 ```
 
-`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
+For example, if `schema` is already created and `settings` is the current PR, the section includes:
+
+```text
+<!-- pr-series:start -->
+### Notification preferences
+
+1. acme/notify-api#12
+2. Add validation and the settings page
+   - Validate notification preference settings (not created yet)
+   - **Add the notification settings page** (this PR)
+<!-- pr-series:end -->
+```
+
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
 
 #### `a ai review`
 
@@ -370,13 +399,13 @@ detection and body/title timestamp conflict checks. Directories without a
 comment snapshot keep legacy two-way comment detection and timestamp conflict
 checks until the next pull saves one.
 
-| Option           | Description                                                          |
-| ---------------- | -------------------------------------------------------------------- |
-| `-R <repo>`      | Target repository (default: current repo)                            |
-| `--dry-run`      | Show what would be changed without applying                          |
-| `--force`        | Bypass conflict checks; applied local changes still require approval |
-| `--edit-others`  | Allow editing other users' comments                                  |
-| `--allow-delete` | Allow deleting comments removed locally                              |
+| Option           | Description                                                                                                                                                           |
+| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `-R <repo>`      | Target repository (default: current repo)                                                                                                                             |
+| `--dry-run`      | Preview all changes without applying. It needs neither flag; a live push needs `--edit-others` to edit other users' comments and `--allow-delete` to delete comments. |
+| `--force`        | Bypass conflict checks; applied local changes still require approval                                                                                                  |
+| `--edit-others`  | Allow editing other users' comments                                                                                                                                   |
+| `--allow-delete` | Allow deleting comments removed locally                                                                                                                               |
 
 ##### `a gh issue-agent init issue`
 
@@ -592,7 +621,7 @@ $ a agent status set awaiting_build "waiting for a build"
 
 If recording the URL to a tracked session fails, the command warns and still attempts to display the review in a tmux pane or browser and send a notification.
 
-`a agent crit open` shows the review waiting on an agent pane in a tmux floating pane, one at a time. Pending editor reviews (in start order) come first and the Crit review last. If none is shown, it shows the last one shown (or the first); if one is shown, it switches to the next, wrapping around. `a agent crit close` closes the shown review without ending it. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. A review that starts while another editor is shown waits hidden until it is switched to or the shown one ends, when the next one is shown. Reviews started outside an agent pane open right away and are not queued. In `a agent watch`, sessions with a review show a `[crit]` badge; press `o` to close watch and show the Crit review. The queue is mirrored to the pane options `@armyknife-review-queue` on the floating pane (for example `[comment 1] · comment 2 · crit`, with the shown review in brackets) and `@armyknife-review-count` on the agent pane (only while nothing is shown), and the `window-layout-changed` hook is re-run so tmux configuration can show them in the pane border:
+`a agent crit open` shows the review waiting on an agent pane in a tmux floating pane, one at a time. Pending editor reviews (in start order) come first and the Crit review last. If none is shown, it shows the last one shown (or the first); if one is shown, it switches to the next, wrapping around. `a agent crit close` closes the shown review without ending it. It requires tmux 3.7 or later, `shpool`, and `terminal-browser` on `PATH`. A review that starts while another editor is shown waits hidden until it is switched to or the shown one ends, when the next one is shown. Reviews started outside an agent pane open right away and are not queued. In `a agent watch`, active reviews show a `[crit]` badge, and reviews awaiting user attention show a `crit` label in the red TASKS-row style. Press `o` to close watch and show the Crit review. The queue is mirrored to the pane options `@armyknife-review-queue` on the floating pane (for example `[comment 1] · comment 2 · crit`, with the shown review in brackets) and `@armyknife-review-count` on the agent pane (only while nothing is shown), and the `window-layout-changed` hook is re-run so tmux configuration can show them in the pane border:
 
 ```sh
 a agent crit add http://127.0.0.1:12345/review
@@ -605,17 +634,17 @@ set -g pane-border-format '#{?#{@armyknife-review-queue},#{@armyknife-review-que
 
 After moving an agent pane to another tmux window, run `a agent crit close` and then `a agent crit open` to bring the review beside the moved pane. If another agent's Crit pane uses the same port, the command exits with an error instead of taking over that connection.
 
-`a agent watch` shows YOUR TURN/TASKS in one tree. `Tab` explicitly opens or closes the selected session's implementation plan inline, and `j/k` moves one cursor through sessions, Batch headings, and PR items. Moving the cursor does not open another plan or change the row count. When opened from an implementation child session with a task ancestor, watch keeps the child selected and leaves the plan closed until `Tab` is pressed. Closing the plan keeps active implementation sessions in the tree. `Esc` clears an active filter or quits.
+`a agent watch` shows one TASKS tree with implementation progress inline. `Tab` opens or closes the selected session's implementation plan, and `j/k` moves one cursor through sessions, Batch headings, and PR items. Moving between sessions does not open another plan or change the row count. When opened from an implementation child session with a task ancestor, watch expands the session branch, keeps the child selected, and leaves the progress plan closed. Closing the plan keeps active implementation sessions in the tree. `Esc` clears an active filter or quits.
 
 When tq data is available, implementation checklist items appear under Batch headings, including planned PRs and existing PRs. A checklist item with a matching implementation session combines both into one row. Unmatched sessions and their descendants keep their TASKS hierarchy. `Enter` focuses a real session's pane; it does nothing on a planned item. `o` opens a real PR for a progress item or session that has one; on other session rows it keeps the existing Crit action. While progress loads or fails, an inline status row distinguishes that state from a task with no implementation checklist, and session navigation remains available.
 
-Worker rows and existing PR rows show one current stage: `implementing`, `crit`, `body`, `CI running`, `merge`, or `merged`. Planned PR rows without a worker show no stage. Stages waiting for user action (`crit`, `body`, and `merge`) use the red YOUR TURN label style. An existing PR marks implementation, diff review, and PR body done unless a linked review is active; otherwise implementation follows the session state. Linked Crit and PR-body review activity updates the stage. CI follows the latest commit's check rollup; merge follows PR state and CI progress. Child PR lookup uses saved repository and branch context when present; it consults the live worktree only when saved context is absent. A row says `(PR unavailable)` only when neither source can resolve a PR.
+Worker rows and existing PR rows show one current stage: `implementing`, `crit`, `body`, `CI running`, `merge`, or `merged`. Planned PR rows without a worker show no stage. Stages waiting for user action (`crit`, `body`, and `merge`) use the red action-label style. An existing PR marks implementation, diff review, and PR body done unless a linked review is active; otherwise implementation follows the session state. Linked Crit and PR-body review activity updates the stage. CI follows the latest commit's check rollup; merge follows PR state and CI progress. Child PR lookup uses saved repository and branch context when present; it consults the live worktree only when saved context is absent. A row says `(PR unavailable)` only when neither source can resolve a PR.
 
 Worker PR stages are fetched in one batch for loaded sessions, refreshed every 30 seconds and when branch inputs change. A failed refresh shows an error while session navigation remains available.
 
 Fully merged batches start collapsed. `j/k` selects planned PR rows as well as existing PRs. On an implementation-plan or Batch heading, `h` collapses it, `l` expands it, and `Enter` toggles it. Press `h` on a PR item to collapse its Batch and select the Batch heading.
 
-The session list shows YOUR TURN first, then TASKS: a tree of sessions where each root is a session without a displayed parent and descendants appear at their full depth beneath the nearest displayed parent. The root badge counts all displayed descendants. Every child session appears in TASKS, including sessions that cannot start their own children. Each TASKS row shows a mark: `✓` done, `◐` your turn, `●` working, `◷` waiting on something else (another session, CI, a background command); stops without a known reason keep the plain status glyph. Roots that contain your turn come first, then the most recently active. A session listed in YOUR TURN is also selectable in TASKS. Session state and titles update immediately. While navigating or scrolling the list, or editing a search, existing rows keep their order; two seconds after the last list interaction, the latest order is applied once. New sessions are appended under their parent. When rows disappear or stop matching a filter, the selection and its screen position are preserved where possible.
+The session list shows a single TASKS tree of sessions. Each root is a session without a displayed parent, and descendants appear at their full depth beneath the nearest displayed parent. The root badge counts all displayed descendants. Every child session appears in TASKS, including sessions that cannot start their own children. Each TASKS row shows a mark: `✓` done, `◐` needs user attention, `✗` failed, `●` working, and `◷` waiting on something else (another session, CI, a background command); stops without a known reason keep the plain status glyph. User-action reasons such as `crit`, `body`, `merge`, `ask`, and `allow` appear as red labels on the corresponding row; the waiting note is not shown. Roots that contain a user-action session come first, then the most recently active. Session state and titles update immediately. While navigating or scrolling the list, or editing a search, existing rows keep their order; two seconds after the last list interaction, the latest order is applied once. New sessions are appended under their parent. When rows disappear or stop matching a filter, the selection and its screen position are preserved where possible.
 
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If delivery fails, the worker saves the message under `agent-bg/undelivered/` in the armyknife cache directory, which defaults to `~/.cache/armyknife/` and uses `$XDG_CACHE_HOME/armyknife/` when set; a later `SessionStart(resume)` retries delivery for up to 30 seconds at one-second intervals. Messages remain saved if all attempts fail and are retried on the next resume. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
@@ -1018,7 +1047,7 @@ set -g pane-border-format '#{@armyknife-cc-pane-status}#{@armyknife-agent-status
 
 #### Task linking (tq)
 
-When the `tq` CLI is on `PATH`, a linked session shows its `#<number>` in a fixed-width column, and its TASKS row shows the task title instead of the session name. TASKS rows show this column; YOUR TURN rows show the session name and configured status name or automatic label before the note. The note is shortened or omitted when the row is too narrow. Rows without a linked task reserve the same column, keeping every TASKS-row title aligned. The number dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. If the linked task is closed, its number renders struck through in a dusty purple, overriding the related/dimmed coloring. Older `tq` binaries that predate task status reporting are treated as open. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
+When the `tq` CLI is on `PATH`, a linked session shows its `#<number>` in a fixed-width column, and its TASKS row shows the task title instead of the session name. TASKS rows show this column and user-action labels; notes attached to those labels are not shown. Rows without a linked task reserve the same column, keeping every TASKS-row title aligned. The number dims unless the task is related to the cursor row's task -- the same task, or its direct parent/child task -- so scanning for everything tied to the task you're currently looking at doesn't require reading every number. If the linked task is closed, its number renders struck through in a dusty purple, overriding the related/dimmed coloring. Older `tq` binaries that predate task status reporting are treated as open. Linking a session to a task happens on tq's side, keyed by Claude Code session ID; armyknife only reads the resulting association by shelling out to `tq session list`, so tq's own base URL and authentication (e.g. Cloudflare Access) stay entirely tq's concern.
 
 When `tq` isn't on `PATH`, or the command fails, rows keep task associations from the last successful lookup, including data restored from cache at startup. During an initial load without a cache, the task-number column shows skeleton placeholders; task numbers or blank cells replace the placeholders without moving session titles. Local operations (focus, resume) are never blocked by `tq` being down.
 

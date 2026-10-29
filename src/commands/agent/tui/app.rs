@@ -14,7 +14,9 @@ use std::time::Instant;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::{FetchedDelegate, ProgressFetchState, ProgressRow};
-use super::session_rows::{SessionRowKey, SessionRowOrder, SessionTask};
+use super::session_rows::{
+    SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_vibe,
+};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -155,7 +157,7 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
-    /// Distinguishes YOUR TURN and TASKS rows for the same session.
+    /// Stable identity for restoring a selection after display rows change.
     row_keys: Vec<Option<SessionRowKey>>,
     /// Rendered item heights support restoring a selection's terminal line.
     row_heights: Vec<usize>,
@@ -376,6 +378,17 @@ impl App {
             .sessions
             .iter()
             .find(|session| session.session_id == focus_session_id)?;
+        let filtered_sessions = self
+            .filtered_indices
+            .iter()
+            .filter_map(|&index| self.sessions.get(index))
+            .collect::<Vec<_>>();
+        let rows = build_session_rows_with_vibe(
+            &filtered_sessions,
+            &self.task_by_session,
+            &self.agent_config,
+            &self.vibe_enabled_session_ids,
+        );
         child_session
             .ancestor_session_ids
             .iter()
@@ -385,6 +398,12 @@ impl App {
                 self.sessions
                     .iter()
                     .find(|session| session.session_id == *ancestor_id)?;
+                if !rows
+                    .iter()
+                    .any(|row| row.session_id() == Some(ancestor_id.as_str()))
+                {
+                    return None;
+                }
                 let progress_child_id = child_session
                     .ancestor_session_ids
                     .get(index + 1)
@@ -576,9 +595,19 @@ mod tests {
         );
 
         assert_eq!(
-            app.selected_session()
-                .map(|session| session.session_id.as_str()),
-            Some(expected_session_id)
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.list_state
+                    .selected()
+                    .and_then(|position| app.row_keys.get(position))
+                    .cloned()
+                    .flatten(),
+            ),
+            (
+                Some(expected_session_id),
+                Some(SessionRowKey::Task(expected_session_id.to_string())),
+            ),
         );
     }
 
@@ -681,14 +710,12 @@ mod tests {
         assert_eq!(
             (
                 app.selected_session_id(),
-                app.selected_session_row_occurrence(),
                 app.progress_inline_source_id.clone(),
                 app.progress_session_id.as_deref(),
                 app.initial_progress_selection.clone(),
             ),
             (
                 Some("delegate"),
-                Some(0),
                 Some("intermediate-delegate".to_string()),
                 Some("intermediate-delegate"),
                 Some(InitialProgressSelection::new(

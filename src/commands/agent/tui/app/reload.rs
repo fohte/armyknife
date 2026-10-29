@@ -17,23 +17,15 @@ const SESSION_ORDER_GRACE_PERIOD: Duration = Duration::from_secs(2);
 #[derive(Debug)]
 pub(super) struct SelectionAnchor {
     position: Option<usize>,
-    session_id: Option<String>,
-    occurrence: usize,
     row_key: Option<SessionRowKey>,
     screen_line: Option<usize>,
 }
 
 impl SelectionAnchor {
     pub(super) fn for_session(session_id: impl Into<String>) -> Self {
-        Self::for_session_occurrence(session_id, 0)
-    }
-
-    pub(super) fn for_session_occurrence(session_id: impl Into<String>, occurrence: usize) -> Self {
         Self {
             position: None,
-            session_id: Some(session_id.into()),
-            occurrence,
-            row_key: None,
+            row_key: Some(SessionRowKey::Task(session_id.into())),
             screen_line: None,
         }
     }
@@ -200,16 +192,6 @@ impl App {
         self.position_of_session_row_where(|session| session.session_id == session_id)
     }
 
-    fn position_of_session_row_occurrence(
-        &self,
-        session_id: &str,
-        occurrence: usize,
-    ) -> Option<usize> {
-        self.session_row_positions_where(|session| session.session_id == session_id)
-            .nth(occurrence)
-            .or_else(|| self.position_of_session_row(session_id))
-    }
-
     fn session_row_positions_where<'a>(
         &'a self,
         predicate: impl Fn(&Session) -> bool + 'a,
@@ -227,11 +209,12 @@ impl App {
         let position = self.list_state.selected();
         SelectionAnchor {
             position,
-            session_id: self
-                .selected_session()
-                .map(|session| session.session_id.clone()),
-            occurrence: self.selected_session_row_occurrence().unwrap_or_default(),
-            row_key: position.and_then(|position| self.row_keys.get(position).cloned().flatten()),
+            row_key: position
+                .and_then(|position| self.row_keys.get(position).cloned().flatten())
+                .or_else(|| {
+                    self.selected_session()
+                        .map(|session| SessionRowKey::Task(session.session_id.clone()))
+                }),
             screen_line: position.and_then(|position| {
                 self.pending_selection_line
                     .or_else(|| self.selection_screen_line(position))
@@ -283,20 +266,6 @@ impl App {
         true
     }
 
-    /// Returns the selected session's occurrence among its rows in display order.
-    /// A session with a YOUR TURN row also appears later in TASKS.
-    pub(super) fn selected_session_row_occurrence(&self) -> Option<usize> {
-        let position = self.list_state.selected()?;
-        let session_index = self.row_sessions.get(position).copied().flatten()?;
-        let preceding_rows = self.row_sessions.get(..position)?;
-        Some(
-            preceding_rows
-                .iter()
-                .filter(|row| **row == Some(session_index))
-                .count(),
-        )
-    }
-
     pub(super) fn position_of_session_row_where(
         &self,
         predicate: impl Fn(&Session) -> bool,
@@ -321,16 +290,15 @@ impl App {
         let next = anchor
             .row_key
             .as_ref()
-            .and_then(|key| {
+            .and_then(|row_key| {
                 self.row_keys
                     .iter()
-                    .position(|row_key| row_key.as_ref() == Some(key))
-            })
-            .or_else(|| {
-                anchor
-                    .session_id
-                    .as_deref()
-                    .and_then(|id| self.position_of_session_row_occurrence(id, anchor.occurrence))
+                    .position(|candidate| candidate.as_ref() == Some(row_key))
+                    .or_else(|| {
+                        row_key
+                            .session_id()
+                            .and_then(|session_id| self.position_of_session_row(session_id))
+                    })
             })
             .or_else(|| {
                 let selectable = self.selectable_positions();
@@ -687,13 +655,13 @@ mod tests {
     }
 
     #[rstest]
-    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session(
+    fn test_reload_restores_selected_task_row_for_user_turn_session(
         app_with_user_turn_and_active_session: App,
     ) {
         let mut app = app_with_user_turn_and_active_session;
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 1)
+            .position_of_session_row("awaiting-1")
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
         app.apply_session_store_changes(store::SessionStoreChanges {
@@ -704,11 +672,8 @@ mod tests {
         .expect("session-store changes should apply");
 
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.selected_session_row_occurrence(),
-            ),
-            (Some("awaiting-1"), Some(1)),
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("awaiting-1"),
         );
     }
 
@@ -852,7 +817,7 @@ mod tests {
     }
 
     #[test]
-    fn task_occurrence_remains_selected_when_a_user_turn_row_appears() {
+    fn task_row_remains_selected_when_session_needs_user_action() {
         let mut selected = create_test_session("selected");
         let other = create_test_session("other");
         let mut app = create_test_app(vec![selected.clone(), other]);
@@ -888,9 +853,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_tq_snapshot_updates_preserve_selected_task_occurrence(
-        app_with_user_turn_and_active_session: App,
-    ) {
+    fn test_tq_snapshot_updates_preserve_selected_task(app_with_user_turn_and_active_session: App) {
         let mut app = app_with_user_turn_and_active_session;
 
         let initial_task = SessionTask {
@@ -910,18 +873,16 @@ mod tests {
             (
                 app.selected_session()
                     .map(|session| session.session_id.as_str()),
-                app.selected_session_row_occurrence(),
                 app.task_by_session.clone(),
             ),
             (
                 Some("awaiting-1"),
-                Some(0),
                 HashMap::from([("awaiting-1".to_string(), initial_task)]),
             ),
         );
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 1)
+            .position_of_session_row("awaiting-1")
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
 
@@ -942,12 +903,10 @@ mod tests {
             (
                 app.selected_session()
                     .map(|session| session.session_id.as_str()),
-                app.selected_session_row_occurrence(),
                 app.task_by_session.clone(),
             ),
             (
                 Some("awaiting-1"),
-                Some(1),
                 HashMap::from([("awaiting-1".to_string(), refreshed_task)]),
             ),
         );

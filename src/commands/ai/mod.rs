@@ -15,7 +15,7 @@ pub enum AiCommands {
     #[command(subcommand)]
     PrDraft(pr_draft::PrDraftCommands),
 
-    /// Register and synchronize PR series diagrams
+    /// Register PR series plans with ordered steps and synchronize their overviews
     #[command(subcommand)]
     PrSeries(pr_series::PrSeriesCommands),
 

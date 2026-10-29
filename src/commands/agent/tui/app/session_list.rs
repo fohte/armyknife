@@ -77,7 +77,7 @@ impl App {
     ) {
         let row_keys = row_session_ids
             .iter()
-            .map(|id| id.map(|id| SessionRowKey::Task(id.to_string())))
+            .map(|id| id.map(|id| SessionRowKey::Task(id.to_owned())))
             .collect::<Vec<_>>();
         self.update_rendered_row_keys(&row_keys);
     }
@@ -110,8 +110,13 @@ impl App {
             .collect();
         self.row_keys = row_keys.to_vec();
         if let Some(order) = self.session_row_order.as_mut() {
-            let keys = self.row_keys.iter().flatten().cloned().collect::<Vec<_>>();
-            order.remember_keys(&keys);
+            let session_ids = self
+                .row_keys
+                .iter()
+                .flatten()
+                .filter_map(SessionRowKey::session_id)
+                .collect::<Vec<_>>();
+            order.remember_session_ids(&session_ids);
         }
     }
 

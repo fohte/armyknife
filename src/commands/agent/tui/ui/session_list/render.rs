@@ -11,11 +11,11 @@ use crate::commands::agent::tui::session_rows::SessionRow;
 
 use super::super::helpers::DIM_FG;
 use super::inline_items::build_inline_progress_item;
-use super::items::{build_header_item, build_session_item, build_user_turn_item};
-/// Renders YOUR TURN first, followed by the TASKS session tree. YOUR TURN rows
-/// use the priority shared with tmux status. A session
-/// linked to a tq task (`app.task_by_session`) gets a fixed-width task-number
-/// column, dimmed unless its task is related to the cursor row's task (see
+use super::items::{build_header_item, build_session_item};
+/// Renders the TASKS session tree with inline implementation progress. A
+/// session linked to a tq task (`app.task_by_session`) gets a fixed-width
+/// task-number column, dimmed unless its task is related to the cursor row's
+/// task (see
 /// [`crate::commands::agent::tui::session_rows::is_related_task`]).
 pub(in crate::commands::agent::tui::ui) fn render_session_list(
     frame: &mut Frame,
@@ -71,7 +71,6 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
-            SessionRow::UserTurn(turn) => build_user_turn_item(turn, app, now, term_width),
             SessionRow::Session(entry) => build_session_item(entry, app, now, term_width, &query),
             SessionRow::InlineProgress(entry) => {
                 build_inline_progress_item(entry, app, now, term_width)
@@ -580,7 +579,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_user_turn_row_is_independent_of_work_type_icon_width() {
+    fn test_render_task_turn_label_is_independent_of_work_type_icon_width() {
         let now = Utc::now();
 
         let mut waiting = create_test_session("wide");
@@ -611,19 +610,25 @@ mod tests {
             );
         });
 
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 1 running · 0 idle
-             ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐  crit    Wide                                                        just now
-
-             ── TASKS ──────────────────────────────────────────────────────────────────────
-             ◐ project               界  Wide [crit]                                 just now
-             ● project                  Blank                                       just now
-
-
-
-
-             ?: keys   /: search   Tab: toggle progress   q: quit"};
+        let waiting_row = format!(
+            ">◐ project               界  Wide crit{}just now",
+            " ".repeat(35)
+        );
+        let expected = [
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            waiting_row.as_str(),
+            " ● project                  Blank                                       just now",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }
@@ -877,73 +882,103 @@ mod tests {
     }
 
     #[rstest]
-    fn test_render_your_turn_row_shows_name_note_and_wait_time(mut you_user_turn_session: Session) {
+    fn test_render_tasks_row_shows_action_label_without_note(mut you_user_turn_session: Session) {
         let now = Utc::now();
         you_user_turn_session.updated_at = now - chrono::Duration::minutes(48);
 
         let output = render_to_string(&[you_user_turn_session], Some(1), now, 80, 10);
 
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 0 running · 0 idle
-             ── YOUR TURN ──────────────────────────────────────────────────────────────────
-            >◐  needs_attention  session-name choose an option                           48m
-
-             ── TASKS ──────────────────────────────────────────────────────────────────────
-             ◐ project                 session-name                                      48m
-
-
-
-             ?: keys   /: search   Tab: toggle progress   q: quit"};
+        let action_row = format!(
+            ">◐ project                 session-name needs_attention{}48m",
+            " ".repeat(22)
+        );
+        let expected = [
+            " agent watch                                    1 needs you · 0 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            action_row.as_str(),
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }
 
     #[rstest]
-    #[case::truncated_note(
-        "you",
-        "session-name",
-        36,
-        indoc! {"
-             agent watch1 needs you · 0 running
-             ── YOUR TURN ──────────────────────
-            >◐  you     session-name ch just now
-             ?: keys   /: search   Tab: toggle p"}
-    )]
-    #[case::omitted_note(
-        "needs_attention",
-        "session-name",
-        43,
-        indoc! {"
-             agent watch1 needs you · 0 running · 0 idl
-             ── YOUR TURN ─────────────────────────────
-            >◐  needs_attention  session-name  just now
-             ?: keys   /: search   Tab: toggle progress"}
-    )]
-    #[case::long_session_name_keeps_time_column(
-        "needs_attention",
-        "a-long-session-name",
-        43,
-        indoc! {"
-             agent watch1 needs you · 0 running · 0 idl
-             ── YOUR TURN ─────────────────────────────
-            >◐  needs_attention  a-long-ses... just now
-             ?: keys   /: search   Tab: toggle progress"}
-    )]
-    fn test_render_your_turn_row_preserves_label_and_session_name_when_space_is_tight(
-        mut you_user_turn_session: Session,
-        #[case] status_label: &str,
-        #[case] session_name: &str,
-        #[case] term_width: u16,
-        #[case] expected: &str,
-    ) {
+    fn test_render_action_label_uses_red_background(you_user_turn_session: Session) {
         let now = Utc::now();
+        let mut other = create_test_session("other");
+        other.updated_at = now + chrono::Duration::seconds(1);
+        let mut you_user_turn_session = you_user_turn_session;
         you_user_turn_session.updated_at = now;
-        you_user_turn_session.label = Some(session_name.to_string());
-        if let Some(status) = &mut you_user_turn_session.agent_status {
-            status.kind = status_label.to_string();
-        }
+        let buffer = render_buffer(&[other, you_user_turn_session], Some(2), now, 80, 10);
+        let red_background_cells = (0..buffer.area.width)
+            .filter_map(|x| {
+                let cell = &buffer[(x, 2)];
+                (cell.bg == Color::Red).then(|| cell.symbol().to_string())
+            })
+            .collect::<Vec<_>>();
 
-        let output = render_to_string(&[you_user_turn_session], Some(1), now, term_width, 4);
+        let expected = [
+            " ", "n", "e", "e", "d", "s", "_", "a", "t", "t", "e", "n", "t", "i", "o", "n", " ",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        assert_eq!(red_background_cells, expected);
+    }
+
+    #[test]
+    fn test_action_label_uses_width_after_minimum_title_reserve() {
+        let now = Utc::now();
+        let mut session = create_test_session("session");
+        session.updated_at = now;
+        session.status = SessionStatus::Stopped;
+        session.label = Some("session-name".to_string());
+        session.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: "choose an option".to_string(),
+        });
+
+        let buffer = render_buffer(&[session], Some(1), now, 55, 5);
+
+        assert_eq!(
+            rendered_row(&buffer, 2),
+            format!(">◐ project{}session... need...  just now", " ".repeat(17))
+        );
+    }
+
+    #[test]
+    fn test_render_failed_user_turn_shows_failure_mark_on_tasks_row() {
+        let now = Utc::now();
+        let mut failed = create_test_session("failed");
+        failed.updated_at = now;
+        failed.status = SessionStatus::Failed;
+        failed.label = Some("session-name".to_string());
+
+        let output = render_to_string(&[failed], Some(1), now, 80, 9);
+
+        let failed_row = format!(
+            ">✗ project                 session-name failed{}just now",
+            " ".repeat(26)
+        );
+        let expected = [
+            " agent watch                                    1 needs you · 0 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            failed_row.as_str(),
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }
@@ -1042,8 +1077,16 @@ mod tests {
         (now, vec![waiting, running])
     }
 
+    fn expected_waiting_task_row(selected: bool) -> String {
+        format!(
+            "{}◐ project                 project crit{}just now",
+            if selected { ">" } else { " " },
+            " ".repeat(33)
+        )
+    }
+
     #[rstest]
-    fn test_select_next_can_select_tasks_row_of_user_turn_session(
+    fn test_select_next_moves_from_action_task_to_next_session(
         waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
     ) {
         let (now, sessions) = waiting_and_running_sessions;
@@ -1051,19 +1094,22 @@ mod tests {
             app.select_next();
         });
 
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 1 running · 0 idle
-             ── YOUR TURN ──────────────────────────────────────────────────────────────────
-             ◐  crit    project                                                     just now
-
-             ── TASKS ──────────────────────────────────────────────────────────────────────
-            >◐ project                 project [crit]                               just now
-             ● project                 project                                      just now
-
-
-
-
-             ?: keys   /: search   Tab: toggle progress   q: quit"};
+        let waiting_row = expected_waiting_task_row(false);
+        let expected = [
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            waiting_row.as_str(),
+            ">● project                 project                                      just now",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }
@@ -1085,62 +1131,64 @@ mod tests {
 
         sessions.push(unread);
         sessions.push(paused);
-        // Start on "waiting" and step to the last TASKS row, crossing the
-        // section boundary and the selectable duplicate row, so a cumulative
-        // off-by-N from separators would show up here.
+        // Walk from the highest-priority session through the last task row.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 16, |app| {
-            app.select_next();
             app.select_next();
             app.select_next();
             app.select_next();
         });
 
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 1 running · 2 idle
-             ── YOUR TURN ──────────────────────────────────────────────────────────────────
-             ◐  crit    project                                                     just now
-
-             ── TASKS ──────────────────────────────────────────────────────────────────────
-             ◐ project                 project [crit]                               just now
-             ● project                 project                                      just now
-             ✱ project                 project                                      just now
-            >⏸ project                 project                                      just now
-
-
-
-
-
-
-             ?: keys   /: search   Tab: toggle progress   q: quit"};
+        let waiting_row = expected_waiting_task_row(false);
+        let expected = [
+            " agent watch                                    1 needs you · 1 running · 2 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            waiting_row.as_str(),
+            " ● project                 project                                      just now",
+            " ✱ project                 project                                      just now",
+            ">⏸ project                 project                                      just now",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }
 
     #[rstest]
-    fn test_select_previous_wraps_backward_across_section_lands_on_session_row(
+    fn test_select_previous_wraps_backward_to_last_session(
         waiting_and_running_sessions: (DateTime<Utc>, Vec<Session>),
     ) {
         let (now, sessions) = waiting_and_running_sessions;
-        // Starting on the first selectable row ("waiting") and going
-        // backward must wrap to the last selectable row ("running"), not to
-        // the TASKS section header.
+        // Starting on the first task row and going backward wraps to the last
+        // session in the list.
         let output = render_to_string_with(&sessions, Some(1), now, 80, 12, |app| {
             app.select_previous();
         });
 
-        let expected = indoc! {"
-             agent watch                                    1 needs you · 1 running · 0 idle
-             ── YOUR TURN ──────────────────────────────────────────────────────────────────
-             ◐  crit    project                                                     just now
-
-             ── TASKS ──────────────────────────────────────────────────────────────────────
-             ◐ project                 project [crit]                               just now
-            >● project                 project                                      just now
-
-
-
-
-             ?: keys   /: search   Tab: toggle progress   q: quit"};
+        let waiting_row = expected_waiting_task_row(false);
+        let expected = [
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
+            waiting_row.as_str(),
+            ">● project                 project                                      just now",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            " ?: keys   /: search   Tab: toggle progress   q: quit",
+        ]
+        .join("\n");
 
         assert_eq!(output, expected);
     }

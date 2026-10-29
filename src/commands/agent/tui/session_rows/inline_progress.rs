@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::commands::agent::tui::progress::ProgressRow;
 
-use super::{Section, SectionHeaderRow, SessionRow, SessionRowEntry, SessionRowKey};
+use super::{SessionRow, SessionRowEntry, SessionRowKey};
 
 #[derive(Debug)]
 pub(in crate::commands::agent::tui) struct InlineProgressEntry<'a> {
@@ -31,36 +31,13 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         .collect::<HashMap<_, _>>();
     let descendants = collect_matched_descendants(&original_rows, matched_session_ids);
 
-    let mut priority_rows = original_rows
-        .into_iter()
-        .filter(|row| {
-            matches!(
-                row,
-                SessionRow::UserTurn(_)
-                    | SessionRow::SectionHeader(SectionHeaderRow {
-                        kind: Section::UserTurn,
-                        ..
-                    })
-            )
-        })
-        .collect::<Vec<_>>();
     let mut task_rows = remaining_rows
         .into_iter()
-        .filter(|row| {
-            matches!(
-                row,
-                SessionRow::Session(_)
-                    | SessionRow::SectionHeader(SectionHeaderRow {
-                        kind: Section::Tasks,
-                        ..
-                    })
-            )
-        })
+        .filter(|row| matches!(row, SessionRow::Session(_) | SessionRow::SectionHeader(_)))
         .collect::<Vec<_>>();
 
     let Some(source_placement) = find_source_placement(&task_rows, source_session_id) else {
-        priority_rows.extend(task_rows);
-        return priority_rows;
+        return task_rows;
     };
     let inline_rows = build_inline_progress_rows(
         source_session_id,
@@ -73,15 +50,13 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
     );
 
     if inline_rows.is_empty() {
-        priority_rows.extend(task_rows);
-        return priority_rows;
+        return task_rows;
     }
     task_rows.splice(
         source_placement.row_index + 1..source_placement.row_index + 1,
         inline_rows,
     );
-    priority_rows.extend(task_rows);
-    priority_rows
+    task_rows
 }
 
 struct SourcePlacement {

@@ -196,8 +196,8 @@ async fn run_with_context(
     };
     let options = DetectOptions {
         current_user: &ctx.current_user,
-        edit_others: args.edit_others,
-        allow_delete: args.allow_delete,
+        edit_others: args.edit_others || args.dry_run,
+        allow_delete: args.allow_delete || args.dry_run,
     };
     let changeset = ChangeSet::detect_with_comparisons(
         &local_state,

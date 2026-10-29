@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use anyhow::{Context, Result, ensure};
 use indoc::indoc;
@@ -42,121 +42,67 @@ pub fn render_section(
         "current pull request `{current_entry_id}` is hidden by repository privacy filtering"
     );
 
-    let visible_ids = visible_entries
+    let visible_by_id = visible_entries
         .iter()
-        .map(|(entry, _)| entry.id.as_str())
-        .collect::<BTreeSet<_>>();
+        .map(|(entry, _)| (entry.id.as_str(), *entry))
+        .collect::<HashMap<_, _>>();
     let created_by_id = created_pull_requests
         .iter()
         .map(|pull_request| (pull_request.entry_id.as_str(), pull_request))
         .collect::<HashMap<_, _>>();
-    let node_ids = visible_entries
-        .iter()
-        .enumerate()
-        .map(|(index, (entry, _))| (entry.id.as_str(), format!("P{}", index + 1)))
-        .collect::<HashMap<_, _>>();
+    let body_is_japanese = contains_japanese(&body_language_source);
+    let render_entry =
+        |entry| render_pull_request(entry, current_entry_id, body_is_japanese, &created_by_id);
+    let mut rendered_steps = Vec::new();
 
-    // GitHub's 120px default clips labels; 400px exceeds MAX_LABEL_WIDTH_PX (200px).
-    let mut diagram =
-        String::from("---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n");
-    let repositories = visible_entries
-        .iter()
-        .map(|(_, repository)| repository.key())
-        .collect::<BTreeSet<_>>();
-    if repositories.len() > 1 {
-        for (repository_index, repository_key) in repositories.iter().enumerate() {
-            let repository = visible_entries
+    if let Some(steps) = &plan.steps {
+        for step in steps {
+            let entries = step
+                .pull_requests
                 .iter()
-                .find(|(_, repository)| repository.key() == *repository_key)
-                .map(|(_, repository)| repository)
-                .context("visible repository was not found")?;
-            diagram.push_str(&format!(
-                "  subgraph repo{repository_index}[\"{}\"]\n",
-                escape_mermaid_text(&repository.full_name())
-            ));
-            append_nodes(
-                &mut diagram,
-                visible_entries
-                    .iter()
-                    .filter(|(_, candidate)| candidate.key() == *repository_key),
-                &node_ids,
-                current_entry_id,
-                &body_language_source,
-                "    ",
-            );
-            diagram.push_str("  end\n");
+                .filter_map(|id| visible_by_id.get(id.as_str()).copied())
+                .collect::<Vec<_>>();
+            match entries.as_slice() {
+                [] => {}
+                [entry] => rendered_steps.push(render_entry(entry)),
+                _ => {
+                    let summary = step.summary.as_deref().context(
+                        "step summary is required when multiple pull requests are visible",
+                    )?;
+                    let step_number = rendered_steps.len() + 1;
+                    let indent = " ".repeat(step_number.to_string().len() + 2);
+                    let mut rendered_group = vec![escape_markdown_text(summary)];
+                    for entry in entries {
+                        rendered_group.push(format!("{indent}- {}", render_entry(entry)));
+                    }
+                    rendered_steps.push(rendered_group.join("\n"));
+                }
+            }
         }
     } else {
-        append_nodes(
-            &mut diagram,
-            visible_entries.iter(),
-            &node_ids,
-            current_entry_id,
-            &body_language_source,
-            "  ",
-        );
-    }
-
-    for (entry, _) in &visible_entries {
-        for dependency in &entry.depends_on {
-            if !visible_ids.contains(dependency.as_str()) {
-                continue;
-            }
-            let from = node_ids
-                .get(dependency.as_str())
-                .context("dependency node was not rendered")?;
-            let to = node_ids
-                .get(entry.id.as_str())
-                .context("pull request node was not rendered")?;
-            diagram.push_str(&format!("  {from} --> {to}\n"));
+        for (entry, _) in &visible_entries {
+            rendered_steps.push(render_entry(entry));
         }
     }
 
-    for (entry, _) in &visible_entries {
-        if let Some(pull_request) = created_by_id.get(entry.id.as_str()) {
-            let node_id = node_ids
-                .get(entry.id.as_str())
-                .context("pull request node was not rendered")?;
-            diagram.push_str(&format!(
-                "  click {node_id} href \"{}\" _blank\n",
-                pull_request.url
-            ));
-        }
-    }
-    diagram.push_str("  classDef current stroke:#3fb950,stroke-width:3px\n");
-    let planned_nodes = visible_entries
-        .iter()
-        .filter(|(entry, _)| !created_by_id.contains_key(entry.id.as_str()))
-        .filter_map(|(entry, _)| node_ids.get(entry.id.as_str()))
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    if !planned_nodes.is_empty() {
-        diagram.push_str("  classDef planned stroke-dasharray:5 5\n");
-    }
-    let current_node = node_ids
-        .get(current_entry_id)
-        .context("current pull request node was not rendered")?;
-    diagram.push_str(&format!("  class {current_node} current\n"));
-    if !planned_nodes.is_empty() {
-        diagram.push_str(&format!("  class {} planned\n", planned_nodes.join(",")));
-    }
-
+    let numbered_steps = rendered_steps
+        .into_iter()
+        .enumerate()
+        .map(|(index, step)| format!("{}. {step}", index + 1))
+        .collect::<Vec<_>>()
+        .join("\n");
     let section = format!(
         indoc! {"
             {START_MARKER}
             ### {name}
 
-            {purpose}
-
-            ```mermaid
-            {diagram}```
+            {steps}
             {END_MARKER}
         "},
         START_MARKER = START_MARKER,
         END_MARKER = END_MARKER,
         name = plan.name,
-        purpose = plan.purpose,
-        diagram = diagram,
+        steps = numbered_steps,
     );
     Ok(section.trim_end_matches('\n').to_string())
 }
@@ -228,31 +174,38 @@ fn managed_section_range(body: &str) -> Result<Option<std::ops::Range<usize>>> {
     Ok(Some(start_index..end_index + END_MARKER.len()))
 }
 
-fn append_nodes<'a>(
-    output: &mut String,
-    entries: impl Iterator<Item = &'a (&'a super::model::PrSeriesEntry, Repository)>,
-    node_ids: &HashMap<&str, String>,
+fn render_pull_request(
+    entry: &super::model::PrSeriesEntry,
     current_entry_id: &str,
-    body_language_source: &str,
-    indent: &str,
-) {
-    for (entry, _) in entries {
-        let Some(node_id) = node_ids.get(entry.id.as_str()) else {
-            continue;
-        };
-        let current_label = if entry.id == current_entry_id {
-            if contains_japanese(body_language_source) {
-                "<br/>今回の PR"
-            } else {
-                "<br/>This PR"
-            }
+    body_is_japanese: bool,
+    created_by_id: &HashMap<&str, &CreatedPullRequest>,
+) -> String {
+    if entry.id == current_entry_id {
+        let current_label = if body_is_japanese {
+            "今回の PR"
         } else {
-            ""
+            "this PR"
         };
-        output.push_str(&format!(
-            "{indent}{node_id}(\"{}{current_label}\")\n",
-            escape_mermaid_text(&entry.summary)
-        ));
+        format!(
+            "**{}** ({current_label})",
+            escape_markdown_text(&entry.summary)
+        )
+    } else if let Some(pull_request) = created_by_id.get(entry.id.as_str()) {
+        format!(
+            "{}#{}",
+            pull_request.repository.full_name(),
+            pull_request.number
+        )
+    } else {
+        let not_created_label = if body_is_japanese {
+            "未作成"
+        } else {
+            "not created yet"
+        };
+        format!(
+            "{} ({not_created_label})",
+            escape_markdown_text(&entry.summary)
+        )
     }
 }
 
@@ -263,15 +216,15 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
     line_start && line_end
 }
 
-fn escape_mermaid_text(value: &str) -> String {
+fn escape_markdown_text(value: &str) -> String {
     value
         .chars()
-        .map(|character| match character {
-            '&' => "#amp;".to_string(),
-            '"' => "#quot;".to_string(),
-            '<' => "#lt;".to_string(),
-            '>' => "#gt;".to_string(),
-            _ => character.to_string(),
+        .map(|character| {
+            if character.is_ascii_punctuation() {
+                format!("\\{character}")
+            } else {
+                character.to_string()
+            }
         })
         .collect()
 }
@@ -289,13 +242,16 @@ fn contains_japanese(value: &str) -> bool {
 mod tests {
     use std::collections::HashMap;
 
+    use indoc::indoc;
+
     use super::*;
-    use crate::commands::ai::pr_series::model::{PrSeriesEntry, PrSeriesPlan};
+    use crate::commands::ai::pr_series::model::{PrSeriesEntry, PrSeriesPlan, PrSeriesStep};
 
     fn plan() -> PrSeriesPlan {
         PrSeriesPlan {
             name: "Notification preferences".to_string(),
             purpose: "Let users choose which notifications they receive.".to_string(),
+            steps: None,
             pull_requests: vec![
                 PrSeriesEntry {
                     id: "schema".to_string(),
@@ -357,35 +313,258 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn public_repository_views_remove_private_nodes_and_incident_edges_without_shortcuts() {
-        assert_eq!(
-            render_section(
-                &plan(),
-                "docs",
-                "Existing body",
-                &privacy(),
-                &created_docs()
-            )
-            .unwrap(),
-            "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\n---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P2(\"Document the settings<br/>This PR\")\n  end\n  click P2 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->",
-        );
+    #[derive(Debug)]
+    struct RenderCase {
+        plan: PrSeriesPlan,
+        current_entry_id: &'static str,
+        current_body: &'static str,
+        repository_privacy: HashMap<String, bool>,
+        created_pull_requests: Vec<CreatedPullRequest>,
+        expected: String,
     }
 
-    #[test]
-    fn private_repository_views_include_private_dependencies() {
-        let expected = "<!-- pr-series:start -->\n### Notification preferences\n\nLet users choose which notifications they receive.\n\n```mermaid\n---\nconfig:\n  flowchart:\n    wrappingWidth: 400\n---\nflowchart LR\n  subgraph repo0[\"acme/notify-api\"]\n    P1(\"Add preference tables\")\n  end\n  subgraph repo1[\"acme/notify-docs\"]\n    P3(\"Document the settings\")\n  end\n  subgraph repo2[\"acme/private-infra\"]\n    P2(\"Rotate mail credentials<br/>今回の PR\")\n  end\n  P1 --> P2\n  P2 --> P3\n  click P2 href \"https://github.com/acme/private-infra/pull/19\" _blank\n  click P3 href \"https://github.com/acme/notify-docs/pull/31\" _blank\n  classDef current stroke:#3fb950,stroke-width:3px\n  classDef planned stroke-dasharray:5 5\n  class P2 current\n  class P1 planned\n```\n<!-- pr-series:end -->";
+    fn legacy_render_case() -> RenderCase {
+        RenderCase {
+            plan: plan(),
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
 
+                1. Add preference tables (not created yet)
+                2. **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn grouped_render_case() -> RenderCase {
+        let mut plan = plan();
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["credentials".to_string()],
+            },
+            PrSeriesStep {
+                summary: Some("Add preference storage and document the settings.".to_string()),
+                pull_requests: vec!["schema".to_string(), "docs".to_string()],
+            },
+        ]);
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Add preference storage and document the settings\\.
+                   - Add preference tables (not created yet)
+                   - **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn private_japanese_render_case() -> RenderCase {
+        RenderCase {
+            plan: plan(),
+            current_entry_id: "credentials",
+            current_body: "設定本文",
+            repository_privacy: privacy(),
+            created_pull_requests: created_private_infra(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Add preference tables (未作成)
+                2. **Rotate mail credentials** (今回の PR)
+                3. acme/notify-docs#31
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn one_visible_pull_request_render_case() -> RenderCase {
+        let mut plan = plan();
+        plan.steps = Some(vec![PrSeriesStep {
+            summary: Some("Set up storage and rotate credentials.".to_string()),
+            pull_requests: vec!["credentials".to_string(), "docs".to_string()],
+        }]);
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn escaped_summary_render_case() -> RenderCase {
+        let mut plan = plan();
+        plan.pull_requests[0].summary = "Build [preference] tables".to_string();
+        plan.pull_requests[2].summary = "Document `settings`".to_string();
+        plan.steps = Some(vec![PrSeriesStep {
+            summary: Some("Group *storage* with [docs](guide)".to_string()),
+            pull_requests: vec!["schema".to_string(), "docs".to_string()],
+        }]);
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {r"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Group \*storage\* with \[docs\]\(guide\)
+                   - Build \[preference\] tables (not created yet)
+                   - **Document \`settings\`** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn created_non_current_nested_pr_render_case() -> RenderCase {
+        let mut plan = plan();
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: Some("Store preferences and document the settings.".to_string()),
+                pull_requests: vec!["schema".to_string(), "docs".to_string()],
+            },
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["credentials".to_string()],
+            },
+        ]);
+        plan.pull_requests[2].depends_on.clear();
+        let created = vec![CreatedPullRequest {
+            entry_id: "schema".to_string(),
+            repository: Repository {
+                owner: "acme".to_string(),
+                name: "notify-api".to_string(),
+            },
+            number: 12,
+            url: "https://github.com/acme/notify-api/pull/12".to_string(),
+        }];
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created,
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Store preferences and document the settings\\.
+                   - acme/notify-api#12
+                   - **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn tenth_step_nested_list_render_case() -> RenderCase {
+        let pull_requests = (1..=11)
+            .map(|number| PrSeriesEntry {
+                id: format!("task-{number}"),
+                summary: format!("Implement notification stage {number}"),
+                depends_on: Vec::new(),
+                repository: "example/notify-api".to_string(),
+                tq_leaf_id: format!("leaf-{number}"),
+            })
+            .collect();
+        let steps = (1..=9)
+            .map(|number| PrSeriesStep {
+                summary: None,
+                pull_requests: vec![format!("task-{number}")],
+            })
+            .chain(std::iter::once(PrSeriesStep {
+                summary: Some("Complete the final notification step".to_string()),
+                pull_requests: vec!["task-10".to_string(), "task-11".to_string()],
+            }))
+            .collect();
+        RenderCase {
+            plan: PrSeriesPlan {
+                name: "Notification workflow".to_string(),
+                purpose: "Implement notification delivery in stages.".to_string(),
+                pull_requests,
+                steps: Some(steps),
+            },
+            current_entry_id: "task-11",
+            current_body: "Existing body",
+            repository_privacy: HashMap::from([("example/notify-api".to_string(), false)]),
+            created_pull_requests: Vec::new(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification workflow
+
+                1. Implement notification stage 1 (not created yet)
+                2. Implement notification stage 2 (not created yet)
+                3. Implement notification stage 3 (not created yet)
+                4. Implement notification stage 4 (not created yet)
+                5. Implement notification stage 5 (not created yet)
+                6. Implement notification stage 6 (not created yet)
+                7. Implement notification stage 7 (not created yet)
+                8. Implement notification stage 8 (not created yet)
+                9. Implement notification stage 9 (not created yet)
+                10. Complete the final notification step
+                    - Implement notification stage 10 (not created yet)
+                    - **Implement notification stage 11** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::legacy_plan(legacy_render_case())]
+    #[case::grouped_step_filters_private_entries(grouped_render_case())]
+    #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
+    #[case::single_visible_pr_omits_step_summary(one_visible_pull_request_render_case())]
+    #[case::summaries_escape_markdown_punctuation(escaped_summary_render_case())]
+    #[case::created_non_current_pr_uses_reference_in_nested_list(
+        created_non_current_nested_pr_render_case()
+    )]
+    #[case::tenth_step_uses_four_space_nested_list_indentation(tenth_step_nested_list_render_case())]
+    fn renders_steps_as_expected(#[case] case: RenderCase) {
         assert_eq!(
             render_section(
-                &plan(),
-                "credentials",
-                "設定本文",
-                &privacy(),
-                &created_private_infra(),
+                &case.plan,
+                case.current_entry_id,
+                case.current_body,
+                &case.repository_privacy,
+                &case.created_pull_requests,
             )
             .unwrap(),
-            expected,
+            case.expected,
         );
     }
 
@@ -408,27 +587,8 @@ mod tests {
             <!-- pr-series:start -->
             ### 通知設定
 
-            Let users choose which notifications they receive.
-
-            ```mermaid
-            ---
-            config:
-              flowchart:
-                wrappingWidth: 400
-            ---
-            flowchart LR
-              subgraph repo0[\"acme/notify-api\"]
-                P1(\"Add preference tables\")
-              end
-              subgraph repo1[\"acme/notify-docs\"]
-                P2(\"Document the settings<br/>This PR\")
-              end
-              click P2 href \"https://github.com/acme/notify-docs/pull/31\" _blank
-              classDef current stroke:#3fb950,stroke-width:3px
-              classDef planned stroke-dasharray:5 5
-              class P2 current
-              class P1 planned
-            ```
+            1. Add preference tables (not created yet)
+            2. **Document the settings** (this PR)
             <!-- pr-series:end -->
         "}
         .trim_end_matches('\n')
@@ -443,11 +603,7 @@ mod tests {
             <!-- pr-series:start -->
             ### New series
 
-            Purpose
-
-            ```mermaid
-            flowchart LR
-            ```
+            1. Add the sample feature
             <!-- pr-series:end -->
         "}
         .trim_end_matches('\n');
@@ -466,11 +622,7 @@ mod tests {
             <!-- pr-series:start -->
             ### New series
 
-            Purpose
-
-            ```mermaid
-            flowchart LR
-            ```
+            1. Add the sample feature
             <!-- pr-series:end -->
             Outside after
         "}
@@ -493,11 +645,7 @@ mod tests {
             <!-- pr-series:start -->
             ### New series
 
-            Purpose
-
-            ```mermaid
-            flowchart LR
-            ```
+            1. Add the sample feature
             <!-- pr-series:end -->
         "}
         .trim_end_matches('\n');
@@ -510,11 +658,7 @@ mod tests {
                 <!-- pr-series:start -->
                 ### New series
 
-                Purpose
-
-                ```mermaid
-                flowchart LR
-                ```
+                1. Add the sample feature
                 <!-- pr-series:end -->
             "}
             .trim_end_matches('\n'),

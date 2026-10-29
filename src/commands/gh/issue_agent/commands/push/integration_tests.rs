@@ -862,6 +862,77 @@ async fn test_edit_others_comment_denied_without_flag(test_dir: TempDir) {
 }
 
 #[rstest]
+#[case::edit_other_users_comment(Some("Modified"))]
+#[case::delete_other_users_comment(None)]
+#[tokio::test]
+async fn test_dry_run_shows_other_users_comment_changes(
+    test_dir: TempDir,
+    #[case] local_body: Option<&str>,
+) {
+    let (mock, storage) = TestSetup::new(test_dir.path())
+        .remote_comments(vec![make_remote_comment(
+            "otheruser",
+            "IC_abc",
+            12345,
+            "Original",
+        )])
+        .build()
+        .await;
+    storage
+        .save_base_comments(&[CommentSnapshot {
+            id: "IC_abc".to_string(),
+            body: "Original".to_string(),
+        }])
+        .unwrap();
+    if let Some(body) = local_body {
+        setup_local_comment(
+            test_dir.path(),
+            "001_comment_12345.md",
+            &create_comment_file(
+                "otheruser",
+                "2024-01-01T12:00:00+00:00",
+                "IC_abc",
+                12345,
+                body,
+            ),
+        );
+    }
+    let local_comment_path = storage.dir().join("comments/001_comment_12345.md");
+    let local_comment_before =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_before = storage.read_base_comments().unwrap();
+
+    let client = mock.client();
+    let result = run_with_client_and_storage(
+        &make_args_full(true, false, false, false),
+        &client,
+        &storage,
+        "testuser",
+    )
+    .await;
+    let local_comment_after =
+        std::fs::read_to_string(&local_comment_path).map_err(|error| error.kind());
+    let snapshot_after = storage.read_base_comments().unwrap();
+    let github_writes = mock
+        .received_requests()
+        .await
+        .into_iter()
+        .filter(|request| matches!(request.method.as_str(), "PATCH" | "DELETE"))
+        .map(|request| (request.method.to_string(), request.url.path().to_string()))
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        (
+            result.map_err(|error| error.to_string()),
+            local_comment_after,
+            snapshot_after,
+            github_writes,
+        ),
+        (Ok(()), local_comment_before, snapshot_before, Vec::new()),
+    );
+}
+
+#[rstest]
 #[tokio::test]
 async fn test_edit_others_comment_allowed_with_flag(test_dir: TempDir) {
     let (mock, storage) = TestSetup::new(test_dir.path())

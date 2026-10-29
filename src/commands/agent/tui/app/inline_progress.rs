@@ -242,7 +242,7 @@ impl App {
                 .iter()
                 .find(|row| row.selection_key().as_ref() == Some(selection_key))
                 .and_then(open_pr_url_target),
-            SessionRowKey::Task(session_id) | SessionRowKey::UserTurn(session_id) => self
+            SessionRowKey::Task(session_id) => self
                 .progress_rows
                 .iter()
                 .find(|row| match row {

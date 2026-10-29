@@ -363,6 +363,7 @@ mod tests {
         PrSeriesPlan {
             name: "Notification preferences".to_string(),
             purpose: "Let users choose which notifications they receive.".to_string(),
+            steps: None,
             pull_requests: vec![
                 PrSeriesEntry {
                     id: "schema".to_string(),
@@ -513,20 +514,7 @@ mod tests {
                             <!-- pr-series:start -->
                             ### Notification preferences
 
-                            Let users choose which notifications they receive.
-
-                            ```mermaid
-                            ---
-                            config:
-                              flowchart:
-                                wrappingWidth: 400
-                            ---
-                            flowchart LR
-                              P1(\"Add preference tables<br/>This PR\")
-                              click P1 href \"https://github.com/acme/notify-api/pull/12\" _blank
-                              classDef current stroke:#3fb950,stroke-width:3px
-                              class P1 current
-                            ```
+                            1. **Add preference tables** (this PR)
                             <!-- pr-series:end -->
                         "}
                         .trim_end_matches('\n')
