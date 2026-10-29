@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.495](https://github.com/fohte/armyknife/compare/v0.1.494...v0.1.495) (2026-10-29)
+
+
+### Features
+
+* **agent/watch:** remove the YOUR TURN section ([#1337](https://github.com/fohte/armyknife/issues/1337)) ([804d5d3](https://github.com/fohte/armyknife/commit/804d5d340ff92de86994b663d1b92741e21bdc52))
+
 ## [0.1.494](https://github.com/fohte/armyknife/compare/v0.1.493...v0.1.494) (2026-10-29)
 
 
