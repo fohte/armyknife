@@ -241,7 +241,7 @@ fn escape_markdown_text(value: &str) -> String {
             let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
             let is_leading_ordered_list_marker =
                 has_leading_ordered_list_marker && index == leading_digit_end;
-            // GFM autolinks preserve escapes such as \& in the label and href, so block URL recognition.
+            // GFM autolinks preserve escapes such as \& in the label and href, so break the "://" and "www." triggers to keep URLs as plain text.
             let is_url_scheme_delimiter = *character == ':'
                 && characters.get(index + 1) == Some(&'/')
                 && characters.get(index + 2) == Some(&'/');
