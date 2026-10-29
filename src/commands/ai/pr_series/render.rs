@@ -217,6 +217,7 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
 }
 
 fn escape_markdown_text(value: &str) -> String {
+    // GitHub preserves full-width spaces and NBSP, so trimming them changes the rendered text.
     let characters = value
         .trim_start_matches([' ', '\t'])
         .chars()
@@ -232,6 +233,7 @@ fn escape_markdown_text(value: &str) -> String {
         .iter()
         .enumerate()
         .map(|(index, character)| {
+            // CommonMark cannot open or close emphasis with an underscore between alphanumerics.
             let has_alphanumeric_neighbors = index > 0
                 && index + 1 < characters.len()
                 && characters[index - 1].is_alphanumeric()
@@ -239,6 +241,7 @@ fn escape_markdown_text(value: &str) -> String {
             let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
             let is_leading_ordered_list_marker =
                 has_leading_ordered_list_marker && index == leading_digit_end;
+            // GFM autolinks preserve escapes such as \& in the label and href, so block URL recognition.
             let is_url_scheme_delimiter = *character == ':'
                 && characters.get(index + 1) == Some(&'/')
                 && characters.get(index + 2) == Some(&'/');
@@ -621,6 +624,21 @@ mod tests {
     #[case::leading_quote("> quote", r"\> quote")]
     #[case::leading_hyphen("- item", r"\- item")]
     #[case::leading_plus("+ item", r"\+ item")]
+    #[case::leading_exclamation("!notice", "!notice")]
+    #[case::leading_double_quote(r#""quoted" summary"#, r#""quoted" summary"#)]
+    #[case::leading_percent("% complete", "% complete")]
+    #[case::leading_apostrophe("'quoted' summary", "'quoted' summary")]
+    #[case::leading_parenthesis("(draft) docs", "(draft) docs")]
+    #[case::leading_right_parenthesis(") note", ") note")]
+    #[case::leading_comma(", note", ", note")]
+    #[case::leading_slash("/path", "/path")]
+    #[case::leading_semicolon("; note", "; note")]
+    #[case::leading_equals("= note", "= note")]
+    #[case::leading_question_mark("? note", "? note")]
+    #[case::leading_caret("^ note", "^ note")]
+    #[case::leading_left_brace("{draft}", "{draft}")]
+    #[case::leading_right_brace("} draft", "} draft")]
+    #[case::leading_pipe("| draft", "| draft")]
     #[case::leading_thematic_break("---", r"\---")]
     #[case::leading_numbered_list_period("2026. release", r"2026\. release")]
     #[case::leading_numbered_list_parenthesis("12) continuation", r"12\) continuation")]
