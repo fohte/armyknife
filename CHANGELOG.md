@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.497](https://github.com/fohte/armyknife/compare/v0.1.496...v0.1.497) (2026-10-29)
+
+
+### Features
+
+* **ai/pr-draft:** support PR stacking ([#1341](https://github.com/fohte/armyknife/issues/1341)) ([6899e0d](https://github.com/fohte/armyknife/commit/6899e0df2dd1b64020cc1ef507a3d2b0bc5ff78f))
+
 ## [0.1.496](https://github.com/fohte/armyknife/compare/v0.1.495...v0.1.496) (2026-10-29)
 
 
