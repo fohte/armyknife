@@ -383,7 +383,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_pr_row_shows_one_plain_language_stage() {
+    fn planned_pr_without_a_worker_has_no_stage() {
         let now = Utc::now();
         let mut design = create_test_session("design");
         design.updated_at = now;
@@ -419,7 +419,7 @@ mod tests {
             >● project                 Design source                                                                                            just now
              ▾                       └─   Implementation plan · 0/1 PRs merged
              ▾                          └─   Batch: Batch A · 0 PRs merged
-                                          └─   Planned PR · Planned change implementing
+                                          └─   Planned PR · Planned change
 
 
              ?: keys   /: search   Tab: toggle progress   q: quit"};

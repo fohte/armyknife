@@ -152,7 +152,7 @@ fn progress_row_stage(progress: Option<&ProgressRow>) -> Option<CurrentPrStage> 
         ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row) => {
             Some(current_pr_stage(row.stages))
         }
-        ProgressRow::PlannedPullRequest { .. } => Some(CurrentPrStage::implementing()),
+        ProgressRow::PlannedPullRequest { .. } => None,
         ProgressRow::Work(_)
         | ProgressRow::ImplementationHeader { .. }
         | ProgressRow::UnmatchedDelegatesHeader { .. }
