@@ -58,15 +58,7 @@ impl App {
         let pr_stage_info = pull_request
             .map(PrStageInfo::from_progress)
             .or(linked_pr_stage_info);
-        let has_checklist_item = delegate.is_some_and(|delegate| {
-            delegate.checklist_item_id.is_some()
-                || delegate
-                    .session
-                    .pr_context
-                    .as_ref()
-                    .and_then(|context| context.checklist_item_id.as_ref())
-                    .is_some()
-        }) || session
+        let has_checklist_item = session
             .pr_context
             .as_ref()
             .and_then(|context| context.checklist_item_id.as_ref())
@@ -110,6 +102,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::progress::{PrProgressRow, ProgressMark, StageMarks};
     use crate::commands::agent::types::{Engine, SessionPrContext, SessionStatus};
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use chrono::{TimeZone, Utc};
@@ -158,6 +151,31 @@ mod tests {
             engine: Engine::Claude,
             model: None,
             effort: None,
+        }
+    }
+
+    fn linked_checklist_pr_row(session_id: &str, pr_stage_info: PrStageInfo) -> ProgressRow {
+        ProgressRow::ChecklistPullRequest {
+            batch_id: "batch-1".to_string(),
+            checklist_item_id: "item-1".to_string(),
+            row: PrProgressRow {
+                session_id: session_id.to_string(),
+                repo: Some("sample-project".to_string()),
+                title: "Sample change".to_string(),
+                number: Some(17),
+                url: Some("https://example.test/pull/17".to_string()),
+                pane_id: None,
+                is_ended: false,
+                lookup_unavailable: true,
+                stages: StageMarks {
+                    implementation: ProgressMark::Done,
+                    diff_review: ProgressMark::Done,
+                    pr_body: ProgressMark::Done,
+                    ci: ProgressMark::NotStarted,
+                    merge: ProgressMark::NotStarted,
+                },
+                pr_stage_info: Some(pr_stage_info),
+            },
         }
     }
 
@@ -264,6 +282,34 @@ mod tests {
 
         assert_eq!(
             app.worker_pr_stage_for_session(&current)
+                .map(CurrentPrStage::label),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::lookup_failed_open_link(PrStageInfo::Open(PrCiState::Unknown), true, Some("PR open"))]
+    #[case::lookup_failed_closed_link(PrStageInfo::Closed, true, Some("closed"))]
+    #[case::linked_row_before_lookup(PrStageInfo::Closed, false, Some("closed"))]
+    fn worker_stage_uses_linked_pr_state_when_details_are_unavailable(
+        #[case] linked_stage: PrStageInfo,
+        #[case] apply_lookup_failure: bool,
+        #[case] expected: Option<&str>,
+    ) {
+        let worker = session("worker", Some("item-1"));
+        let mut app = App::with_sessions(vec![worker.clone()]);
+        app.progress_rows = vec![linked_checklist_pr_row(&worker.session_id, linked_stage)];
+        if apply_lookup_failure {
+            app.apply_worker_pr_progress_result(Ok(vec![FetchedDelegate {
+                session: worker.clone(),
+                checklist_item_id: Some("item-1".to_string()),
+                pull_request: None,
+                lookup_unavailable: true,
+            }]));
+        }
+
+        assert_eq!(
+            app.worker_pr_stage_for_session(&worker)
                 .map(CurrentPrStage::label),
             expected,
         );
