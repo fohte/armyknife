@@ -36,7 +36,7 @@ use self::event::KeyEvent;
 use self::event::{AppEvent, EventHandler};
 use self::progress::ProgressOpenTarget;
 use self::progress_refresh::{
-    ProgressRefreshSchedule, WorkerPrRefreshSchedule,
+    ProgressRefreshSchedule, WorkerPrInputSnapshot, WorkerPrRefreshSchedule,
     apply_tq_snapshot_and_schedule_progress_refresh, start_pending_progress_refresh,
     start_progress_refresh,
 };
@@ -189,6 +189,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
     progress_refresh_schedule.request(app.progress_inline_source_id.clone());
     let mut worker_pr_refresh_schedule = WorkerPrRefreshSchedule::new(Instant::now());
     worker_pr_refresh_schedule.request();
+    let mut worker_pr_input_snapshot = WorkerPrInputSnapshot::new(&app.sessions);
 
     let local_session_ids: HashSet<String> =
         app.sessions.iter().map(|s| s.session_id.clone()).collect();
@@ -370,7 +371,9 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
         }
         if sessions_changed {
             app.refresh_worktree_session_counts();
-            worker_pr_refresh_schedule.request();
+            if worker_pr_input_snapshot.update(&app.sessions) {
+                worker_pr_refresh_schedule.request();
+            }
             if let Some(session_id) = app.progress_inline_source_id.clone()
                 && app.progress_session_id.as_deref() == Some(session_id.as_str())
             {
@@ -518,7 +521,6 @@ mod tests {
     fn inline_progress_test_app() -> App {
         let mut app = create_test_app_with_sessions(2);
         app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];
-        app.progress_inline_expanded = true;
         app.progress_inline_source_id = Some("session-0".to_string());
         app.progress_session_id = Some("session-0".to_string());
         app.progress_fetch_states
@@ -922,7 +924,6 @@ mod tests {
     fn test_first_tq_snapshot_queues_progress_refresh_after_initial_fetch() {
         let now = Instant::now();
         let mut app = create_test_app_with_sessions(1);
-        app.progress_inline_expanded = true;
         app.progress_inline_source_id = Some("session-0".to_string());
         let mut tq_refresh_schedule = TqRefreshSchedule::new(now);
         let mut progress_refresh_schedule = ProgressRefreshSchedule::new(now);
@@ -966,7 +967,6 @@ mod tests {
         let now = Instant::now();
         let mut app = create_test_app_with_sessions(2);
         app.list_state.select(Some(1));
-        app.progress_inline_expanded = true;
         app.progress_inline_source_id = Some("session-0".to_string());
         let _ = app.set_tq_snapshot(super::tq_snapshot::TqSnapshot::new(HashMap::from([(
             "session-0".to_string(),
@@ -1628,11 +1628,36 @@ mod tests {
         let mut app = create_test_app_with_sessions(1);
 
         handle_key_event(&mut app, key(KeyCode::Tab));
-        let after_progress = app.progress_inline_expanded;
+        let after_progress = app.progress_inline_source_id.clone();
         handle_key_event(&mut app, key(KeyCode::Tab));
-        let after_tasks = app.progress_inline_expanded;
+        let after_tasks = app.progress_inline_source_id.clone();
 
-        assert_eq!([after_progress, after_tasks], [true, false]);
+        assert_eq!(
+            [after_progress, after_tasks],
+            [Some("session-0".to_string()), None]
+        );
+    }
+
+    #[test]
+    fn tab_switches_the_open_plan_to_the_selected_task() {
+        let mut app = create_test_app_with_sessions(2);
+        app.progress_inline_source_id = Some("session-0".to_string());
+        let rows = app.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        drop(rows);
+        let row_heights = vec![1; row_keys.len()];
+        app.update_rendered_rows(&row_keys, &row_heights, row_heights.len());
+        select_inline_progress_row(&mut app, &SessionRowKey::Task("session-1".to_string()));
+
+        handle_key_event(&mut app, key(KeyCode::Tab));
+
+        assert_eq!(
+            (
+                app.progress_inline_source_id.clone(),
+                app.selected_session_id(),
+            ),
+            (Some("session-1".to_string()), Some("session-1")),
+        );
     }
 
     #[test]
@@ -1647,7 +1672,6 @@ mod tests {
             Some("session-2"),
             Some("session-3"),
         ]);
-        app.progress_inline_expanded = true;
         app.progress_inline_source_id = Some("session-0".to_string());
         app.progress_session_id = Some("session-0".to_string());
         app.progress_fetch_states
@@ -1759,12 +1783,12 @@ mod tests {
 
         assert_eq!(
             (
-                app.progress_inline_expanded,
+                app.progress_inline_source_id.clone(),
                 app.selected_session_id(),
                 app.selected_row_key().cloned(),
             ),
             (
-                false,
+                None,
                 Some("session-0"),
                 Some(SessionRowKey::Task("session-0".to_string())),
             ),
@@ -1822,7 +1846,7 @@ mod tests {
     #[test]
     fn o_on_an_unmatched_session_opens_its_real_pull_request() {
         let mut app = inline_progress_test_app();
-        app.progress_inline_expanded = false;
+        app.progress_inline_source_id = None;
         app.progress_rows = vec![ProgressRow::PullRequest(PrProgressRow {
             session_id: "session-1".to_string(),
             repo: Some("example-project".to_string()),

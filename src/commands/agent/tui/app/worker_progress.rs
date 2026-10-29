@@ -6,14 +6,27 @@ use crate::commands::agent::types::Session;
 
 use super::App;
 
+const WORKER_PR_REFRESH_ERROR_PREFIX: &str = "PR stage refresh failed:";
+
 impl App {
     pub(in crate::commands::agent::tui) fn apply_worker_pr_progress_result(
         &mut self,
         result: Result<Vec<FetchedDelegate>, String>,
     ) {
-        let Ok(delegates) = result else {
-            return;
+        let delegates = match result {
+            Ok(delegates) => delegates,
+            Err(error) => {
+                self.set_error(format!("{WORKER_PR_REFRESH_ERROR_PREFIX} {error}"));
+                return;
+            }
         };
+        if self
+            .error_message
+            .as_deref()
+            .is_some_and(|error| error.starts_with(WORKER_PR_REFRESH_ERROR_PREFIX))
+        {
+            self.clear_error();
+        }
 
         self.worker_pr_progress = delegates
             .into_iter()
@@ -76,6 +89,7 @@ mod tests {
     use crate::commands::agent::types::{Engine, SessionPrContext, SessionStatus};
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use chrono::{TimeZone, Utc};
+    use rstest::rstest;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
 
@@ -199,6 +213,35 @@ mod tests {
                     "https://example.test/pull/17".to_string()
                 )),
             ),
+        );
+    }
+
+    #[test]
+    fn reports_worker_pr_fetch_failures_in_the_error_banner() {
+        let mut app = App::with_sessions(Vec::new());
+
+        app.apply_worker_pr_progress_result(Err("GitHub is unavailable".to_string()));
+
+        assert_eq!(
+            app.error_message.as_deref(),
+            Some("PR stage refresh failed: GitHub is unavailable"),
+        );
+    }
+
+    #[rstest]
+    #[case::with_checklist(Some("item-1"), Some("implementing"))]
+    #[case::without_checklist(None, None)]
+    fn derives_worker_stage_before_the_batch_fetch(
+        #[case] checklist_item_id: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        let app = App::with_sessions(vec![session("worker", checklist_item_id)]);
+        let current = app.sessions[0].clone();
+
+        assert_eq!(
+            app.worker_pr_stage_for_session(&current)
+                .map(CurrentPrStage::label),
+            expected,
         );
     }
 }

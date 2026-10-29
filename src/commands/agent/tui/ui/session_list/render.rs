@@ -301,7 +301,6 @@ mod tests {
         row_order: &[Option<&str>],
     ) -> String {
         render_to_string_with(sessions, selected_index, now, 140, height, |app| {
-            app.progress_inline_expanded = true;
             app.progress_inline_source_id = Some("design".to_string());
             app.progress_session_id = Some("design".to_string());
             app.progress_fetch_states

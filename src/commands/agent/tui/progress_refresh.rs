@@ -1,4 +1,5 @@
 use std::time::{Duration, Instant};
+use std::{collections::HashMap, path::PathBuf};
 
 use chrono::Utc;
 
@@ -6,8 +7,39 @@ use super::app::App;
 use super::event::EventHandler;
 use super::progress::ProgressFetchState;
 use super::tq_snapshot::TqSnapshot;
+use crate::commands::agent::types::{Session, SessionPrContext};
 
 pub(super) const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct WorkerPrInputSnapshot(HashMap<String, (PathBuf, Option<SessionPrContext>)>);
+
+impl WorkerPrInputSnapshot {
+    pub(super) fn new(sessions: &[Session]) -> Self {
+        Self(worker_pr_inputs(sessions))
+    }
+
+    pub(super) fn update(&mut self, sessions: &[Session]) -> bool {
+        let inputs = worker_pr_inputs(sessions);
+        if self.0 == inputs {
+            return false;
+        }
+        self.0 = inputs;
+        true
+    }
+}
+
+fn worker_pr_inputs(sessions: &[Session]) -> HashMap<String, (PathBuf, Option<SessionPrContext>)> {
+    sessions
+        .iter()
+        .map(|session| {
+            (
+                session.session_id.clone(),
+                (session.cwd.clone(), session.pr_context.clone()),
+            )
+        })
+        .collect()
+}
 
 pub(super) struct WorkerPrRefreshSchedule {
     in_flight: bool,
@@ -167,6 +199,9 @@ pub(super) fn start_progress_refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{Engine, SessionStatus};
+    use chrono::{TimeZone, Utc};
+    use std::collections::BTreeSet;
 
     #[test]
     fn worker_pr_refresh_coalesces_requests_while_a_fetch_is_running() {
@@ -189,5 +224,58 @@ mod tests {
         let after_completion = schedule.start_pending(now);
 
         assert_eq!((while_in_flight, after_completion), (false, true));
+    }
+
+    #[test]
+    fn worker_pr_inputs_ignore_session_activity_but_refresh_for_branch_changes() {
+        let timestamp = Utc.with_ymd_and_hms(2026, 10, 1, 0, 0, 0).single().unwrap();
+        let mut session = Session {
+            archived_at: None,
+            pr_context: Some(SessionPrContext {
+                owner: "sample-owner".to_string(),
+                repo: "sample-repo".to_string(),
+                branch: "sample-branch".to_string(),
+                checklist_item_id: Some("item-a".to_string()),
+            }),
+            session_id: "worker".to_string(),
+            work_type: None,
+            work_type_pinned: false,
+            vibe_enabled: false,
+            launched_with_vibe: false,
+            child_launch: Default::default(),
+            crit_urls: Vec::new(),
+            pending_human_review_ids: BTreeSet::new(),
+            cwd: PathBuf::from("/project/worker"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Running,
+            created_at: timestamp,
+            updated_at: timestamp,
+            last_message: None,
+            current_tool: None,
+            label: None,
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: BTreeSet::new(),
+            pending_agent_task_ids: BTreeSet::new(),
+            pending_permission_agent_ids: BTreeSet::new(),
+            pending_permission_request_ids: Default::default(),
+            read_at: None,
+            sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
+            agent_status: None,
+            agent_status_clear_pending: false,
+            engine: Engine::Claude,
+            model: None,
+            effort: None,
+        };
+        let mut snapshot = WorkerPrInputSnapshot::new(&[session.clone()]);
+        session.updated_at += chrono::Duration::seconds(1);
+        session.last_message = Some("Working on the branch".to_string());
+        let activity_only = snapshot.update(&[session.clone()]);
+        session.pr_context.as_mut().expect("context exists").branch = "next-branch".to_string();
+        let branch_changed = snapshot.update(&[session]);
+
+        assert_eq!((activity_only, branch_changed), (false, true));
     }
 }

@@ -48,7 +48,6 @@ fn inline_progress_app(timestamp: DateTime<Utc>) -> App {
     let mut unmatched = create_test_session_at("unmatched", timestamp);
     unmatched.ancestor_session_ids = vec![root.session_id.clone()];
     let mut app = create_test_app(vec![root, worker, worker_child, unmatched]);
-    app.progress_inline_expanded = true;
     app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     app.progress_fetch_states
@@ -152,7 +151,6 @@ fn inline_planned_item_uses_its_worker_session_without_a_pr_url(timestamp: DateT
     let mut child = create_test_session_at("worker-child", timestamp);
     child.ancestor_session_ids = vec![design.session_id.clone(), worker.session_id.clone()];
     let mut app = create_test_app(vec![design, worker, child]);
-    app.progress_inline_expanded = true;
     app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     app.progress_fetch_states
@@ -267,7 +265,6 @@ fn cached_planned_item_attaches_worker_from_saved_checklist_context(timestamp: D
         ("design".to_string(), vec![task_link("task-a")]),
         ("worker".to_string(), vec![task_link("task-a")]),
     ])));
-    app.progress_inline_expanded = true;
     app.progress_inline_source_id = Some("design".to_string());
     app.progress_implementation_expanded = true;
     app.progress_session_id = Some("design".to_string());
@@ -491,7 +488,6 @@ fn inline_status_distinguishes_fetch_state_from_missing_checklist(
     #[case] expected: &str,
 ) {
     let mut app = create_test_app(vec![create_test_session_at("design", timestamp)]);
-    app.progress_inline_expanded = true;
     app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     if let Some(state) = fetch_state {
@@ -516,7 +512,6 @@ fn inline_status_distinguishes_fetch_state_from_missing_checklist(
 #[rstest]
 fn inline_status_displays_cached_pr_lookup_error(timestamp: DateTime<Utc>) {
     let mut app = create_test_app(vec![create_test_session_at("source-session", timestamp)]);
-    app.progress_inline_expanded = true;
     app.progress_inline_source_id = Some("source-session".to_string());
     app.progress_session_id = Some("source-session".to_string());
     app.progress_fetch_states
@@ -1249,11 +1244,10 @@ fn initial_focus_keeps_the_worker_selected_and_parent_progress_closed(
     assert_eq!(
         (
             app.selected_session_id(),
-            app.progress_inline_expanded,
             app.progress_inline_source_id.clone(),
             app.selected_progress_source_id(),
         ),
-        (Some("delegate"), false, None, Some("selected".to_string())),
+        (Some("delegate"), None, Some("selected".to_string())),
     );
 }
 
@@ -1314,13 +1308,11 @@ fn nested_delegate_focus_keeps_the_worker_selected_with_progress_closed(timestam
     assert_eq!(
         (
             app.selected_session_id(),
-            app.progress_inline_expanded,
             app.progress_inline_source_id.clone(),
             app.selected_progress_source_id(),
         ),
         (
             Some("delegate"),
-            false,
             None,
             Some("intermediate-delegate".to_string()),
         ),
@@ -1395,7 +1387,7 @@ fn initial_focus_expands_the_worker_batch_without_moving_the_cursor(
     assert_eq!(
         (
             app.selected_session_id(),
-            app.progress_inline_expanded,
+            app.progress_inline_source_id.clone(),
             app.progress_implementation_expanded,
             app.progress_batch_expanded.get("batch-a").copied(),
             app.list_state
@@ -1406,7 +1398,7 @@ fn initial_focus_expands_the_worker_batch_without_moving_the_cursor(
         ),
         (
             Some("delegate"),
-            true,
+            Some("selected".to_string()),
             true,
             Some(true),
             Some(

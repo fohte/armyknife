@@ -7,9 +7,7 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::commands::agent::tui::app::App;
-use crate::commands::agent::tui::progress::{
-    CurrentPrStage, ProgressMark, ProgressRow, StageMarks, current_pr_stage,
-};
+use crate::commands::agent::tui::progress::{CurrentPrStage, ProgressRow, current_pr_stage};
 use crate::commands::agent::tui::session_rows::inline_progress::InlineProgressEntry;
 
 use super::super::helpers::{DIM_FG, REPO_COLUMN_WIDTH};
@@ -154,13 +152,7 @@ fn progress_row_stage(progress: Option<&ProgressRow>) -> Option<CurrentPrStage> 
         ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row) => {
             Some(current_pr_stage(row.stages))
         }
-        ProgressRow::PlannedPullRequest { .. } => Some(current_pr_stage(StageMarks {
-            implementation: ProgressMark::Working,
-            diff_review: ProgressMark::NotStarted,
-            pr_body: ProgressMark::NotStarted,
-            ci: ProgressMark::NotStarted,
-            merge: ProgressMark::NotStarted,
-        })),
+        ProgressRow::PlannedPullRequest { .. } => Some(CurrentPrStage::implementing()),
         ProgressRow::Work(_)
         | ProgressRow::ImplementationHeader { .. }
         | ProgressRow::UnmatchedDelegatesHeader { .. }

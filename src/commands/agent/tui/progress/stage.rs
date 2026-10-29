@@ -7,6 +7,17 @@ pub(in crate::commands::agent::tui) struct CurrentPrStage {
 }
 
 impl CurrentPrStage {
+    const fn new(label: &'static str, waiting_for_user: bool) -> Self {
+        Self {
+            label,
+            waiting_for_user,
+        }
+    }
+
+    pub(in crate::commands::agent::tui) const fn implementing() -> Self {
+        Self::new("implementing", false)
+    }
+
     pub(in crate::commands::agent::tui) fn label(self) -> &'static str {
         self.label
     }
@@ -20,57 +31,30 @@ pub(in crate::commands::agent::tui) fn current_pr_stage(stages: StageMarks) -> C
     use ProgressMark::{Done, User, Waiting, Working};
 
     if stages.merge == Done {
-        return CurrentPrStage {
-            label: "merged",
-            waiting_for_user: false,
-        };
+        return CurrentPrStage::new("merged", false);
     }
     if stages.merge == User {
-        return CurrentPrStage {
-            label: "merge",
-            waiting_for_user: true,
-        };
+        return CurrentPrStage::new("merge", true);
     }
     if stages.pr_body == User {
-        return CurrentPrStage {
-            label: "body",
-            waiting_for_user: true,
-        };
+        return CurrentPrStage::new("body", true);
     }
     if stages.diff_review == User {
-        return CurrentPrStage {
-            label: "crit",
-            waiting_for_user: true,
-        };
+        return CurrentPrStage::new("crit", true);
     }
     if matches!(stages.diff_review, Working | Waiting) {
-        return CurrentPrStage {
-            label: "crit",
-            waiting_for_user: false,
-        };
+        return CurrentPrStage::new("crit", false);
     }
     if matches!(stages.pr_body, Working | Waiting) {
-        return CurrentPrStage {
-            label: "body",
-            waiting_for_user: false,
-        };
+        return CurrentPrStage::new("body", false);
     }
     if matches!(stages.ci, Working | Waiting) {
-        return CurrentPrStage {
-            label: "CI running",
-            waiting_for_user: false,
-        };
+        return CurrentPrStage::new("CI running", false);
     }
     if matches!(stages.merge, Working | Waiting) {
-        return CurrentPrStage {
-            label: "merge",
-            waiting_for_user: false,
-        };
+        return CurrentPrStage::new("merge", false);
     }
-    CurrentPrStage {
-        label: "implementing",
-        waiting_for_user: false,
-    }
+    CurrentPrStage::implementing()
 }
 
 #[cfg(test)]

@@ -119,17 +119,15 @@ impl App {
             .and_then(|position| self.row_keys.get(position))
             .and_then(Option::as_ref)
             .cloned();
-        let is_open_for_source = self.progress_inline_expanded
-            && self.progress_inline_source_id.as_deref() == Some(source_session_id.as_str());
+        let is_open_for_source =
+            self.progress_inline_source_id.as_deref() == Some(source_session_id.as_str());
         if !is_open_for_source {
             let anchor = self.selection_anchor();
-            self.progress_inline_expanded = true;
             self.progress_inline_source_id = Some(source_session_id);
             self.restore_selection(anchor);
             return;
         }
 
-        self.progress_inline_expanded = false;
         self.progress_inline_source_id = None;
         let restore_source = matches!(
             selected_key,

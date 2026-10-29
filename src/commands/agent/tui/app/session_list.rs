@@ -15,9 +15,6 @@ impl App {
             &self.vibe_enabled_session_ids,
             self.session_row_order.as_ref(),
         );
-        if !self.progress_inline_expanded {
-            return rows;
-        }
         let Some(source_session_id) = self.progress_inline_source_id.as_deref() else {
             return rows;
         };

@@ -358,7 +358,7 @@ mod tests {
         let output = render_to_string_with(&sessions, None, now, 120, height, |app| {
             app.view = view;
             app.show_help = show_help;
-            app.progress_inline_expanded = progress_expanded;
+            app.progress_inline_source_id = progress_expanded.then(|| "source-session".to_string());
         });
 
         let actual_lines: Vec<&str> = output

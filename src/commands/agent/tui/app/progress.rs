@@ -265,9 +265,8 @@ impl App {
         snapshot: CachedProgress,
         resolve_initial_selection: bool,
     ) {
-        let is_open_source = self.progress_inline_expanded
-            && self.progress_inline_source_id.as_deref() == Some(session_id);
-        let is_active_source = if self.progress_inline_expanded {
+        let is_open_source = self.progress_inline_source_id.as_deref() == Some(session_id);
+        let is_active_source = if self.progress_inline_source_id.is_some() {
             is_open_source
         } else {
             self.selected_progress_source_id().as_deref() == Some(session_id)

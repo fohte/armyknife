@@ -192,9 +192,7 @@ pub struct App {
     pub(super) progress_batch_expanded: HashMap<String, bool>,
     pub(super) progress_session_id: Option<String>,
     pub(super) initial_progress_selection: Option<InitialProgressSelection>,
-    /// Whether the selected task's implementation plan is projected into the session tree.
-    pub(super) progress_inline_expanded: bool,
-    /// Session whose plan was explicitly opened with Tab.
+    /// Session whose plan was explicitly opened with Tab, if any.
     pub(super) progress_inline_source_id: Option<String>,
     /// PR data is fetched for all sessions without changing the row projection.
     pub(super) worker_pr_progress: HashMap<String, FetchedDelegate>,
@@ -303,7 +301,6 @@ impl App {
             progress_batch_expanded: HashMap::new(),
             progress_session_id: None,
             initial_progress_selection: None,
-            progress_inline_expanded: false,
             progress_inline_source_id: None,
             worker_pr_progress: HashMap::new(),
             progress_error: None,
@@ -685,14 +682,14 @@ mod tests {
             (
                 app.selected_session_id(),
                 app.selected_session_row_occurrence(),
-                app.progress_inline_expanded,
+                app.progress_inline_source_id.clone(),
                 app.progress_session_id.as_deref(),
                 app.initial_progress_selection.clone(),
             ),
             (
                 Some("delegate"),
                 Some(0),
-                true,
+                Some("intermediate-delegate".to_string()),
                 Some("intermediate-delegate"),
                 Some(InitialProgressSelection::new(
                     "intermediate-delegate".to_string(),
@@ -718,10 +715,10 @@ mod tests {
         assert_eq!(
             (
                 app.selected_session_id(),
-                app.progress_inline_expanded,
+                app.progress_inline_source_id.clone(),
                 app.initial_progress_selection.clone(),
             ),
-            (Some("delegate"), false, None),
+            (Some("delegate"), None, None),
         );
     }
 
