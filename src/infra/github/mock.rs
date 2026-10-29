@@ -227,7 +227,8 @@ fn mock_pull_request(
         "head": {
             "label": format!("{}:{}", owner, head),
             "ref": head,
-            "sha": "abc123"
+            "sha": "abc123",
+            "repo": { "full_name": format!("{owner}/{repo}") }
         },
         "base": {
             "label": format!("{}:main", owner),
@@ -730,10 +731,42 @@ impl<'a> MockRepoContext<'a> {
         }
     }
 
+    /// Create a pull request stack mock builder.
+    pub fn stack(&self, number: u64) -> MockPullRequestStackBuilder<'_> {
+        MockPullRequestStackBuilder {
+            server: self.server,
+            owner: self.owner,
+            repo: self.repo,
+            number,
+        }
+    }
+
     /// Mock GET /repos/{owner}/{repo}/pulls returning empty list (no existing PRs).
     pub async fn list_pull_requests_empty(&self) {
         Mock::given(method("GET"))
             .and(path(format!("/repos/{}/{}/pulls", self.owner, self.repo)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls for a specific branch with no PRs.
+    pub async fn list_pull_requests_empty_for_branch(&self, branch: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{}/{}/pulls", self.owner, self.repo)))
+            .and(query_param("head", format!("{}:{branch}", self.owner)))
+            .and(query_param("state", "all"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls for an open PR on a branch with no results.
+    pub async fn list_open_pull_requests_empty_for_branch(&self, branch: &str) {
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{}/{}/pulls", self.owner, self.repo)))
+            .and(query_param("head", format!("{}:{branch}", self.owner)))
+            .and(query_param("state", "open"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
             .mount(self.server)
             .await;
@@ -757,6 +790,51 @@ impl<'a> MockRepoContext<'a> {
                     owner, repo, pr_number, title, body, head
                 )])),
             )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls returning an open PR for a branch.
+    pub async fn list_open_pull_requests_with(
+        &self,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+    ) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
+            .and(query_param("state", "open"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!([mock_pull_request(
+                    owner, repo, pr_number, title, body, head
+                )])),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock an open PR whose head branch comes from the specified repository.
+    pub async fn list_open_pull_requests_with_head_repo(
+        &self,
+        pr_number: u64,
+        title: &str,
+        body: &str,
+        head: &str,
+        head_repository: &str,
+    ) {
+        let owner = self.owner;
+        let repo = self.repo;
+        let mut pull_request = mock_pull_request(owner, repo, pr_number, title, body, head);
+        pull_request["head"]["repo"]["full_name"] = json!(head_repository);
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls")))
+            .and(query_param("head", format!("{owner}:{head}")))
+            .and(query_param("state", "open"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([pull_request])))
             .mount(self.server)
             .await;
     }
@@ -1062,6 +1140,103 @@ pub struct MockPullRequestBuilder<'a> {
     owner: &'a str,
     repo: &'a str,
     number: u64,
+}
+
+/// Builder for mocking pull request stack endpoints.
+pub struct MockPullRequestStackBuilder<'a> {
+    server: &'a MockServer,
+    owner: &'a str,
+    repo: &'a str,
+    number: u64,
+}
+
+impl MockPullRequestStackBuilder<'_> {
+    /// Mock GET /repos/{owner}/{repo}/pulls/{number} with no stack membership.
+    pub async fn get_empty_for_pull_request(self, pull_request: u64) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pull_request}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "stack": null })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock GET /repos/{owner}/{repo}/pulls/{number} with stack membership.
+    pub async fn get_for_pull_request(self, pull_request: u64, position: u64, size: u64) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("GET"))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pull_request}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "stack": {
+                    "number": self.number,
+                    "position": position,
+                    "size": size,
+                }
+            })))
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/stacks with a successful response.
+    pub async fn create(self, pull_requests: &[u64]) {
+        self.create_with_status(pull_requests, 201).await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/stacks with a configured status.
+    pub async fn create_with_status(self, pull_requests: &[u64], status: u16) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("POST"))
+            .and(path(format!("/repos/{owner}/{repo}/stacks")))
+            .and(body_json(json!({ "pull_requests": pull_requests })))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(if status < 300 {
+                    mock_stack(self.number, pull_requests)
+                } else {
+                    json!({ "message": "stack creation rejected" })
+                }),
+            )
+            .mount(self.server)
+            .await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/stacks/{number}/add with a successful response.
+    pub async fn add(self, pull_requests: &[u64]) {
+        self.add_with_status(pull_requests, 201).await;
+    }
+
+    /// Mock POST /repos/{owner}/{repo}/stacks/{number}/add with a configured status.
+    pub async fn add_with_status(self, pull_requests: &[u64], status: u16) {
+        let owner = self.owner;
+        let repo = self.repo;
+        Mock::given(method("POST"))
+            .and(path(format!(
+                "/repos/{owner}/{repo}/stacks/{}/add",
+                self.number
+            )))
+            .and(body_json(json!({ "pull_requests": pull_requests })))
+            .respond_with(
+                ResponseTemplate::new(status).set_body_json(if status < 300 {
+                    mock_stack(self.number, pull_requests)
+                } else {
+                    json!({ "message": "stack extension rejected" })
+                }),
+            )
+            .mount(self.server)
+            .await;
+    }
+}
+
+fn mock_stack(number: u64, pull_requests: &[u64]) -> serde_json::Value {
+    json!({
+        "number": number,
+        "pull_requests": pull_requests
+            .iter()
+            .map(|number| json!({ "number": number }))
+            .collect::<Vec<_>>(),
+    })
 }
 
 impl<'a> MockPullRequestBuilder<'a> {

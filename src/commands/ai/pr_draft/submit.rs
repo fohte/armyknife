@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_allows_japanese};
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
+use super::stack::stack_created_pull_request;
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
 use crate::commands::ai::pr_series::preserve_managed_section;
 use crate::commands::ai::pr_series_aftercare::{
@@ -10,7 +11,8 @@ use crate::commands::ai::pr_series_aftercare::{
 };
 use crate::infra::git::cmd::{run_git, run_git_optional};
 use crate::infra::github::{
-    CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrState, RepoClient, UpdatePrParams,
+    CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrStackClient, PrState, RepoClient,
+    UpdatePrParams,
 };
 use crate::shared::config::{Config, load_config};
 use crate::shared::human_in_the_loop::LockGuard;
@@ -131,7 +133,7 @@ fn ensure_no_review_access(
 
 async fn run_impl(
     args: &SubmitArgs,
-    gh_client: &(impl PrBodyClient + PrClient + RepoClient),
+    gh_client: &(impl PrBodyClient + PrClient + PrStackClient + RepoClient),
     run_hook: HookRunner<'_>,
     write_config: impl Fn(&str, &str) -> anyhow::Result<()>,
     current_repo_identity: impl FnOnce() -> Option<(String, String)>,
@@ -267,7 +269,7 @@ async fn run_impl(
         }
         None => {
             // Create new PR
-            gh_client
+            let created_pr = gh_client
                 .create_pull_request(CreatePrParams {
                     owner: target.owner.clone(),
                     repo: target.repo.clone(),
@@ -277,7 +279,22 @@ async fn run_impl(
                     base: args.base.clone(),
                     draft: args.draft,
                 })
-                .await?
+                .await?;
+
+            if let Some(base_branch) = args.base.as_deref()
+                && let Some(warning) = stack_created_pull_request(
+                    gh_client,
+                    &target.owner,
+                    &target.repo,
+                    base_branch,
+                    created_pr.number,
+                )
+                .await
+            {
+                eprintln!("{warning}");
+            }
+
+            created_pr.url
         }
     };
 
@@ -608,12 +625,18 @@ mod tests {
     }
 
     async fn setup_test_env(owner: &str, repo: &str) -> TestEnv {
+        let env = setup_test_env_without_pull_request_mocks(owner, repo).await;
+        let ctx = env.mock.repo(owner, repo);
+        ctx.list_pull_requests_empty().await;
+        ctx.pull_request(1).create().await;
+        env
+    }
+
+    async fn setup_test_env_without_pull_request_mocks(owner: &str, repo: &str) -> TestEnv {
         crate::shared::testing::init_approval_dir();
         let mock = GitHubMockServer::start().await;
         let ctx = mock.repo(owner, repo);
         ctx.repo_info().private(true).get().await;
-        ctx.list_pull_requests_empty().await;
-        ctx.pull_request(1).create().await;
         let draft_dir = DraftFile::draft_dir().join(owner).join(repo);
         if draft_dir.exists() {
             let _ = fs::remove_dir_all(&draft_dir);
@@ -1259,6 +1282,90 @@ mod tests {
             .expect("decode update request body")
     }
 
+    async fn stack_requests(env: &TestEnv) -> Vec<(String, String, String, serde_json::Value)> {
+        env.mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| {
+                let path = request.url.path();
+                path.contains("/stacks")
+                    || (request.method.as_str() == "GET"
+                        && path.contains("/pulls/")
+                        && path
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|number| number.parse::<u64>().is_ok()))
+            })
+            .map(|request| {
+                let body = if request.method.as_str() == "POST" {
+                    request
+                        .body_json::<serde_json::Value>()
+                        .expect("decode stack request body")
+                } else {
+                    serde_json::Value::Null
+                };
+                (
+                    request.method.to_string(),
+                    request.url.path().to_string(),
+                    request.url.query().unwrap_or_default().to_string(),
+                    body,
+                )
+            })
+            .collect()
+    }
+
+    fn expected_stack_membership_get(
+        repo: &str,
+        pull_request: u64,
+    ) -> (String, String, String, serde_json::Value) {
+        (
+            "GET".to_string(),
+            format!("/repos/sample-owner/{repo}/pulls/{pull_request}"),
+            String::new(),
+            serde_json::Value::Null,
+        )
+    }
+
+    fn expected_stack_post(
+        path: String,
+        body: serde_json::Value,
+    ) -> (String, String, String, serde_json::Value) {
+        ("POST".to_string(), path, String::new(), body)
+    }
+
+    async fn run_stack_submit(
+        env: &TestEnv,
+        branch: &str,
+        base: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            branch,
+            "Add stack support",
+            "Body content",
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: base.map(str::to_string),
+            draft: false,
+            no_review: false,
+        };
+        let client = env.mock.client();
+
+        run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            no_current_repo,
+            &NoopPostSubmitProcessor,
+            no_vibe_access,
+        )
+        .await
+    }
+
     #[rstest]
     #[tokio::test]
     async fn submit_updates_existing_pr(#[with(true)] post_submit_spy: PostSubmitSpy) {
@@ -1401,6 +1508,151 @@ mod tests {
                     "title": "Updated title",
                     "body": "Updated body\n",
                 })],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::success("stack-create", 201)]
+    #[case::api_failure("stack-failure", 422)]
+    #[tokio::test]
+    async fn submit_handles_stack_create_results(#[case] repo: &str, #[case] status: u16) {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", repo).await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
+            .await;
+        ctx.pull_request(18).create().await;
+        ctx.stack(1).get_empty_for_pull_request(17).await;
+        ctx.stack(1).create_with_status(&[17, 18], status).await;
+
+        let result = run_stack_submit(&env, "feature/top", Some("main")).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                stack_requests(&env).await,
+            ),
+            (
+                Ok(()),
+                vec![
+                    expected_stack_membership_get(repo, 17),
+                    expected_stack_post(
+                        format!("/repos/sample-owner/{repo}/stacks"),
+                        serde_json::json!({ "pull_requests": [17, 18] }),
+                    ),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::success("stack-add", 201)]
+    #[case::api_failure("stack-add-failure", 409)]
+    #[tokio::test]
+    async fn submit_handles_stack_add_results(#[case] repo: &str, #[case] status: u16) {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", repo).await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
+            .await;
+        ctx.pull_request(18).create().await;
+        ctx.stack(23).get_for_pull_request(17, 2, 2).await;
+        ctx.stack(23).add_with_status(&[18], status).await;
+
+        let result = run_stack_submit(&env, "feature/top", Some("main")).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                stack_requests(&env).await,
+            ),
+            (
+                Ok(()),
+                vec![
+                    expected_stack_membership_get(repo, 17),
+                    expected_stack_post(
+                        format!("/repos/sample-owner/{repo}/stacks/23/add"),
+                        serde_json::json!({ "pull_requests": [18] }),
+                    ),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::no_base("stack-skip-no-base", None)]
+    #[case::no_open_base_pr("stack-skip-no-open-pr", Some("main"))]
+    #[tokio::test]
+    async fn submit_skips_stack_api_when_it_has_no_open_base_pr(
+        #[case] repo: &str,
+        #[case] base: Option<&str>,
+    ) {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", repo).await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        if let Some(base) = base {
+            ctx.list_open_pull_requests_empty_for_branch(base).await;
+        }
+        ctx.pull_request(18).create().await;
+
+        let result = run_stack_submit(&env, "feature/top", base).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                stack_requests(&env).await,
+            ),
+            (Ok(()), Vec::new()),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_does_not_stack_a_base_pr_from_another_repository() {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", "stack-fork").await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        ctx.list_open_pull_requests_with_head_repo(
+            17,
+            "Base change",
+            "Body",
+            "main",
+            "sample-owner/another-repo",
+        )
+        .await;
+        ctx.pull_request(18).create().await;
+
+        let result = run_stack_submit(&env, "feature/top", Some("main")).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                stack_requests(&env).await,
+            ),
+            (Ok(()), Vec::new()),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_leaves_new_pr_unstacked_when_base_pr_is_not_at_the_top() {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", "stack-middle").await;
+        let ctx = env.mock.repo(&env.owner, &env.repo);
+        ctx.list_pull_requests_empty_for_branch("feature/top").await;
+        ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
+            .await;
+        ctx.pull_request(18).create().await;
+        ctx.stack(23).get_for_pull_request(17, 2, 3).await;
+
+        let result = run_stack_submit(&env, "feature/top", Some("main")).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                stack_requests(&env).await,
+            ),
+            (
+                Ok(()),
+                vec![expected_stack_membership_get("stack-middle", 17)],
             ),
         );
     }

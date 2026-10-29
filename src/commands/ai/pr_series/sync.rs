@@ -235,7 +235,10 @@ mod tests {
 
     use super::*;
     use crate::commands::ai::pr_series::model::PrSeriesEntry;
-    use crate::infra::github::{CreatePrParams, PrBodyClient, PrClient, PrInfo, UpdatePrParams};
+    use crate::infra::github::{
+        CreatePrParams, CreatedPullRequest as GitHubCreatedPullRequest, PrBodyClient, PrClient,
+        PrInfo, UpdatePrParams,
+    };
 
     #[derive(Default)]
     struct FakeGitHub {
@@ -297,8 +300,14 @@ mod tests {
     }
 
     impl PrClient for FakeGitHub {
-        async fn create_pull_request(&self, _params: CreatePrParams) -> Result<String> {
-            Ok(String::new())
+        async fn create_pull_request(
+            &self,
+            _params: CreatePrParams,
+        ) -> Result<GitHubCreatedPullRequest> {
+            Ok(GitHubCreatedPullRequest {
+                number: 0,
+                url: String::new(),
+            })
         }
 
         async fn update_pull_request(&self, _params: UpdatePrParams) -> Result<String> {
@@ -306,6 +315,15 @@ mod tests {
         }
 
         async fn get_pr_for_branch(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _branch: &str,
+        ) -> Result<Option<PrInfo>> {
+            Ok(None)
+        }
+
+        async fn get_open_pr_for_branch(
             &self,
             _owner: &str,
             _repo: &str,
