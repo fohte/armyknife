@@ -37,11 +37,18 @@ pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 const TIME_COLUMN_WIDTH: usize = 9;
 /// The longest automatic user-turn label is `failed`; configured names can be wider.
 const USER_TURN_LABEL_WIDTH: usize = 6;
-/// Prefix width before the work type column, shared by title and
-/// waiting-question alignment.
-const TITLE_COLUMN_BASE_INDENT: usize =
+/// Compress fixed columns before a long action label crowds out the session name.
+const COMPACT_LAYOUT_WIDTH: usize = 64;
+/// Preserve room for the shortest reason labels and a readable title at very small widths.
+const TIGHT_LAYOUT_WIDTH: usize = 40;
+const COMPACT_REPO_COLUMN_WIDTH: usize = 7;
+const TIGHT_REPO_COLUMN_WIDTH: usize = 5;
+const COMPACT_TASK_NUMBER_COLUMN_WIDTH: usize = TASK_NUMBER_COLUMN_WIDTH;
+const TIGHT_TASK_NUMBER_COLUMN_WIDTH: usize = 1;
+const MIN_TITLE_WIDTH: usize = 10;
+#[cfg(test)]
+pub(super) const WAITING_QUESTION_BASE_INDENT: usize =
     MARKER_WIDTH + STATUS_COLUMN_WIDTH + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH;
-pub(super) const WAITING_QUESTION_BASE_INDENT: usize = TITLE_COLUMN_BASE_INDENT;
 /// Below this age, the time column renders in the default (bright)
 /// foreground; at or above it, it dims to `DIM_FG`. Independent of status
 /// color, so a stale RUNNING session's time still reads as stale.
@@ -59,9 +66,23 @@ fn work_type_column_width(app: &App) -> usize {
         + 1
 }
 
-/// Width left for the title after fixed columns.
-fn title_column_width(term_width: usize, work_type_column_width: usize) -> usize {
-    term_width.saturating_sub(TITLE_COLUMN_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
+/// Width left for the title after fixed columns, floored to keep long names visible.
+fn title_column_width(
+    term_width: usize,
+    repo_column_width: usize,
+    task_number_column_width: usize,
+    work_type_column_width: usize,
+) -> usize {
+    term_width
+        .saturating_sub(
+            MARKER_WIDTH
+                + STATUS_COLUMN_WIDTH
+                + repo_column_width
+                + task_number_column_width
+                + work_type_column_width
+                + TIME_COLUMN_WIDTH,
+        )
+        .max(MIN_TITLE_WIDTH)
 }
 
 /// Pads `s` with trailing spaces up to `width` display columns (no-op if
@@ -191,6 +212,23 @@ pub(super) fn build_session_item(
     query: &str,
 ) -> ListItem<'static> {
     let session = entry.session;
+    let compact_columns = term_width < COMPACT_LAYOUT_WIDTH;
+    let repo_column_width = if term_width < TIGHT_LAYOUT_WIDTH {
+        TIGHT_REPO_COLUMN_WIDTH
+    } else if compact_columns {
+        COMPACT_REPO_COLUMN_WIDTH
+    } else {
+        REPO_COLUMN_WIDTH
+    };
+    let task_number_column_width = if term_width < TIGHT_LAYOUT_WIDTH {
+        TIGHT_TASK_NUMBER_COLUMN_WIDTH
+    } else if compact_columns {
+        COMPACT_TASK_NUMBER_COLUMN_WIDTH
+    } else {
+        TASK_NUMBER_COLUMN_WIDTH
+    };
+    let title_base_indent =
+        MARKER_WIDTH + STATUS_COLUMN_WIDTH + repo_column_width + task_number_column_width;
     let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
     let (symbol, symbol_color) = entry.user_turn.map_or_else(
         || mark_glyph(entry.mark, session),
@@ -202,7 +240,7 @@ pub(super) fn build_session_item(
         .get_cached_worktree_labels(&session.cwd)
         .map_or("", |(repo, _)| repo);
     let repo_text = get_session_info(session, repo_name);
-    let repo_col = pad_to_width(&truncate(&repo_text, REPO_COLUMN_WIDTH), REPO_COLUMN_WIDTH);
+    let repo_col = pad_to_width(&truncate(&repo_text, repo_column_width), repo_column_width);
 
     let own_title = match entry.task.as_ref() {
         Some(task) => task.task_title.clone(),
@@ -225,7 +263,7 @@ pub(super) fn build_session_item(
         let style = task_number_style(related, task.is_closed);
         let number = truncate(
             &format!("#{}", task.task_number),
-            TASK_NUMBER_COLUMN_WIDTH.saturating_sub(1),
+            task_number_column_width.saturating_sub(1),
         );
         let number_width = number.width();
         let number_style = if task.is_closed {
@@ -235,39 +273,56 @@ pub(super) fn build_session_item(
         };
         vec![
             Span::styled(number, number_style),
-            Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH.saturating_sub(number_width))),
+            Span::raw(" ".repeat(task_number_column_width.saturating_sub(number_width))),
         ]
-    } else if app.is_tq_loading() {
+    } else if app.is_tq_loading() && task_number_column_width > 1 {
         vec![
             Span::styled("━━━━", Style::default().fg(DIM_FG)),
-            Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH - "━━━━".width())),
+            Span::raw(" ".repeat(task_number_column_width.saturating_sub("━━━━".width()))),
         ]
     } else {
-        vec![Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH))]
+        vec![Span::raw(" ".repeat(task_number_column_width))]
     };
 
-    let work_type_column_width = work_type_column_width(app);
-    let work_type_config = app
-        .agent_config
-        .watch_work_type(session.work_type.as_deref());
-    let work_type_spans = work_type_config.map_or_else(
-        || vec![Span::raw(" ".repeat(work_type_column_width))],
-        |config| {
-            let icon_width = config.icon.width();
-            vec![
-                Span::styled(
-                    config.icon.clone(),
-                    Style::default().fg(Color::from(config.color)),
-                ),
-                Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
-            ]
-        },
-    );
+    let work_type_column_width = if compact_columns {
+        0
+    } else {
+        work_type_column_width(app)
+    };
+    let work_type_spans = if compact_columns {
+        Vec::new()
+    } else {
+        let work_type_config = app
+            .agent_config
+            .watch_work_type(session.work_type.as_deref());
+        work_type_config.map_or_else(
+            || vec![Span::raw(" ".repeat(work_type_column_width))],
+            |config| {
+                let icon_width = config.icon.width();
+                vec![
+                    Span::styled(
+                        config.icon.clone(),
+                        Style::default().fg(Color::from(config.color)),
+                    ),
+                    Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
+                ]
+            },
+        )
+    };
 
-    let branch = tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling);
+    let branch = if compact_columns {
+        compact_tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling)
+    } else {
+        tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling)
+    };
     let branch_width = branch.width();
-    let title_width =
-        title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
+    let title_width = title_column_width(
+        term_width,
+        repo_column_width,
+        task_number_column_width,
+        work_type_column_width,
+    )
+    .saturating_sub(branch_width);
     let title_style = own_title_style(is_idle, title_kin_color);
     let title_spans = build_title_spans(
         entry,
@@ -276,6 +331,7 @@ pub(super) fn build_session_item(
         query,
         title_style,
         app.agent_config.vibe_marker.as_ref(),
+        compact_columns,
     );
 
     let time_text = format_compact_time(session.updated_at, now);
@@ -309,7 +365,7 @@ pub(super) fn build_session_item(
             .or(session.last_message.as_deref())
             .unwrap_or("");
         let quoted = format!("\u{201c}{question}\u{201d}");
-        let question_indent = WAITING_QUESTION_BASE_INDENT + branch_width + work_type_column_width;
+        let question_indent = title_base_indent + branch_width + work_type_column_width;
         let quoted_width = term_width.saturating_sub(question_indent);
         let truncated_quoted = truncate(&quoted, quoted_width);
         // ratatui reserves the marker column on every line of a multi-line
@@ -341,6 +397,19 @@ pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bo
     branch
 }
 
+fn compact_tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bool) -> String {
+    let Some(tree_prefix) = tree_prefix else {
+        return String::new();
+    };
+
+    let mut branch = String::new();
+    for ancestor_is_last in tree_prefix {
+        branch.push(if *ancestor_is_last { ' ' } else { '│' });
+    }
+    branch.push_str(if is_last_sibling { "└ " } else { "├ " });
+    branch
+}
+
 /// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
 fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String {
     if child_count == 0 {
@@ -361,6 +430,7 @@ fn build_title_spans(
     query: &str,
     title_style: Style,
     vibe_marker: Option<&AgentWorkTypeConfig>,
+    compact_columns: bool,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let crit_badge = if entry.session.crit_urls.is_empty()
@@ -372,14 +442,29 @@ fn build_title_spans(
     } else {
         " [crit]".to_string()
     };
-    let raw_user_turn_label = entry.user_turn.and_then(|turn| turn.label);
+    let title_reserve = own_title.width().min(MIN_TITLE_WIDTH);
+    let raw_user_turn_label = entry.user_turn.and_then(|turn| {
+        let label = turn.label?;
+        if compact_columns
+            && turn.kind == UserTurnKind::AgentStatus
+            && title_width < label.width() + title_reserve
+        {
+            Some("you")
+        } else {
+            Some(label)
+        }
+    });
     let user_turn_label_width = raw_user_turn_label.map_or(0, |label| {
-        let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
-        label_width + 2
+        if compact_columns {
+            label.width()
+        } else {
+            label.width().max(USER_TURN_LABEL_WIDTH) + 2
+        }
     });
     let marker = match (entry.vibe_mode, vibe_marker) {
         (Some(mode), Some(config))
-            if config.icon.width() + crit_badge.width() + user_turn_label_width < title_width =>
+            if config.icon.width() + crit_badge.width() + user_turn_label_width + title_reserve
+                <= title_width =>
         {
             Some((mode, config))
         }
@@ -387,31 +472,26 @@ fn build_title_spans(
     };
     let marker_width = marker.map_or(0, |(_, config)| config.icon.width());
     let show_child_badge = !child_badge.is_empty()
-        && child_badge.width() + crit_badge.width() + user_turn_label_width + marker_width
-            < title_width;
+        && child_badge.width()
+            + crit_badge.width()
+            + user_turn_label_width
+            + marker_width
+            + title_reserve
+            <= title_width;
     let child_badge = if show_child_badge {
         child_badge
     } else {
         String::new()
     };
     let badge_width = child_badge.width() + crit_badge.width();
-    let label_width = title_width
-        .saturating_sub(badge_width + marker_width)
-        .saturating_sub(usize::from(!own_title.is_empty()));
-    let user_turn_label = raw_user_turn_label.and_then(|label| {
-        if label_width == 0 {
-            return None;
-        }
-
-        let has_padding = label_width >= 3;
-        let label_text_width = label_width.saturating_sub(usize::from(has_padding) * 2);
-        let label_text = truncate(label, label_text_width);
-        let label = if has_padding {
-            format!(" {label_text} ")
+    let user_turn_label = raw_user_turn_label.map(|label| {
+        if compact_columns {
+            label.to_string()
         } else {
-            label_text
-        };
-        Some(label)
+            let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
+            let padding = " ".repeat(label_width.saturating_sub(label.width()));
+            format!(" {label}{padding} ")
+        }
     });
     let visible_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let content_width =
@@ -546,6 +626,22 @@ mod tests {
     ) {
         assert_eq!(
             tree_branch_text(tree_prefix.as_deref(), is_last_sibling),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::root(None, true, "")]
+    #[case::middle_child(Some(vec![]), false, "├ ")]
+    #[case::nested_child(Some(vec![false]), true, "│└ ")]
+    #[case::deep_child(Some(vec![true, false]), true, " │└ ")]
+    fn test_compact_tree_branch_text(
+        #[case] tree_prefix: Option<Vec<bool>>,
+        #[case] is_last_sibling: bool,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            compact_tree_branch_text(tree_prefix.as_deref(), is_last_sibling),
             expected
         );
     }

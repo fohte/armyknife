@@ -661,17 +661,29 @@ mod tests {
         assert_eq!(red_background_cells, expected);
     }
 
-    #[test]
-    fn test_narrow_action_label_keeps_title_and_time() {
+    #[rstest]
+    #[case::tight_crit(36, ">◐ pr... a-long-ses...◆crit just now", false)]
+    #[case::narrow_agent_status(43, ">◐ project      a-long-sess...◆you just now", true)]
+    fn test_narrow_action_label_keeps_session_name_and_time(
+        #[case] term_width: u16,
+        #[case] expected_row: &str,
+        #[case] is_agent_status: bool,
+    ) {
         let now = Utc::now();
         let mut root = create_test_session("root");
         root.updated_at = now;
-        root.status = SessionStatus::Stopped;
-        root.label = Some("session-name".to_string());
-        root.agent_status = Some(AgentStatus {
-            kind: "needs_attention".to_string(),
-            note: "choose an option".to_string(),
-        });
+        root.label = Some("a-long-session-name".to_string());
+        if is_agent_status {
+            root.status = SessionStatus::Stopped;
+            root.agent_status = Some(AgentStatus {
+                kind: "needs_attention".to_string(),
+                note: "choose an option".to_string(),
+            });
+        } else {
+            root.status = SessionStatus::WaitingInput;
+            root.crit_urls
+                .push("https://example.test/review".to_string());
+        }
         root.vibe_enabled = true;
 
         let mut child = create_test_session("child");
@@ -691,21 +703,13 @@ mod tests {
             &[root, child],
             Some(1),
             now,
-            43,
+            term_width,
             6,
             agent_config,
             |_| {},
         );
-        let actual = (
-            rendered_row(&buffer, 2),
-            marker_style_on_row(&buffer, 2, "◆"),
-        );
-        let expected = (
-            format!(">◐ project{}s n...  just now", " ".repeat(17)),
-            None,
-        );
 
-        assert_eq!(actual, expected);
+        assert_eq!(rendered_row(&buffer, 2), expected_row);
     }
 
     #[test]
