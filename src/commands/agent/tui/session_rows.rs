@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::types::Session;
-use crate::commands::agent::user_turn::{UserTurn, user_turns};
+use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::shared::config::AgentConfig;
 
 mod task_tree;
@@ -12,33 +12,27 @@ pub(super) use task_tree::task_mark;
 
 /// One row in the session list's selection/render order.
 ///
-/// Section headers are not individually selectable; both row variants carry
-/// a session ID (see [`SessionRow::session_id`]).
+/// Section headers are not individually selectable.
 #[derive(Debug)]
 pub(super) enum SessionRow<'a> {
     SectionHeader(SectionHeaderRow),
-    UserTurn(UserTurn<'a>),
     Session(SessionRowEntry<'a>),
 }
 
 #[derive(Debug)]
 pub(super) struct SectionHeaderRow {
     pub label: String,
-    /// Which section this header represents, so the renderer can color it
-    /// consistently with that section's status (e.g. red for YOUR TURN).
-    pub kind: Section,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum SessionRowKey {
-    UserTurn(String),
     Task(String),
 }
 
 impl SessionRowKey {
     pub(super) fn session_id(&self) -> &str {
         match self {
-            Self::UserTurn(session_id) | Self::Task(session_id) => session_id,
+            Self::Task(session_id) => session_id,
         }
     }
 }
@@ -46,9 +40,7 @@ impl SessionRowKey {
 /// Captures session order while list navigation is active.
 #[derive(Debug, Default)]
 pub(super) struct SessionRowOrder {
-    user_turn_positions: HashMap<String, usize>,
     task_positions: HashMap<String, usize>,
-    next_user_turn_position: usize,
     next_task_position: usize,
 }
 
@@ -69,13 +61,8 @@ impl SessionRowOrder {
 
     pub(super) fn remember_keys(&mut self, keys: &[SessionRowKey]) {
         for key in keys {
-            let (positions, next_position) = match key {
-                SessionRowKey::UserTurn(_) => (
-                    &mut self.user_turn_positions,
-                    &mut self.next_user_turn_position,
-                ),
-                SessionRowKey::Task(_) => (&mut self.task_positions, &mut self.next_task_position),
-            };
+            let (positions, next_position) =
+                (&mut self.task_positions, &mut self.next_task_position);
             let session_id = key.session_id();
             if !positions.contains_key(session_id) {
                 positions.insert(session_id.to_string(), *next_position);
@@ -85,14 +72,8 @@ impl SessionRowOrder {
     }
 
     pub(super) fn retain_sessions(&mut self, session_ids: &HashSet<String>) {
-        self.user_turn_positions
-            .retain(|session_id, _| session_ids.contains(session_id));
         self.task_positions
             .retain(|session_id, _| session_ids.contains(session_id));
-    }
-
-    fn user_turn_position(&self, session_id: &str) -> Option<usize> {
-        self.user_turn_positions.get(session_id).copied()
     }
 
     fn task_position(&self, session_id: &str) -> Option<usize> {
@@ -114,9 +95,17 @@ pub(super) struct SessionRowEntry<'a> {
     /// Descendants shown under a root (always 0 on descendant rows).
     pub child_count: usize,
     pub child_user_turn_count: usize,
+    /// The user-action reason attached to this session, without its note.
+    pub user_turn: Option<UserTurnInfo<'a>>,
     /// The tq task this session is linked to, if any. Drives the task-number
     /// column, the row name, and cursor-relative task-kinship styling.
     pub task: Option<SessionTask>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct UserTurnInfo<'a> {
+    pub kind: UserTurnKind,
+    pub label: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,7 +131,6 @@ impl<'a> SessionRow<'a> {
     /// The session_id occupying this row, if it belongs to a session.
     pub(super) fn session_id(&self) -> Option<&str> {
         match self {
-            SessionRow::UserTurn(turn) => Some(turn.session.session_id.as_str()),
             SessionRow::Session(entry) => Some(entry.session.session_id.as_str()),
             SessionRow::SectionHeader(_) => None,
         }
@@ -151,9 +139,6 @@ impl<'a> SessionRow<'a> {
     pub(super) fn row_key(&self) -> Option<SessionRowKey> {
         match self {
             SessionRow::SectionHeader(_) => None,
-            SessionRow::UserTurn(turn) => {
-                Some(SessionRowKey::UserTurn(turn.session.session_id.clone()))
-            }
             SessionRow::Session(entry) => {
                 Some(SessionRowKey::Task(entry.session.session_id.clone()))
             }
@@ -175,12 +160,6 @@ pub(super) fn tasks_row_occurrence(rows: &[SessionRow<'_>], session_id: &str) ->
     None
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Section {
-    UserTurn,
-    Tasks,
-}
-
 /// A tq task linked to a session, as needed for rendering the task-number
 /// column and for the cursor-relative task-kinship check
 /// (see [`is_related_task`]). `parent_task_id` is `None` both when the task
@@ -199,7 +178,7 @@ pub(super) struct SessionTask {
     pub is_closed: bool,
 }
 
-/// Builds YOUR TURN followed by the TASKS session tree.
+/// Builds the TASKS session tree.
 ///
 /// `task_by_session` attaches each row's linked tq task (see [`SessionTask`]);
 /// callers can pass an empty map when tq integration is unavailable.
@@ -236,24 +215,24 @@ pub(super) fn build_session_rows_with_order<'a>(
     vibe_enabled_session_ids: &HashSet<String>,
     order: Option<&SessionRowOrder>,
 ) -> Vec<SessionRow<'a>> {
-    let mut turns = user_turns(sessions.iter().copied(), agent_config);
-    if let Some(order) = order {
-        turns.sort_by_key(|turn| {
-            order
-                .user_turn_position(&turn.session.session_id)
-                .unwrap_or(usize::MAX)
-        });
-    }
-    let user_turn_session_ids: HashSet<String> = turns
+    let turns = user_turns(sessions.iter().copied(), agent_config);
+    let user_turns_by_session = turns
         .iter()
-        .map(|turn| turn.session.session_id.clone())
+        .map(|turn| {
+            (
+                turn.session.session_id.as_str(),
+                UserTurnInfo {
+                    kind: turn.kind,
+                    label: turn.label,
+                },
+            )
+        })
         .collect();
-    let mut rows = Vec::with_capacity(sessions.len() + 2);
-    push_user_turns(&mut rows, turns);
+    let mut rows = Vec::with_capacity(sessions.len() + 1);
     let task_rows = task_tree::build_task_rows(
         sessions,
         task_by_session,
-        &user_turn_session_ids,
+        &user_turns_by_session,
         agent_config,
         vibe_enabled_session_ids,
         order,
@@ -261,24 +240,11 @@ pub(super) fn build_session_rows_with_order<'a>(
     if !task_rows.is_empty() {
         rows.push(SessionRow::SectionHeader(SectionHeaderRow {
             label: "TASKS".to_string(),
-            kind: Section::Tasks,
         }));
         rows.extend(task_rows.into_iter().map(SessionRow::Session));
     }
 
     rows
-}
-
-fn push_user_turns<'a>(rows: &mut Vec<SessionRow<'a>>, turns: Vec<UserTurn<'a>>) {
-    if turns.is_empty() {
-        return;
-    }
-
-    rows.push(SessionRow::SectionHeader(SectionHeaderRow {
-        label: "YOUR TURN".to_string(),
-        kind: Section::UserTurn,
-    }));
-    rows.extend(turns.into_iter().map(SessionRow::UserTurn));
 }
 
 /// Whether `session` descends from `ancestor_id` at any depth (i.e.
@@ -486,10 +452,6 @@ mod tests {
         Header {
             label: String,
         },
-        UserTurn {
-            id: String,
-            kind: UserTurnKind,
-        },
         Task {
             id: String,
             mark: TaskMark,
@@ -497,6 +459,7 @@ mod tests {
             tree_prefix: Option<Vec<bool>>,
             child_count: usize,
             child_user_turn_count: usize,
+            user_turn: Option<(UserTurnKind, Option<String>)>,
         },
     }
 
@@ -506,10 +469,6 @@ mod tests {
                 SessionRow::SectionHeader(header) => RowDescription::Header {
                     label: header.label.clone(),
                 },
-                SessionRow::UserTurn(turn) => RowDescription::UserTurn {
-                    id: turn.session.session_id.clone(),
-                    kind: turn.kind,
-                },
                 SessionRow::Session(entry) => RowDescription::Task {
                     id: entry.session.session_id.clone(),
                     mark: entry.mark,
@@ -517,6 +476,9 @@ mod tests {
                     tree_prefix: entry.tree_prefix.clone(),
                     child_count: entry.child_count,
                     child_user_turn_count: entry.child_user_turn_count,
+                    user_turn: entry
+                        .user_turn
+                        .map(|turn| (turn.kind, turn.label.map(str::to_owned))),
                 },
             })
             .collect()
@@ -536,6 +498,19 @@ mod tests {
             tree_prefix: None,
             child_count: children,
             child_user_turn_count: user_turns,
+            user_turn: None,
+        }
+    }
+
+    fn user_turn_root_row(id: &str, kind: UserTurnKind, label: Option<&str>) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            mark: TaskMark::UserTurn,
+            is_last_sibling: false,
+            tree_prefix: None,
+            child_count: 0,
+            child_user_turn_count: 0,
+            user_turn: Some((kind, label.map(str::to_owned))),
         }
     }
 
@@ -547,6 +522,7 @@ mod tests {
             tree_prefix: Some(Vec::new()),
             child_count: 0,
             child_user_turn_count: 0,
+            user_turn: None,
         }
     }
 
@@ -563,6 +539,25 @@ mod tests {
             tree_prefix: Some(tree_prefix.to_vec()),
             child_count: 0,
             child_user_turn_count: 0,
+            user_turn: None,
+        }
+    }
+
+    fn user_turn_nested_row(
+        id: &str,
+        is_last_sibling: bool,
+        tree_prefix: &[bool],
+        kind: UserTurnKind,
+        label: Option<&str>,
+    ) -> RowDescription {
+        RowDescription::Task {
+            id: id.to_string(),
+            mark: TaskMark::UserTurn,
+            is_last_sibling,
+            tree_prefix: Some(tree_prefix.to_vec()),
+            child_count: 0,
+            child_user_turn_count: 0,
+            user_turn: Some((kind, label.map(str::to_owned))),
         }
     }
 
@@ -573,9 +568,7 @@ mod tests {
     }
 
     #[rstest]
-    fn test_build_session_rows_user_turn_also_appears_unselectable_in_tasks(
-        agent_config: AgentConfig,
-    ) {
+    fn test_build_session_rows_places_user_turn_reason_on_tasks_row(agent_config: AgentConfig) {
         let mut crit = create_test_session("crit", SessionStatus::WaitingInput);
         crit.crit_urls
             .push("https://example.com/review".to_string());
@@ -587,13 +580,8 @@ mod tests {
         assert_eq!(
             describe(&rows),
             vec![
-                header("YOUR TURN"),
-                RowDescription::UserTurn {
-                    id: "crit".to_string(),
-                    kind: UserTurnKind::Crit,
-                },
                 header("TASKS"),
-                root_row("crit", TaskMark::UserTurn, 0, 0),
+                user_turn_root_row("crit", UserTurnKind::Crit, Some("crit")),
                 root_row("running", TaskMark::Working, 0, 0),
             ]
         );
@@ -633,16 +621,17 @@ mod tests {
         assert_eq!(
             describe(&rows),
             vec![
-                header("YOUR TURN"),
-                RowDescription::UserTurn {
-                    id: "delegated_child".to_string(),
-                    kind: UserTurnKind::AgentStatus,
-                },
                 header("TASKS"),
                 root_row("pm", TaskMark::Working, 7, 1),
                 child_row("design", TaskMark::Working, false),
                 nested_row("delegated", TaskMark::Working, false, &[false]),
-                nested_row("delegated_child", TaskMark::UserTurn, true, &[false, false]),
+                user_turn_nested_row(
+                    "delegated_child",
+                    true,
+                    &[false, false],
+                    UserTurnKind::AgentStatus,
+                    Some("needs_attention"),
+                ),
                 nested_row("grandchild", TaskMark::Working, false, &[false]),
                 nested_row("great_grandchild", TaskMark::Working, true, &[false, false],),
                 nested_row("qa", TaskMark::Working, true, &[false]),
@@ -747,6 +736,7 @@ mod tests {
         false,
         TaskMark::UserTurn
     )]
+    #[case::failed(SessionStatus::Failed, None, false, TaskMark::UserTurn)]
     #[case::unknown_status_is_user(
         SessionStatus::Stopped,
         Some("removed_name"),
@@ -799,7 +789,7 @@ mod tests {
 
         let task = rows.iter().find_map(|r| match r {
             SessionRow::Session(entry) => Some(entry.task.clone()),
-            SessionRow::SectionHeader(_) | SessionRow::UserTurn(_) => None,
+            SessionRow::SectionHeader(_) => None,
         });
         assert_eq!(task, Some(expected));
     }

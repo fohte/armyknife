@@ -263,7 +263,7 @@ mod tests {
                 app.selected_session().map(|s| s.session_id.as_str()),
                 app.selected_session_row_occurrence(),
             ),
-            (Some("b"), Some(1)),
+            (Some("b"), Some(0)),
         );
     }
 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::{SessionRowEntry, SessionRowOrder, SessionTask, TaskMark, VibeMode};
+use super::{SessionRowEntry, SessionRowOrder, SessionTask, TaskMark, UserTurnInfo, VibeMode};
 use crate::commands::agent::types::{DisplayStatus, Session, SessionStatus};
 use crate::shared::config::{AgentConfig, AgentStatusState};
 
@@ -8,7 +8,7 @@ use crate::shared::config::{AgentConfig, AgentStatusState};
 pub(super) fn build_task_rows<'a>(
     sessions: &[&'a Session],
     task_by_session: &HashMap<String, SessionTask>,
-    user_turn_session_ids: &HashSet<String>,
+    user_turns_by_session: &HashMap<&'a str, UserTurnInfo<'a>>,
     agent_config: &AgentConfig,
     vibe_enabled_session_ids: &HashSet<String>,
     order: Option<&SessionRowOrder>,
@@ -57,7 +57,7 @@ pub(super) fn build_task_rows<'a>(
     let builder = TaskTreeBuilder {
         children_by_parent: &children_by_parent,
         task_by_session,
-        user_turn_session_ids,
+        user_turns_by_session,
         agent_config,
         vibe_enabled_session_ids: &known_vibe_enabled_session_ids,
     };
@@ -125,7 +125,7 @@ struct TaskTreeGroup<'a> {
 struct TaskTreeBuilder<'context, 'session> {
     children_by_parent: &'context HashMap<&'session str, Vec<&'session Session>>,
     task_by_session: &'context HashMap<String, SessionTask>,
-    user_turn_session_ids: &'context HashSet<String>,
+    user_turns_by_session: &'context HashMap<&'session str, UserTurnInfo<'session>>,
     agent_config: &'context AgentConfig,
     vibe_enabled_session_ids: &'context HashSet<String>,
 }
@@ -143,15 +143,19 @@ impl<'context, 'session> TaskTreeBuilder<'context, 'session> {
             return;
         }
 
-        let has_user_turn = self.user_turn_session_ids.contains(&session.session_id);
+        let user_turn = self
+            .user_turns_by_session
+            .get(session.session_id.as_str())
+            .copied();
         rows.push(SessionRowEntry {
             session,
-            mark: task_mark(session, has_user_turn, self.agent_config),
+            mark: task_mark(session, user_turn.is_some(), self.agent_config),
             vibe_mode: vibe_mode(session, self.vibe_enabled_session_ids),
             is_last_sibling,
             tree_prefix: tree_prefix.clone(),
             child_count: 0,
             child_user_turn_count: 0,
+            user_turn,
             task: self
                 .task_by_session
                 .get(session.session_id.as_str())

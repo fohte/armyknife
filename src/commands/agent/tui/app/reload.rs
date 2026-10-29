@@ -284,7 +284,6 @@ impl App {
     }
 
     /// Returns the selected session's occurrence among its rows in display order.
-    /// A session with a YOUR TURN row also appears later in TASKS.
     pub(super) fn selected_session_row_occurrence(&self) -> Option<usize> {
         let position = self.list_state.selected()?;
         let session_index = self.row_sessions.get(position).copied().flatten()?;
@@ -681,13 +680,13 @@ mod tests {
     }
 
     #[rstest]
-    fn test_reload_restores_selected_tasks_occurrence_for_user_turn_session(
+    fn test_reload_restores_selected_task_row_for_user_turn_session(
         app_with_user_turn_and_active_session: App,
     ) {
         let mut app = app_with_user_turn_and_active_session;
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 1)
+            .position_of_session_row_occurrence("awaiting-1", 0)
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
         app.apply_session_store_changes(store::SessionStoreChanges {
@@ -702,7 +701,7 @@ mod tests {
                 app.selected_session().map(|s| s.session_id.as_str()),
                 app.selected_session_row_occurrence(),
             ),
-            (Some("awaiting-1"), Some(1)),
+            (Some("awaiting-1"), Some(0)),
         );
     }
 
@@ -846,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn task_occurrence_remains_selected_when_a_user_turn_row_appears() {
+    fn task_row_remains_selected_when_session_needs_user_action() {
         let mut selected = create_test_session("selected");
         let other = create_test_session("other");
         let mut app = create_test_app(vec![selected.clone(), other]);
@@ -915,7 +914,7 @@ mod tests {
         );
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 1)
+            .position_of_session_row_occurrence("awaiting-1", 0)
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
 
@@ -941,7 +940,7 @@ mod tests {
             ),
             (
                 Some("awaiting-1"),
-                Some(1),
+                Some(0),
                 HashMap::from([("awaiting-1".to_string(), refreshed_task)]),
             ),
         );

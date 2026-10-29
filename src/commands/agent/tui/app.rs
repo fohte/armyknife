@@ -156,7 +156,7 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
-    /// Distinguishes YOUR TURN and TASKS rows for the same session.
+    /// Stable identity for restoring a selection after display rows change.
     row_keys: Vec<Option<SessionRowKey>>,
     /// Rendered item heights support restoring a selection's terminal line.
     row_heights: Vec<usize>,
@@ -595,9 +595,19 @@ mod tests {
         );
 
         assert_eq!(
-            app.selected_session()
-                .map(|session| session.session_id.as_str()),
-            Some(expected_session_id)
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.list_state
+                    .selected()
+                    .and_then(|position| app.row_keys.get(position))
+                    .cloned()
+                    .flatten(),
+            ),
+            (
+                Some(expected_session_id),
+                Some(SessionRowKey::Task(expected_session_id.to_string())),
+            ),
         );
     }
 

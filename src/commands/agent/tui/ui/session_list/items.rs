@@ -9,9 +9,9 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::App;
 use crate::commands::agent::tui::session_rows::{
-    Section, SectionHeaderRow, SessionRowEntry, TaskMark, VibeMode, is_related_task, kin_relation,
+    SectionHeaderRow, SessionRowEntry, TaskMark, VibeMode, is_related_task, kin_relation,
 };
-use crate::commands::agent::user_turn::UserTurn;
+use crate::commands::agent::user_turn::UserTurnKind;
 use crate::shared::config::AgentWorkTypeConfig;
 
 use super::super::helpers::{
@@ -112,62 +112,6 @@ fn format_compact_time(dt: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format!("{}d", hours / 24)
 }
 
-/// Renders a user-turn row with its session name ahead of the note.
-pub(super) fn build_user_turn_item(
-    turn: &UserTurn<'_>,
-    app: &App,
-    now: DateTime<Utc>,
-    term_width: usize,
-) -> ListItem<'static> {
-    let title = app
-        .get_cached_title(&turn.session.session_id)
-        .map(String::from)
-        .unwrap_or_else(|| get_title_display_name_fallback(turn.session));
-    let note = turn
-        .note
-        .map(|note| note.split_whitespace().collect::<Vec<_>>().join(" "))
-        .filter(|note| !note.is_empty());
-    let time_text = format_compact_time(turn.session.updated_at, now);
-    let time_col = pad_left_to_width(&time_text, TIME_COLUMN_WIDTH);
-    let line_width = term_width.saturating_sub(MARKER_WIDTH);
-    let label = turn.label.map(|label| {
-        let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
-        let padding = " ".repeat(label_width.saturating_sub(label.width()));
-        format!(" {label}{padding} ")
-    });
-    let label_width = label.as_ref().map_or(0, |label| label.width() + 1);
-    let fixed_width = 1 + 1 + label_width + TIME_COLUMN_WIDTH;
-    let description_width = line_width.saturating_sub(fixed_width);
-    let mut description = truncate(&title, description_width);
-    if let Some(note) = note {
-        let note_width = description_width.saturating_sub(description.width() + 1);
-        if note_width > 0 {
-            let note = truncate(&note, note_width);
-            if !note.is_empty() {
-                description.push(' ');
-                description.push_str(&note);
-            }
-        }
-    }
-    let description_padding = " ".repeat(description_width.saturating_sub(description.width()));
-    let symbol_style = Style::default().fg(Color::Red);
-    let mut spans = vec![
-        Span::styled(turn.kind.symbol(), symbol_style),
-        Span::raw(" "),
-    ];
-    if let Some(label) = label {
-        spans.push(Span::styled(label, user_turn_label_style()));
-        spans.push(Span::raw(" "));
-    }
-    spans.extend([
-        Span::raw(description),
-        Span::raw(description_padding),
-        Span::raw(time_col),
-    ]);
-
-    ListItem::new(Line::from(spans))
-}
-
 fn user_turn_label_style() -> Style {
     Style::default()
         .fg(Color::White)
@@ -175,15 +119,11 @@ fn user_turn_label_style() -> Style {
         .add_modifier(Modifier::BOLD)
 }
 
-fn header_style(kind: Section) -> Style {
-    let base = Style::default().add_modifier(Modifier::BOLD);
-    match kind {
-        Section::UserTurn => base.fg(Color::Red),
-        Section::Tasks => base.fg(DIM_FG),
-    }
+fn header_style() -> Style {
+    Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
 }
 
-/// `◐` shares YOUR TURN's red so the user's own turns stand out in the tree.
+/// `◐` highlights sessions that need user attention in the session tree.
 pub fn mark_glyph(mark: TaskMark, session: &Session) -> (&'static str, Color) {
     match mark {
         TaskMark::Done => ("✓", DIM_FG),
@@ -231,7 +171,7 @@ pub(super) fn build_header_item(
     with_leading_blank: bool,
 ) -> ListItem<'static> {
     let content_width = term_width.saturating_sub(MARKER_WIDTH);
-    let style = header_style(header.kind);
+    let style = header_style();
     let prefix = format!("── {} ", header.label);
     let dashes = content_width.saturating_sub(prefix.width());
     let content = format!("{prefix}{}", "─".repeat(dashes));
@@ -258,7 +198,10 @@ pub(super) fn build_session_item(
 ) -> ListItem<'static> {
     let session = entry.session;
     let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
-    let (symbol, symbol_color) = mark_glyph(entry.mark, session);
+    let (symbol, symbol_color) = entry.user_turn.map_or_else(
+        || mark_glyph(entry.mark, session),
+        |turn| (turn.kind.symbol(), Color::Red),
+    );
     let status_style = Style::default().fg(symbol_color);
 
     let repo_name = app
@@ -364,8 +307,8 @@ pub(super) fn build_session_item(
     let mut lines = vec![Line::from(spans)];
 
     // An empty question still renders bare quotes rather than an
-    // inconsistent row shape. Sessions already in YOUR TURN skip it there.
-    if session.status == SessionStatus::WaitingInput && entry.mark != TaskMark::UserTurn {
+    // inconsistent row shape. User-action rows use their reason label instead.
+    if session.status == SessionStatus::WaitingInput && entry.user_turn.is_none() {
         let question = session
             .current_tool
             .as_deref()
@@ -426,26 +369,39 @@ fn build_title_spans(
     vibe_marker: Option<&AgentWorkTypeConfig>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
-    let crit_badge = if entry.session.crit_urls.is_empty() {
+    let crit_badge = if entry.session.crit_urls.is_empty()
+        || entry
+            .user_turn
+            .is_some_and(|turn| turn.kind == UserTurnKind::Crit)
+    {
         String::new()
     } else {
         " [crit]".to_string()
     };
+    let user_turn_label = entry.user_turn.and_then(|turn| turn.label).map(|label| {
+        let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
+        let padding = " ".repeat(label_width.saturating_sub(label.width()));
+        format!(" {label}{padding} ")
+    });
+    let user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
-        (Some(mode), Some(config)) if config.icon.width() + crit_badge.width() < title_width => {
+        (Some(mode), Some(config))
+            if config.icon.width() + crit_badge.width() + user_turn_label_width < title_width =>
+        {
             Some((mode, config))
         }
         _ => None,
     };
     let marker_width = marker.map_or(0, |(_, config)| config.icon.width());
     let show_child_badge = !child_badge.is_empty()
-        && child_badge.width() + crit_badge.width() + marker_width < title_width;
+        && child_badge.width() + crit_badge.width() + user_turn_label_width + marker_width
+            < title_width;
     let child_badge = if show_child_badge {
         child_badge
     } else {
         String::new()
     };
-    let badge_width = child_badge.width() + crit_badge.width();
+    let badge_width = child_badge.width() + crit_badge.width() + user_turn_label_width;
     let content_width = title_width.saturating_sub(badge_width + marker_width);
 
     let title = truncate(own_title, content_width);
@@ -470,6 +426,10 @@ fn build_title_spans(
             Style::default().fg(Color::Indexed(98)),
         ));
     }
+    if let Some(label) = user_turn_label {
+        used_width += label.width();
+        spans.push(Span::styled(label, user_turn_label_style()));
+    }
     if used_width < title_width {
         spans.push(Span::raw(" ".repeat(title_width - used_width)));
     }
@@ -493,16 +453,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::user_turn(
-        Section::UserTurn,
-        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-    )]
-    #[case::tasks(
-        Section::Tasks,
-        Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
-    )]
-    fn test_header_style(#[case] kind: Section, #[case] expected: Style) {
-        assert_eq!(header_style(kind), expected);
+    #[test]
+    fn test_header_style() {
+        assert_eq!(
+            header_style(),
+            Style::default().fg(DIM_FG).add_modifier(Modifier::BOLD)
+        );
     }
 
     #[test]
