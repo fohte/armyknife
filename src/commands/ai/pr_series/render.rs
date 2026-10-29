@@ -217,7 +217,10 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
 }
 
 fn escape_markdown_text(value: &str) -> String {
-    let characters = value.trim_start().chars().collect::<Vec<_>>();
+    let characters = value
+        .trim_start_matches([' ', '\t'])
+        .chars()
+        .collect::<Vec<_>>();
     let leading_digit_end = characters
         .iter()
         .take_while(|character| character.is_ascii_digit())
@@ -236,10 +239,20 @@ fn escape_markdown_text(value: &str) -> String {
             let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
             let is_leading_ordered_list_marker =
                 has_leading_ordered_list_marker && index == leading_digit_end;
+            let is_url_scheme_delimiter = *character == ':'
+                && characters.get(index + 1) == Some(&'/')
+                && characters.get(index + 2) == Some(&'/');
+            let is_www_domain_delimiter = *character == '.'
+                && index >= 3
+                && characters[index - 3] == 'w'
+                && characters[index - 2] == 'w'
+                && characters[index - 1] == 'w';
             let should_escape = matches!(character, '\\' | '`' | '*' | '~' | '[' | ']' | '<' | '&')
                 || (*character == '_' && !has_alphanumeric_neighbors)
                 || is_leading_block_marker
-                || is_leading_ordered_list_marker;
+                || is_leading_ordered_list_marker
+                || is_url_scheme_delimiter
+                || is_www_domain_delimiter;
 
             if should_escape {
                 format!("\\{character}")
@@ -617,9 +630,27 @@ mod tests {
     #[case::leading_spaces_before_marker("   # heading", r"\# heading")]
     #[case::leading_tab_before_numbered_list("\t12. item", r"12\. item")]
     #[case::leading_spaces_are_removed("   plain summary", "plain summary")]
+    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading", "\u{3000}# heading")]
+    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading", "\u{00a0}# heading")]
+    #[case::https_url_is_not_linked(
+        "see https://example.test/?a=1&b=2 now",
+        r"see https\://example.test/?a=1\&b=2 now"
+    )]
+    #[case::ftp_url_is_not_linked(
+        "see ftp://example.test/?a=1&b=2 now",
+        r"see ftp\://example.test/?a=1\&b=2 now"
+    )]
+    #[case::www_url_is_not_linked(
+        "see www.example.test/?a=1&b=2 now",
+        r"see www\.example.test/?a=1\&b=2 now"
+    )]
+    #[case::uppercase_www_is_not_escaped(
+        "see WWW.example.test/?a=1&b=2 now",
+        r"see WWW.example.test/?a=1\&b=2 now"
+    )]
     #[case::other_ascii_punctuation_is_preserved(
-        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: @user #12 $x^2$ https://example.test/path"#,
-        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: @user #12 $x^2$ https://example.test/path"#,
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: Fix: x @user #12 $x^2$"#,
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: Fix: x @user #12 $x^2$"#,
     )]
     fn renders_summaries_with_only_required_markdown_escapes(
         #[case] summary: &str,
