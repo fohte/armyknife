@@ -65,7 +65,7 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
     let mut row_keys = Vec::with_capacity(rows.len());
     let mut items: Vec<ListItem> = Vec::with_capacity(rows.len());
     for (i, row) in rows.iter().enumerate() {
-        row_keys.push(row.row_key());
+        row_keys.push(row.session_id().map(str::to_owned));
 
         let item = match row {
             SessionRow::SectionHeader(header) => build_header_item(header, term_width, i > 0),
@@ -347,10 +347,10 @@ mod tests {
             " ".repeat(35)
         );
         let expected = [
-            "             agent watch                                    1 needs you · 1 running · 0 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             waiting_row.as_str(),
-            "             ● project                  Blank                                       just now",
+            " ● project                  Blank                                       just now",
             "",
             "",
             "",
@@ -358,7 +358,7 @@ mod tests {
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 
@@ -625,8 +625,8 @@ mod tests {
             " ".repeat(22)
         );
         let expected = [
-            "             agent watch                                    1 needs you · 0 running · 0 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 0 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             action_row.as_str(),
             "",
             "",
@@ -634,7 +634,7 @@ mod tests {
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 
@@ -644,7 +644,7 @@ mod tests {
     #[rstest]
     fn test_render_action_label_uses_red_background(you_user_turn_session: Session) {
         let now = Utc::now();
-        let buffer = render_buffer(&[you_user_turn_session], Some(1), now, 80, 9);
+        let buffer = render_buffer(&[you_user_turn_session], None, now, 80, 9);
         let red_background_cells = (0..buffer.area.width)
             .filter_map(|x| {
                 let cell = &buffer[(x, 2)];
@@ -662,6 +662,53 @@ mod tests {
     }
 
     #[test]
+    fn test_narrow_action_label_keeps_title_and_time() {
+        let now = Utc::now();
+        let mut root = create_test_session("root");
+        root.updated_at = now;
+        root.status = SessionStatus::Stopped;
+        root.label = Some("session-name".to_string());
+        root.agent_status = Some(AgentStatus {
+            kind: "needs_attention".to_string(),
+            note: "choose an option".to_string(),
+        });
+        root.vibe_enabled = true;
+
+        let mut child = create_test_session("child");
+        child.updated_at = now;
+        child.ancestor_session_ids = vec!["root".to_string()];
+
+        let agent_config = AgentConfig {
+            vibe_marker: Some(AgentWorkTypeConfig {
+                icon: "◆".to_string(),
+                color: AgentWorkTypeColor::Named(
+                    crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                ),
+            }),
+            ..AgentConfig::default()
+        };
+        let buffer = render_buffer_with_agent_config(
+            &[root, child],
+            Some(1),
+            now,
+            43,
+            6,
+            agent_config,
+            |_| {},
+        );
+        let actual = (
+            rendered_row(&buffer, 2),
+            marker_style_on_row(&buffer, 2, "◆"),
+        );
+        let expected = (
+            format!(">◐ project{}s n...  just now", " ".repeat(17)),
+            None,
+        );
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_render_failed_user_turn_shows_failure_mark_on_tasks_row() {
         let now = Utc::now();
         let mut failed = create_test_session("failed");
@@ -676,15 +723,15 @@ mod tests {
             " ".repeat(26)
         );
         let expected = [
-            "             agent watch                                    1 needs you · 0 running · 0 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 0 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             failed_row.as_str(),
             "",
             "",
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 
@@ -804,8 +851,8 @@ mod tests {
 
         let waiting_row = expected_waiting_task_row(false);
         let expected = [
-            "             agent watch                                    1 needs you · 1 running · 0 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             waiting_row.as_str(),
             ">● project                 project                                      just now",
             "",
@@ -815,7 +862,7 @@ mod tests {
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 
@@ -848,8 +895,8 @@ mod tests {
 
         let waiting_row = expected_waiting_task_row(false);
         let expected = [
-            "             agent watch                                    1 needs you · 1 running · 2 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 1 running · 2 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             waiting_row.as_str(),
             " ● project                 project                                      just now",
             " ✱ project                 project                                      just now",
@@ -863,7 +910,7 @@ mod tests {
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 
@@ -883,8 +930,8 @@ mod tests {
 
         let waiting_row = expected_waiting_task_row(false);
         let expected = [
-            "             agent watch                                    1 needs you · 1 running · 0 idle",
-            "             ── TASKS ──────────────────────────────────────────────────────────────────────",
+            " agent watch                                    1 needs you · 1 running · 0 idle",
+            " ── TASKS ──────────────────────────────────────────────────────────────────────",
             waiting_row.as_str(),
             ">● project                 project                                      just now",
             "",
@@ -894,7 +941,7 @@ mod tests {
             "",
             "",
             "",
-            "             ?: keys   Tab: pane   Esc: quit",
+            " ?: keys   Tab: pane   Esc: quit",
         ]
         .join("\n");
 

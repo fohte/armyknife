@@ -9,7 +9,7 @@ use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use super::super::session_rows::{SessionRowKey, SessionRowOrder, build_session_rows_with_vibe};
+use super::super::session_rows::{SessionRowOrder, build_session_rows_with_vibe};
 use super::App;
 
 const SESSION_ORDER_GRACE_PERIOD: Duration = Duration::from_secs(2);
@@ -18,22 +18,14 @@ const SESSION_ORDER_GRACE_PERIOD: Duration = Duration::from_secs(2);
 pub(super) struct SelectionAnchor {
     position: Option<usize>,
     session_id: Option<String>,
-    occurrence: usize,
-    row_key: Option<SessionRowKey>,
     screen_line: Option<usize>,
 }
 
 impl SelectionAnchor {
     pub(super) fn for_session(session_id: impl Into<String>) -> Self {
-        Self::for_session_occurrence(session_id, 0)
-    }
-
-    pub(super) fn for_session_occurrence(session_id: impl Into<String>, occurrence: usize) -> Self {
         Self {
             position: None,
             session_id: Some(session_id.into()),
-            occurrence,
-            row_key: None,
             screen_line: None,
         }
     }
@@ -179,7 +171,10 @@ impl App {
     /// that cursor positions always match the displayed order.
     pub(super) fn rebuild_row_order(&mut self) {
         let rows = self.build_display_rows();
-        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        let row_keys = rows
+            .iter()
+            .map(|row| row.session_id().map(str::to_owned))
+            .collect::<Vec<_>>();
         drop(rows);
         self.update_rendered_row_keys(&row_keys);
     }
@@ -200,16 +195,6 @@ impl App {
         self.position_of_session_row_where(|session| session.session_id == session_id)
     }
 
-    fn position_of_session_row_occurrence(
-        &self,
-        session_id: &str,
-        occurrence: usize,
-    ) -> Option<usize> {
-        self.session_row_positions_where(|session| session.session_id == session_id)
-            .nth(occurrence)
-            .or_else(|| self.position_of_session_row(session_id))
-    }
-
     fn session_row_positions_where<'a>(
         &'a self,
         predicate: impl Fn(&Session) -> bool + 'a,
@@ -227,11 +212,12 @@ impl App {
         let position = self.list_state.selected();
         SelectionAnchor {
             position,
-            session_id: self
-                .selected_session()
-                .map(|session| session.session_id.clone()),
-            occurrence: self.selected_session_row_occurrence().unwrap_or_default(),
-            row_key: position.and_then(|position| self.row_keys.get(position).cloned().flatten()),
+            session_id: position
+                .and_then(|position| self.row_keys.get(position).cloned().flatten())
+                .or_else(|| {
+                    self.selected_session()
+                        .map(|session| session.session_id.clone())
+                }),
             screen_line: position.and_then(|position| {
                 self.pending_selection_line
                     .or_else(|| self.selection_screen_line(position))
@@ -283,19 +269,6 @@ impl App {
         true
     }
 
-    /// Returns the selected session's occurrence among its rows in display order.
-    pub(super) fn selected_session_row_occurrence(&self) -> Option<usize> {
-        let position = self.list_state.selected()?;
-        let session_index = self.row_sessions.get(position).copied().flatten()?;
-        let preceding_rows = self.row_sessions.get(..position)?;
-        Some(
-            preceding_rows
-                .iter()
-                .filter(|row| **row == Some(session_index))
-                .count(),
-        )
-    }
-
     pub(super) fn position_of_session_row_where(
         &self,
         predicate: impl Fn(&Session) -> bool,
@@ -312,19 +285,9 @@ impl App {
     /// selectable position, else `None`.
     pub(super) fn resync_selection(&mut self, anchor: SelectionAnchor) {
         let next = anchor
-            .row_key
+            .session_id
             .as_ref()
-            .and_then(|key| {
-                self.row_keys
-                    .iter()
-                    .position(|row_key| row_key.as_ref() == Some(key))
-            })
-            .or_else(|| {
-                anchor
-                    .session_id
-                    .as_deref()
-                    .and_then(|id| self.position_of_session_row_occurrence(id, anchor.occurrence))
-            })
+            .and_then(|session_id| self.position_of_session_row(session_id))
             .or_else(|| {
                 let selectable = self.selectable_positions();
                 anchor.position.and_then(|position| {
@@ -686,7 +649,7 @@ mod tests {
         let mut app = app_with_user_turn_and_active_session;
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 0)
+            .position_of_session_row("awaiting-1")
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
         app.apply_session_store_changes(store::SessionStoreChanges {
@@ -697,11 +660,8 @@ mod tests {
         .expect("session-store changes should apply");
 
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.selected_session_row_occurrence(),
-            ),
-            (Some("awaiting-1"), Some(0)),
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("awaiting-1"),
         );
     }
 
@@ -781,10 +741,10 @@ mod tests {
                 (
                     vec![
                         None,
-                        Some(SessionRowKey::Task("root-b".to_string())),
-                        Some(SessionRowKey::Task("root-a".to_string())),
-                        Some(SessionRowKey::Task("child-a".to_string())),
-                        Some(SessionRowKey::Task("child-b".to_string())),
+                        Some("root-b".to_string()),
+                        Some("root-a".to_string()),
+                        Some("child-a".to_string()),
+                        Some("child-b".to_string()),
                     ],
                     Some("child-a".to_string()),
                     Some(t4),
@@ -795,10 +755,10 @@ mod tests {
                 true,
                 vec![
                     None,
-                    Some(SessionRowKey::Task("root-a".to_string())),
-                    Some(SessionRowKey::Task("child-b".to_string())),
-                    Some(SessionRowKey::Task("child-a".to_string())),
-                    Some(SessionRowKey::Task("root-b".to_string())),
+                    Some("root-a".to_string()),
+                    Some("child-b".to_string()),
+                    Some("child-a".to_string()),
+                    Some("root-b".to_string()),
                 ],
                 Some("child-a".to_string()),
             ),
@@ -837,9 +797,9 @@ mod tests {
             app.row_keys,
             vec![
                 None,
-                Some(SessionRowKey::Task("root".to_string())),
-                Some(SessionRowKey::Task("existing-child".to_string())),
-                Some(SessionRowKey::Task("new-child".to_string())),
+                Some("root".to_string()),
+                Some("existing-child".to_string()),
+                Some("new-child".to_string()),
             ],
         );
     }
@@ -873,17 +833,12 @@ mod tests {
                     .cloned()
                     .flatten(),
             ),
-            (
-                Some("selected"),
-                Some(SessionRowKey::Task("selected".to_string())),
-            ),
+            (Some("selected"), Some("selected".to_string()),),
         );
     }
 
     #[rstest]
-    fn test_tq_snapshot_updates_preserve_selected_task_occurrence(
-        app_with_user_turn_and_active_session: App,
-    ) {
+    fn test_tq_snapshot_updates_preserve_selected_task(app_with_user_turn_and_active_session: App) {
         let mut app = app_with_user_turn_and_active_session;
 
         let initial_task = SessionTask {
@@ -903,18 +858,16 @@ mod tests {
             (
                 app.selected_session()
                     .map(|session| session.session_id.as_str()),
-                app.selected_session_row_occurrence(),
                 app.task_by_session.clone(),
             ),
             (
                 Some("awaiting-1"),
-                Some(0),
                 HashMap::from([("awaiting-1".to_string(), initial_task)]),
             ),
         );
 
         let task_position = app
-            .position_of_session_row_occurrence("awaiting-1", 0)
+            .position_of_session_row("awaiting-1")
             .expect("TASKS row is displayed");
         app.list_state.select(Some(task_position));
 
@@ -935,12 +888,10 @@ mod tests {
             (
                 app.selected_session()
                     .map(|session| session.session_id.as_str()),
-                app.selected_session_row_occurrence(),
                 app.task_by_session.clone(),
             ),
             (
                 Some("awaiting-1"),
-                Some(0),
                 HashMap::from([("awaiting-1".to_string(), refreshed_task)]),
             ),
         );

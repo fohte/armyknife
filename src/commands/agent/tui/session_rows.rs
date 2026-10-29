@@ -24,19 +24,6 @@ pub(super) struct SectionHeaderRow {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub(super) enum SessionRowKey {
-    Task(String),
-}
-
-impl SessionRowKey {
-    pub(super) fn session_id(&self) -> &str {
-        match self {
-            Self::Task(session_id) => session_id,
-        }
-    }
-}
-
 /// Captures session order while list navigation is active.
 #[derive(Debug, Default)]
 pub(super) struct SessionRowOrder {
@@ -52,21 +39,19 @@ impl SessionRowOrder {
     }
 
     pub(super) fn remember_rows(&mut self, rows: &[SessionRow<'_>]) {
-        let keys = rows
+        let session_ids = rows
             .iter()
-            .filter_map(SessionRow::row_key)
+            .filter_map(SessionRow::session_id)
             .collect::<Vec<_>>();
-        self.remember_keys(&keys);
+        self.remember_session_ids(&session_ids);
     }
 
-    pub(super) fn remember_keys(&mut self, keys: &[SessionRowKey]) {
-        for key in keys {
-            let (positions, next_position) =
-                (&mut self.task_positions, &mut self.next_task_position);
-            let session_id = key.session_id();
-            if !positions.contains_key(session_id) {
-                positions.insert(session_id.to_string(), *next_position);
-                *next_position += 1;
+    pub(super) fn remember_session_ids(&mut self, session_ids: &[&str]) {
+        for session_id in session_ids {
+            if !self.task_positions.contains_key(*session_id) {
+                self.task_positions
+                    .insert((*session_id).to_string(), self.next_task_position);
+                self.next_task_position += 1;
             }
         }
     }
@@ -135,29 +120,6 @@ impl<'a> SessionRow<'a> {
             SessionRow::SectionHeader(_) => None,
         }
     }
-
-    pub(super) fn row_key(&self) -> Option<SessionRowKey> {
-        match self {
-            SessionRow::SectionHeader(_) => None,
-            SessionRow::Session(entry) => {
-                Some(SessionRowKey::Task(entry.session.session_id.clone()))
-            }
-        }
-    }
-}
-
-pub(super) fn tasks_row_occurrence(rows: &[SessionRow<'_>], session_id: &str) -> Option<usize> {
-    let mut occurrence = 0;
-    for row in rows {
-        match row {
-            SessionRow::Session(entry) if entry.session.session_id == session_id => {
-                return Some(occurrence);
-            }
-            _ if row.session_id() == Some(session_id) => occurrence += 1,
-            _ => {}
-        }
-    }
-    None
 }
 
 /// A tq task linked to a session, as needed for rendering the task-number

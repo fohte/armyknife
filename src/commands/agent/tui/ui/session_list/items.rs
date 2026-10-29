@@ -37,9 +37,6 @@ pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 const TIME_COLUMN_WIDTH: usize = 9;
 /// The longest automatic user-turn label is `failed`; configured names can be wider.
 const USER_TURN_LABEL_WIDTH: usize = 6;
-/// Floor for the variable-width title column so it never collapses to
-/// nothing on very narrow terminals.
-const MIN_TITLE_WIDTH: usize = 10;
 /// Prefix width before the work type column, shared by title and
 /// waiting-question alignment.
 const TITLE_COLUMN_BASE_INDENT: usize =
@@ -62,12 +59,9 @@ fn work_type_column_width(app: &App) -> usize {
         + 1
 }
 
-/// Variable width left for the title after fixed columns, floored so it never
-/// disappears on narrow terminals.
+/// Width left for the title after fixed columns.
 fn title_column_width(term_width: usize, work_type_column_width: usize) -> usize {
-    term_width
-        .saturating_sub(TITLE_COLUMN_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
-        .max(MIN_TITLE_WIDTH)
+    term_width.saturating_sub(TITLE_COLUMN_BASE_INDENT + work_type_column_width + TIME_COLUMN_WIDTH)
 }
 
 /// Pads `s` with trailing spaces up to `width` display columns (no-op if
@@ -378,12 +372,11 @@ fn build_title_spans(
     } else {
         " [crit]".to_string()
     };
-    let user_turn_label = entry.user_turn.and_then(|turn| turn.label).map(|label| {
+    let raw_user_turn_label = entry.user_turn.and_then(|turn| turn.label);
+    let user_turn_label_width = raw_user_turn_label.map_or(0, |label| {
         let label_width = label.width().max(USER_TURN_LABEL_WIDTH);
-        let padding = " ".repeat(label_width.saturating_sub(label.width()));
-        format!(" {label}{padding} ")
+        label_width + 2
     });
-    let user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
         (Some(mode), Some(config))
             if config.icon.width() + crit_badge.width() + user_turn_label_width < title_width =>
@@ -401,8 +394,28 @@ fn build_title_spans(
     } else {
         String::new()
     };
-    let badge_width = child_badge.width() + crit_badge.width() + user_turn_label_width;
-    let content_width = title_width.saturating_sub(badge_width + marker_width);
+    let badge_width = child_badge.width() + crit_badge.width();
+    let label_width = title_width
+        .saturating_sub(badge_width + marker_width)
+        .saturating_sub(usize::from(!own_title.is_empty()));
+    let user_turn_label = raw_user_turn_label.and_then(|label| {
+        if label_width == 0 {
+            return None;
+        }
+
+        let has_padding = label_width >= 3;
+        let label_text_width = label_width.saturating_sub(usize::from(has_padding) * 2);
+        let label_text = truncate(label, label_text_width);
+        let label = if has_padding {
+            format!(" {label_text} ")
+        } else {
+            label_text
+        };
+        Some(label)
+    });
+    let visible_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
+    let content_width =
+        title_width.saturating_sub(badge_width + marker_width + visible_label_width);
 
     let title = truncate(own_title, content_width);
     let mut used_width = title.width();

@@ -259,11 +259,8 @@ mod tests {
         app.select_next();
 
         assert_eq!(
-            (
-                app.selected_session().map(|s| s.session_id.as_str()),
-                app.selected_session_row_occurrence(),
-            ),
-            (Some("b"), Some(0)),
+            app.selected_session().map(|s| s.session_id.as_str()),
+            Some("b"),
         );
     }
 
