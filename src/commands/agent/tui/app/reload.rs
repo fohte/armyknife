@@ -408,6 +408,7 @@ pub(super) fn load_vibe_enabled_session_ids() -> Result<HashSet<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::progress::ProgressSelectionKey;
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::tq_snapshot::TqSnapshot;
     use chrono::{TimeDelta, TimeZone, Utc};
@@ -651,6 +652,41 @@ mod tests {
         assert_eq!(
             app.selected_session().map(|s| s.session_id.as_str()),
             Some("running-2")
+        );
+    }
+
+    #[rstest]
+    #[case::progress_row_with_worker_session_id("worker")]
+    fn test_resync_selection_falls_back_to_worker_when_progress_row_disappears(
+        #[case] worker_session_id: &str,
+    ) {
+        let mut app = create_test_app(vec![create_test_session(worker_session_id)]);
+        app.resync_selection(SelectionAnchor {
+            position: Some(0),
+            row_key: Some(SessionRowKey::Progress {
+                source_session_id: "design".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch".to_string(),
+                    item_id: "item".to_string(),
+                },
+                session_id: Some(worker_session_id.to_string()),
+            }),
+            screen_line: None,
+        });
+
+        assert_eq!(
+            (
+                app.list_state.selected(),
+                app.list_state
+                    .selected()
+                    .and_then(|position| app.row_keys.get(position))
+                    .cloned()
+                    .flatten(),
+            ),
+            (
+                Some(1),
+                Some(SessionRowKey::Task(worker_session_id.to_string())),
+            ),
         );
     }
 

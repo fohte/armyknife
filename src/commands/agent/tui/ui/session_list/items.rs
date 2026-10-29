@@ -513,7 +513,78 @@ pub(super) fn pr_stage_label_style(stage: CurrentPrStage) -> Style {
 mod tests {
     use super::*;
     use crate::commands::agent::tui::progress::{ProgressMark, StageMarks, current_pr_stage};
+    use crate::commands::agent::tui::ui::test_support::create_test_session;
+    use crate::shared::config::{AgentWorkTypeColor, AgentWorkTypeNamedColor};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::wide_title(28, "worker", Some(" ◐ 1/2"), "         ")]
+    #[case::tight_title(12, "wo...", None, "")]
+    fn test_title_spans_deduplicate_matching_action_label_and_fit_badges(
+        #[case] title_width: usize,
+        #[case] expected_title: &str,
+        #[case] expected_child_badge: Option<&str>,
+        #[case] expected_padding: &str,
+    ) {
+        let mut session = create_test_session("worker");
+        session
+            .crit_urls
+            .push("https://example.com/review".to_string());
+        let entry = SessionRowEntry {
+            session: &session,
+            mark: TaskMark::UserTurn,
+            vibe_mode: Some(VibeMode::Explicit),
+            is_last_sibling: true,
+            tree_prefix: None,
+            child_count: 2,
+            child_user_turn_count: 1,
+            user_turn: Some(crate::commands::agent::tui::session_rows::UserTurnInfo {
+                kind: UserTurnKind::Crit,
+                label: Some("crit"),
+            }),
+            task: None,
+        };
+        let work_type = AgentWorkTypeConfig {
+            icon: "P".to_string(),
+            color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Magenta),
+        };
+        let stage = current_pr_stage(StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::User,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        });
+
+        let mut expected = vec![
+            Span::styled(
+                expected_title.to_string(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("P", Style::default().fg(Color::Magenta)),
+        ];
+        if let Some(child_badge) = expected_child_badge {
+            expected.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));
+        }
+        expected.push(Span::styled(" crit ", user_turn_label_style()));
+        if !expected_padding.is_empty() {
+            expected.push(Span::raw(expected_padding));
+        }
+
+        assert_eq!(
+            build_title_spans(
+                &entry,
+                "worker",
+                title_width,
+                "",
+                Style::default().add_modifier(Modifier::BOLD),
+                Some(&work_type),
+                Some(stage),
+            ),
+            expected,
+        );
+    }
+
     #[rstest]
     #[case::crit_waiting_for_user(
         StageMarks {
