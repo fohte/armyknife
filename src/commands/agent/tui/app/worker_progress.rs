@@ -37,31 +37,8 @@ impl App {
             self.clear_error();
         }
 
-        let linked_pr_stages = self
-            .worker_pr_progress
-            .iter()
-            .filter_map(|(session_id, progress)| {
-                progress
-                    .linked_pr_stage_info
-                    .map(|stage| (session_id.clone(), stage))
-            })
-            .collect::<HashMap<_, _>>();
+        let mut previous_progress = std::mem::take(&mut self.worker_pr_progress);
         let mut worker_pr_progress = HashMap::new();
-        for (session_id, linked_pr_stage_info) in &linked_pr_stages {
-            if self
-                .sessions
-                .iter()
-                .any(|session| session.session_id == *session_id)
-            {
-                worker_pr_progress.insert(
-                    session_id.clone(),
-                    WorkerPrProgress {
-                        delegate: None,
-                        linked_pr_stage_info: Some(*linked_pr_stage_info),
-                    },
-                );
-            }
-        }
         for delegate in delegates {
             let has_checklist_item = delegate
                 .checklist_item_id
@@ -76,11 +53,27 @@ impl App {
                 .is_some();
             if has_checklist_item || delegate.pull_request.is_some() {
                 let session_id = delegate.session.session_id.clone();
+                let linked_pr_stage_info = previous_progress
+                    .remove(&session_id)
+                    .and_then(|progress| progress.linked_pr_stage_info);
                 worker_pr_progress.insert(
                     session_id.clone(),
                     WorkerPrProgress {
                         delegate: Some(delegate),
-                        linked_pr_stage_info: linked_pr_stages.get(&session_id).copied(),
+                        linked_pr_stage_info,
+                    },
+                );
+            }
+        }
+        for (session_id, progress) in previous_progress {
+            if self.has_session(&session_id)
+                && let Some(linked_pr_stage_info) = progress.linked_pr_stage_info
+            {
+                worker_pr_progress.insert(
+                    session_id,
+                    WorkerPrProgress {
+                        delegate: None,
+                        linked_pr_stage_info: Some(linked_pr_stage_info),
                     },
                 );
             }
@@ -141,12 +134,14 @@ impl App {
         }
     }
 
-    fn store_worker_pr_stage_info(&mut self, session_id: &str, pr_stage_info: PrStageInfo) {
-        if !self
-            .sessions
+    fn has_session(&self, session_id: &str) -> bool {
+        self.sessions
             .iter()
             .any(|session| session.session_id == session_id)
-        {
+    }
+
+    fn store_worker_pr_stage_info(&mut self, session_id: &str, pr_stage_info: PrStageInfo) {
+        if !self.has_session(session_id) {
             return;
         }
         self.worker_pr_progress
