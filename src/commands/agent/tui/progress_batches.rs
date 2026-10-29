@@ -605,6 +605,7 @@ mod tests {
     #[rstest]
     #[case::linked_open_pr_with_unknown_ci("open", PrStageInfo::Open(PrCiState::Unknown), "CI")]
     #[case::linked_closed_pr("closed", PrStageInfo::Closed, "closed")]
+    #[case::linked_merged_pr_case_insensitive("MERGED", PrStageInfo::Merged, "merged")]
     fn pr_only_rows_show_the_linked_pr_stage_without_a_worker(
         #[case] linked_state: &str,
         #[case] expected_stage_info: PrStageInfo,
