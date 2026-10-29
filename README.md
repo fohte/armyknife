@@ -269,10 +269,10 @@ Manage PR body drafts with human-in-the-loop review.
 
 #### `a ai pr-series`
 
-Register a task's PR split plan and synchronize its diagram into linked PR bodies.
+Register a task's PR split plan and synchronize its ordered overview into linked PR bodies.
 Both commands require the `tq` CLI to be installed and available on `PATH`.
 
-When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR diagrams if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
+When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
 When updating an existing PR, `submit` keeps its `pr-series` section if the draft does not include one.
 
@@ -281,7 +281,7 @@ a ai pr-series set <task-id> --file plan.json
 a ai pr-series sync <task-id>
 ```
 
-`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. Each `summary` must fit in one line below Mermaid's 200px label width. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`:
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. An optional `steps` array groups PR IDs in execution order. Each step must contain at least one PR, every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not. The `purpose` field remains required for compatibility with existing plan files, but is not included in the synchronized section.
 
 ```json
 {
@@ -290,23 +290,52 @@ a ai pr-series sync <task-id>
   "pullRequests": [
     {
       "id": "schema",
-      "summary": "Add preference tables",
+      "summary": "Add tables for notification preferences",
       "dependsOn": [],
       "repository": "acme/notify-api",
       "tqLeafId": "<schema-leaf-id>"
     },
     {
+      "id": "validation",
+      "summary": "Validate notification preference settings",
+      "dependsOn": ["schema"],
+      "repository": "acme/notify-api",
+      "tqLeafId": "<validation-leaf-id>"
+    },
+    {
       "id": "settings",
-      "summary": "Add the settings page",
+      "summary": "Add the notification settings page",
       "dependsOn": ["schema"],
       "repository": "acme/notify-web",
       "tqLeafId": "<settings-leaf-id>"
+    }
+  ],
+  "steps": [
+    {
+      "pullRequests": ["schema"]
+    },
+    {
+      "summary": "Add validation and the settings page",
+      "pullRequests": ["validation", "settings"]
     }
   ]
 }
 ```
 
-`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
+For example, if `schema` is already created and `settings` is the current PR, the section includes:
+
+```text
+<!-- pr-series:start -->
+### Notification preferences
+
+1. acme/notify-api#12
+2. Add validation and the settings page
+   - Validate notification preference settings (not created yet)
+   - **Add the notification settings page** (this PR)
+<!-- pr-series:end -->
+```
+
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
 
 #### `a ai review`
 

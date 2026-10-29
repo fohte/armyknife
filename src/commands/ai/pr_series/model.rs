@@ -2,11 +2,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
-use unicode_width::UnicodeWidthChar;
 
 use crate::infra::tq::{TqChecklist, TqChecklistItem, TqGithubLink};
-
-const MAX_LABEL_WIDTH_PX: usize = 200;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -14,6 +11,16 @@ pub struct PrSeriesPlan {
     pub name: String,
     pub purpose: String,
     pub pull_requests: Vec<PrSeriesEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub steps: Option<Vec<PrSeriesStep>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PrSeriesStep {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    pub pull_requests: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,11 +94,6 @@ impl PrSeriesPlan {
         for entry in &self.pull_requests {
             validate_identifier(&entry.id)?;
             validate_single_line("pull request summary", &entry.summary)?;
-            ensure!(
-                estimated_label_width_px(&entry.summary) < MAX_LABEL_WIDTH_PX,
-                "summary for pull request `{}` does not fit within the 200px Mermaid label width",
-                entry.id
-            );
             Repository::parse(&entry.repository)?;
             ensure!(
                 !entry.tq_leaf_id.trim().is_empty(),
@@ -135,6 +137,62 @@ impl PrSeriesPlan {
                     .push(entry.id.as_str());
             }
             remaining_dependencies.insert(entry.id.as_str(), entry.depends_on.len());
+        }
+
+        if let Some(steps) = &self.steps {
+            let mut step_by_entry = HashMap::new();
+            for (step_index, step) in steps.iter().enumerate() {
+                ensure!(
+                    !step.pull_requests.is_empty(),
+                    "step {} must contain at least one pull request",
+                    step_index + 1
+                );
+                if let Some(summary) = &step.summary {
+                    validate_single_line("step summary", summary)?;
+                }
+                ensure!(
+                    step.pull_requests.len() < 2 || step.summary.is_some(),
+                    "step {} must have a summary when it contains multiple pull requests",
+                    step_index + 1
+                );
+
+                for entry_id in &step.pull_requests {
+                    ensure!(
+                        entries_by_id.contains_key(entry_id.as_str()),
+                        "step {} references unknown pull request id `{entry_id}`",
+                        step_index + 1
+                    );
+                    ensure!(
+                        step_by_entry
+                            .insert(entry_id.as_str(), step_index)
+                            .is_none(),
+                        "pull request `{entry_id}` belongs to multiple steps"
+                    );
+                }
+            }
+
+            for entry in &self.pull_requests {
+                let step_index =
+                    step_by_entry
+                        .get(entry.id.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("pull request `{}` does not belong to a step", entry.id)
+                        })?;
+                for dependency in &entry.depends_on {
+                    let dependency_step = step_by_entry
+                        .get(dependency.as_str())
+                        .copied()
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("pull request `{dependency}` does not belong to a step")
+                        })?;
+                    ensure!(
+                        dependency_step < step_index,
+                        "pull request `{}` depends on `{dependency}` from the same or a later step",
+                        entry.id
+                    );
+                }
+            }
         }
 
         let mut ready = self
@@ -322,28 +380,6 @@ fn is_github_path_component(value: &str) -> bool {
         })
 }
 
-fn estimated_label_width_px(value: &str) -> usize {
-    value.chars().map(estimated_char_width_px).sum()
-}
-
-fn estimated_char_width_px(character: char) -> usize {
-    match character {
-        ' ' => 5,
-        'i' | 'l' | 'I' => 5,
-        'j' | 'r' | 't' | 'f' | '!' | '.' | ',' | ':' | ';' | '\'' | '`' => 6,
-        'm' | 'M' => 14,
-        'w' => 12,
-        'W' => 16,
-        _ if character.is_ascii_uppercase() => 12,
-        _ if character.is_ascii_lowercase() => 9,
-        _ if character.is_ascii_digit() => 10,
-        '@' => 16,
-        '%' => 14,
-        _ if character.is_ascii_punctuation() => 10,
-        _ => UnicodeWidthChar::width(character).unwrap_or_default() * 9,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
@@ -356,6 +392,17 @@ mod tests {
             name: "Notification preferences".to_string(),
             purpose: "Let users choose which notifications they receive.".to_string(),
             pull_requests,
+            steps: None,
+        }
+    }
+
+    fn plan_with_steps(
+        pull_requests: Vec<PrSeriesEntry>,
+        steps: Vec<PrSeriesStep>,
+    ) -> PrSeriesPlan {
+        PrSeriesPlan {
+            steps: Some(steps),
+            ..plan_with_entries(pull_requests)
         }
     }
 
@@ -369,13 +416,45 @@ mod tests {
         }
     }
 
-    #[test]
-    fn validates_an_acyclic_plan_with_cross_repository_dependencies() {
-        let plan = plan_with_entries(vec![
+    fn step(summary: Option<&str>, pull_requests: &[&str]) -> PrSeriesStep {
+        PrSeriesStep {
+            summary: summary.map(str::to_string),
+            pull_requests: pull_requests.iter().map(|id| id.to_string()).collect(),
+        }
+    }
+
+    fn valid_cross_repository_plan() -> PrSeriesPlan {
+        plan_with_entries(vec![
             entry("schema", &[], "acme/notify-api", "leaf-schema"),
             entry("settings", &["schema"], "acme/notify-web", "leaf-settings"),
-        ]);
+        ])
+    }
 
+    fn valid_long_summary_plan() -> PrSeriesPlan {
+        let mut long_entry = entry("long", &[], "acme/notify-api", "leaf-long");
+        long_entry.summary = "W".repeat(300);
+        plan_with_entries(vec![long_entry])
+    }
+
+    fn valid_step_order_plan() -> PrSeriesPlan {
+        plan_with_steps(
+            vec![
+                entry("schema", &[], "acme/notify-api", "leaf-schema"),
+                entry("docs", &[], "acme/notify-docs", "leaf-docs"),
+                entry("settings", &["schema"], "acme/notify-web", "leaf-settings"),
+            ],
+            vec![
+                step(Some("Add schema and documentation"), &["schema", "docs"]),
+                step(None, &["settings"]),
+            ],
+        )
+    }
+
+    #[rstest]
+    #[case::acyclic_cross_repository_dependencies(valid_cross_repository_plan())]
+    #[case::long_summary_without_label_width_limit(valid_long_summary_plan())]
+    #[case::dependencies_in_earlier_steps(valid_step_order_plan())]
+    fn accepts_valid_plans(#[case] plan: PrSeriesPlan) {
         assert_eq!(plan.validate().map_err(|error| error.to_string()), Ok(()));
     }
 
@@ -391,27 +470,21 @@ mod tests {
         ],
         "pull request dependencies contain a cycle"
     )]
-    #[case::wide_summary(
+    #[case::multiline_summary(
         vec![PrSeriesEntry {
-            id: "wide".to_string(),
-            summary: "W".repeat(15),
+            id: "multiline".to_string(),
+            summary: indoc! {"
+                first line
+                second line
+            "}
+            .to_string(),
             depends_on: Vec::new(),
             repository: "acme/notify-api".to_string(),
-            tq_leaf_id: "leaf-wide".to_string(),
+            tq_leaf_id: "leaf-multiline".to_string(),
         }],
-        "summary for pull request `wide` does not fit within the 200px Mermaid label width"
+        "pull request summary must be a single line"
     )]
-    #[case::exact_width(
-        vec![PrSeriesEntry {
-            id: "wide".to_string(),
-            summary: format!("{}{}", "あ".repeat(10), "i".repeat(4)),
-            depends_on: Vec::new(),
-            repository: "acme/notify-api".to_string(),
-            tq_leaf_id: "leaf-wide".to_string(),
-        }],
-        "summary for pull request `wide` does not fit within the 200px Mermaid label width"
-    )]
-    fn rejects_invalid_dependencies_and_labels(
+    fn rejects_invalid_dependencies_and_multiline_summaries(
         #[case] entries: Vec<PrSeriesEntry>,
         #[case] expected_error: &str,
     ) {
@@ -422,6 +495,159 @@ mod tests {
                 .map(|error| error.to_string()),
             Some(expected_error.to_string()),
         );
+    }
+
+    #[rstest]
+    #[case::missing_multi_pull_request_summary(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema"), entry("settings", &[], "acme/notify-web", "leaf-settings")],
+        vec![step(None, &["schema", "settings"])],
+        "step 1 must have a summary when it contains multiple pull requests"
+    )]
+    #[case::empty_step(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(None, &[])],
+        "step 1 must contain at least one pull request"
+    )]
+    #[case::unknown_pull_request(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(None, &["missing"])],
+        "step 1 references unknown pull request id `missing`"
+    )]
+    #[case::pull_request_in_multiple_steps(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(None, &["schema"]), step(None, &["schema"])],
+        "pull request `schema` belongs to multiple steps"
+    )]
+    #[case::duplicate_pull_request_in_one_step(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(Some("Repeat the schema work"), &["schema", "schema"])],
+        "pull request `schema` belongs to multiple steps"
+    )]
+    #[case::pull_request_without_step(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![],
+        "pull request `schema` does not belong to a step"
+    )]
+    #[case::dependency_in_same_step(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema"), entry("settings", &["schema"], "acme/notify-web", "leaf-settings")],
+        vec![step(Some("Build and document the settings"), &["schema", "settings"])],
+        "pull request `settings` depends on `schema` from the same or a later step"
+    )]
+    #[case::dependency_in_later_step(
+        vec![entry("schema", &["settings"], "acme/notify-api", "leaf-schema"), entry("settings", &[], "acme/notify-web", "leaf-settings")],
+        vec![step(None, &["schema"]), step(None, &["settings"])],
+        "pull request `schema` depends on `settings` from the same or a later step"
+    )]
+    #[case::multiline_step_summary(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(
+            Some(indoc! {"
+                first line
+                second line
+            "}),
+            &["schema"]
+        )],
+        "step summary must be a single line"
+    )]
+    fn rejects_invalid_steps(
+        #[case] entries: Vec<PrSeriesEntry>,
+        #[case] steps: Vec<PrSeriesStep>,
+        #[case] expected_error: &str,
+    ) {
+        assert_eq!(
+            plan_with_steps(entries, steps)
+                .validate()
+                .err()
+                .map(|error| error.to_string()),
+            Some(expected_error.to_string()),
+        );
+    }
+
+    #[rstest]
+    #[case::legacy_without_steps(
+        indoc! {r#"
+            {
+              "name": "Notification preferences",
+              "purpose": "Let users choose which notifications they receive.",
+              "pullRequests": [
+                {
+                  "id": "schema",
+                  "summary": "Add preference tables",
+                  "dependsOn": [],
+                  "repository": "acme/notify-api",
+                  "tqLeafId": "leaf-schema"
+                }
+              ]
+            }
+        "#},
+        plan_with_entries(vec![PrSeriesEntry {
+            id: "schema".to_string(),
+            summary: "Add preference tables".to_string(),
+            depends_on: Vec::new(),
+            repository: "acme/notify-api".to_string(),
+            tq_leaf_id: "leaf-schema".to_string(),
+        }]),
+    )]
+    #[case::steps_use_camel_case_with_optional_summary(
+        indoc! {r#"
+            {
+              "name": "Notification preferences",
+              "purpose": "Let users choose which notifications they receive.",
+              "pullRequests": [
+                {
+                  "id": "schema",
+                  "summary": "Add preference tables",
+                  "dependsOn": [],
+                  "repository": "acme/notify-api",
+                  "tqLeafId": "leaf-schema"
+                },
+                {
+                  "id": "settings",
+                  "summary": "Add the settings page",
+                  "dependsOn": ["schema"],
+                  "repository": "acme/notify-web",
+                  "tqLeafId": "leaf-settings"
+                }
+              ],
+              "steps": [
+                { "pullRequests": ["schema"] },
+                {
+                  "summary": "Add and document the settings experience",
+                  "pullRequests": ["settings"]
+                }
+              ]
+            }
+        "#},
+        plan_with_steps(
+            vec![
+                PrSeriesEntry {
+                    id: "schema".to_string(),
+                    summary: "Add preference tables".to_string(),
+                    depends_on: Vec::new(),
+                    repository: "acme/notify-api".to_string(),
+                    tq_leaf_id: "leaf-schema".to_string(),
+                },
+                PrSeriesEntry {
+                    id: "settings".to_string(),
+                    summary: "Add the settings page".to_string(),
+                    depends_on: vec!["schema".to_string()],
+                    repository: "acme/notify-web".to_string(),
+                    tq_leaf_id: "leaf-settings".to_string(),
+                },
+            ],
+            vec![
+                step(None, &["schema"]),
+                step(
+                    Some("Add and document the settings experience"),
+                    &["settings"],
+                ),
+            ],
+        ),
+    )]
+    fn reads_plan_json(#[case] json: &str, #[case] expected: PrSeriesPlan) {
+        let plan: PrSeriesPlan = serde_json::from_str(json).unwrap();
+
+        assert_eq!(plan, expected);
     }
 
     #[test]

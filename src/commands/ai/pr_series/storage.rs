@@ -293,6 +293,7 @@ mod tests {
         PrSeriesPlan {
             name: "Notification preferences".to_string(),
             purpose: "Let users choose which notifications they receive.".to_string(),
+            steps: None,
             pull_requests: vec![super::super::model::PrSeriesEntry {
                 id: "schema".to_string(),
                 summary: "Add preference tables".to_string(),
