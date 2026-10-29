@@ -1,12 +1,21 @@
+use std::collections::HashMap;
+
 use crate::commands::agent::tui::progress::marks::{session_stage_marks, stage_marks};
 use crate::commands::agent::tui::progress::{
     CurrentPrStage, FetchedDelegate, PrStageInfo, ProgressOpenTarget, ProgressRow, current_pr_stage,
 };
+use crate::commands::agent::tui::progress_batches::ImplementationPlan;
 use crate::commands::agent::types::Session;
 
 use super::App;
 
 const WORKER_PR_REFRESH_ERROR_PREFIX: &str = "PR stage refresh failed:";
+
+#[derive(Debug, Default)]
+pub(in crate::commands::agent::tui) struct WorkerPrProgress {
+    delegate: Option<FetchedDelegate>,
+    linked_pr_stage_info: Option<PrStageInfo>,
+}
 
 impl App {
     pub(in crate::commands::agent::tui) fn apply_worker_pr_progress_result(
@@ -28,33 +37,65 @@ impl App {
             self.clear_error();
         }
 
-        self.worker_pr_progress = delegates
-            .into_iter()
-            .filter_map(|delegate| {
-                let has_checklist_item = delegate
-                    .checklist_item_id
-                    .as_ref()
-                    .or_else(|| {
-                        delegate
-                            .session
-                            .pr_context
-                            .as_ref()
-                            .and_then(|context| context.checklist_item_id.as_ref())
-                    })
-                    .is_some();
-                (has_checklist_item || delegate.pull_request.is_some())
-                    .then(|| (delegate.session.session_id.clone(), delegate))
+        let linked_pr_stages = self
+            .worker_pr_progress
+            .iter()
+            .filter_map(|(session_id, progress)| {
+                progress
+                    .linked_pr_stage_info
+                    .map(|stage| (session_id.clone(), stage))
             })
-            .collect();
+            .collect::<HashMap<_, _>>();
+        let mut worker_pr_progress = HashMap::new();
+        for (session_id, linked_pr_stage_info) in &linked_pr_stages {
+            if self
+                .sessions
+                .iter()
+                .any(|session| session.session_id == *session_id)
+            {
+                worker_pr_progress.insert(
+                    session_id.clone(),
+                    WorkerPrProgress {
+                        delegate: None,
+                        linked_pr_stage_info: Some(*linked_pr_stage_info),
+                    },
+                );
+            }
+        }
+        for delegate in delegates {
+            let has_checklist_item = delegate
+                .checklist_item_id
+                .as_ref()
+                .or_else(|| {
+                    delegate
+                        .session
+                        .pr_context
+                        .as_ref()
+                        .and_then(|context| context.checklist_item_id.as_ref())
+                })
+                .is_some();
+            if has_checklist_item || delegate.pull_request.is_some() {
+                let session_id = delegate.session.session_id.clone();
+                worker_pr_progress.insert(
+                    session_id.clone(),
+                    WorkerPrProgress {
+                        delegate: Some(delegate),
+                        linked_pr_stage_info: linked_pr_stages.get(&session_id).copied(),
+                    },
+                );
+            }
+        }
+        self.worker_pr_progress = worker_pr_progress;
     }
 
     pub(in crate::commands::agent::tui) fn worker_pr_stage_for_session(
         &self,
         session: &Session,
     ) -> Option<CurrentPrStage> {
-        let delegate = self.worker_pr_progress.get(&session.session_id);
+        let progress = self.worker_pr_progress.get(&session.session_id);
+        let delegate = progress.and_then(|progress| progress.delegate.as_ref());
         let pull_request = delegate.and_then(|delegate| delegate.pull_request.as_ref());
-        let linked_pr_stage_info = self.linked_pr_stage_info(&session.session_id);
+        let linked_pr_stage_info = progress.and_then(|progress| progress.linked_pr_stage_info);
         let pr_stage_info = pull_request
             .map(PrStageInfo::from_progress)
             .or(linked_pr_stage_info);
@@ -75,17 +116,43 @@ impl App {
         Some(current_pr_stage(stages, pr_stage_info.as_ref()))
     }
 
-    fn linked_pr_stage_info(&self, session_id: &str) -> Option<PrStageInfo> {
-        self.progress_rows
-            .iter()
-            .find_map(|progress_row| match progress_row {
-                ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row)
-                    if row.session_id == session_id =>
-                {
-                    row.pr_stage_info
+    pub(super) fn retain_worker_pr_stage_info(
+        &mut self,
+        implementation: Option<&ImplementationPlan>,
+        rows: &[ProgressRow],
+    ) {
+        let plan_stage_infos = implementation
+            .map(ImplementationPlan::worker_pr_stage_infos)
+            .unwrap_or_default();
+        for (session_id, pr_stage_info) in plan_stage_infos {
+            self.store_worker_pr_stage_info(&session_id, pr_stage_info);
+        }
+        for progress_row in rows {
+            let row = match progress_row {
+                ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row) => {
+                    row
                 }
-                _ => None,
-            })
+                _ => continue,
+            };
+            let Some(pr_stage_info) = row.pr_stage_info else {
+                continue;
+            };
+            self.store_worker_pr_stage_info(&row.session_id, pr_stage_info);
+        }
+    }
+
+    fn store_worker_pr_stage_info(&mut self, session_id: &str, pr_stage_info: PrStageInfo) {
+        if !self
+            .sessions
+            .iter()
+            .any(|session| session.session_id == session_id)
+        {
+            return;
+        }
+        self.worker_pr_progress
+            .entry(session_id.to_string())
+            .or_default()
+            .linked_pr_stage_info = Some(pr_stage_info);
     }
 
     pub(in crate::commands::agent::tui) fn worker_pr_open_target(
@@ -94,6 +161,7 @@ impl App {
     ) -> Option<ProgressOpenTarget> {
         self.worker_pr_progress
             .get(session_id)
+            .and_then(|progress| progress.delegate.as_ref())
             .and_then(|delegate| delegate.pull_request.as_ref())
             .map(|progress| ProgressOpenTarget::OpenUrl(progress.pull_request.url.clone()))
     }
@@ -102,7 +170,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::tui::progress::{PrProgressRow, ProgressMark, StageMarks};
     use crate::commands::agent::types::{Engine, SessionPrContext, SessionStatus};
     use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use chrono::{TimeZone, Utc};
@@ -151,31 +218,6 @@ mod tests {
             engine: Engine::Claude,
             model: None,
             effort: None,
-        }
-    }
-
-    fn linked_checklist_pr_row(session_id: &str, pr_stage_info: PrStageInfo) -> ProgressRow {
-        ProgressRow::ChecklistPullRequest {
-            batch_id: "batch-1".to_string(),
-            checklist_item_id: "item-1".to_string(),
-            row: PrProgressRow {
-                session_id: session_id.to_string(),
-                repo: Some("sample-project".to_string()),
-                title: "Sample change".to_string(),
-                number: Some(17),
-                url: Some("https://example.test/pull/17".to_string()),
-                pane_id: None,
-                is_ended: false,
-                lookup_unavailable: true,
-                stages: StageMarks {
-                    implementation: ProgressMark::Done,
-                    diff_review: ProgressMark::Done,
-                    pr_body: ProgressMark::Done,
-                    ci: ProgressMark::NotStarted,
-                    merge: ProgressMark::NotStarted,
-                },
-                pr_stage_info: Some(pr_stage_info),
-            },
         }
     }
 
@@ -282,34 +324,6 @@ mod tests {
 
         assert_eq!(
             app.worker_pr_stage_for_session(&current)
-                .map(CurrentPrStage::label),
-            expected,
-        );
-    }
-
-    #[rstest]
-    #[case::lookup_failed_open_link(PrStageInfo::Open(PrCiState::Unknown), true, Some("PR open"))]
-    #[case::lookup_failed_closed_link(PrStageInfo::Closed, true, Some("closed"))]
-    #[case::linked_row_before_lookup(PrStageInfo::Closed, false, Some("closed"))]
-    fn worker_stage_uses_linked_pr_state_when_details_are_unavailable(
-        #[case] linked_stage: PrStageInfo,
-        #[case] apply_lookup_failure: bool,
-        #[case] expected: Option<&str>,
-    ) {
-        let worker = session("worker", Some("item-1"));
-        let mut app = App::with_sessions(vec![worker.clone()]);
-        app.progress_rows = vec![linked_checklist_pr_row(&worker.session_id, linked_stage)];
-        if apply_lookup_failure {
-            app.apply_worker_pr_progress_result(Ok(vec![FetchedDelegate {
-                session: worker.clone(),
-                checklist_item_id: Some("item-1".to_string()),
-                pull_request: None,
-                lookup_unavailable: true,
-            }]));
-        }
-
-        assert_eq!(
-            app.worker_pr_stage_for_session(&worker)
                 .map(CurrentPrStage::label),
             expected,
         );

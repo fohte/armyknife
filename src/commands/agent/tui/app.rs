@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
-use super::progress::{FetchedDelegate, ProgressFetchState, ProgressRow};
+use super::progress::{ProgressFetchState, ProgressRow};
 use super::session_rows::{
     SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_vibe,
 };
@@ -197,7 +197,7 @@ pub struct App {
     /// Session whose plan was explicitly opened with Tab, if any.
     pub(super) progress_inline_source_id: Option<String>,
     /// PR data is fetched for all sessions without changing the row projection.
-    pub(super) worker_pr_progress: HashMap<String, FetchedDelegate>,
+    pub(super) worker_pr_progress: HashMap<String, worker_progress::WorkerPrProgress>,
     pub(super) progress_error: Option<String>,
     pub(super) progress_fetch_states: HashMap<String, ProgressFetchState>,
     progress_cache: HashMap<String, CachedProgress>,
@@ -479,6 +479,9 @@ mod tests {
 
     #[path = "progress_cache.rs"]
     mod progress_cache;
+
+    #[path = "worker_progress.rs"]
+    mod worker_progress;
 
     /// Counter to assign distinct timestamps to test sessions.
     /// Each call returns a progressively older timestamp, so sessions

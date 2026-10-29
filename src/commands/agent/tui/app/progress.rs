@@ -265,6 +265,7 @@ impl App {
         snapshot: CachedProgress,
         resolve_initial_selection: bool,
     ) {
+        self.retain_worker_pr_stage_info(snapshot.implementation.as_ref(), &snapshot.rows);
         let is_open_source = self.progress_inline_source_id.as_deref() == Some(session_id);
         let is_active_source = if self.progress_inline_source_id.is_some() {
             is_open_source

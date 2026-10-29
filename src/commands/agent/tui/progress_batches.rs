@@ -29,6 +29,26 @@ impl ImplementationPlan {
                 .then_some(batch.id.as_str())
         })
     }
+
+    pub(super) fn worker_pr_stage_infos(&self) -> Vec<(String, PrStageInfo)> {
+        self.batches
+            .iter()
+            .flat_map(|batch| &batch.items)
+            .filter_map(|item| {
+                let session_id = item.worker_session_id.as_ref()?;
+                let stage_info = item
+                    .pull_request
+                    .as_ref()
+                    .map(PrStageInfo::from_progress)
+                    .or_else(|| {
+                        item.github_link
+                            .as_ref()
+                            .map(|link| PrStageInfo::from_link_state(link.state.as_deref()))
+                    })?;
+                Some((session_id.clone(), stage_info))
+            })
+            .collect()
+    }
 }
 
 pub(super) fn attach_session_workers(
