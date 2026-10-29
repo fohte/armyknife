@@ -142,6 +142,11 @@ impl PrSeriesPlan {
         if let Some(steps) = &self.steps {
             let mut step_by_entry = HashMap::new();
             for (step_index, step) in steps.iter().enumerate() {
+                ensure!(
+                    !step.pull_requests.is_empty(),
+                    "step {} must contain at least one pull request",
+                    step_index + 1
+                );
                 if let Some(summary) = &step.summary {
                     validate_single_line("step summary", summary)?;
                 }
@@ -378,7 +383,7 @@ fn is_github_path_component(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
 
     use super::*;
 
@@ -418,22 +423,38 @@ mod tests {
         }
     }
 
-    #[test]
-    fn validates_an_acyclic_plan_with_cross_repository_dependencies() {
-        let plan = plan_with_entries(vec![
+    fn valid_cross_repository_plan() -> PrSeriesPlan {
+        plan_with_entries(vec![
             entry("schema", &[], "acme/notify-api", "leaf-schema"),
             entry("settings", &["schema"], "acme/notify-web", "leaf-settings"),
-        ]);
-
-        assert_eq!(plan.validate().map_err(|error| error.to_string()), Ok(()));
+        ])
     }
 
-    #[test]
-    fn accepts_summaries_that_exceed_the_old_label_width() {
+    fn valid_long_summary_plan() -> PrSeriesPlan {
         let mut long_entry = entry("long", &[], "acme/notify-api", "leaf-long");
         long_entry.summary = "W".repeat(300);
-        let plan = plan_with_entries(vec![long_entry]);
+        plan_with_entries(vec![long_entry])
+    }
 
+    fn valid_step_order_plan() -> PrSeriesPlan {
+        plan_with_steps(
+            vec![
+                entry("schema", &[], "acme/notify-api", "leaf-schema"),
+                entry("docs", &[], "acme/notify-docs", "leaf-docs"),
+                entry("settings", &["schema"], "acme/notify-web", "leaf-settings"),
+            ],
+            vec![
+                step(Some("Add schema and documentation"), &["schema", "docs"]),
+                step(None, &["settings"]),
+            ],
+        )
+    }
+
+    #[rstest]
+    #[case::acyclic_cross_repository_dependencies(valid_cross_repository_plan())]
+    #[case::long_summary_without_label_width_limit(valid_long_summary_plan())]
+    #[case::dependencies_in_earlier_steps(valid_step_order_plan())]
+    fn accepts_valid_plans(#[case] plan: PrSeriesPlan) {
         assert_eq!(plan.validate().map_err(|error| error.to_string()), Ok(()));
     }
 
@@ -481,6 +502,11 @@ mod tests {
         vec![entry("schema", &[], "acme/notify-api", "leaf-schema"), entry("settings", &[], "acme/notify-web", "leaf-settings")],
         vec![step(None, &["schema", "settings"])],
         "step 1 must have a summary when it contains multiple pull requests"
+    )]
+    #[case::empty_step(
+        vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
+        vec![step(None, &[])],
+        "step 1 must contain at least one pull request"
     )]
     #[case::unknown_pull_request(
         vec![entry("schema", &[], "acme/notify-api", "leaf-schema")],
@@ -537,9 +563,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reads_legacy_plans_without_steps() {
-        let plan: PrSeriesPlan = serde_json::from_str(indoc! {r#"
+    #[rstest]
+    #[case::legacy_without_steps(
+        indoc! {r#"
             {
               "name": "Notification preferences",
               "purpose": "Let users choose which notifications they receive.",
@@ -553,24 +579,17 @@ mod tests {
                 }
               ]
             }
-        "#})
-        .unwrap();
-
-        assert_eq!(
-            plan,
-            plan_with_entries(vec![PrSeriesEntry {
-                id: "schema".to_string(),
-                summary: "Add preference tables".to_string(),
-                depends_on: Vec::new(),
-                repository: "acme/notify-api".to_string(),
-                tq_leaf_id: "leaf-schema".to_string(),
-            }]),
-        );
-    }
-
-    #[test]
-    fn reads_steps_in_camel_case_with_optional_summary() {
-        let plan: PrSeriesPlan = serde_json::from_str(indoc! {r#"
+        "#},
+        plan_with_entries(vec![PrSeriesEntry {
+            id: "schema".to_string(),
+            summary: "Add preference tables".to_string(),
+            depends_on: Vec::new(),
+            repository: "acme/notify-api".to_string(),
+            tq_leaf_id: "leaf-schema".to_string(),
+        }]),
+    )]
+    #[case::steps_use_camel_case_with_optional_summary(
+        indoc! {r#"
             {
               "name": "Notification preferences",
               "purpose": "Let users choose which notifications they receive.",
@@ -598,54 +617,37 @@ mod tests {
                 }
               ]
             }
-        "#})
-        .unwrap();
-
-        assert_eq!(
-            plan,
-            plan_with_steps(
-                vec![
-                    PrSeriesEntry {
-                        id: "schema".to_string(),
-                        summary: "Add preference tables".to_string(),
-                        depends_on: Vec::new(),
-                        repository: "acme/notify-api".to_string(),
-                        tq_leaf_id: "leaf-schema".to_string(),
-                    },
-                    PrSeriesEntry {
-                        id: "settings".to_string(),
-                        summary: "Add the settings page".to_string(),
-                        depends_on: vec!["schema".to_string()],
-                        repository: "acme/notify-web".to_string(),
-                        tq_leaf_id: "leaf-settings".to_string(),
-                    },
-                ],
-                vec![
-                    step(None, &["schema"]),
-                    step(
-                        Some("Add and document the settings experience"),
-                        &["settings"]
-                    ),
-                ],
-            ),
-        );
-    }
-
-    #[test]
-    fn validates_steps_with_dependencies_in_earlier_steps() {
-        let plan = plan_with_steps(
+        "#},
+        plan_with_steps(
             vec![
-                entry("schema", &[], "acme/notify-api", "leaf-schema"),
-                entry("docs", &[], "acme/notify-docs", "leaf-docs"),
-                entry("settings", &["schema"], "acme/notify-web", "leaf-settings"),
+                PrSeriesEntry {
+                    id: "schema".to_string(),
+                    summary: "Add preference tables".to_string(),
+                    depends_on: Vec::new(),
+                    repository: "acme/notify-api".to_string(),
+                    tq_leaf_id: "leaf-schema".to_string(),
+                },
+                PrSeriesEntry {
+                    id: "settings".to_string(),
+                    summary: "Add the settings page".to_string(),
+                    depends_on: vec!["schema".to_string()],
+                    repository: "acme/notify-web".to_string(),
+                    tq_leaf_id: "leaf-settings".to_string(),
+                },
             ],
             vec![
-                step(Some("Add schema and documentation"), &["schema", "docs"]),
-                step(None, &["settings"]),
+                step(None, &["schema"]),
+                step(
+                    Some("Add and document the settings experience"),
+                    &["settings"],
+                ),
             ],
-        );
+        ),
+    )]
+    fn reads_plan_json(#[case] json: &str, #[case] expected: PrSeriesPlan) {
+        let plan: PrSeriesPlan = serde_json::from_str(json).unwrap();
 
-        assert_eq!(plan.validate().map_err(|error| error.to_string()), Ok(()));
+        assert_eq!(plan, expected);
     }
 
     #[test]
@@ -685,64 +687,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_created_pull_requests_from_leaf_github_links() {
-        let plan = plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")]);
-        let checklists: Vec<TqChecklist> = serde_json::from_str(indoc! {r#"
-            [
-              {
-                "id": "checklist-1",
-                "name": "Implementation",
-                "items": [
-                  {
-                    "id": "batch-1",
-                    "content": "Batch 1",
-                    "children": [
-                      {
-                        "id": "leaf-schema",
-                        "content": "Add schema",
-                        "githubLinkId": "link-schema",
-                        "children": []
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-        "#})
-        .unwrap();
-        let links: Vec<TqGithubLink> = serde_json::from_str(indoc! {r#"
-            [
-              {
-                "id": "link-schema",
-                "kind": "pull_request",
-                "owner": "ACME",
-                "repo": "notify-api",
-                "number": 17,
-                "url": "https://github.com/ACME/notify-api/pull/17"
-              }
-            ]
-        "#})
-        .unwrap();
-
-        assert_eq!(
-            resolve_created_pull_requests(&plan, &checklists, &links).unwrap(),
-            vec![CreatedPullRequest {
-                entry_id: "schema".to_string(),
-                repository: Repository {
-                    owner: "acme".to_string(),
-                    name: "notify-api".to_string(),
-                },
-                number: 17,
-                url: "https://github.com/acme/notify-api/pull/17".to_string(),
-            }],
-        );
+    #[fixture]
+    fn single_pr_plan() -> PrSeriesPlan {
+        plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")])
     }
 
-    #[test]
-    fn rejects_a_checklist_link_to_a_different_repository() {
-        let plan = plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")]);
-        let checklists = vec![TqChecklist {
+    #[fixture]
+    fn linked_checklists() -> Vec<TqChecklist> {
+        vec![TqChecklist {
             id: "checklist-1".to_string(),
             name: "Implementation".to_string(),
             items: vec![TqChecklistItem {
@@ -752,8 +704,33 @@ mod tests {
                 github_link_id: Some("link-schema".to_string()),
                 children: Vec::new(),
             }],
-        }];
-        let github_links = vec![TqGithubLink {
+        }]
+    }
+
+    #[rstest]
+    #[case::matching_repository(
+        TqGithubLink {
+            id: "link-schema".to_string(),
+            kind: Some("pull_request".to_string()),
+            owner: Some("ACME".to_string()),
+            repo: Some("notify-api".to_string()),
+            number: Some(17),
+            title: Some("Add preference tables".to_string()),
+            url: Some("https://github.com/ACME/notify-api/pull/17".to_string()),
+            state: Some("open".to_string()),
+        },
+        Ok(vec![CreatedPullRequest {
+            entry_id: "schema".to_string(),
+            repository: Repository {
+                owner: "acme".to_string(),
+                name: "notify-api".to_string(),
+            },
+            number: 17,
+            url: "https://github.com/acme/notify-api/pull/17".to_string(),
+        }]),
+    )]
+    #[case::different_repository(
+        TqGithubLink {
             id: "link-schema".to_string(),
             kind: Some("pull_request".to_string()),
             owner: Some("acme".to_string()),
@@ -762,16 +739,19 @@ mod tests {
             title: Some("Add preference tables".to_string()),
             url: Some("https://github.com/acme/notify-other/pull/23".to_string()),
             state: Some("open".to_string()),
-        }];
+        },
+        Err("tq pull request link `link-schema` points to `acme/notify-other`, expected `acme/notify-api`".to_string()),
+    )]
+    fn resolves_created_pull_requests(
+        single_pr_plan: PrSeriesPlan,
+        linked_checklists: Vec<TqChecklist>,
+        #[case] github_link: TqGithubLink,
+        #[case] expected: std::result::Result<Vec<CreatedPullRequest>, String>,
+    ) {
+        let actual =
+            resolve_created_pull_requests(&single_pr_plan, &linked_checklists, &[github_link])
+                .map_err(|error| error.to_string());
 
-        assert_eq!(
-            resolve_created_pull_requests(&plan, &checklists, &github_links)
-                .err()
-                .map(|error| error.to_string()),
-            Some(
-                "tq pull request link `link-schema` points to `acme/notify-other`, expected `acme/notify-api`"
-                    .to_string(),
-            ),
-        );
+        assert_eq!(actual, expected);
     }
 }

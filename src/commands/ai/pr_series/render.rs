@@ -313,18 +313,24 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn legacy_plan_renders_each_pull_request_as_an_ordered_item() {
-        assert_eq!(
-            render_section(
-                &plan(),
-                "docs",
-                "Existing body",
-                &privacy(),
-                &created_docs()
-            )
-            .unwrap(),
-            indoc! {"
+    #[derive(Debug)]
+    struct RenderCase {
+        plan: PrSeriesPlan,
+        current_entry_id: &'static str,
+        current_body: &'static str,
+        repository_privacy: HashMap<String, bool>,
+        created_pull_requests: Vec<CreatedPullRequest>,
+        expected: String,
+    }
+
+    fn legacy_render_case() -> RenderCase {
+        RenderCase {
+            plan: plan(),
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
                 <!-- pr-series:start -->
                 ### Notification preferences
 
@@ -332,12 +338,12 @@ mod tests {
                 2. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "}
-            .trim_end_matches('\n'),
-        );
+            .trim_end_matches('\n')
+            .to_string(),
+        }
     }
 
-    #[test]
-    fn steps_render_groups_and_omit_groups_with_no_visible_pull_requests() {
+    fn grouped_render_case() -> RenderCase {
         let mut plan = plan();
         plan.steps = Some(vec![
             PrSeriesStep {
@@ -349,10 +355,13 @@ mod tests {
                 pull_requests: vec!["schema".to_string(), "docs".to_string()],
             },
         ]);
-
-        assert_eq!(
-            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs(),).unwrap(),
-            indoc! {"
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
                 <!-- pr-series:start -->
                 ### Notification preferences
 
@@ -361,22 +370,19 @@ mod tests {
                    - **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "}
-            .trim_end_matches('\n'),
-        );
+            .trim_end_matches('\n')
+            .to_string(),
+        }
     }
 
-    #[test]
-    fn private_repository_views_include_private_entries_and_japanese_labels() {
-        assert_eq!(
-            render_section(
-                &plan(),
-                "credentials",
-                "設定本文",
-                &privacy(),
-                &created_private_infra(),
-            )
-            .unwrap(),
-            indoc! {"
+    fn private_japanese_render_case() -> RenderCase {
+        RenderCase {
+            plan: plan(),
+            current_entry_id: "credentials",
+            current_body: "設定本文",
+            repository_privacy: privacy(),
+            created_pull_requests: created_private_infra(),
+            expected: indoc! {"
                 <!-- pr-series:start -->
                 ### Notification preferences
 
@@ -385,33 +391,36 @@ mod tests {
                 3. acme/notify-docs#31
                 <!-- pr-series:end -->
             "}
-            .trim_end_matches('\n'),
-        );
+            .trim_end_matches('\n')
+            .to_string(),
+        }
     }
 
-    #[test]
-    fn one_visible_pull_request_uses_the_ordered_item_without_the_group_summary() {
+    fn one_visible_pull_request_render_case() -> RenderCase {
         let mut plan = plan();
         plan.steps = Some(vec![PrSeriesStep {
             summary: Some("Set up storage and rotate credentials.".to_string()),
             pull_requests: vec!["credentials".to_string(), "docs".to_string()],
         }]);
-
-        assert_eq!(
-            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs(),).unwrap(),
-            indoc! {"
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {"
                 <!-- pr-series:start -->
                 ### Notification preferences
 
                 1. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "}
-            .trim_end_matches('\n'),
-        );
+            .trim_end_matches('\n')
+            .to_string(),
+        }
     }
 
-    #[test]
-    fn summaries_escape_markdown_punctuation() {
+    fn escaped_summary_render_case() -> RenderCase {
         let mut plan = plan();
         plan.pull_requests[0].summary = "Build [preference] tables".to_string();
         plan.pull_requests[2].summary = "Document `settings`".to_string();
@@ -419,16 +428,143 @@ mod tests {
             summary: Some("Group *storage* with [docs](guide)".to_string()),
             pull_requests: vec!["schema".to_string(), "docs".to_string()],
         }]);
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created_docs(),
+            expected: indoc! {r"
+                <!-- pr-series:start -->
+                ### Notification preferences
 
+                1. Group \*storage\* with \[docs\]\(guide\)
+                   - Build \[preference\] tables (not created yet)
+                   - **Document \`settings\`** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn created_non_current_nested_pr_render_case() -> RenderCase {
+        let mut plan = plan();
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: Some("Store preferences and document the settings.".to_string()),
+                pull_requests: vec!["schema".to_string(), "docs".to_string()],
+            },
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["credentials".to_string()],
+            },
+        ]);
+        plan.pull_requests[2].depends_on.clear();
+        let created = vec![CreatedPullRequest {
+            entry_id: "schema".to_string(),
+            repository: Repository {
+                owner: "acme".to_string(),
+                name: "notify-api".to_string(),
+            },
+            number: 12,
+            url: "https://github.com/acme/notify-api/pull/12".to_string(),
+        }];
+        RenderCase {
+            plan,
+            current_entry_id: "docs",
+            current_body: "Existing body",
+            repository_privacy: privacy(),
+            created_pull_requests: created,
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Store preferences and document the settings\\.
+                   - acme/notify-api#12
+                   - **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    fn tenth_step_nested_list_render_case() -> RenderCase {
+        let pull_requests = (1..=11)
+            .map(|number| PrSeriesEntry {
+                id: format!("task-{number}"),
+                summary: format!("Implement notification stage {number}"),
+                depends_on: Vec::new(),
+                repository: "example/notify-api".to_string(),
+                tq_leaf_id: format!("leaf-{number}"),
+            })
+            .collect();
+        let steps = (1..=9)
+            .map(|number| PrSeriesStep {
+                summary: None,
+                pull_requests: vec![format!("task-{number}")],
+            })
+            .chain(std::iter::once(PrSeriesStep {
+                summary: Some("Complete the final notification step".to_string()),
+                pull_requests: vec!["task-10".to_string(), "task-11".to_string()],
+            }))
+            .collect();
+        RenderCase {
+            plan: PrSeriesPlan {
+                name: "Notification workflow".to_string(),
+                purpose: "Implement notification delivery in stages.".to_string(),
+                pull_requests,
+                steps: Some(steps),
+            },
+            current_entry_id: "task-11",
+            current_body: "Existing body",
+            repository_privacy: HashMap::from([("example/notify-api".to_string(), false)]),
+            created_pull_requests: Vec::new(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification workflow
+
+                1. Implement notification stage 1 (not created yet)
+                2. Implement notification stage 2 (not created yet)
+                3. Implement notification stage 3 (not created yet)
+                4. Implement notification stage 4 (not created yet)
+                5. Implement notification stage 5 (not created yet)
+                6. Implement notification stage 6 (not created yet)
+                7. Implement notification stage 7 (not created yet)
+                8. Implement notification stage 8 (not created yet)
+                9. Implement notification stage 9 (not created yet)
+                10. Complete the final notification step
+                    - Implement notification stage 10 (not created yet)
+                    - **Implement notification stage 11** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::legacy_plan(legacy_render_case())]
+    #[case::grouped_step_filters_private_entries(grouped_render_case())]
+    #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
+    #[case::single_visible_pr_omits_step_summary(one_visible_pull_request_render_case())]
+    #[case::summaries_escape_markdown_punctuation(escaped_summary_render_case())]
+    #[case::created_non_current_pr_uses_reference_in_nested_list(
+        created_non_current_nested_pr_render_case()
+    )]
+    #[case::tenth_step_uses_four_space_nested_list_indentation(tenth_step_nested_list_render_case())]
+    fn renders_steps_as_expected(#[case] case: RenderCase) {
         assert_eq!(
-            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs(),).unwrap(),
-            r"<!-- pr-series:start -->
-### Notification preferences
-
-1. Group \*storage\* with \[docs\]\(guide\)
-   - Build \[preference\] tables (not created yet)
-   - **Document \`settings\`** (this PR)
-<!-- pr-series:end -->",
+            render_section(
+                &case.plan,
+                case.current_entry_id,
+                case.current_body,
+                &case.repository_privacy,
+                &case.created_pull_requests,
+            )
+            .unwrap(),
+            case.expected,
         );
     }
 

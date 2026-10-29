@@ -281,7 +281,7 @@ a ai pr-series set <task-id> --file plan.json
 a ai pr-series sync <task-id>
 ```
 
-`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. An optional `steps` array groups PR IDs in execution order. Every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not. The `purpose` field remains required for compatibility with existing plan files, but is not included in the synchronized section.
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. An optional `steps` array groups PR IDs in execution order. Each step must contain at least one PR, every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not. The `purpose` field remains required for compatibility with existing plan files, but is not included in the synchronized section.
 
 ```json
 {
@@ -305,18 +305,18 @@ a ai pr-series sync <task-id>
     {
       "id": "settings",
       "summary": "Add the notification settings page",
-      "dependsOn": ["validation"],
+      "dependsOn": ["schema"],
       "repository": "acme/notify-web",
       "tqLeafId": "<settings-leaf-id>"
     }
   ],
   "steps": [
     {
-      "summary": "Add and validate notification preference storage",
-      "pullRequests": ["schema", "validation"]
+      "pullRequests": ["schema"]
     },
     {
-      "pullRequests": ["settings"]
+      "summary": "Add validation and the settings page",
+      "pullRequests": ["validation", "settings"]
     }
   ]
 }
@@ -329,15 +329,15 @@ For example, if `schema` is already created and `settings` is the current PR, th
 
 ### Notification preferences
 
-1. Add and validate notification preference storage
-   - acme/notify-api#12
+1. acme/notify-api#12
+2. Add validation and the settings page
    - Validate notification preference settings (not created yet)
-2. **Add the notification settings page** (this PR)
+   - **Add the notification settings page** (this PR)
 
 <!-- pr-series:end -->
 ```
 
-`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
 
 #### `a ai review`
 
