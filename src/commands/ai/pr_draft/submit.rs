@@ -1287,7 +1287,16 @@ mod tests {
             .received_requests()
             .await
             .iter()
-            .filter(|request| request.url.path().contains("/stacks"))
+            .filter(|request| {
+                let path = request.url.path();
+                path.contains("/stacks")
+                    || (request.method.as_str() == "GET"
+                        && path.contains("/pulls/")
+                        && path
+                            .rsplit('/')
+                            .next()
+                            .is_some_and(|number| number.parse::<u64>().is_ok()))
+            })
             .map(|request| {
                 let body = if request.method.as_str() == "POST" {
                     request
@@ -1306,14 +1315,14 @@ mod tests {
             .collect()
     }
 
-    fn expected_stack_get(
+    fn expected_stack_membership_get(
         repo: &str,
         pull_request: u64,
     ) -> (String, String, String, serde_json::Value) {
         (
             "GET".to_string(),
-            format!("/repos/sample-owner/{repo}/stacks"),
-            format!("pull_request={pull_request}"),
+            format!("/repos/sample-owner/{repo}/pulls/{pull_request}"),
+            String::new(),
             serde_json::Value::Null,
         )
     }
@@ -1527,7 +1536,7 @@ mod tests {
             (
                 Ok(()),
                 vec![
-                    expected_stack_get(repo, 17),
+                    expected_stack_membership_get(repo, 17),
                     expected_stack_post(
                         format!("/repos/sample-owner/{repo}/stacks"),
                         serde_json::json!({ "pull_requests": [17, 18] }),
@@ -1548,7 +1557,7 @@ mod tests {
         ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
             .await;
         ctx.pull_request(18).create().await;
-        ctx.stack(23).get_for_pull_request(17, &[10, 17]).await;
+        ctx.stack(23).get_for_pull_request(17, 2, 2).await;
         ctx.stack(23).add_with_status(&[18], status).await;
 
         let result = run_stack_submit(&env, "feature/top", Some("main")).await;
@@ -1561,7 +1570,7 @@ mod tests {
             (
                 Ok(()),
                 vec![
-                    expected_stack_get(repo, 17),
+                    expected_stack_membership_get(repo, 17),
                     expected_stack_post(
                         format!("/repos/sample-owner/{repo}/stacks/23/add"),
                         serde_json::json!({ "pull_requests": [18] }),
@@ -1632,7 +1641,7 @@ mod tests {
         ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
             .await;
         ctx.pull_request(18).create().await;
-        ctx.stack(23).get_for_pull_request(17, &[10, 17, 16]).await;
+        ctx.stack(23).get_for_pull_request(17, 2, 3).await;
 
         let result = run_stack_submit(&env, "feature/top", Some("main")).await;
 
@@ -1641,7 +1650,10 @@ mod tests {
                 result.map_err(|error| error.to_string()),
                 stack_requests(&env).await,
             ),
-            (Ok(()), vec![expected_stack_get("stack-middle", 17)],),
+            (
+                Ok(()),
+                vec![expected_stack_membership_get("stack-middle", 17)],
+            ),
         );
     }
 

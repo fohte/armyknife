@@ -74,7 +74,7 @@ pub(super) async fn stack_created_pull_request(
         };
     };
 
-    if stack.pull_requests.last() != Some(&lower_pr.number) {
+    if stack.position != stack.size {
         return Some(base_pr_not_at_top_warning(&stack, lower_pr.number));
     }
 
@@ -115,19 +115,10 @@ fn format_warning(reason: &str, instructions: Option<&str>) -> String {
 }
 
 fn base_pr_not_at_top_warning(stack: &PullRequestStack, lower_pr: u64) -> String {
-    let position = stack
-        .pull_requests
-        .iter()
-        .position(|number| *number == lower_pr)
-        .map(|position| position + 1);
-    let position = position.map_or_else(
-        || "an unknown position".to_string(),
-        |position| format!("position {position} of {}", stack.pull_requests.len()),
-    );
     format_warning(
         &format!(
-            "the PR was created, but was not added to stack {} because its base PR {lower_pr} is at {position}; only the top PR can be extended.",
-            stack.number,
+            "the PR was created, but was not added to stack {} because its base PR {lower_pr} is at position {} of {}; only the top PR can be extended.",
+            stack.number, stack.position, stack.size,
         ),
         None,
     )
@@ -200,7 +191,6 @@ mod tests {
         StackCreationFailure,
         StackAddFailure,
         BasePrNotAtTop,
-        BasePrMissingFromStack,
     }
 
     struct FakeStackClient {
@@ -261,15 +251,13 @@ mod tests {
                 Scenario::StackCreationFailure => Ok(None),
                 Scenario::BasePrNotAtTop => Ok(Some(PullRequestStack {
                     number: 23,
-                    pull_requests: vec![10, 17, 16],
-                })),
-                Scenario::BasePrMissingFromStack => Ok(Some(PullRequestStack {
-                    number: 23,
-                    pull_requests: vec![10, 16],
+                    position: 2,
+                    size: 3,
                 })),
                 _ => Ok(Some(PullRequestStack {
                     number: 23,
-                    pull_requests: vec![10, 17],
+                    position: 2,
+                    size: 2,
                 })),
             }
         }
@@ -399,10 +387,6 @@ mod tests {
     #[case::base_pr_not_at_top(
         Scenario::BasePrNotAtTop,
         "Warning: the PR was created, but was not added to stack 23 because its base PR 17 is at position 2 of 3; only the top PR can be extended."
-    )]
-    #[case::base_pr_missing_from_stack(
-        Scenario::BasePrMissingFromStack,
-        "Warning: the PR was created, but was not added to stack 23 because its base PR 17 is at an unknown position; only the top PR can be extended."
     )]
     #[tokio::test]
     async fn returns_complete_warning_for_stack_failures(

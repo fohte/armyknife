@@ -1151,27 +1151,30 @@ pub struct MockPullRequestStackBuilder<'a> {
 }
 
 impl MockPullRequestStackBuilder<'_> {
-    /// Mock GET /repos/{owner}/{repo}/stacks for a pull request with no stack.
+    /// Mock GET /repos/{owner}/{repo}/pulls/{number} with no stack membership.
     pub async fn get_empty_for_pull_request(self, pull_request: u64) {
         let owner = self.owner;
         let repo = self.repo;
         Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/stacks")))
-            .and(query_param("pull_request", pull_request.to_string()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pull_request}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "stack": null })))
             .mount(self.server)
             .await;
     }
 
-    /// Mock GET /repos/{owner}/{repo}/stacks for a pull request in a stack.
-    pub async fn get_for_pull_request(self, pull_request: u64, pull_requests: &[u64]) {
+    /// Mock GET /repos/{owner}/{repo}/pulls/{number} with stack membership.
+    pub async fn get_for_pull_request(self, pull_request: u64, position: u64, size: u64) {
         let owner = self.owner;
         let repo = self.repo;
-        let stack = mock_stack(self.number, pull_requests);
         Mock::given(method("GET"))
-            .and(path(format!("/repos/{owner}/{repo}/stacks")))
-            .and(query_param("pull_request", pull_request.to_string()))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!([stack])))
+            .and(path(format!("/repos/{owner}/{repo}/pulls/{pull_request}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "stack": {
+                    "number": self.number,
+                    "position": position,
+                    "size": size,
+                }
+            })))
             .mount(self.server)
             .await;
     }

@@ -6,11 +6,12 @@ use serde_json::json;
 use super::client::GitHubClient;
 use super::error::Result;
 
-/// A pull request stack and its bottom-to-top pull request order.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Stack membership metadata exposed on a pull request resource.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PullRequestStack {
     pub number: u64,
-    pub pull_requests: Vec<u64>,
+    pub position: u64,
+    pub size: u64,
 }
 
 /// Operations for GitHub pull request stacks.
@@ -37,14 +38,8 @@ pub trait PrStackClient: Send + Sync {
 }
 
 #[derive(Debug, Deserialize)]
-struct StackResponse {
-    number: u64,
-    pull_requests: Vec<StackPullRequestResponse>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StackPullRequestResponse {
-    number: u64,
+struct PullRequestResponse {
+    stack: Option<PullRequestStack>,
 }
 
 impl PrStackClient for GitHubClient {
@@ -54,20 +49,10 @@ impl PrStackClient for GitHubClient {
         repo: &str,
         pull_request: u64,
     ) -> Result<Option<PullRequestStack>> {
-        let route = format!("/repos/{owner}/{repo}/stacks");
-        let pull_request = pull_request.to_string();
-        let stacks: Vec<StackResponse> = self
-            .rest_get_with_query(&route, &[("pull_request", &pull_request)])
-            .await?;
+        let route = format!("/repos/{owner}/{repo}/pulls/{pull_request}");
+        let pull_request: PullRequestResponse = self.rest_get(&route).await?;
 
-        Ok(stacks.into_iter().next().map(|stack| PullRequestStack {
-            number: stack.number,
-            pull_requests: stack
-                .pull_requests
-                .into_iter()
-                .map(|pull_request| pull_request.number)
-                .collect(),
-        }))
+        Ok(pull_request.stack)
     }
 
     async fn create_stack(&self, owner: &str, repo: &str, pull_requests: &[u64]) -> Result<()> {
