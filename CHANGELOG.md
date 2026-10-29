@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.496](https://github.com/fohte/armyknife/compare/v0.1.495...v0.1.496) (2026-10-29)
+
+
+### Bug Fixes
+
+* **gh/issue-agent:** compare pull with snapshots ([#1339](https://github.com/fohte/armyknife/issues/1339)) ([e663c0a](https://github.com/fohte/armyknife/commit/e663c0abfba0e3cee012672d3f09b1b430a73e3d))
+
 ## [0.1.495](https://github.com/fohte/armyknife/compare/v0.1.494...v0.1.495) (2026-10-29)
 
 
