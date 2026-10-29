@@ -14,9 +14,7 @@ use std::time::Instant;
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
 use super::progress::ProgressRow;
-use super::session_rows::{
-    SessionRowKey, SessionRowOrder, SessionTask, build_session_rows_with_vibe, tasks_row_occurrence,
-};
+use super::session_rows::{SessionRowOrder, SessionTask, build_session_rows_with_vibe};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
 
@@ -44,7 +42,6 @@ impl InitialProgressSelection {
 struct FocusedTaskAncestor {
     task_session_id: String,
     progress_child_id: String,
-    task_row_occurrence: usize,
 }
 
 mod clean;
@@ -156,8 +153,8 @@ pub struct App {
     /// correspondence (no extra `ListItem`s for separators, etc.).
     /// Updated each render by the UI layer after building the row list.
     row_sessions: Vec<Option<usize>>,
-    /// Distinguishes YOUR TURN and TASKS rows for the same session.
-    row_keys: Vec<Option<SessionRowKey>>,
+    /// Stable identity for restoring a selection after display rows change.
+    row_keys: Vec<Option<String>>,
     /// Rendered item heights support restoring a selection's terminal line.
     row_heights: Vec<usize>,
     list_viewport_height: usize,
@@ -355,10 +352,7 @@ impl App {
                 ancestor.task_session_id.clone(),
                 ancestor.progress_child_id,
             ));
-            self.restore_selection(SelectionAnchor::for_session_occurrence(
-                ancestor.task_session_id,
-                ancestor.task_row_occurrence,
-            ));
+            self.restore_selection(SelectionAnchor::for_session(ancestor.task_session_id));
             return;
         }
 
@@ -402,7 +396,12 @@ impl App {
                     .sessions
                     .iter()
                     .find(|session| session.session_id == *ancestor_id)?;
-                let task_row_occurrence = tasks_row_occurrence(&rows, ancestor_id)?;
+                if !rows
+                    .iter()
+                    .any(|row| row.session_id() == Some(ancestor_id.as_str()))
+                {
+                    return None;
+                }
                 let progress_child_id = child_session
                     .ancestor_session_ids
                     .get(index + 1)
@@ -411,7 +410,6 @@ impl App {
                 Some(FocusedTaskAncestor {
                     task_session_id: ancestor.session_id.clone(),
                     progress_child_id,
-                    task_row_occurrence,
                 })
             })
     }
@@ -595,9 +593,19 @@ mod tests {
         );
 
         assert_eq!(
-            app.selected_session()
-                .map(|session| session.session_id.as_str()),
-            Some(expected_session_id)
+            (
+                app.selected_session()
+                    .map(|session| session.session_id.as_str()),
+                app.list_state
+                    .selected()
+                    .and_then(|position| app.row_keys.get(position))
+                    .cloned()
+                    .flatten(),
+            ),
+            (
+                Some(expected_session_id),
+                Some(expected_session_id.to_string()),
+            ),
         );
     }
 
@@ -650,13 +658,11 @@ mod tests {
         assert_eq!(
             (
                 app.selected_session_id(),
-                app.selected_session_row_occurrence(),
                 app.progress_focused,
                 app.initial_progress_selection.clone(),
             ),
             (
                 Some("intermediate-delegate"),
-                Some(0),
                 true,
                 Some(InitialProgressSelection::new(
                     "intermediate-delegate".to_string(),

@@ -1,4 +1,4 @@
-use super::super::session_rows::{SessionRow, SessionRowKey, build_session_rows_with_order};
+use super::super::session_rows::{SessionRow, build_session_rows_with_order};
 use super::App;
 
 impl App {
@@ -20,14 +20,14 @@ impl App {
     ) {
         let row_keys = row_session_ids
             .iter()
-            .map(|id| id.map(|id| SessionRowKey::Task(id.to_string())))
+            .map(|id| id.map(str::to_owned))
             .collect::<Vec<_>>();
         self.update_rendered_row_keys(&row_keys);
     }
 
     pub(in crate::commands::agent::tui) fn update_rendered_rows(
         &mut self,
-        row_keys: &[Option<SessionRowKey>],
+        row_keys: &[Option<String>],
         row_heights: &[usize],
         viewport_height: usize,
     ) {
@@ -37,21 +37,26 @@ impl App {
         self.restore_pending_selection_line();
     }
 
-    pub(super) fn update_rendered_row_keys(&mut self, row_keys: &[Option<SessionRowKey>]) {
+    pub(super) fn update_rendered_row_keys(&mut self, row_keys: &[Option<String>]) {
         self.row_sessions = row_keys
             .iter()
             .map(|key| {
                 key.as_ref().and_then(|key| {
                     self.sessions
                         .iter()
-                        .position(|session| session.session_id == key.session_id())
+                        .position(|session| session.session_id == key.as_str())
                 })
             })
             .collect();
         self.row_keys = row_keys.to_vec();
         if let Some(order) = self.session_row_order.as_mut() {
-            let keys = self.row_keys.iter().flatten().cloned().collect::<Vec<_>>();
-            order.remember_keys(&keys);
+            let session_ids = self
+                .row_keys
+                .iter()
+                .flatten()
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+            order.remember_session_ids(&session_ids);
         }
     }
 
