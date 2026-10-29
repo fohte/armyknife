@@ -1306,6 +1306,25 @@ mod tests {
             .collect()
     }
 
+    fn expected_stack_get(
+        repo: &str,
+        pull_request: u64,
+    ) -> (String, String, String, serde_json::Value) {
+        (
+            "GET".to_string(),
+            format!("/repos/sample-owner/{repo}/stacks"),
+            format!("pull_request={pull_request}"),
+            serde_json::Value::Null,
+        )
+    }
+
+    fn expected_stack_post(
+        path: String,
+        body: serde_json::Value,
+    ) -> (String, String, String, serde_json::Value) {
+        ("POST".to_string(), path, String::new(), body)
+    }
+
     async fn run_stack_submit(
         env: &TestEnv,
         branch: &str,
@@ -1484,16 +1503,19 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::success("stack-create", 201)]
+    #[case::api_failure("stack-failure", 422)]
     #[tokio::test]
-    async fn submit_creates_stack_when_base_pr_is_not_stacked() {
-        let env = setup_test_env_without_pull_request_mocks("sample-owner", "stack-create").await;
+    async fn submit_handles_stack_create_results(#[case] repo: &str, #[case] status: u16) {
+        let env = setup_test_env_without_pull_request_mocks("sample-owner", repo).await;
         let ctx = env.mock.repo(&env.owner, &env.repo);
         ctx.list_pull_requests_empty_for_branch("feature/top").await;
         ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
             .await;
         ctx.pull_request(18).create().await;
         ctx.stack(1).get_empty_for_pull_request(17).await;
-        ctx.stack(1).create(&[17, 18]).await;
+        ctx.stack(1).create_with_status(&[17, 18], status).await;
 
         let result = run_stack_submit(&env, "feature/top", Some("main")).await;
 
@@ -1505,54 +1527,9 @@ mod tests {
             (
                 Ok(()),
                 vec![
-                    (
-                        "GET".to_string(),
-                        "/repos/sample-owner/stack-create/stacks".to_string(),
-                        "pull_request=17".to_string(),
-                        serde_json::Value::Null,
-                    ),
-                    (
-                        "POST".to_string(),
-                        "/repos/sample-owner/stack-create/stacks".to_string(),
-                        String::new(),
-                        serde_json::json!({ "pull_requests": [17, 18] }),
-                    ),
-                ],
-            ),
-        );
-    }
-
-    #[tokio::test]
-    async fn submit_succeeds_when_stack_creation_fails() {
-        let env = setup_test_env_without_pull_request_mocks("sample-owner", "stack-failure").await;
-        let ctx = env.mock.repo(&env.owner, &env.repo);
-        ctx.list_pull_requests_empty_for_branch("feature/top").await;
-        ctx.list_open_pull_requests_with(17, "Base change", "Body", "main")
-            .await;
-        ctx.pull_request(18).create().await;
-        ctx.stack(1).get_empty_for_pull_request(17).await;
-        ctx.stack(1).create_with_status(&[17, 18], 422).await;
-
-        let result = run_stack_submit(&env, "feature/top", Some("main")).await;
-
-        assert_eq!(
-            (
-                result.map_err(|error| error.to_string()),
-                stack_requests(&env).await,
-            ),
-            (
-                Ok(()),
-                vec![
-                    (
-                        "GET".to_string(),
-                        "/repos/sample-owner/stack-failure/stacks".to_string(),
-                        "pull_request=17".to_string(),
-                        serde_json::Value::Null,
-                    ),
-                    (
-                        "POST".to_string(),
-                        "/repos/sample-owner/stack-failure/stacks".to_string(),
-                        String::new(),
+                    expected_stack_get(repo, 17),
+                    expected_stack_post(
+                        format!("/repos/sample-owner/{repo}/stacks"),
                         serde_json::json!({ "pull_requests": [17, 18] }),
                     ),
                 ],
@@ -1584,16 +1561,9 @@ mod tests {
             (
                 Ok(()),
                 vec![
-                    (
-                        "GET".to_string(),
-                        format!("/repos/sample-owner/{repo}/stacks"),
-                        "pull_request=17".to_string(),
-                        serde_json::Value::Null,
-                    ),
-                    (
-                        "POST".to_string(),
+                    expected_stack_get(repo, 17),
+                    expected_stack_post(
                         format!("/repos/sample-owner/{repo}/stacks/23/add"),
-                        String::new(),
                         serde_json::json!({ "pull_requests": [18] }),
                     ),
                 ],
@@ -1671,15 +1641,7 @@ mod tests {
                 result.map_err(|error| error.to_string()),
                 stack_requests(&env).await,
             ),
-            (
-                Ok(()),
-                vec![(
-                    "GET".to_string(),
-                    "/repos/sample-owner/stack-middle/stacks".to_string(),
-                    "pull_request=17".to_string(),
-                    serde_json::Value::Null,
-                )],
-            ),
+            (Ok(()), vec![expected_stack_get("stack-middle", 17)],),
         );
     }
 

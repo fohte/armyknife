@@ -261,13 +261,13 @@ Manage PR body drafts with human-in-the-loop review.
 
 `submit` options:
 
-| Option         | Description                                                                                        |
-| -------------- | -------------------------------------------------------------------------------------------------- |
-| `--base <ref>` | Base branch for the PR. If it has an open PR, `submit` creates or extends its stack when possible. |
-| `--draft`      | Create as draft PR                                                                                 |
-| `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository)                   |
+| Option         | Description                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `--base <ref>` | Base branch for the PR. If it has an open PR from this repository, `submit` stacks the new PR when possible. |
+| `--draft`      | Create as draft PR                                                                                           |
+| `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository)                             |
 
-If the base PR is not at the top of its stack, the new PR stays unstacked and a warning is printed.
+If that branch has an open PR from this repository, `submit` creates a stack if needed or adds the new PR when the base PR is at the top. If the base PR is lower in its stack, the new PR stays unstacked and a warning is printed. Stack API failures do not fail submission; they print a warning with a manual `gh api` command.
 
 #### `a ai pr-series`
 
