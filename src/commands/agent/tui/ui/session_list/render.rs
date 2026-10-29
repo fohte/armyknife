@@ -103,15 +103,11 @@ mod tests {
     use rstest::{fixture, rstest};
     use unicode_width::UnicodeWidthStr;
 
-    use super::super::items::{
-        MIN_WORK_TYPE_COLUMN_WIDTH, TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_BASE_INDENT,
-        tree_branch_text,
-    };
+    use super::super::items::{ColumnLayout, tree_branch_text};
 
-    const WAITING_QUESTION_INDENT: usize =
-        WAITING_QUESTION_BASE_INDENT + MIN_WORK_TYPE_COLUMN_WIDTH;
-    const TASK_NUMBER_COLUMN_START: usize =
-        WAITING_QUESTION_INDENT - TASK_NUMBER_COLUMN_WIDTH - MIN_WORK_TYPE_COLUMN_WIDTH;
+    fn default_column_layout() -> ColumnLayout {
+        ColumnLayout::new(80, &AgentConfig::default())
+    }
     #[test]
     fn test_time_column_dims_after_one_hour_independent_of_status() {
         let now = Utc::now();
@@ -402,7 +398,8 @@ mod tests {
             }
         });
 
-        let icon_column = (WAITING_QUESTION_INDENT - MIN_WORK_TYPE_COLUMN_WIDTH) as u16;
+        let layout = default_column_layout();
+        let icon_column = layout.title_base_indent() as u16;
         assert_eq!(
             (
                 buffer[(icon_column, 2)].symbol(),
@@ -516,7 +513,7 @@ mod tests {
             );
         });
 
-        let task_number_column = TASK_NUMBER_COLUMN_START as u16;
+        let task_number_column = default_column_layout().task_number_start() as u16;
         assert_ne!(buffer[(task_number_column, 2)].fg, DIM_FG);
         assert_ne!(buffer[(task_number_column, 3)].fg, DIM_FG);
         assert_eq!(buffer[(task_number_column, 4)].fg, DIM_FG);
@@ -542,8 +539,9 @@ mod tests {
         });
 
         // The number and title positions follow the shared column widths.
-        let number_start = TASK_NUMBER_COLUMN_START as u16;
-        let title_col = WAITING_QUESTION_INDENT as u16;
+        let layout = default_column_layout();
+        let number_start = layout.task_number_start() as u16;
+        let title_col = layout.title_start() as u16;
         let number_end = number_start + "#42".width() as u16;
         let number_cols = number_start..number_end;
         let padding_cols = number_end..title_col;
@@ -661,34 +659,68 @@ mod tests {
         assert_eq!(red_background_cells, expected);
     }
 
+    #[derive(Clone, Copy)]
+    enum NarrowAction {
+        Crit,
+        AgentStatus,
+        AgentStatusFits,
+    }
+
+    impl NarrowAction {
+        fn configure(self, session: &mut Session) {
+            match self {
+                Self::Crit => {
+                    session.status = SessionStatus::WaitingInput;
+                    session
+                        .crit_urls
+                        .push("https://example.test/review".to_string());
+                }
+                Self::AgentStatus | Self::AgentStatusFits => {
+                    session.status = SessionStatus::Stopped;
+                    session.agent_status = Some(AgentStatus {
+                        kind: "needs_attention".to_string(),
+                        note: "choose an option".to_string(),
+                    });
+                }
+            }
+        }
+
+        fn includes_child(self) -> bool {
+            !matches!(self, Self::AgentStatusFits)
+        }
+    }
+
     #[rstest]
-    #[case::tight_crit(36, ">◐ pr... a-long-ses...◆crit just now", false)]
-    #[case::narrow_agent_status(43, ">◐ project      a-long-sess...◆you just now", true)]
+    #[case::tight_crit(36, ">◐ pr... a-long-ses...◆crit just now", NarrowAction::Crit)]
+    #[case::narrow_agent_status(
+        43,
+        ">◐ project      a-long-sess...◆you just now",
+        NarrowAction::AgentStatus
+    )]
+    #[case::compact_agent_status_fits(
+        63,
+        ">◐ project      a-long-session-name◆needs_attention    just now",
+        NarrowAction::AgentStatusFits
+    )]
     fn test_narrow_action_label_keeps_session_name_and_time(
         #[case] term_width: u16,
         #[case] expected_row: &str,
-        #[case] is_agent_status: bool,
+        #[case] action: NarrowAction,
     ) {
         let now = Utc::now();
         let mut root = create_test_session("root");
         root.updated_at = now;
         root.label = Some("a-long-session-name".to_string());
-        if is_agent_status {
-            root.status = SessionStatus::Stopped;
-            root.agent_status = Some(AgentStatus {
-                kind: "needs_attention".to_string(),
-                note: "choose an option".to_string(),
-            });
-        } else {
-            root.status = SessionStatus::WaitingInput;
-            root.crit_urls
-                .push("https://example.test/review".to_string());
-        }
+        action.configure(&mut root);
         root.vibe_enabled = true;
 
-        let mut child = create_test_session("child");
-        child.updated_at = now;
-        child.ancestor_session_ids = vec!["root".to_string()];
+        let mut sessions = vec![root];
+        if action.includes_child() {
+            let mut child = create_test_session("child");
+            child.updated_at = now;
+            child.ancestor_session_ids = vec!["root".to_string()];
+            sessions.push(child);
+        }
 
         let agent_config = AgentConfig {
             vibe_marker: Some(AgentWorkTypeConfig {
@@ -700,7 +732,7 @@ mod tests {
             ..AgentConfig::default()
         };
         let buffer = render_buffer_with_agent_config(
-            &[root, child],
+            &sessions,
             Some(1),
             now,
             term_width,
@@ -710,6 +742,133 @@ mod tests {
         );
 
         assert_eq!(rendered_row(&buffer, 2), expected_row);
+    }
+
+    #[test]
+    fn test_wide_long_status_label_keeps_title_and_time_columns() {
+        let now = Utc::now();
+        let mut session = create_test_session("custom-status");
+        session.updated_at = now;
+        session.status = SessionStatus::Stopped;
+        session.label = Some("a-long-session-name".to_string());
+        session.agent_status = Some(AgentStatus {
+            kind: "custom-status-that-is-much-too-long".to_string(),
+            note: "choose an option".to_string(),
+        });
+
+        let buffer = render_buffer(&[session], Some(1), now, 64, 8);
+
+        assert_eq!(
+            rendered_row(&buffer, 2),
+            ">◐ project                 a-long-... custom-status-... just now"
+        );
+    }
+
+    #[test]
+    fn test_narrow_waiting_question_aligns_with_session_title() {
+        let now = Utc::now();
+        let mut session = create_test_session("question");
+        session.updated_at = now;
+        session.status = SessionStatus::WaitingInput;
+        session.label = Some("question-session".to_string());
+        session.last_message = Some("Review this change?".to_string());
+
+        let output = render_to_string(&[session], Some(1), now, 43, 9);
+        let expected = indoc! {"
+             agent watch0 needs you · 0 running · 0 idl
+             ── TASKS ─────────────────────────────────
+            >◐ project      question-session   just now
+                            “Review this change?”
+
+
+
+
+             ?: keys   Tab: pane   Esc: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[derive(Clone, Copy)]
+    enum TightTqState {
+        LinkedTask,
+        Loading,
+    }
+
+    #[rstest]
+    #[case::linked_task(">● pr... Linked work        just now", TightTqState::LinkedTask)]
+    #[case::loading(">● pr... Session title      just now", TightTqState::Loading)]
+    fn test_tight_layout_omits_task_number_before_title(
+        #[case] expected_row: &str,
+        #[case] tq_state: TightTqState,
+    ) {
+        let now = Utc::now();
+        let mut session = create_test_session("linked");
+        session.updated_at = now;
+        session.status = SessionStatus::Running;
+        session.label = Some("Session title".to_string());
+
+        let buffer = render_buffer_with(&[session], Some(1), now, 36, 9, |app| match tq_state {
+            TightTqState::LinkedTask => {
+                app.task_by_session
+                    .insert("linked".to_string(), linked_task(42, "Linked work", None));
+            }
+            TightTqState::Loading => app.tq_refreshing = true,
+        });
+
+        assert_eq!(rendered_row(&buffer, 2), expected_row);
+    }
+
+    #[test]
+    fn test_deep_narrow_action_row_hides_vibe_marker_to_keep_title_and_label() {
+        let now = Utc::now();
+        let mut root = create_test_session("root");
+        root.updated_at = now;
+        let mut parent = create_test_session("parent");
+        parent.updated_at = now;
+        parent.ancestor_session_ids = vec!["root".to_string()];
+        let mut child = create_test_session("child");
+        child.updated_at = now;
+        child.ancestor_session_ids = vec!["root".to_string(), "parent".to_string()];
+        let mut action = create_test_session("action");
+        action.updated_at = now;
+        action.status = SessionStatus::WaitingInput;
+        action
+            .crit_urls
+            .push("https://example.test/review".to_string());
+        action.label = Some("a-long-session-name".to_string());
+        action.vibe_enabled = true;
+        action.ancestor_session_ids = vec![
+            "root".to_string(),
+            "parent".to_string(),
+            "child".to_string(),
+        ];
+
+        let agent_config = AgentConfig {
+            vibe_marker: Some(AgentWorkTypeConfig {
+                icon: "◆".to_string(),
+                color: AgentWorkTypeColor::Named(
+                    crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
+                ),
+            }),
+            ..AgentConfig::default()
+        };
+        let buffer = render_buffer_with_agent_config(
+            &[root, parent, child, action],
+            Some(1),
+            now,
+            36,
+            10,
+            agent_config,
+            |_| {},
+        );
+
+        assert_eq!(
+            (
+                rendered_row(&buffer, 5),
+                marker_style_on_row(&buffer, 5, "◆")
+            ),
+            (" ◐ pr...   └ a-long-...crit just now".to_string(), None)
+        );
     }
 
     #[test]
@@ -995,8 +1154,8 @@ mod tests {
         let sessions = vec![a, b, c, d, e];
         // list_state index: header=0, a=1, b=2, c=3, d=4, e=5 -- select "e".
         let buffer = render_buffer(&sessions, Some(5), now, 80, 12);
-        let title_column =
-            WAITING_QUESTION_INDENT + tree_branch_text(tree_prefix.as_deref(), false).width();
+        let title_column = default_column_layout().title_start()
+            + tree_branch_text(tree_prefix.as_deref(), false, false).width();
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
@@ -1061,8 +1220,8 @@ mod tests {
         // list_state index: header=0, root=1, gp_a=2, parent_a=3,
         // selected=4, sibling=5, parent_a2=6, cousin=7, gp_b=8.
         let buffer = render_buffer(&sessions, Some(4), now, 80, 20);
-        let title_column =
-            WAITING_QUESTION_INDENT + tree_branch_text(tree_prefix.as_deref(), false).width();
+        let title_column = default_column_layout().title_start()
+            + tree_branch_text(tree_prefix.as_deref(), false, false).width();
 
         assert_eq!(buffer[(title_column as u16, row_y)].fg, expected_fg);
     }
@@ -1088,7 +1247,8 @@ mod tests {
         // The child's own title starts after its tree branch in row 4. The
         // child is a direct descendant of the cursor, but the query "project"
         // matches it too, and search hits must win over kin coloring.
-        let title_column = WAITING_QUESTION_INDENT + "├─ ".width();
+        let title_column = default_column_layout().title_start()
+            + tree_branch_text(Some(&[]), false, false).width();
         assert_eq!(buffer[(title_column as u16, 4)].fg, Color::Yellow);
     }
 
