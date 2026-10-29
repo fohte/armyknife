@@ -324,16 +324,14 @@ a ai pr-series sync <task-id>
 
 For example, if `schema` is already created and `settings` is the current PR, the section includes:
 
-```md
+```text
 <!-- pr-series:start -->
-
 ### Notification preferences
 
 1. acme/notify-api#12
 2. Add validation and the settings page
    - Validate notification preference settings (not created yet)
    - **Add the notification settings page** (this PR)
-
 <!-- pr-series:end -->
 ```
 
