@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.498](https://github.com/fohte/armyknife/compare/v0.1.497...v0.1.498) (2026-10-29)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** limit summary escaping ([#1343](https://github.com/fohte/armyknife/issues/1343)) ([e8fbbf4](https://github.com/fohte/armyknife/commit/e8fbbf46777d86c5e6d994595b4be4d8d0b0d16f))
+
 ## [0.1.497](https://github.com/fohte/armyknife/compare/v0.1.496...v0.1.497) (2026-10-29)
 
 
