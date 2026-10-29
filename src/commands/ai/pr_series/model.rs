@@ -383,7 +383,7 @@ fn is_github_path_component(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use indoc::indoc;
-    use rstest::{fixture, rstest};
+    use rstest::rstest;
 
     use super::*;
 
@@ -687,14 +687,64 @@ mod tests {
         );
     }
 
-    #[fixture]
-    fn single_pr_plan() -> PrSeriesPlan {
-        plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")])
+    #[test]
+    fn resolves_created_pull_requests_from_leaf_github_links() {
+        let plan = plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")]);
+        let checklists: Vec<TqChecklist> = serde_json::from_str(indoc! {r#"
+            [
+              {
+                "id": "checklist-1",
+                "name": "Implementation",
+                "items": [
+                  {
+                    "id": "batch-1",
+                    "content": "Batch 1",
+                    "children": [
+                      {
+                        "id": "leaf-schema",
+                        "content": "Add schema",
+                        "githubLinkId": "link-schema",
+                        "children": []
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+        "#})
+        .unwrap();
+        let links: Vec<TqGithubLink> = serde_json::from_str(indoc! {r#"
+            [
+              {
+                "id": "link-schema",
+                "kind": "pull_request",
+                "owner": "ACME",
+                "repo": "notify-api",
+                "number": 17,
+                "url": "https://github.com/ACME/notify-api/pull/17"
+              }
+            ]
+        "#})
+        .unwrap();
+
+        assert_eq!(
+            resolve_created_pull_requests(&plan, &checklists, &links).unwrap(),
+            vec![CreatedPullRequest {
+                entry_id: "schema".to_string(),
+                repository: Repository {
+                    owner: "acme".to_string(),
+                    name: "notify-api".to_string(),
+                },
+                number: 17,
+                url: "https://github.com/acme/notify-api/pull/17".to_string(),
+            }],
+        );
     }
 
-    #[fixture]
-    fn linked_checklists() -> Vec<TqChecklist> {
-        vec![TqChecklist {
+    #[test]
+    fn rejects_a_checklist_link_to_a_different_repository() {
+        let plan = plan_with_entries(vec![entry("schema", &[], "acme/notify-api", "leaf-schema")]);
+        let checklists = vec![TqChecklist {
             id: "checklist-1".to_string(),
             name: "Implementation".to_string(),
             items: vec![TqChecklistItem {
@@ -704,33 +754,8 @@ mod tests {
                 github_link_id: Some("link-schema".to_string()),
                 children: Vec::new(),
             }],
-        }]
-    }
-
-    #[rstest]
-    #[case::matching_repository(
-        TqGithubLink {
-            id: "link-schema".to_string(),
-            kind: Some("pull_request".to_string()),
-            owner: Some("ACME".to_string()),
-            repo: Some("notify-api".to_string()),
-            number: Some(17),
-            title: Some("Add preference tables".to_string()),
-            url: Some("https://github.com/ACME/notify-api/pull/17".to_string()),
-            state: Some("open".to_string()),
-        },
-        Ok(vec![CreatedPullRequest {
-            entry_id: "schema".to_string(),
-            repository: Repository {
-                owner: "acme".to_string(),
-                name: "notify-api".to_string(),
-            },
-            number: 17,
-            url: "https://github.com/acme/notify-api/pull/17".to_string(),
-        }]),
-    )]
-    #[case::different_repository(
-        TqGithubLink {
+        }];
+        let github_links = vec![TqGithubLink {
             id: "link-schema".to_string(),
             kind: Some("pull_request".to_string()),
             owner: Some("acme".to_string()),
@@ -739,19 +764,16 @@ mod tests {
             title: Some("Add preference tables".to_string()),
             url: Some("https://github.com/acme/notify-other/pull/23".to_string()),
             state: Some("open".to_string()),
-        },
-        Err("tq pull request link `link-schema` points to `acme/notify-other`, expected `acme/notify-api`".to_string()),
-    )]
-    fn resolves_created_pull_requests(
-        single_pr_plan: PrSeriesPlan,
-        linked_checklists: Vec<TqChecklist>,
-        #[case] github_link: TqGithubLink,
-        #[case] expected: std::result::Result<Vec<CreatedPullRequest>, String>,
-    ) {
-        let actual =
-            resolve_created_pull_requests(&single_pr_plan, &linked_checklists, &[github_link])
-                .map_err(|error| error.to_string());
+        }];
 
-        assert_eq!(actual, expected);
+        assert_eq!(
+            resolve_created_pull_requests(&plan, &checklists, &github_links)
+                .err()
+                .map(|error| error.to_string()),
+            Some(
+                "tq pull request link `link-schema` points to `acme/notify-other`, expected `acme/notify-api`"
+                    .to_string(),
+            ),
+        );
     }
 }
