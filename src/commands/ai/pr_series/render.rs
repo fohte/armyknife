@@ -51,6 +51,8 @@ pub fn render_section(
         .map(|pull_request| (pull_request.entry_id.as_str(), pull_request))
         .collect::<HashMap<_, _>>();
     let body_is_japanese = contains_japanese(&body_language_source);
+    let render_entry =
+        |entry| render_pull_request(entry, current_entry_id, body_is_japanese, &created_by_id);
     let mut rendered_steps = Vec::new();
 
     if let Some(steps) = &plan.steps {
@@ -62,12 +64,7 @@ pub fn render_section(
                 .collect::<Vec<_>>();
             match entries.as_slice() {
                 [] => {}
-                [entry] => rendered_steps.push(render_pull_request(
-                    entry,
-                    current_entry_id,
-                    body_is_japanese,
-                    &created_by_id,
-                )),
+                [entry] => rendered_steps.push(render_entry(entry)),
                 _ => {
                     let summary = step.summary.as_deref().context(
                         "step summary is required when multiple pull requests are visible",
@@ -76,15 +73,7 @@ pub fn render_section(
                     let indent = " ".repeat(step_number.to_string().len() + 2);
                     let mut rendered_group = vec![escape_markdown_text(summary)];
                     for entry in entries {
-                        rendered_group.push(format!(
-                            "{indent}- {}",
-                            render_pull_request(
-                                entry,
-                                current_entry_id,
-                                body_is_japanese,
-                                &created_by_id,
-                            )
-                        ));
+                        rendered_group.push(format!("{indent}- {}", render_entry(entry)));
                     }
                     rendered_steps.push(rendered_group.join("\n"));
                 }
@@ -92,12 +81,7 @@ pub fn render_section(
         }
     } else {
         for (entry, _) in &visible_entries {
-            rendered_steps.push(render_pull_request(
-                entry,
-                current_entry_id,
-                body_is_japanese,
-                &created_by_id,
-            ));
+            rendered_steps.push(render_entry(entry));
         }
     }
 
@@ -368,7 +352,16 @@ mod tests {
 
         assert_eq!(
             render_section(&plan, "docs", "Existing body", &privacy(), &created_docs(),).unwrap(),
-            "<!-- pr-series:start -->\n### Notification preferences\n\n1. Add preference storage and document the settings\\.\n   - Add preference tables (not created yet)\n   - **Document the settings** (this PR)\n<!-- pr-series:end -->",
+            indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Add preference storage and document the settings\\.
+                   - Add preference tables (not created yet)
+                   - **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n'),
         );
     }
 
