@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use super::clean_progress::CleanProgress;
 use super::clean_view::CleanView;
-use super::progress::{ProgressFetchState, ProgressRow};
+use super::progress::{FetchedDelegate, ProgressFetchState, ProgressRow};
 use super::session_rows::{SessionRowKey, SessionRowOrder, SessionTask};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeDiscoveryState;
@@ -56,6 +56,7 @@ mod progress_selection;
 mod reload;
 mod session_list;
 mod tq;
+mod worker_progress;
 mod worktree;
 
 pub(in crate::commands::agent::tui) use progress_cache::persist_progress_cache;
@@ -193,6 +194,10 @@ pub struct App {
     pub(super) initial_progress_selection: Option<InitialProgressSelection>,
     /// Whether the selected task's implementation plan is projected into the session tree.
     pub(super) progress_inline_expanded: bool,
+    /// Session whose plan was explicitly opened with Tab.
+    pub(super) progress_inline_source_id: Option<String>,
+    /// PR data is fetched for all sessions without changing the row projection.
+    pub(super) worker_pr_progress: HashMap<String, FetchedDelegate>,
     pub(super) progress_error: Option<String>,
     pub(super) progress_fetch_states: HashMap<String, ProgressFetchState>,
     progress_cache: HashMap<String, CachedProgress>,
@@ -299,6 +304,8 @@ impl App {
             progress_session_id: None,
             initial_progress_selection: None,
             progress_inline_expanded: false,
+            progress_inline_source_id: None,
+            worker_pr_progress: HashMap::new(),
             progress_error: None,
             progress_fetch_states: HashMap::new(),
             progress_cache: HashMap::new(),
@@ -345,7 +352,6 @@ impl App {
         if let Some(focus_id) = focus_session_id
             && let Some(ancestor) = self.focused_task_ancestor(focus_id)
         {
-            self.progress_inline_expanded = true;
             self.progress_session_id = Some(ancestor.task_session_id.clone());
             self.initial_progress_selection = Some(InitialProgressSelection::new(
                 ancestor.task_session_id.clone(),
@@ -626,6 +632,7 @@ mod tests {
             Some("delegate"),
             None,
         );
+        app.toggle_inline_progress();
 
         app.progress_rows = vec![
             ProgressRow::ImplementationHeader {

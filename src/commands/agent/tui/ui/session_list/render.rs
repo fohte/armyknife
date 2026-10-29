@@ -95,7 +95,7 @@ pub(in crate::commands::agent::tui::ui) fn render_session_list(
 mod tests {
     use super::*;
     use crate::commands::agent::tui::progress::{
-        PrProgressRow, ProgressFetchState, ProgressMark, ProgressRow, StageMarks,
+        FetchedDelegate, PrProgressRow, ProgressFetchState, ProgressMark, ProgressRow, StageMarks,
     };
     use crate::commands::agent::tui::session_rows::SessionTask;
     use crate::commands::agent::tui::ui::helpers::DIM_FG;
@@ -106,6 +106,7 @@ mod tests {
     use crate::commands::agent::types::AgentStatus;
     use crate::commands::agent::types::Session;
     use crate::commands::agent::types::SessionStatus;
+    use crate::infra::github::{PrCiState, PrInfo, PrProgressInfo, PrState};
     use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
     use indoc::indoc;
     use ratatui::style::Modifier;
@@ -224,7 +225,7 @@ mod tests {
         >● project                 Design source                                                                                            just now
          ▾                       └─   Implementation plan · 0/1 PRs merged
          ▾                          └─   Batch: Batch A · 0 PRs merged
-         ● project                     └─   Worker session · Planned PR · Placeholder change · I:● R:○ B:○ CI:○ M:○                         just now
+         ● project                     └─   Worker session · Planned PR · Placeholder change implementing                                   just now
 
 
 
@@ -235,7 +236,7 @@ mod tests {
         >● project                 Design source                                                                                            just now
          ▾                       └─   Implementation plan · 0/1 PRs merged
          ▾                          └─   Batch: Batch A · 0 PRs merged
-         ● project                     └─   Worker session · PR #17 I:● R:○ B:○ CI:○ M:○                                                    just now
+         ● project                     └─   Worker session · PR #17 implementing                                                            just now
 
 
 
@@ -247,7 +248,7 @@ mod tests {
         >● project               ├─   Design source                                                                                         just now
          ▾                       │  └─   Implementation plan · 0/1 PRs merged
          ▾                       │     └─   Batch: Batch A · 0 PRs merged
-         ● project               │        └─   Worker session · Planned PR · Placeholder change · I:● R:○ B:○ CI:○ M:○                      just now
+         ● project               │        └─   Worker session · Planned PR · Placeholder change implementing                                just now
          ● project               │           └─   Worker child                                                                              just now
          ● project               └─   Following sibling                                                                                     just now
 
@@ -301,6 +302,7 @@ mod tests {
     ) -> String {
         render_to_string_with(sessions, selected_index, now, 140, height, |app| {
             app.progress_inline_expanded = true;
+            app.progress_inline_source_id = Some("design".to_string());
             app.progress_session_id = Some("design".to_string());
             app.progress_fetch_states
                 .insert("design".to_string(), ProgressFetchState::Ready);
@@ -340,6 +342,88 @@ mod tests {
             inline_checklist_progress_rows,
             &[None, Some("design"), Some("worker")],
         );
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn closed_worker_row_shows_the_fetched_pr_stage() {
+        let now = Utc::now();
+        let mut worker = create_test_session("worker");
+        worker.updated_at = now;
+        worker.label = Some("Worker session".to_string());
+        let output = render_to_string_with(&[worker], Some(0), now, 140, 8, |app| {
+            let session = app.sessions[0].clone();
+            app.apply_worker_pr_progress_result(Ok(vec![FetchedDelegate {
+                session,
+                checklist_item_id: None,
+                pull_request: Some(PrProgressInfo {
+                    pull_request: PrInfo {
+                        number: 17,
+                        title: "Example change".to_string(),
+                        state: PrState::Open,
+                        url: "https://example.test/pull/17".to_string(),
+                    },
+                    ci_state: PrCiState::InProgress,
+                }),
+                lookup_unavailable: false,
+            }]));
+        });
+
+        let expected = indoc! {"
+             agent watch                                                                                                0 needs you · 1 running · 0 idle
+            >● project                 Worker session CI running                                                                                just now
+
+
+
+
+
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn planned_pr_row_shows_one_plain_language_stage() {
+        let now = Utc::now();
+        let mut design = create_test_session("design");
+        design.updated_at = now;
+        design.label = Some("Design source".to_string());
+        let output = render_inline_progress_screen(
+            &[design],
+            Some(0),
+            now,
+            8,
+            vec![
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-a".to_string(),
+                    title: "Batch A".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::PlannedPullRequest {
+                    batch_id: "batch-a".to_string(),
+                    checklist_item_id: "item-a".to_string(),
+                    title: "Planned change".to_string(),
+                },
+            ],
+            &[None, Some("design")],
+        );
+
+        let expected = indoc! {"
+             agent watch                                                                                                0 needs you · 1 running · 0 idle
+            >● project                 Design source                                                                                            just now
+             ▾                       └─   Implementation plan · 0/1 PRs merged
+             ▾                          └─   Batch: Batch A · 0 PRs merged
+                                          └─   Planned PR · Planned change implementing
+
+
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
 
         assert_eq!(output, expected);
     }

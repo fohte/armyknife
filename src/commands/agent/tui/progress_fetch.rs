@@ -10,6 +10,29 @@ use super::super::session_pr_context::{self, Resolution};
 use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::progress_batches::{build_implementation_plan_with_work_sessions, pull_request_queries};
 
+pub(super) async fn fetch_worker_progress(
+    sessions: Vec<Session>,
+) -> Result<Vec<FetchedDelegate>, String> {
+    let query_sessions = sessions.clone();
+    let query_data =
+        tokio::task::spawn_blocking(move || branch_queries_for_sessions(&query_sessions))
+            .await
+            .map_err(|error| format!("failed to inspect session worktrees: {error}"))?;
+
+    let prs = if query_data.queries.is_empty() {
+        HashMap::new()
+    } else {
+        let client =
+            GitHubClient::get().map_err(|error| format!("GitHub is unavailable: {error:#}"))?;
+        client
+            .get_pr_progress_for_branches_batch(&query_data.queries)
+            .await
+            .map_err(|error| format!("failed to fetch PR progress: {error:#}"))?
+    };
+
+    Ok(fetched_sessions(sessions, &query_data, &prs))
+}
+
 pub(super) async fn fetch_progress(
     selected_session_id: String,
     request_scope: ProgressFetchScope,
@@ -438,6 +461,61 @@ mod tests {
             (
                 vec!["design", "worker"],
                 HashMap::from([("worker".to_string(), "planned-item".to_string())]),
+            ),
+        );
+    }
+
+    #[test]
+    fn batches_worker_branches_across_task_roots_and_preserves_checklist_ids() {
+        let mut first = session("first-worker", vec!["first-task"], 1);
+        first.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "first-branch".to_string(),
+            checklist_item_id: Some("first-item".to_string()),
+        });
+        let mut second = session("second-worker", vec!["second-task"], 2);
+        second.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "second-branch".to_string(),
+            checklist_item_id: Some("second-item".to_string()),
+        });
+        let mut duplicate = session("duplicate-worker", vec!["third-task"], 3);
+        duplicate.pr_context = Some(SessionPrContext {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "first-branch".to_string(),
+            checklist_item_id: Some("duplicate-item".to_string()),
+        });
+
+        let queries = branch_queries_for_sessions(&[first, second, duplicate]);
+
+        assert_eq!(
+            (
+                queries.queries,
+                queries.by_session.len(),
+                queries.checklist_item_id_by_session,
+            ),
+            (
+                vec![
+                    BranchPrQuery {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repo".to_string(),
+                        branch: "first-branch".to_string(),
+                    },
+                    BranchPrQuery {
+                        owner: "sample-owner".to_string(),
+                        repo: "sample-repo".to_string(),
+                        branch: "second-branch".to_string(),
+                    },
+                ],
+                3,
+                HashMap::from([
+                    ("first-worker".to_string(), "first-item".to_string()),
+                    ("second-worker".to_string(), "second-item".to_string()),
+                    ("duplicate-worker".to_string(), "duplicate-item".to_string()),
+                ]),
             ),
         );
     }

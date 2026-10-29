@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::clean_progress::{self, CleanLogEvent, TAIL_INTERVAL};
 use super::clean_view::CleanRow;
-use super::progress::{FetchedProgress, ProgressFetchScope};
+use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::tq_snapshot::TqSnapshot;
 use super::worktree::WorktreeRow;
 use crate::commands::agent::types::Session;
@@ -45,6 +45,8 @@ pub enum AppEvent {
         session_id: String,
         result: std::result::Result<FetchedProgress, String>,
     },
+    /// PR stage data for all loaded sessions finished loading.
+    WorkerPrProgressFetched(std::result::Result<Vec<FetchedDelegate>, String>),
     /// One or more JSONL events from the detached clean child.
     CleanLogEvents(Vec<CleanLogEvent>),
     /// tq task snapshot fetch completed. `Ok(None)` means the fetch was
@@ -183,6 +185,21 @@ impl EventHandler {
             let result =
                 super::progress_fetch::fetch_progress(session_id.clone(), fetch_scope).await;
             let _ = tx.send(AppEvent::ProgressFetched { session_id, result });
+        });
+    }
+
+    /// Fetches PR stages for the loaded sessions in one branch batch.
+    pub fn start_worker_pr_progress_fetch(&self, sessions: Vec<Session>) {
+        let tx = self.sender.clone();
+        let Some(rt) = self.rt_handle.as_ref().cloned() else {
+            let _ = tx.send(AppEvent::WorkerPrProgressFetched(Err(
+                "tokio runtime is not available".to_string(),
+            )));
+            return;
+        };
+        rt.spawn(async move {
+            let result = super::progress_fetch::fetch_worker_progress(sessions).await;
+            let _ = tx.send(AppEvent::WorkerPrProgressFetched(result));
         });
     }
 

@@ -49,6 +49,7 @@ fn inline_progress_app(timestamp: DateTime<Utc>) -> App {
     unmatched.ancestor_session_ids = vec![root.session_id.clone()];
     let mut app = create_test_app(vec![root, worker, worker_child, unmatched]);
     app.progress_inline_expanded = true;
+    app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     app.progress_fetch_states
         .insert("design".to_string(), ProgressFetchState::Ready);
@@ -152,6 +153,7 @@ fn inline_planned_item_uses_its_worker_session_without_a_pr_url(timestamp: DateT
     child.ancestor_session_ids = vec![design.session_id.clone(), worker.session_id.clone()];
     let mut app = create_test_app(vec![design, worker, child]);
     app.progress_inline_expanded = true;
+    app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     app.progress_fetch_states
         .insert("design".to_string(), ProgressFetchState::Ready);
@@ -266,6 +268,7 @@ fn cached_planned_item_attaches_worker_from_saved_checklist_context(timestamp: D
         ("worker".to_string(), vec![task_link("task-a")]),
     ])));
     app.progress_inline_expanded = true;
+    app.progress_inline_source_id = Some("design".to_string());
     app.progress_implementation_expanded = true;
     app.progress_session_id = Some("design".to_string());
 
@@ -489,6 +492,7 @@ fn inline_status_distinguishes_fetch_state_from_missing_checklist(
 ) {
     let mut app = create_test_app(vec![create_test_session_at("design", timestamp)]);
     app.progress_inline_expanded = true;
+    app.progress_inline_source_id = Some("design".to_string());
     app.progress_session_id = Some("design".to_string());
     if let Some(state) = fetch_state {
         app.progress_fetch_states
@@ -513,6 +517,7 @@ fn inline_status_distinguishes_fetch_state_from_missing_checklist(
 fn inline_status_displays_cached_pr_lookup_error(timestamp: DateTime<Utc>) {
     let mut app = create_test_app(vec![create_test_session_at("source-session", timestamp)]);
     app.progress_inline_expanded = true;
+    app.progress_inline_source_id = Some("source-session".to_string());
     app.progress_session_id = Some("source-session".to_string());
     app.progress_fetch_states
         .insert("source-session".to_string(), ProgressFetchState::Ready);
@@ -1230,26 +1235,25 @@ fn local_progress_refresh_uses_current_delegate_state(
 }
 
 #[rstest]
-fn initial_focus_keeps_the_worker_selected_and_opens_parent_progress(
+fn initial_focus_keeps_the_worker_selected_and_parent_progress_closed(
     selected_task_session: Session,
     delegated_session: Session,
 ) {
-    let mut app = App::with_initial_selection(
+    let app = App::with_initial_selection(
         vec![selected_task_session, delegated_session],
         AgentConfig::default(),
         Some("delegate"),
         None,
     );
 
-    app.begin_progress_refresh("selected");
-
     assert_eq!(
         (
             app.selected_session_id(),
             app.progress_inline_expanded,
+            app.progress_inline_source_id.clone(),
             app.selected_progress_source_id(),
         ),
-        (Some("delegate"), true, Some("selected".to_string())),
+        (Some("delegate"), false, None, Some("selected".to_string())),
     );
 }
 
@@ -1285,7 +1289,7 @@ fn selected_linked_session_uses_the_matching_task_source(
 }
 
 #[rstest]
-fn nested_delegate_focus_keeps_the_worker_selected_in_its_parent_tree(timestamp: DateTime<Utc>) {
+fn nested_delegate_focus_keeps_the_worker_selected_with_progress_closed(timestamp: DateTime<Utc>) {
     let root = create_test_session_at("root", timestamp);
     let mut task = create_test_session_at("task", timestamp);
     task.ancestor_session_ids = vec![root.session_id.clone()];
@@ -1300,24 +1304,24 @@ fn nested_delegate_focus_keeps_the_worker_selected_in_its_parent_tree(timestamp:
         task.session_id.clone(),
         intermediate_delegate.session_id.clone(),
     ];
-    let mut app = App::with_initial_selection(
+    let app = App::with_initial_selection(
         vec![root, task, intermediate_delegate, delegate],
         AgentConfig::default(),
         Some("delegate"),
         None,
     );
 
-    app.begin_progress_refresh("intermediate-delegate");
-
     assert_eq!(
         (
             app.selected_session_id(),
             app.progress_inline_expanded,
+            app.progress_inline_source_id.clone(),
             app.selected_progress_source_id(),
         ),
         (
             Some("delegate"),
-            true,
+            false,
+            None,
             Some("intermediate-delegate".to_string()),
         ),
     );
@@ -1334,6 +1338,7 @@ fn initial_focus_expands_the_worker_batch_without_moving_the_cursor(
         Some("delegate"),
         None,
     );
+    app.toggle_inline_progress();
     app.begin_progress_refresh("selected");
     let checklist = TqChecklist {
         id: "checklist-a".to_string(),

@@ -265,11 +265,16 @@ impl App {
         snapshot: CachedProgress,
         resolve_initial_selection: bool,
     ) {
-        let inline_selection = self
-            .progress_inline_expanded
-            .then(|| self.selection_anchor());
+        let is_open_source = self.progress_inline_expanded
+            && self.progress_inline_source_id.as_deref() == Some(session_id);
+        let is_active_source = if self.progress_inline_expanded {
+            is_open_source
+        } else {
+            self.selected_progress_source_id().as_deref() == Some(session_id)
+        };
+        let inline_selection = is_open_source.then(|| self.selection_anchor());
         self.set_cached_progress(session_id, snapshot.clone());
-        if self.selected_progress_source_id().as_deref() != Some(session_id) {
+        if !is_active_source {
             return;
         }
         let rows_unchanged = self.progress_session_id.as_deref() == Some(session_id)

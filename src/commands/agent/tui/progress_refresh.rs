@@ -9,6 +9,44 @@ use super::tq_snapshot::TqSnapshot;
 
 pub(super) const PROGRESS_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 
+pub(super) struct WorkerPrRefreshSchedule {
+    in_flight: bool,
+    pending: bool,
+    next_periodic_refresh: Instant,
+}
+
+impl WorkerPrRefreshSchedule {
+    pub(super) fn new(now: Instant) -> Self {
+        Self {
+            in_flight: false,
+            pending: false,
+            next_periodic_refresh: now + PROGRESS_REFRESH_INTERVAL,
+        }
+    }
+
+    pub(super) fn request(&mut self) {
+        self.pending = true;
+    }
+
+    pub(super) fn periodic_refresh_due(&self, now: Instant) -> bool {
+        now >= self.next_periodic_refresh
+    }
+
+    pub(super) fn fetch_completed(&mut self) {
+        self.in_flight = false;
+    }
+
+    pub(super) fn start_pending(&mut self, now: Instant) -> bool {
+        if self.in_flight || !self.pending {
+            return false;
+        }
+        self.pending = false;
+        self.in_flight = true;
+        self.next_periodic_refresh = now + PROGRESS_REFRESH_INTERVAL;
+        true
+    }
+}
+
 pub(super) struct ProgressRefreshSchedule {
     pub(super) in_flight: bool,
     pub(super) pending_session_id: Option<String>,
@@ -87,7 +125,7 @@ pub(super) fn apply_tq_snapshot_and_schedule_progress_refresh(
 ) -> bool {
     let scope_changed = app.set_tq_snapshot(snapshot);
     if scope_changed {
-        let session_id = app.selected_progress_source_id();
+        let session_id = app.progress_inline_source_id.clone();
         if let Some(session_id) = session_id.as_deref() {
             app.refresh_progress_from_sessions(session_id);
         }
@@ -124,4 +162,32 @@ pub(super) fn start_progress_refresh(
         .insert(session_id.clone(), ProgressFetchState::Loading);
     event_handler.start_progress_fetch(session_id, fetch_scope);
     ProgressRefreshStart::Started
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_pr_refresh_coalesces_requests_while_a_fetch_is_running() {
+        let now = Instant::now();
+        let mut schedule = WorkerPrRefreshSchedule::new(now);
+        schedule.request();
+
+        assert_eq!(
+            (
+                schedule.start_pending(now),
+                schedule.start_pending(now),
+                schedule.periodic_refresh_due(now),
+            ),
+            (true, false, false),
+        );
+        schedule.request();
+        let while_in_flight = schedule.start_pending(now);
+
+        schedule.fetch_completed();
+        let after_completion = schedule.start_pending(now);
+
+        assert_eq!((while_in_flight, after_completion), (false, true));
+    }
 }

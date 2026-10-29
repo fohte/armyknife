@@ -18,10 +18,10 @@ impl App {
         if !self.progress_inline_expanded {
             return rows;
         }
-        let Some(source_session_id) = self.selected_progress_source_id() else {
+        let Some(source_session_id) = self.progress_inline_source_id.as_deref() else {
             return rows;
         };
-        let progress_rows = if self.progress_session_id.as_deref() == Some(&source_session_id) {
+        let progress_rows = if self.progress_session_id.as_deref() == Some(source_session_id) {
             self.progress_rows.as_slice()
         } else {
             &[]
@@ -62,11 +62,11 @@ impl App {
             &self.vibe_enabled_session_ids,
             self.session_row_order.as_ref(),
         );
-        let status = self.progress_status_label(&source_session_id, progress_rows);
+        let status = self.progress_status_label(source_session_id, progress_rows);
         project_inline_progress_rows(
             rows,
             remaining_rows,
-            &source_session_id,
+            source_session_id,
             progress_rows,
             &matched_sessions,
             status,

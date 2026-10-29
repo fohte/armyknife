@@ -8,6 +8,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::commands::agent::tui::app::App;
+use crate::commands::agent::tui::progress::CurrentPrStage;
 use crate::commands::agent::tui::session_rows::{
     Section, SectionHeaderRow, SessionRowEntry, TaskMark, VibeMode, is_related_task, kin_relation,
 };
@@ -168,7 +169,7 @@ pub(super) fn build_user_turn_item(
     ListItem::new(Line::from(spans))
 }
 
-fn user_turn_label_style() -> Style {
+pub(super) fn user_turn_label_style() -> Style {
     Style::default()
         .fg(Color::White)
         .bg(Color::Red)
@@ -256,7 +257,15 @@ pub(super) fn build_session_item(
     term_width: usize,
     query: &str,
 ) -> ListItem<'static> {
-    build_session_item_with_annotation(entry, app, now, term_width, query, None)
+    build_session_item_with_annotation(
+        entry,
+        app,
+        now,
+        term_width,
+        query,
+        None,
+        app.worker_pr_stage_for_session(entry.session),
+    )
 }
 
 pub(super) fn build_session_item_with_annotation(
@@ -266,6 +275,7 @@ pub(super) fn build_session_item_with_annotation(
     term_width: usize,
     query: &str,
     annotation: Option<&str>,
+    stage: Option<CurrentPrStage>,
 ) -> ListItem<'static> {
     let session = entry.session;
     let is_idle = matches!(entry.mark, TaskMark::Done | TaskMark::Unclassified);
@@ -354,6 +364,7 @@ pub(super) fn build_session_item_with_annotation(
         query,
         title_style,
         app.agent_config.vibe_marker.as_ref(),
+        stage,
     );
 
     let time_text = format_compact_time(session.updated_at, now);
@@ -439,6 +450,7 @@ fn build_title_spans(
     query: &str,
     title_style: Style,
     vibe_marker: Option<&AgentWorkTypeConfig>,
+    stage: Option<CurrentPrStage>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let crit_badge = if entry.session.crit_urls.is_empty() {
@@ -446,21 +458,26 @@ fn build_title_spans(
     } else {
         " [crit]".to_string()
     };
+    let stage_badge = stage.map(|stage| format!(" {} ", stage.label()));
+    let stage_badge_width = stage_badge.as_ref().map_or(0, |badge| badge.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
-        (Some(mode), Some(config)) if config.icon.width() + crit_badge.width() < title_width => {
+        (Some(mode), Some(config))
+            if config.icon.width() + crit_badge.width() + stage_badge_width < title_width =>
+        {
             Some((mode, config))
         }
         _ => None,
     };
     let marker_width = marker.map_or(0, |(_, config)| config.icon.width());
     let show_child_badge = !child_badge.is_empty()
-        && child_badge.width() + crit_badge.width() + marker_width < title_width;
+        && child_badge.width() + crit_badge.width() + marker_width + stage_badge_width
+            < title_width;
     let child_badge = if show_child_badge {
         child_badge
     } else {
         String::new()
     };
-    let badge_width = child_badge.width() + crit_badge.width();
+    let badge_width = child_badge.width() + crit_badge.width() + stage_badge_width;
     let content_width = title_width.saturating_sub(badge_width + marker_width);
 
     let title = truncate(own_title, content_width);
@@ -485,6 +502,10 @@ fn build_title_spans(
             Style::default().fg(Color::Indexed(98)),
         ));
     }
+    if let (Some(stage), Some(badge)) = (stage, stage_badge) {
+        used_width += badge.width();
+        spans.push(Span::styled(badge, pr_stage_label_style(stage)));
+    }
     if used_width < title_width {
         spans.push(Span::raw(" ".repeat(title_width - used_width)));
     }
@@ -492,10 +513,69 @@ fn build_title_spans(
     spans
 }
 
+pub(super) fn pr_stage_label_style(stage: CurrentPrStage) -> Style {
+    if stage.waiting_for_user() {
+        user_turn_label_style()
+    } else {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tui::progress::{ProgressMark, StageMarks, current_pr_stage};
     use rstest::rstest;
+
+    #[rstest]
+    #[case::crit_waiting_for_user(
+        StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::User,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        },
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Red)
+            .add_modifier(Modifier::BOLD),
+    )]
+    #[case::body_waiting_for_user(
+        StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::Done,
+            pr_body: ProgressMark::User,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        },
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Red)
+            .add_modifier(Modifier::BOLD),
+    )]
+    #[case::merge_waiting_for_user(
+        StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::Done,
+            pr_body: ProgressMark::Done,
+            ci: ProgressMark::Done,
+            merge: ProgressMark::User,
+        },
+        Style::default()
+            .fg(Color::White)
+            .bg(Color::Red)
+            .add_modifier(Modifier::BOLD),
+    )]
+    fn user_wait_pr_stages_share_the_your_turn_badge_style(
+        #[case] marks: StageMarks,
+        #[case] expected: Style,
+    ) {
+        assert_eq!(pr_stage_label_style(current_pr_stage(marks)), expected);
+    }
+
     #[rstest]
     #[case::just_now(0, "just now")]
     #[case::one_minute(60, "1m")]

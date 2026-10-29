@@ -7,7 +7,9 @@ use ratatui::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::commands::agent::tui::app::App;
-use crate::commands::agent::tui::progress::{ProgressMark, ProgressRow};
+use crate::commands::agent::tui::progress::{
+    CurrentPrStage, ProgressMark, ProgressRow, StageMarks, current_pr_stage,
+};
 use crate::commands::agent::tui::session_rows::inline_progress::InlineProgressEntry;
 
 use super::super::helpers::{DIM_FG, REPO_COLUMN_WIDTH};
@@ -25,22 +27,18 @@ pub(super) fn build_inline_progress_item(
     if let (Some(session), Some(ProgressRow::ChecklistPullRequest { row, .. })) =
         (&entry.session, entry.progress.as_ref())
     {
-        let stages = stage_marks(
-            row.stages.implementation,
-            row.stages.diff_review,
-            row.stages.pr_body,
-            row.stages.ci,
-            row.stages.merge,
-        );
         let annotation = if row.number.is_none() && row.url.is_none() {
-            format!("Planned PR · {} · {stages}", row.title)
+            format!("Planned PR · {}", row.title)
         } else {
             format!(
-                "PR {} {stages}",
+                "PR {}",
                 row.number
                     .map_or_else(|| "#?".to_string(), |number| format!("#{number}")),
             )
         };
+        let stage = app
+            .worker_pr_stage_for_session(session.session)
+            .unwrap_or_else(|| current_pr_stage(row.stages));
         return build_session_item_with_annotation(
             session,
             app,
@@ -48,6 +46,7 @@ pub(super) fn build_inline_progress_item(
             term_width,
             "",
             Some(&annotation),
+            Some(stage),
         );
     }
 
@@ -89,29 +88,22 @@ pub(super) fn build_inline_progress_item(
                 .add_modifier(Modifier::BOLD),
         ),
         (Some(ProgressRow::PlannedPullRequest { title, .. }), _) => (
-            "○",
+            "",
             format!("Planned PR · {title}"),
             Style::default().fg(DIM_FG),
         ),
         (Some(ProgressRow::ChecklistPullRequest { row, .. }), _) => (
-            stage_status(row.stages.merge, row.stages.ci),
+            "",
             format!(
-                "PR {} · {} · {}",
+                "PR {} · {}",
                 row.number
                     .map_or_else(|| "#?".to_string(), |number| format!("#{number}")),
                 row.title,
-                stage_marks(
-                    row.stages.implementation,
-                    row.stages.diff_review,
-                    row.stages.pr_body,
-                    row.stages.ci,
-                    row.stages.merge
-                ),
             ),
             Style::default(),
         ),
         (Some(ProgressRow::PullRequest(row)), _) => (
-            stage_status(row.stages.merge, row.stages.ci),
+            "",
             format!(
                 "PR {} · {}",
                 row.number
@@ -135,7 +127,7 @@ pub(super) fn build_inline_progress_item(
         (None, _) => ("·", String::new(), Style::default().fg(DIM_FG)),
     };
     let title = truncate_inline_title(&title, title_width);
-    let spans = vec![
+    let mut spans = vec![
         Span::styled(
             status.to_string(),
             Style::default().fg(status_color(status)),
@@ -147,33 +139,32 @@ pub(super) fn build_inline_progress_item(
         Span::raw(" ".repeat(work_type_width)),
         Span::styled(title, style),
     ];
+    let stage = progress_row_stage(entry.progress.as_ref());
+    if let Some(stage) = stage {
+        spans.push(Span::styled(
+            format!(" {} ", stage.label()),
+            super::items::pr_stage_label_style(stage),
+        ));
+    }
     ListItem::new(Line::from(spans))
 }
 
-fn stage_marks(
-    implementation: ProgressMark,
-    review: ProgressMark,
-    pr_body: ProgressMark,
-    ci: ProgressMark,
-    merge: ProgressMark,
-) -> String {
-    format!(
-        "I:{} R:{} B:{} CI:{} M:{}",
-        implementation.symbol(),
-        review.symbol(),
-        pr_body.symbol(),
-        ci.symbol(),
-        merge.symbol(),
-    )
-}
-
-fn stage_status(merge: ProgressMark, ci: ProgressMark) -> &'static str {
-    if merge == ProgressMark::Done {
-        "✓"
-    } else if ci == ProgressMark::Waiting {
-        "◷"
-    } else {
-        merge.symbol()
+fn progress_row_stage(progress: Option<&ProgressRow>) -> Option<CurrentPrStage> {
+    match progress? {
+        ProgressRow::ChecklistPullRequest { row, .. } | ProgressRow::PullRequest(row) => {
+            Some(current_pr_stage(row.stages))
+        }
+        ProgressRow::PlannedPullRequest { .. } => Some(current_pr_stage(StageMarks {
+            implementation: ProgressMark::Working,
+            diff_review: ProgressMark::NotStarted,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        })),
+        ProgressRow::Work(_)
+        | ProgressRow::ImplementationHeader { .. }
+        | ProgressRow::UnmatchedDelegatesHeader { .. }
+        | ProgressRow::BatchHeader { .. } => None,
     }
 }
 
