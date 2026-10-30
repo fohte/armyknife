@@ -85,6 +85,7 @@ impl RpcRejection {
         };
         message.contains("list_turns is not supported yet")
             || message.contains("is not materialized yet; includeTurns is unavailable")
+            || message.contains("is not materialized yet; thread/turns/list is unavailable")
     }
 }
 
@@ -489,10 +490,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_latest_turn_status_from_thread_history() {
+    fn reads_latest_turn_status_without_loading_turn_items() {
         let (mut client, mut server) = connected_client_and_server().expect("connected sockets");
         let server_thread = std::thread::spawn(move || {
-            let request = server.read().expect("thread/read request");
+            let request = server.read().expect("thread/turns/list request");
             let request: Value = serde_json::from_str(request.to_text().expect("text request"))
                 .expect("request JSON");
             server
@@ -500,18 +501,15 @@ mod tests {
                     json!({
                         "id": TURN_STATUS_READ_REQUEST_ID_START,
                         "result": {
-                            "thread": {
-                                "turns": [
-                                    {"id": "turn-old", "startedAt": 10, "status": "failed"},
-                                    {"id": "turn-new", "startedAt": 20, "status": "inProgress"},
-                                ],
-                            },
+                            "data": [{"id": "turn-new", "status": "inProgress"}],
+                            "nextCursor": null,
+                            "backwardsCursor": "cursor",
                         },
                     })
                     .to_string()
                     .into(),
                 ))
-                .expect("thread/read response");
+                .expect("thread/turns/list response");
             request
         });
 
@@ -524,10 +522,12 @@ mod tests {
             (
                 json!({
                     "id": TURN_STATUS_READ_REQUEST_ID_START,
-                    "method": "thread/read",
+                    "method": "thread/turns/list",
                     "params": {
                         "threadId": "fixture-thread-id",
-                        "includeTurns": true,
+                        "limit": 1,
+                        "sortDirection": "desc",
+                        "itemsView": "notLoaded",
                     },
                 }),
                 Some("inProgress".to_string()),
@@ -796,7 +796,7 @@ mod tests {
     #[test]
     fn start_turn_uses_a_fresh_response_timeout() -> anyhow::Result<()> {
         let (mut client, server_socket) = connected_client_and_server()?;
-        let server = std::thread::spawn(move || -> anyhow::Result<(Value, Value, Value)> {
+        let server = std::thread::spawn(move || -> anyhow::Result<(Value, Value, Value, Value)> {
             let mut socket = server_socket;
             socket.send(thread_started_message())?;
             let Message::Text(request) = socket.read()? else {
@@ -806,7 +806,7 @@ mod tests {
             socket.send(Message::Text(
                 json!({
                     "id": 2,
-                    "result": {"thread": {"turns": []}},
+                    "result": {"data": []},
                 })
                 .to_string()
                 .into(),
@@ -838,19 +838,31 @@ mod tests {
             socket.send(Message::Text(
                 json!({
                     "id": delivery::THREAD_RESUME_REQUEST_ID,
-                    "result": {"thread": {"turns": [{
+                    "result": {"thread": {}},
+                })
+                .to_string()
+                .into(),
+            ))?;
+            let Message::Text(turns_request) = socket.read()? else {
+                return Err(anyhow!("Codex app-server received a non-text request"));
+            };
+            let turns_request = serde_json::from_str(&turns_request)?;
+            socket.send(Message::Text(
+                json!({
+                    "id": delivery::THREAD_TURNS_LIST_REQUEST_ID,
+                    "result": {"data": [{
                         "id": "turn-a",
                         "status": "inProgress",
                         "items": [{
                             "type": "userMessage",
                             "clientId": client_user_message_id,
                         }],
-                    }]}},
+                    }]},
                 })
                 .to_string()
                 .into(),
             ))?;
-            Ok((snapshot_request, request, resume_request))
+            Ok((snapshot_request, request, resume_request, turns_request))
         });
         let thread_id = client.wait_for_thread_started_with_timeout(
             Path::new("/workspace/project-a"),
@@ -860,7 +872,7 @@ mod tests {
         let result = client
             .start_turn(&thread_id, "hello there", None)
             .map_err(|error| error.to_string());
-        let (snapshot_request, request, resume_request) =
+        let (snapshot_request, request, resume_request, turns_request) =
             join_server(&client.socket, &result, server)?;
         let mut normalized_request = request;
         normalized_request["params"]["clientUserMessageId"] = json!("message-a");
@@ -870,6 +882,7 @@ mod tests {
             snapshot_request,
             normalized_request,
             resume_request,
+            turns_request,
             client.socket.get_ref().read_timeout()?,
         );
 
@@ -880,8 +893,13 @@ mod tests {
                 Ok(()),
                 json!({
                     "id": 2,
-                    "method": "thread/read",
-                    "params": {"threadId": "thread-a", "includeTurns": true},
+                    "method": "thread/turns/list",
+                    "params": {
+                        "threadId": "thread-a",
+                        "limit": 5,
+                        "sortDirection": "desc",
+                        "itemsView": "full",
+                    },
                 }),
                 json!({
                     "id": TURN_START_REQUEST_ID,
@@ -899,7 +917,17 @@ mod tests {
                 json!({
                     "id": delivery::THREAD_RESUME_REQUEST_ID,
                     "method": "thread/resume",
-                    "params": {"threadId": "thread-a"},
+                    "params": {"threadId": "thread-a", "excludeTurns": true},
+                }),
+                json!({
+                    "id": delivery::THREAD_TURNS_LIST_REQUEST_ID,
+                    "method": "thread/turns/list",
+                    "params": {
+                        "threadId": "thread-a",
+                        "limit": 5,
+                        "sortDirection": "desc",
+                        "itemsView": "full",
+                    },
                 }),
                 Some(Duration::from_secs(30)),
             ),
@@ -922,7 +950,7 @@ mod tests {
             socket.send(Message::Text(
                 json!({
                     "id": 2,
-                    "result": {"thread": {"turns": []}},
+                    "result": {"data": []},
                 })
                 .to_string()
                 .into(),
@@ -974,8 +1002,13 @@ mod tests {
                 Ok((
                     json!({
                         "id": 2,
-                        "method": "thread/read",
-                        "params": {"threadId": "thread-a", "includeTurns": true},
+                        "method": "thread/turns/list",
+                        "params": {
+                            "threadId": "thread-a",
+                            "limit": 5,
+                            "sortDirection": "desc",
+                            "itemsView": "full",
+                        },
                     }),
                     json!({
                         "id": TURN_START_REQUEST_ID,
