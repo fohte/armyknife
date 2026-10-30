@@ -231,6 +231,7 @@ fn escape_markdown_heading(value: &str) -> String {
 }
 
 fn escape_markdown(value: &str, context: MarkdownEscapeContext) -> String {
+    let is_text = matches!(context, MarkdownEscapeContext::Text);
     let characters: Vec<char> = match context {
         MarkdownEscapeContext::Text => {
             // GitHub preserves full-width spaces and NBSP, so trimming them changes the rendered text.
@@ -258,12 +259,10 @@ fn escape_markdown(value: &str, context: MarkdownEscapeContext) -> String {
                 && index + 1 < characters.len()
                 && characters[index - 1].is_alphanumeric()
                 && characters[index + 1].is_alphanumeric();
-            let is_leading_block_marker = matches!(context, MarkdownEscapeContext::Text)
-                && index == 0
-                && matches!(character, '#' | '>' | '-' | '+');
-            let is_leading_ordered_list_marker = matches!(context, MarkdownEscapeContext::Text)
-                && has_leading_ordered_list_marker
-                && index == leading_digit_end;
+            let is_leading_block_marker =
+                is_text && index == 0 && matches!(character, '#' | '>' | '-' | '+');
+            let is_leading_ordered_list_marker =
+                is_text && has_leading_ordered_list_marker && index == leading_digit_end;
             // GFM autolinks preserve escapes such as \& in the label and href, so break the "://" and "www." triggers to keep URLs as plain text.
             let is_url_scheme_delimiter = *character == ':'
                 && characters.get(index + 1) == Some(&'/')
