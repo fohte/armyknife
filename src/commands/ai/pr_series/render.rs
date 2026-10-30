@@ -633,10 +633,15 @@ mod tests {
         );
     }
 
-    #[rstest::rstest]
-    #[case::without_steps(false)]
-    #[case::with_one_entry_step(true)]
-    fn omits_section_when_plan_has_one_pull_request(#[case] with_steps: bool) {
+    #[derive(Debug)]
+    struct SectionOmissionCase {
+        plan: PrSeriesPlan,
+        current_entry_id: &'static str,
+        repository_privacy: HashMap<String, bool>,
+        created_pull_requests: Vec<CreatedPullRequest>,
+    }
+
+    fn single_pull_request_omission_case(with_steps: bool) -> SectionOmissionCase {
         let mut plan = plan();
         plan.pull_requests.truncate(1);
         if with_steps {
@@ -646,24 +651,38 @@ mod tests {
             }]);
         }
 
-        assert_eq!(
-            render_section(&plan, "schema", "Existing body", &privacy(), &[]).unwrap(),
-            None,
-        );
+        SectionOmissionCase {
+            plan,
+            current_entry_id: "schema",
+            repository_privacy: privacy(),
+            created_pull_requests: Vec::new(),
+        }
     }
 
-    #[test]
-    fn omits_section_when_privacy_filter_leaves_one_pull_request() {
+    fn privacy_filter_leaves_one_pull_request_case() -> SectionOmissionCase {
         let mut repository_privacy = privacy();
         repository_privacy.insert("acme/notify-api".to_string(), true);
 
+        SectionOmissionCase {
+            plan: plan(),
+            current_entry_id: "docs",
+            repository_privacy,
+            created_pull_requests: created_docs(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::one_pr_without_steps(single_pull_request_omission_case(false))]
+    #[case::one_pr_with_step(single_pull_request_omission_case(true))]
+    #[case::privacy_filter_leaves_one_pr(privacy_filter_leaves_one_pull_request_case())]
+    fn omits_section_when_one_pull_request_is_visible(#[case] case: SectionOmissionCase) {
         assert_eq!(
             render_section(
-                &plan(),
-                "docs",
+                &case.plan,
+                case.current_entry_id,
                 "Existing body",
-                &repository_privacy,
-                &created_docs(),
+                &case.repository_privacy,
+                &case.created_pull_requests,
             )
             .unwrap(),
             None,
