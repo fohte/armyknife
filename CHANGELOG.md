@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.499](https://github.com/fohte/armyknife/compare/v0.1.498...v0.1.499) (2026-10-30)
+
+
+### Bug Fixes
+
+* **agent/codex-steer:** bound turn history reads ([#1346](https://github.com/fohte/armyknife/issues/1346)) ([08ebe99](https://github.com/fohte/armyknife/commit/08ebe99902e1438689a85da2968e71b2b2615c58))
+
 ## [0.1.498](https://github.com/fohte/armyknife/compare/v0.1.497...v0.1.498) (2026-10-29)
 
 
