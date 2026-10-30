@@ -385,14 +385,24 @@ fn build_title_spans(
     stage: Option<CurrentPrStage>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
+    let raw_user_turn_label = user_turn_label_before_title(entry, stage);
     let crit_badge = if has_crit_badge(entry) {
-        " [crit]".to_string()
+        if stage.is_some() || raw_user_turn_label.is_some() {
+            " [crit]".to_string()
+        } else {
+            " [crit] ".to_string()
+        }
     } else {
         String::new()
     };
-    let stage_badge = stage.map(|stage| format!(" {} ", stage.label()));
+    let stage_badge = stage.map(|stage| {
+        if raw_user_turn_label.is_some() {
+            format!(" {}", stage.label())
+        } else {
+            format!(" {} ", stage.label())
+        }
+    });
     let stage_badge_width = stage_badge.as_ref().map_or(0, |badge| badge.width());
-    let raw_user_turn_label = user_turn_label_before_title(entry, stage);
     let user_turn_label = raw_user_turn_label.map(|label| format!(" {label} "));
     let user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
@@ -476,6 +486,18 @@ mod tests {
     use crate::shared::config::{AgentWorkTypeColor, AgentWorkTypeNamedColor};
     use rstest::rstest;
 
+    #[derive(Debug)]
+    struct TitleLabelCase<'a> {
+        has_crit_url: bool,
+        user_turn_label: Option<&'a str>,
+        title: &'a str,
+        title_width: usize,
+        marks: StageMarks,
+        expected_crit_badge: Option<&'a str>,
+        expected_stage_badge: &'a str,
+        expected_user_turn_label: Option<&'a str>,
+    }
+
     #[rstest]
     #[case::wide_title(28, "worker", Some(" ◐ 1/2"), "         ")]
     #[case::tight_title(12, "wo...", None, "")]
@@ -541,6 +563,91 @@ mod tests {
                 "",
                 Style::default().add_modifier(Modifier::BOLD),
                 Some(&work_type),
+                Some(stage),
+            ),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::crit_stage_has_one_separator(TitleLabelCase {
+        has_crit_url: true,
+        user_turn_label: None,
+        title: "review",
+        title_width: 19,
+        marks: StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::User,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        },
+        expected_crit_badge: Some(" [crit]"),
+        expected_stage_badge: " crit ",
+        expected_user_turn_label: None,
+    })]
+    #[case::stage_and_user_have_one_separator(TitleLabelCase {
+        has_crit_url: false,
+        user_turn_label: Some("you"),
+        title: "overview",
+        title_width: 26,
+        marks: StageMarks {
+            implementation: ProgressMark::Working,
+            diff_review: ProgressMark::NotStarted,
+            pr_body: ProgressMark::NotStarted,
+            ci: ProgressMark::NotStarted,
+            merge: ProgressMark::NotStarted,
+        },
+        expected_crit_badge: None,
+        expected_stage_badge: " implementing",
+        expected_user_turn_label: Some(" you "),
+    })]
+    fn test_title_labels_have_one_space_between_each_part(#[case] case: TitleLabelCase<'_>) {
+        let mut session = create_test_session(case.title);
+        if case.has_crit_url {
+            session
+                .crit_urls
+                .push("https://example.com/review".to_string());
+        }
+        let entry = SessionRowEntry {
+            session: &session,
+            mark: TaskMark::Working,
+            vibe_mode: None,
+            is_last_sibling: true,
+            tree_prefix: None,
+            child_count: 0,
+            child_user_turn_count: 0,
+            user_turn: case.user_turn_label.map(|label| {
+                crate::commands::agent::tui::session_rows::UserTurnInfo {
+                    kind: UserTurnKind::AgentStatus,
+                    label: Some(label),
+                }
+            }),
+            task: None,
+        };
+        let stage = current_pr_stage(case.marks, None);
+        let title_style = Style::default().add_modifier(Modifier::BOLD);
+        let mut expected = Vec::new();
+        if let Some(badge) = case.expected_crit_badge {
+            expected.push(Span::styled(badge, Style::default().fg(Color::Indexed(98))));
+        }
+        expected.push(Span::styled(
+            case.expected_stage_badge,
+            pr_stage_label_style(stage),
+        ));
+        if let Some(label) = case.expected_user_turn_label {
+            expected.push(Span::styled(label, user_turn_label_style()));
+        }
+        expected.push(Span::styled(case.title.to_string(), title_style));
+
+        assert_eq!(
+            build_title_spans(
+                &entry,
+                case.title,
+                case.title_width,
+                "",
+                title_style,
+                None,
                 Some(stage),
             ),
             expected,
