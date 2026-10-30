@@ -101,7 +101,7 @@ pub fn render_section(
         "},
         START_MARKER = START_MARKER,
         END_MARKER = END_MARKER,
-        name = plan.name,
+        name = escape_markdown_heading(&plan.name),
         steps = numbered_steps,
     );
     Ok(section.trim_end_matches('\n').to_string())
@@ -216,18 +216,38 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
     line_start && line_end
 }
 
+#[derive(Clone, Copy)]
+enum MarkdownEscapeContext {
+    Text,
+    Heading,
+}
+
 fn escape_markdown_text(value: &str) -> String {
-    // GitHub preserves full-width spaces and NBSP, so trimming them changes the rendered text.
-    let characters = value
-        .trim_start_matches([' ', '\t'])
-        .chars()
-        .collect::<Vec<_>>();
+    escape_markdown(value, MarkdownEscapeContext::Text)
+}
+
+fn escape_markdown_heading(value: &str) -> String {
+    escape_markdown(value, MarkdownEscapeContext::Heading)
+}
+
+fn escape_markdown(value: &str, context: MarkdownEscapeContext) -> String {
+    let characters: Vec<char> = match context {
+        MarkdownEscapeContext::Text => {
+            // GitHub preserves full-width spaces and NBSP, so trimming them changes the rendered text.
+            value.trim_start_matches([' ', '\t']).chars().collect()
+        }
+        MarkdownEscapeContext::Heading => value.chars().collect(),
+    };
     let leading_digit_end = characters
         .iter()
         .take_while(|character| character.is_ascii_digit())
         .count();
     let has_leading_ordered_list_marker = leading_digit_end > 0
         && matches!(characters.get(leading_digit_end), Some(&'.') | Some(&')'));
+    let closing_hash_index = match context {
+        MarkdownEscapeContext::Text => None,
+        MarkdownEscapeContext::Heading => atx_closing_hash_index(&characters),
+    };
 
     characters
         .iter()
@@ -238,9 +258,12 @@ fn escape_markdown_text(value: &str) -> String {
                 && index + 1 < characters.len()
                 && characters[index - 1].is_alphanumeric()
                 && characters[index + 1].is_alphanumeric();
-            let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
-            let is_leading_ordered_list_marker =
-                has_leading_ordered_list_marker && index == leading_digit_end;
+            let is_leading_block_marker = matches!(context, MarkdownEscapeContext::Text)
+                && index == 0
+                && matches!(character, '#' | '>' | '-' | '+');
+            let is_leading_ordered_list_marker = matches!(context, MarkdownEscapeContext::Text)
+                && has_leading_ordered_list_marker
+                && index == leading_digit_end;
             // GFM autolinks preserve escapes such as \& in the label and href, so break the "://" and "www." triggers to keep URLs as plain text.
             let is_url_scheme_delimiter = *character == ':'
                 && characters.get(index + 1) == Some(&'/')
@@ -255,7 +278,8 @@ fn escape_markdown_text(value: &str) -> String {
                 || is_leading_block_marker
                 || is_leading_ordered_list_marker
                 || is_url_scheme_delimiter
-                || is_www_domain_delimiter;
+                || is_www_domain_delimiter
+                || closing_hash_index == Some(index);
 
             if should_escape {
                 format!("\\{character}")
@@ -264,6 +288,21 @@ fn escape_markdown_text(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn atx_closing_hash_index(characters: &[char]) -> Option<usize> {
+    let last_content_index = characters
+        .iter()
+        .rposition(|character| *character != ' ' && *character != '\t')?;
+    if characters[last_content_index] != '#' {
+        return None;
+    }
+
+    let mut hash_start = last_content_index;
+    while hash_start > 0 && characters[hash_start - 1] == '#' {
+        hash_start -= 1;
+    }
+    (hash_start == 0 || matches!(characters[hash_start - 1], ' ' | '\t')).then_some(hash_start)
 }
 
 fn contains_japanese(value: &str) -> bool {
@@ -603,6 +642,44 @@ mod tests {
             .unwrap(),
             case.expected,
         );
+    }
+
+    #[rstest::rstest]
+    #[case::html_tags(r#"<b>x</b>"#, r"\<b>x\</b>")]
+    #[case::emphasis("Release *notes*", r"Release \*notes\*")]
+    #[case::scheme_autolink("https://example.test", r"https\://example.test")]
+    #[case::www_autolink("www.example.test", r"www\.example.test")]
+    #[case::closing_hash("Drop #", r"Drop \#")]
+    #[case::closing_hash_with_trailing_spaces("Drop #  ", r"Drop \#  ")]
+    #[case::closing_hash_only("#", r"\#")]
+    #[case::closing_hash_sequence_only("##", r"\##")]
+    #[case::hash_inside_word("C#", "C#")]
+    #[case::hashes_not_at_end("Drop ##x", "Drop ##x")]
+    #[case::leading_hyphen("- item", "- item")]
+    #[case::leading_quote("> quote", "> quote")]
+    #[case::leading_ordered_list_marker("1. item", "1. item")]
+    #[case::leading_hash("# heading", "# heading")]
+    fn renders_series_names_with_heading_specific_markdown_escapes(
+        #[case] name: &str,
+        #[case] expected_name: &str,
+    ) {
+        let mut plan = plan();
+        plan.name = name.to_string();
+        let actual =
+            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+        let expected = format!(
+            indoc! {"
+                <!-- pr-series:start -->
+                ### {name}
+
+                1. Add preference tables (not created yet)
+                2. **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "},
+            name = expected_name,
+        );
+
+        assert_eq!(actual, expected.trim_end_matches('\n'));
     }
 
     #[rstest::rstest]
