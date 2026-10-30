@@ -25,12 +25,20 @@ const RETRY_TURN_START_REQUEST_ID: u64 = RECOVERY_THREAD_RESUME_REQUEST_ID + 1;
 const DELIVERY_TURNS_LIMIT: u32 = 5;
 const DELIVERY_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-#[cfg(test)]
-const PRE_TURN_READ_REQUEST_ID: u64 = PRE_TURN_TURNS_LIST_REQUEST_ID;
-#[cfg(test)]
-const THREAD_READ_REQUEST_ID: u64 = THREAD_TURNS_LIST_REQUEST_ID;
-#[cfg(test)]
-const NEXT_THREAD_READ_REQUEST_ID: u64 = NEXT_THREAD_TURNS_LIST_REQUEST_ID;
+#[derive(Clone, Copy)]
+enum ItemsView {
+    Full,
+    NotLoaded,
+}
+
+impl ItemsView {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::NotLoaded => "notLoaded",
+        }
+    }
+}
 
 struct DeliveryContext<'a> {
     thread_id: &'a str,
@@ -74,16 +82,9 @@ where
         thread_id,
         PRE_TURN_TURNS_LIST_REQUEST_ID,
         DELIVERY_TURNS_LIMIT,
-        "full",
+        ItemsView::Full,
     ) {
-        Ok((response, _)) => {
-            let turns = response.get("turns").cloned().ok_or_else(|| {
-                DeliveryError::NotDelivered(anyhow!(
-                    "Codex app-server thread/turns/list response did not contain turns before turn/start"
-                ))
-            })?;
-            matching_user_message_snapshot(&json!({"turns": turns}), content)
-        }
+        Ok((thread, _)) => matching_user_message_snapshot(&thread, content),
         Err(RequestError::Rejected(error)) => {
             tracing::warn!(
                 event = "agent.codex_steer.pre_turn_read_rejected",
@@ -104,7 +105,7 @@ where
         }
     };
 
-    let (turn_start_response, next_thread_read_request_id) =
+    let (turn_start_response, next_thread_turns_list_request_id) =
         start_turn_with_recovery(socket, thread_id, content, effort, client_user_message_id)?;
     let turn_id = turn_start_response
         .pointer("/turn/id")
@@ -141,20 +142,14 @@ where
         return Ok(());
     }
 
-    let (read_response, read_notifications) = read_turns(
+    let (thread, read_notifications) = read_turns(
         socket,
         thread_id,
         THREAD_TURNS_LIST_REQUEST_ID,
         DELIVERY_TURNS_LIMIT,
-        "full",
+        ItemsView::Full,
     )
     .map_err(|error| uncertain_request_error(error, "thread/turns/list"))?;
-    let turns = read_response.get("turns").ok_or_else(|| {
-        DeliveryError::Unconfirmed(anyhow!(
-            "Codex app-server thread/turns/list response did not contain turns"
-        ))
-    })?;
-    let thread = json!({"turns": turns});
     if has_recorded_message(
         &thread,
         &read_notifications,
@@ -169,11 +164,11 @@ where
     if has_completed_turn_notification(&resume_notifications, turn_id)
         || has_completed_turn_notification(&read_notifications, turn_id)
     {
-        let mut next_read_request_id = next_thread_read_request_id;
+        let mut next_read_request_id = next_thread_turns_list_request_id;
         return confirm_after_turn_end(socket, &delivery, &mut next_read_request_id);
     }
 
-    let mut next_read_request_id = next_thread_read_request_id;
+    let mut next_read_request_id = next_thread_turns_list_request_id;
     match turn_status(&thread, turn_id) {
         Some(status) if is_terminal_turn_status(status) => {
             confirm_after_turn_end(socket, &delivery, &mut next_read_request_id)
@@ -262,20 +257,14 @@ where
             Ok(None) => continue,
             Err(error) if is_read_timeout(&error) => {
                 let request_id = take_request_id(next_read_request_id)?;
-                let (response, notifications) = read_turns(
+                let (thread, notifications) = read_turns(
                     socket,
                     delivery.thread_id,
                     request_id,
                     DELIVERY_TURNS_LIMIT,
-                    "full",
+                    ItemsView::Full,
                 )
                 .map_err(|error| uncertain_request_error(error, "thread/turns/list"))?;
-                let turns = response.get("turns").ok_or_else(|| {
-                    DeliveryError::Unconfirmed(anyhow!(
-                        "Codex app-server thread/turns/list response did not contain turns"
-                    ))
-                })?;
-                let thread = json!({"turns": turns});
                 if has_recorded_message(
                     &thread,
                     &notifications,
@@ -349,20 +338,14 @@ fn confirm_after_turn_end(
     next_read_request_id: &mut u64,
 ) -> super::Result<()> {
     let request_id = take_request_id(next_read_request_id)?;
-    let (response, notifications) = read_turns(
+    let (thread, notifications) = read_turns(
         socket,
         delivery.thread_id,
         request_id,
         DELIVERY_TURNS_LIMIT,
-        "full",
+        ItemsView::Full,
     )
     .map_err(|error| uncertain_request_error(error, "thread/turns/list"))?;
-    let turns = response.get("turns").ok_or_else(|| {
-        DeliveryError::Unconfirmed(anyhow!(
-            "Codex app-server thread/turns/list response did not contain turns"
-        ))
-    })?;
-    let thread = json!({"turns": turns});
     if has_recorded_message(
         &thread,
         &notifications,
@@ -387,7 +370,7 @@ fn read_turns(
     thread_id: &str,
     request_id: u64,
     limit: u32,
-    items_view: &str,
+    items_view: ItemsView,
 ) -> std::result::Result<(Value, Vec<Value>), RequestError> {
     socket
         .get_ref()
@@ -411,12 +394,8 @@ pub(super) fn latest_turn_status(
     thread_id: &str,
     request_id: u64,
 ) -> anyhow::Result<Option<String>> {
-    let (response, _) = read_turns(socket, thread_id, request_id, 1, "notLoaded")
+    let (thread, _) = read_turns(socket, thread_id, request_id, 1, ItemsView::NotLoaded)
         .map_err(super::request_error_to_anyhow)?;
-    let turns = response.get("turns").ok_or_else(|| {
-        anyhow!("Codex app-server thread/turns/list response did not contain turns")
-    })?;
-    let thread = json!({"turns": turns});
     Ok(latest_status(&thread).map(str::to_string))
 }
 
@@ -450,7 +429,7 @@ fn thread_turns_list_request(
     thread_id: &str,
     request_id: u64,
     limit: u32,
-    items_view: &str,
+    items_view: ItemsView,
 ) -> RpcRequest {
     RpcRequest {
         id: request_id,
@@ -462,7 +441,7 @@ fn thread_turns_list_request(
                 "threadId": thread_id,
                 "limit": limit,
                 "sortDirection": "desc",
-                "itemsView": items_view,
+                "itemsView": items_view.as_str(),
             },
         }),
     }
@@ -599,7 +578,7 @@ mod tests {
 
     fn start_and_subscribe_requests() -> Vec<Value> {
         vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             json!({
                 "id": TURN_START_REQUEST_ID,
                 "method": "turn/start",
@@ -621,13 +600,14 @@ mod tests {
         ]
     }
 
-    fn thread_read_request(request_id: u64) -> Value {
-        thread_turns_list_request(THREAD_ID, request_id, DELIVERY_TURNS_LIMIT, "full").payload
+    fn thread_turns_list_request_payload(request_id: u64) -> Value {
+        thread_turns_list_request(THREAD_ID, request_id, DELIVERY_TURNS_LIMIT, ItemsView::Full)
+            .payload
     }
 
     fn read_snapshot(socket: &mut WebSocket<UnixStream>, result: Value) -> anyhow::Result<Value> {
         let request = read_request(socket)?;
-        send_response(socket, PRE_TURN_READ_REQUEST_ID, result)?;
+        send_response(socket, PRE_TURN_TURNS_LIST_REQUEST_ID, result)?;
         Ok(request)
     }
 
@@ -678,7 +658,11 @@ mod tests {
             let resume_request = read_request(&mut socket)?;
             send_response(&mut socket, THREAD_RESUME_REQUEST_ID, resume_response())?;
             let history_request = read_request(&mut socket)?;
-            send_response(&mut socket, THREAD_READ_REQUEST_ID, json!({"data": []}))?;
+            send_response(
+                &mut socket,
+                THREAD_TURNS_LIST_REQUEST_ID,
+                json!({"data": []}),
+            )?;
             socket.send(Message::Text(
                 user_message_notification().to_string().into(),
             ))?;
@@ -708,7 +692,9 @@ mod tests {
         let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
-            .chain(std::iter::once(thread_read_request(THREAD_READ_REQUEST_ID)))
+            .chain(std::iter::once(thread_turns_list_request_payload(
+                THREAD_TURNS_LIST_REQUEST_ID,
+            )))
             .collect::<Vec<_>>();
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
@@ -737,7 +723,7 @@ mod tests {
             )),
         ]
         .into_iter();
-        let mut next_read_request_id = NEXT_THREAD_READ_REQUEST_ID;
+        let mut next_read_request_id = NEXT_THREAD_TURNS_LIST_REQUEST_ID;
 
         let actual = wait_for_delivery_with_reader(
             &mut client_socket,
@@ -781,7 +767,7 @@ mod tests {
             let mut socket = server_socket;
             let snapshot_request = read_request(&mut socket)?;
             socket.send(Message::Text(
-                json!({"id": PRE_TURN_READ_REQUEST_ID, "error": error})
+                json!({"id": PRE_TURN_TURNS_LIST_REQUEST_ID, "error": error})
                     .to_string()
                     .into(),
             ))?;
@@ -796,7 +782,7 @@ mod tests {
             let turns_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", client_user_message_id, Some("hello there")),
             )?;
             Ok(vec![
@@ -818,7 +804,9 @@ mod tests {
 
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
-            .chain(std::iter::once(thread_read_request(THREAD_READ_REQUEST_ID)))
+            .chain(std::iter::once(thread_turns_list_request_payload(
+                THREAD_TURNS_LIST_REQUEST_ID,
+            )))
             .collect::<Vec<_>>();
         assert_eq!((result, requests), (Ok(()), expected_requests));
         Ok(())
@@ -837,7 +825,7 @@ mod tests {
             let snapshot_request = read_request(&mut socket)?;
             send_error(
                 &mut socket,
-                PRE_TURN_READ_REQUEST_ID,
+                PRE_TURN_TURNS_LIST_REQUEST_ID,
                 rejection_code,
                 rejection_message,
             )?;
@@ -852,13 +840,13 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             let final_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("interrupted", None, Some("hello there")),
             )?;
             Ok(vec![
@@ -903,8 +891,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
@@ -968,7 +956,7 @@ mod tests {
             let turns_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response(
                     "inProgress",
                     Some(CLIENT_USER_MESSAGE_ID),
@@ -994,7 +982,7 @@ mod tests {
         ));
         let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             super::super::turn_start_request(
                 THREAD_ID,
                 "hello there",
@@ -1012,7 +1000,7 @@ mod tests {
             )
             .payload,
             thread_resume_request(THREAD_ID).payload,
-            thread_read_request(THREAD_READ_REQUEST_ID),
+            thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
         ];
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
@@ -1051,7 +1039,7 @@ mod tests {
             let initial_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             let delayed_history_request = read_request(&mut socket)?;
@@ -1089,7 +1077,7 @@ mod tests {
         ));
         let requests = join_server(&client_socket, &result, server)?;
         let expected_requests = vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             super::super::turn_start_request(
                 THREAD_ID,
                 "hello there",
@@ -1107,8 +1095,8 @@ mod tests {
             )
             .payload,
             thread_resume_request(THREAD_ID).payload,
-            thread_read_request(THREAD_READ_REQUEST_ID),
-            thread_read_request(RETRY_TURN_START_REQUEST_ID + 1),
+            thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+            thread_turns_list_request_payload(RETRY_TURN_START_REQUEST_ID + 1),
         ];
 
         assert_eq!((result, requests), (Ok(()), expected_requests));
@@ -1149,7 +1137,7 @@ mod tests {
         ));
         let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
         let expected_requests = vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             super::super::turn_start_request(
                 THREAD_ID,
                 "hello there",
@@ -1218,7 +1206,7 @@ mod tests {
         ));
         let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
         let expected_requests = vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             super::super::turn_start_request(
                 THREAD_ID,
                 "hello there",
@@ -1291,7 +1279,7 @@ mod tests {
         ));
         let requests = join_server(&client_socket, &Err(result.1.clone()), server)?;
         let mut expected_requests = vec![
-            thread_read_request(PRE_TURN_READ_REQUEST_ID),
+            thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID),
             super::super::turn_start_request(
                 THREAD_ID,
                 "hello there",
@@ -1349,7 +1337,7 @@ mod tests {
             (result, requests),
             (
                 Err("Codex app-server did not deliver the message: could not read Codex thread before starting the turn: Codex app-server thread/turns/list response did not contain data".to_string()),
-                vec![thread_read_request(PRE_TURN_READ_REQUEST_ID)],
+                vec![thread_turns_list_request_payload(PRE_TURN_TURNS_LIST_REQUEST_ID)],
             ),
         );
         Ok(())
@@ -1378,13 +1366,13 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response(&status, None, None),
             )?;
             let final_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response(&status, None, None),
             )?;
             Ok(vec![
@@ -1407,8 +1395,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
@@ -1447,7 +1435,7 @@ mod tests {
             let turns_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response(
                     "inProgress",
                     client_user_message_id.as_deref(),
@@ -1473,7 +1461,9 @@ mod tests {
 
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
-            .chain(std::iter::once(thread_read_request(THREAD_READ_REQUEST_ID)))
+            .chain(std::iter::once(thread_turns_list_request_payload(
+                THREAD_TURNS_LIST_REQUEST_ID,
+            )))
             .collect::<Vec<_>>();
         assert_eq!((result, requests), (Ok(()), expected_requests));
         Ok(())
@@ -1496,7 +1486,7 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             socket.send(Message::Text(
@@ -1517,7 +1507,7 @@ mod tests {
             let final_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             Ok(vec![
@@ -1540,8 +1530,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
@@ -1572,7 +1562,7 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             socket.send(Message::Text(
@@ -1593,7 +1583,7 @@ mod tests {
             let final_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("interrupted", None, Some("hello there")),
             )?;
             Ok(vec![
@@ -1616,8 +1606,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
@@ -1656,12 +1646,12 @@ mod tests {
             if reject_snapshot {
                 send_error(
                     &mut socket,
-                    PRE_TURN_READ_REQUEST_ID,
+                    PRE_TURN_TURNS_LIST_REQUEST_ID,
                     -32000,
                     "thread history is temporarily unavailable",
                 )?;
             } else {
-                send_response(&mut socket, PRE_TURN_READ_REQUEST_ID, prior_message)?;
+                send_response(&mut socket, PRE_TURN_TURNS_LIST_REQUEST_ID, prior_message)?;
             }
             let turn_request = read_request(&mut socket)?;
             send_response(
@@ -1685,13 +1675,13 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("interrupted", None, Some("hello there")),
             )?;
             let final_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("interrupted", None, Some("hello there")),
             )?;
             Ok(vec![
@@ -1714,8 +1704,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
@@ -1743,13 +1733,13 @@ mod tests {
             let history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                THREAD_READ_REQUEST_ID,
+                THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, None),
             )?;
             let polled_history_request = read_request(&mut socket)?;
             send_response(
                 &mut socket,
-                NEXT_THREAD_READ_REQUEST_ID,
+                NEXT_THREAD_TURNS_LIST_REQUEST_ID,
                 thread_response("inProgress", None, Some("hello there")),
             )?;
             Ok(vec![
@@ -1784,8 +1774,8 @@ mod tests {
         let expected_requests = start_and_subscribe_requests()
             .into_iter()
             .chain([
-                thread_read_request(THREAD_READ_REQUEST_ID),
-                thread_read_request(NEXT_THREAD_READ_REQUEST_ID),
+                thread_turns_list_request_payload(THREAD_TURNS_LIST_REQUEST_ID),
+                thread_turns_list_request_payload(NEXT_THREAD_TURNS_LIST_REQUEST_ID),
             ])
             .collect::<Vec<_>>();
 
