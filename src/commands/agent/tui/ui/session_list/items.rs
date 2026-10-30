@@ -386,68 +386,56 @@ fn build_title_spans(
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let raw_user_turn_label = user_turn_label_before_title(entry, stage);
-    let crit_badge = if has_crit_badge(entry) {
-        if stage.is_some() || raw_user_turn_label.is_some() {
-            " [crit]".to_string()
+    let mut state_badges = Vec::new();
+    if has_crit_badge(entry) {
+        state_badges.push((
+            "[crit]".to_string(),
+            Style::default().fg(Color::Indexed(98)),
+        ));
+    }
+    if let Some(stage) = stage {
+        state_badges.push((stage.label().to_string(), pr_stage_label_style(stage)));
+    }
+    if let Some(label) = raw_user_turn_label {
+        state_badges.push((label.to_string(), user_turn_label_style()));
+    }
+    let state_badge_width = state_badges
+        .iter()
+        .map(|(label, _)| label.width())
+        .sum::<usize>()
+        + if state_badges.is_empty() {
+            0
         } else {
-            " [crit] ".to_string()
-        }
-    } else {
-        String::new()
-    };
-    let stage_badge = stage.map(|stage| {
-        if raw_user_turn_label.is_some() {
-            format!(" {}", stage.label())
-        } else {
-            format!(" {} ", stage.label())
-        }
-    });
-    let stage_badge_width = stage_badge.as_ref().map_or(0, |badge| badge.width());
-    let user_turn_label = raw_user_turn_label.map(|label| format!(" {label} "));
-    let user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
+            state_badges.len() + 1
+        };
     let marker = match (entry.vibe_mode, vibe_marker) {
-        (Some(mode), Some(config))
-            if config.icon.width()
-                + crit_badge.width()
-                + stage_badge_width
-                + user_turn_label_width
-                < title_width =>
-        {
+        (Some(mode), Some(config)) if config.icon.width() + state_badge_width < title_width => {
             Some((mode, config))
         }
         _ => None,
     };
     let marker_width = marker.map_or(0, |(_, config)| config.icon.width());
     let show_child_badge = !child_badge.is_empty()
-        && child_badge.width()
-            + crit_badge.width()
-            + marker_width
-            + stage_badge_width
-            + user_turn_label_width
-            < title_width;
+        && child_badge.width() + state_badge_width + marker_width < title_width;
     let child_badge = if show_child_badge {
         child_badge
     } else {
         String::new()
     };
     let child_badge_width = child_badge.width();
-    let state_badge_width = crit_badge.width() + stage_badge_width + user_turn_label_width;
     let content_width =
         title_width.saturating_sub(state_badge_width + marker_width + child_badge_width);
 
     let title = truncate(own_title, content_width);
     let mut spans = Vec::new();
-    if !crit_badge.is_empty() {
-        spans.push(Span::styled(
-            crit_badge,
-            Style::default().fg(Color::Indexed(98)),
-        ));
-    }
-    if let (Some(stage), Some(badge)) = (stage, stage_badge) {
-        spans.push(Span::styled(badge, pr_stage_label_style(stage)));
-    }
-    if let Some(label) = user_turn_label {
-        spans.push(Span::styled(label, user_turn_label_style()));
+    let state_badge_count = state_badges.len();
+    for (index, (label, style)) in state_badges.into_iter().enumerate() {
+        let trailing_space = if index + 1 == state_badge_count {
+            " "
+        } else {
+            ""
+        };
+        spans.push(Span::styled(format!(" {label}{trailing_space}"), style));
     }
     spans.extend(highlight_matches(&title, query, title_style));
     if let Some((mode, config)) = marker {
@@ -492,9 +480,9 @@ mod tests {
         user_turn_label: Option<&'a str>,
         title: &'a str,
         title_width: usize,
-        marks: StageMarks,
+        marks: Option<StageMarks>,
         expected_crit_badge: Option<&'a str>,
-        expected_stage_badge: &'a str,
+        expected_stage_badge: Option<&'a str>,
         expected_user_turn_label: Option<&'a str>,
     }
 
@@ -575,15 +563,15 @@ mod tests {
         user_turn_label: None,
         title: "review",
         title_width: 19,
-        marks: StageMarks {
+        marks: Some(StageMarks {
             implementation: ProgressMark::Done,
             diff_review: ProgressMark::User,
             pr_body: ProgressMark::NotStarted,
             ci: ProgressMark::NotStarted,
             merge: ProgressMark::NotStarted,
-        },
+        }),
         expected_crit_badge: Some(" [crit]"),
-        expected_stage_badge: " crit ",
+        expected_stage_badge: Some(" crit "),
         expected_user_turn_label: None,
     })]
     #[case::stage_and_user_have_one_separator(TitleLabelCase {
@@ -591,16 +579,26 @@ mod tests {
         user_turn_label: Some("you"),
         title: "overview",
         title_width: 26,
-        marks: StageMarks {
+        marks: Some(StageMarks {
             implementation: ProgressMark::Working,
             diff_review: ProgressMark::NotStarted,
             pr_body: ProgressMark::NotStarted,
             ci: ProgressMark::NotStarted,
             merge: ProgressMark::NotStarted,
-        },
+        }),
         expected_crit_badge: None,
-        expected_stage_badge: " implementing",
+        expected_stage_badge: Some(" implementing"),
         expected_user_turn_label: Some(" you "),
+    })]
+    #[case::crit_only_has_trailing_separator(TitleLabelCase {
+        has_crit_url: true,
+        user_turn_label: None,
+        title: "review",
+        title_width: 14,
+        marks: None,
+        expected_crit_badge: Some(" [crit] "),
+        expected_stage_badge: None,
+        expected_user_turn_label: None,
     })]
     fn test_title_labels_have_one_space_between_each_part(#[case] case: TitleLabelCase<'_>) {
         let mut session = create_test_session(case.title);
@@ -625,16 +623,18 @@ mod tests {
             }),
             task: None,
         };
-        let stage = current_pr_stage(case.marks, None);
+        let stage = case.marks.map(|marks| current_pr_stage(marks, None));
         let title_style = Style::default().add_modifier(Modifier::BOLD);
         let mut expected = Vec::new();
         if let Some(badge) = case.expected_crit_badge {
             expected.push(Span::styled(badge, Style::default().fg(Color::Indexed(98))));
         }
-        expected.push(Span::styled(
-            case.expected_stage_badge,
-            pr_stage_label_style(stage),
-        ));
+        if let Some(badge) = case.expected_stage_badge {
+            expected.push(Span::styled(
+                badge,
+                pr_stage_label_style(stage.expect("stage badge has stage marks")),
+            ));
+        }
         if let Some(label) = case.expected_user_turn_label {
             expected.push(Span::styled(label, user_turn_label_style()));
         }
@@ -648,7 +648,7 @@ mod tests {
                 "",
                 title_style,
                 None,
-                Some(stage),
+                stage,
             ),
             expected,
         );
