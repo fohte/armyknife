@@ -644,35 +644,45 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::html_tags(r#"<b>x</b>"#, r"\<b>x\</b>")]
-    #[case::emphasis("Release *notes*", r"Release \*notes\*")]
-    #[case::scheme_autolink("https://example.test", r"https\://example.test")]
-    #[case::www_autolink("www.example.test", r"www\.example.test")]
-    #[case::closing_hash("Drop #", r"Drop \#")]
-    #[case::closing_hash_with_trailing_spaces("Drop #  ", r"Drop \#  ")]
+    #[case::html_tags(r#"<mark>demo</mark>"#, r"\<mark>demo\</mark>")]
+    #[case::emphasis("Polish *draft*", r"Polish \*draft\*")]
+    #[case::scheme_autolink("https://sample.invalid", r"https\://sample.invalid")]
+    #[case::www_autolink("www.sample.invalid", r"www\.sample.invalid")]
+    #[case::closing_hash("Patch #", r"Patch \#")]
+    #[case::closing_hash_with_trailing_spaces("Patch #  ", r"Patch \#  ")]
     #[case::closing_hash_only("#", r"\#")]
     #[case::closing_hash_sequence_only("##", r"\##")]
-    #[case::hash_inside_word("C#", "C#")]
-    #[case::hashes_not_at_end("Drop ##x", "Drop ##x")]
-    #[case::leading_hyphen("- item", "- item")]
-    #[case::leading_quote("> quote", "> quote")]
-    #[case::leading_ordered_list_marker("1. item", "1. item")]
-    #[case::leading_hash("# heading", "# heading")]
+    #[case::hash_inside_word("Widget#", "Widget#")]
+    #[case::hashes_not_at_end("Patch ##stage", "Patch ##stage")]
+    #[case::leading_hyphen("- task", "- task")]
+    #[case::leading_quote("> note", "> note")]
+    #[case::leading_ordered_list_marker("7. phase", "7. phase")]
+    #[case::leading_hash("# section", "# section")]
     fn renders_series_names_with_heading_specific_markdown_escapes(
         #[case] name: &str,
         #[case] expected_name: &str,
     ) {
-        let mut plan = plan();
-        plan.name = name.to_string();
+        let plan = PrSeriesPlan {
+            name: name.to_string(),
+            purpose: "Demonstrate series rendering.".to_string(),
+            pull_requests: vec![PrSeriesEntry {
+                id: "sample".to_string(),
+                summary: "Add sample behavior".to_string(),
+                depends_on: Vec::new(),
+                repository: "sample/service".to_string(),
+                tq_leaf_id: "leaf-sample".to_string(),
+            }],
+            steps: None,
+        };
+        let repository_privacy = HashMap::from([("sample/service".to_string(), false)]);
         let actual =
-            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+            render_section(&plan, "sample", "Existing body", &repository_privacy, &[]).unwrap();
         let expected = format!(
             indoc! {"
                 <!-- pr-series:start -->
                 ### {name}
 
-                1. Add preference tables (not created yet)
-                2. **Document the settings** (this PR)
+                1. **Add sample behavior** (this PR)
                 <!-- pr-series:end -->
             "},
             name = expected_name,
