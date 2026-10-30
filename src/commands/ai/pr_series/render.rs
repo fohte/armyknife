@@ -807,7 +807,7 @@ mod tests {
             expected_summary = expected_summary,
         );
 
-        assert_eq!(actual, expected.trim_end_matches('\n'));
+        assert_eq!(actual, Some(expected.trim_end_matches('\n').to_string()),);
     }
 
     #[test]
