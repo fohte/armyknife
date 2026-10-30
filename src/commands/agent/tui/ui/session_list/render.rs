@@ -224,7 +224,7 @@ mod tests {
         >● project                 Design source                                                                                            just now
          ▾                       └─   Implementation plan · 0/1 PRs merged
          ▾                          └─   Batch: Batch A · 0 PRs merged
-         ● project                     └─   Worker session · Planned PR · Placeholder change implementing                                   just now
+         ● project                     └─   implementing Worker session · Planned PR · Placeholder change                                   just now
 
 
 
@@ -235,7 +235,7 @@ mod tests {
         >● project                 Design source                                                                                            just now
          ▾                       └─   Implementation plan · 0/1 PRs merged
          ▾                          └─   Batch: Batch A · 0 PRs merged
-         ● project                     └─   Worker session · PR #17 implementing                                                            just now
+         ● project                     └─   implementing Worker session · PR #17                                                            just now
 
 
 
@@ -247,7 +247,7 @@ mod tests {
         >● project               ├─   Design source                                                                                         just now
          ▾                       │  └─   Implementation plan · 0/1 PRs merged
          ▾                       │     └─   Batch: Batch A · 0 PRs merged
-         ● project               │        └─   Worker session · Planned PR · Placeholder change implementing                                just now
+         ● project               │        └─   implementing Worker session · Planned PR · Placeholder change                                just now
          ● project               │           └─   Worker child                                                                              just now
          ● project               └─   Following sibling                                                                                     just now
 
@@ -371,7 +371,7 @@ mod tests {
 
         let expected = indoc! {"
              agent watch                                                                                                0 needs you · 1 running · 0 idle
-            >● project                 Worker session CI running                                                                                just now
+            >● project                 CI running Worker session                                                                                just now
 
 
 
@@ -612,7 +612,7 @@ mod tests {
         });
 
         let waiting_row = format!(
-            ">◐ project               界  Wide crit{}just now",
+            ">◐ project               界  crit Wide{}just now",
             " ".repeat(35)
         );
         let expected = [
@@ -890,7 +890,7 @@ mod tests {
         let output = render_to_string(&[you_user_turn_session], Some(1), now, 80, 10);
 
         let action_row = format!(
-            ">◐ project                 session-name needs_attention{}48m",
+            ">◐ project                 needs_attention session-name{}48m",
             " ".repeat(22)
         );
         let expected = [
@@ -935,7 +935,7 @@ mod tests {
     }
 
     #[test]
-    fn test_action_label_uses_width_after_minimum_title_reserve() {
+    fn test_action_label_is_preserved_when_title_is_truncated() {
         let now = Utc::now();
         let mut session = create_test_session("session");
         session.updated_at = now;
@@ -950,7 +950,7 @@ mod tests {
 
         assert_eq!(
             rendered_row(&buffer, 2),
-            format!(">◐ project{}session... need...  just now", " ".repeat(17))
+            ">◐ project                 needs_attention ... just now"
         );
     }
 
@@ -965,7 +965,7 @@ mod tests {
         let output = render_to_string(&[failed], Some(1), now, 80, 9);
 
         let failed_row = format!(
-            ">✗ project                 session-name failed{}just now",
+            ">✗ project                 failed session-name{}just now",
             " ".repeat(26)
         );
         let expected = [
@@ -1080,7 +1080,7 @@ mod tests {
 
     fn expected_waiting_task_row(selected: bool) -> String {
         format!(
-            "{}◐ project                 project crit{}just now",
+            "{}◐ project                 crit project{}just now",
             if selected { ">" } else { " " },
             " ".repeat(33)
         )

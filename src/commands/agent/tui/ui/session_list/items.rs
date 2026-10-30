@@ -278,11 +278,16 @@ pub(super) fn build_session_item_with_annotation(
     };
 
     let work_type_column_width = work_type_column_width(app);
+    let state_label_gap = usize::from(has_state_label(entry, stage));
     let work_type_config = app
         .agent_config
         .watch_work_type(session.work_type.as_deref());
     let work_type_spans = work_type_config.map_or_else(
-        || vec![Span::raw(" ".repeat(work_type_column_width))],
+        || {
+            vec![Span::raw(" ".repeat(
+                work_type_column_width.saturating_sub(state_label_gap),
+            ))]
+        },
         |config| {
             let icon_width = config.icon.width();
             vec![
@@ -290,15 +295,18 @@ pub(super) fn build_session_item_with_annotation(
                     config.icon.clone(),
                     Style::default().fg(Color::from(config.color)),
                 ),
-                Span::raw(" ".repeat(work_type_column_width.saturating_sub(icon_width))),
+                Span::raw(
+                    " ".repeat(work_type_column_width.saturating_sub(icon_width + state_label_gap)),
+                ),
             ]
         },
     );
 
     let branch = tree_branch_text(entry.tree_prefix.as_deref(), entry.is_last_sibling);
     let branch_width = branch.width();
-    let title_width =
-        title_column_width(term_width, work_type_column_width).saturating_sub(branch_width);
+    let title_width = title_column_width(term_width, work_type_column_width)
+        .saturating_add(state_label_gap)
+        .saturating_sub(branch_width);
     let title_style = own_title_style(is_idle, title_kin_color);
     let title_spans = build_title_spans(
         entry,
@@ -382,10 +390,28 @@ fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String 
     }
 }
 
-/// The badge's width is carved out of `title_width` up front so the title
-/// truncates to leave room for it, and the badge is appended right after
-/// that (unpadded) content -- rather than after padding, which would push it
-/// flush against the time column instead of next to the title it describes.
+fn has_crit_badge(entry: &SessionRowEntry<'_>) -> bool {
+    !entry.session.crit_urls.is_empty()
+        && !entry
+            .user_turn
+            .is_some_and(|turn| turn.kind == UserTurnKind::Crit)
+}
+
+fn user_turn_label_before_title<'a>(
+    entry: &SessionRowEntry<'a>,
+    stage: Option<CurrentPrStage>,
+) -> Option<&'a str> {
+    entry
+        .user_turn
+        .and_then(|turn| turn.label)
+        .filter(|label| stage.is_none_or(|stage| stage.label() != *label))
+}
+
+fn has_state_label(entry: &SessionRowEntry<'_>, stage: Option<CurrentPrStage>) -> bool {
+    stage.is_some() || has_crit_badge(entry) || user_turn_label_before_title(entry, stage).is_some()
+}
+
+/// Action labels lead the title so truncation leaves the current state visible.
 fn build_title_spans(
     entry: &SessionRowEntry,
     own_title: &str,
@@ -396,23 +422,18 @@ fn build_title_spans(
     stage: Option<CurrentPrStage>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
-    let crit_badge = if entry.session.crit_urls.is_empty()
-        || entry
-            .user_turn
-            .is_some_and(|turn| turn.kind == UserTurnKind::Crit)
-    {
-        String::new()
-    } else {
+    let crit_badge = if has_crit_badge(entry) {
         " [crit]".to_string()
+    } else {
+        String::new()
     };
     let stage_badge = stage.map(|stage| format!(" {} ", stage.label()));
     let stage_badge_width = stage_badge.as_ref().map_or(0, |badge| badge.width());
-    let raw_user_turn_label = entry
-        .user_turn
-        .and_then(|turn| turn.label)
-        .filter(|label| stage.is_none_or(|stage| stage.label() != *label));
+    let raw_user_turn_label = user_turn_label_before_title(entry, stage);
     let user_turn_label_width =
         raw_user_turn_label.map_or(0, |label| label.width().max(USER_TURN_LABEL_WIDTH) + 2);
+    let user_turn_label = raw_user_turn_label.map(|label| format!(" {label} "));
+    let visible_user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
         (Some(mode), Some(config))
             if config.icon.width()
@@ -438,60 +459,37 @@ fn build_title_spans(
     } else {
         String::new()
     };
-    let badge_width = child_badge.width() + crit_badge.width() + stage_badge_width;
-    let title_reserve = own_title.width().min(MIN_TITLE_WIDTH);
-    let label_width = title_width
-        .saturating_sub(badge_width + marker_width)
-        .saturating_sub(title_reserve);
-    let user_turn_label = raw_user_turn_label.and_then(|label| {
-        if label_width == 0 {
-            return None;
-        }
-
-        let has_padding = label_width >= 3;
-        let label_text_width = label_width.saturating_sub(usize::from(has_padding) * 2);
-        let label_text = truncate(label, label_text_width);
-        let label = if has_padding {
-            format!(" {label_text} ")
-        } else {
-            label_text
-        };
-        Some(label)
-    });
-    let visible_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
+    let child_badge_width = child_badge.width();
+    let state_badge_width = crit_badge.width() + stage_badge_width + visible_user_turn_label_width;
     let content_width =
-        title_width.saturating_sub(badge_width + marker_width + visible_label_width);
+        title_width.saturating_sub(state_badge_width + marker_width + child_badge_width);
 
     let title = truncate(own_title, content_width);
-    let mut used_width = title.width();
-    let mut spans = highlight_matches(&title, query, title_style);
-    if let Some((mode, config)) = marker {
-        let mut style = Style::default().fg(Color::from(config.color));
-        if mode == VibeMode::Inherited {
-            style = style.add_modifier(Modifier::DIM);
-        }
-        used_width += config.icon.width();
-        spans.push(Span::styled(config.icon.clone(), style));
-    }
-    if !child_badge.is_empty() {
-        used_width += child_badge.width();
-        spans.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));
-    }
+    let mut spans = Vec::new();
     if !crit_badge.is_empty() {
-        used_width += crit_badge.width();
         spans.push(Span::styled(
             crit_badge,
             Style::default().fg(Color::Indexed(98)),
         ));
     }
     if let (Some(stage), Some(badge)) = (stage, stage_badge) {
-        used_width += badge.width();
         spans.push(Span::styled(badge, pr_stage_label_style(stage)));
     }
     if let Some(label) = user_turn_label {
-        used_width += label.width();
         spans.push(Span::styled(label, user_turn_label_style()));
     }
+    spans.extend(highlight_matches(&title, query, title_style));
+    if let Some((mode, config)) = marker {
+        let mut style = Style::default().fg(Color::from(config.color));
+        if mode == VibeMode::Inherited {
+            style = style.add_modifier(Modifier::DIM);
+        }
+        spans.push(Span::styled(config.icon.clone(), style));
+    }
+    if !child_badge.is_empty() {
+        spans.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));
+    }
+    let used_width = state_badge_width + title.width() + marker_width + child_badge_width;
     if used_width < title_width {
         spans.push(Span::raw(" ".repeat(title_width - used_width)));
     }
@@ -520,7 +518,7 @@ mod tests {
     #[rstest]
     #[case::wide_title(28, "worker", Some(" ◐ 1/2"), "         ")]
     #[case::tight_title(12, "wo...", None, "")]
-    fn test_title_spans_deduplicate_matching_action_label_and_fit_badges(
+    fn test_title_spans_place_stage_before_title_and_fit_badges(
         #[case] title_width: usize,
         #[case] expected_title: &str,
         #[case] expected_child_badge: Option<&str>,
@@ -560,6 +558,7 @@ mod tests {
         );
 
         let mut expected = vec![
+            Span::styled(" crit ", user_turn_label_style()),
             Span::styled(
                 expected_title.to_string(),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -569,7 +568,6 @@ mod tests {
         if let Some(child_badge) = expected_child_badge {
             expected.push(Span::styled(child_badge, Style::default().fg(DIM_FG)));
         }
-        expected.push(Span::styled(" crit ", user_turn_label_style()));
         if !expected_padding.is_empty() {
             expected.push(Span::raw(expected_padding));
         }

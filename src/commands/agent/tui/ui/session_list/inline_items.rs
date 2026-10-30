@@ -51,9 +51,16 @@ pub(super) fn build_inline_progress_item(
     let branch = tree_branch_text(Some(&entry.tree_prefix), entry.is_last_sibling);
     let branch_width = branch.width();
     let work_type_width = work_type_column_width(app);
+    let stage = progress_row_stage(entry.progress.as_ref());
+    let state_label_gap = usize::from(stage.is_some());
+    let stage_badge_width = stage.map_or(0, |stage| format!(" {} ", stage.label()).width());
     let title_width = term_width.saturating_sub(
-        2 + REPO_COLUMN_WIDTH + TASK_NUMBER_COLUMN_WIDTH + work_type_width + branch_width,
-    );
+        2 + REPO_COLUMN_WIDTH
+            + TASK_NUMBER_COLUMN_WIDTH
+            + work_type_width
+            + branch_width
+            + stage_badge_width,
+    ) + state_label_gap;
     let (status, title, style) = match (entry.progress.as_ref(), entry.label.as_deref()) {
         (_, Some(label)) => ("!", label.to_string(), Style::default().fg(Color::Yellow)),
         (
@@ -134,16 +141,15 @@ pub(super) fn build_inline_progress_item(
         Span::raw(" ".repeat(REPO_COLUMN_WIDTH)),
         Span::raw(" ".repeat(TASK_NUMBER_COLUMN_WIDTH)),
         Span::styled(branch, Style::default().fg(DIM_FG)),
-        Span::raw(" ".repeat(work_type_width)),
-        Span::styled(title, style),
+        Span::raw(" ".repeat(work_type_width.saturating_sub(state_label_gap))),
     ];
-    let stage = progress_row_stage(entry.progress.as_ref());
     if let Some(stage) = stage {
         spans.push(Span::styled(
             format!(" {} ", stage.label()),
             super::items::pr_stage_label_style(stage),
         ));
     }
+    spans.push(Span::styled(title, style));
     ListItem::new(Line::from(spans))
 }
 
