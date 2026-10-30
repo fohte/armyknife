@@ -296,11 +296,12 @@ mod tests {
         sessions: &[Session],
         selected_index: Option<usize>,
         now: DateTime<Utc>,
+        term_width: u16,
         height: u16,
         progress_rows: Vec<ProgressRow>,
         row_order: &[Option<&str>],
     ) -> String {
-        render_to_string_with(sessions, selected_index, now, 140, height, |app| {
+        render_to_string_with(sessions, selected_index, now, term_width, height, |app| {
             app.progress_inline_source_id = Some("design".to_string());
             app.progress_session_id = Some("design".to_string());
             app.progress_fetch_states
@@ -337,6 +338,7 @@ mod tests {
             &[design, worker],
             Some(1),
             now,
+            140,
             10,
             inline_checklist_progress_rows,
             &[None, Some("design"), Some("worker")],
@@ -392,6 +394,7 @@ mod tests {
             &[design],
             Some(0),
             now,
+            140,
             8,
             vec![
                 ProgressRow::ImplementationHeader {
@@ -424,6 +427,44 @@ mod tests {
 
              ?: keys   /: search   Tab: toggle progress   q: quit"};
 
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn unmatched_pr_stage_precedes_truncated_title() {
+        let now = Utc::now();
+        let mut design = create_test_session("design");
+        design.updated_at = now;
+        design.label = Some("Design source".to_string());
+        let mut progress_rows = inline_checklist_progress_rows();
+        for progress in &mut progress_rows {
+            if let ProgressRow::ChecklistPullRequest { row, .. } = progress {
+                row.session_id = "unmatched-worker".to_string();
+                row.number = Some(17);
+                row.title = "A planned implementation item with a long title".to_string();
+            }
+        }
+        let output = render_inline_progress_screen(
+            &[design],
+            Some(0),
+            now,
+            60,
+            10,
+            progress_rows,
+            &[None, Some("design")],
+        );
+
+        let expected = indoc! {"
+             agent watch                0 needs you · 1 running · 0 idle
+            >● project                 Design source            just now
+             ▾                       └─   Implementation plan · 0/1 PRs
+             ▾                          └─   Batch: Batch A · 0 PRs merg
+                                          └─   implementing PR #17 · A …
+
+
+
+
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
         assert_eq!(output, expected);
     }
 
@@ -463,6 +504,7 @@ mod tests {
             &[parent, design, worker, worker_child, sibling],
             Some(2),
             now,
+            140,
             11,
             inline_checklist_progress_rows,
             &[

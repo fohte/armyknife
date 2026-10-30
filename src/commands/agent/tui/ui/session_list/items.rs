@@ -36,8 +36,6 @@ pub(super) const TASK_NUMBER_COLUMN_WIDTH: usize = 6;
 pub(super) const MIN_WORK_TYPE_COLUMN_WIDTH: usize = 2;
 /// Fixed width of the right-aligned time column.
 const TIME_COLUMN_WIDTH: usize = 9;
-/// The longest automatic user-turn label is `failed`; configured names can be wider.
-const USER_TURN_LABEL_WIDTH: usize = 6;
 /// Floor for the variable-width title column so it never collapses to
 /// nothing on very narrow terminals.
 const MIN_TITLE_WIDTH: usize = 10;
@@ -61,6 +59,10 @@ pub(super) fn work_type_column_width(app: &App) -> usize {
         .unwrap_or(1)
         .max(MIN_WORK_TYPE_COLUMN_WIDTH - 1)
         + 1
+}
+
+pub(super) fn state_label_column_shift(has_state_label: bool) -> usize {
+    usize::from(has_state_label)
 }
 
 /// Width left for the title after fixed columns, floored so it never
@@ -278,7 +280,7 @@ pub(super) fn build_session_item_with_annotation(
     };
 
     let work_type_column_width = work_type_column_width(app);
-    let state_label_gap = usize::from(has_state_label(entry, stage));
+    let state_label_gap = state_label_column_shift(has_state_label(entry, stage));
     let work_type_config = app
         .agent_config
         .watch_work_type(session.work_type.as_deref());
@@ -430,10 +432,8 @@ fn build_title_spans(
     let stage_badge = stage.map(|stage| format!(" {} ", stage.label()));
     let stage_badge_width = stage_badge.as_ref().map_or(0, |badge| badge.width());
     let raw_user_turn_label = user_turn_label_before_title(entry, stage);
-    let user_turn_label_width =
-        raw_user_turn_label.map_or(0, |label| label.width().max(USER_TURN_LABEL_WIDTH) + 2);
     let user_turn_label = raw_user_turn_label.map(|label| format!(" {label} "));
-    let visible_user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
+    let user_turn_label_width = user_turn_label.as_ref().map_or(0, |label| label.width());
     let marker = match (entry.vibe_mode, vibe_marker) {
         (Some(mode), Some(config))
             if config.icon.width()
@@ -460,7 +460,7 @@ fn build_title_spans(
         String::new()
     };
     let child_badge_width = child_badge.width();
-    let state_badge_width = crit_badge.width() + stage_badge_width + visible_user_turn_label_width;
+    let state_badge_width = crit_badge.width() + stage_badge_width + user_turn_label_width;
     let content_width =
         title_width.saturating_sub(state_badge_width + marker_width + child_badge_width);
 
