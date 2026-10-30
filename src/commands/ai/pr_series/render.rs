@@ -861,6 +861,30 @@ mod tests {
         assert_eq!(remove_managed_section(body).unwrap(), expected);
     }
 
+    #[test]
+    fn removes_managed_section_without_mixing_crlf_lines() {
+        let body = indoc! {"
+            Before
+
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+
+            After
+        "}
+        .trim_end_matches('\n')
+        .replace('\n', "\r\n");
+        let expected = indoc! {"
+            Before
+
+            After
+        "}
+        .trim_end_matches('\n')
+        .replace('\n', "\r\n");
+
+        assert_eq!(remove_managed_section(&body).unwrap(), expected);
+    }
+
     #[rstest::rstest]
     #[case::submitted_section_wins(
         (indoc! {"
