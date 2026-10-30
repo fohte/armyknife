@@ -186,6 +186,7 @@ fn render_pull_request(
         } else {
             "this PR"
         };
+        // Unicode whitespace next to the bold delimiters prevents GitHub from rendering emphasis.
         format!(
             "**{}** ({current_label})",
             escape_markdown_text(entry.summary.trim())
@@ -697,9 +698,14 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading")]
-    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading")]
-    fn preserves_leading_unicode_whitespace_in_non_bold_summaries(#[case] summary: &str) {
+    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading", "\u{3000}# heading")]
+    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading", "\u{00a0}# heading")]
+    #[case::leading_spaces_before_marker_are_escaped("   # heading", r"\# heading")]
+    #[case::leading_tab_before_numbered_list_is_escaped("\t12. item", r"12\. item")]
+    fn renders_non_bold_summaries_with_required_markdown_escapes(
+        #[case] summary: &str,
+        #[case] expected_summary: &str,
+    ) {
         let mut plan = plan();
         plan.pull_requests[0].summary = summary.to_string();
         let actual =
@@ -709,11 +715,11 @@ mod tests {
                 <!-- pr-series:start -->
                 ### Notification preferences
 
-                1. {summary} (not created yet)
+                1. {expected_summary} (not created yet)
                 2. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "},
-            summary = summary,
+            expected_summary = expected_summary,
         );
 
         assert_eq!(actual, expected.trim_end_matches('\n'));
