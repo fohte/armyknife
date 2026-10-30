@@ -453,21 +453,34 @@ mod tests {
         }
     }
 
-    fn one_visible_pull_request_render_case() -> RenderCase {
+    fn one_visible_pull_request_step_render_case() -> RenderCase {
         let mut plan = plan();
-        let mut repository_privacy = privacy();
-        repository_privacy.insert("acme/notify-api".to_string(), true);
-        plan.steps = Some(vec![PrSeriesStep {
-            summary: Some("Set up storage and rotate credentials.".to_string()),
-            pull_requests: vec!["credentials".to_string(), "docs".to_string()],
-        }]);
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            },
+            PrSeriesStep {
+                summary: Some("Set up storage and rotate credentials.".to_string()),
+                pull_requests: vec!["credentials".to_string(), "docs".to_string()],
+            },
+        ]);
         RenderCase {
             plan,
             current_entry_id: "docs",
             current_body: "Existing body",
-            repository_privacy,
+            repository_privacy: privacy(),
             created_pull_requests: created_docs(),
-            expected: String::new(),
+            expected: indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. Add preference tables (not created yet)
+                2. **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n')
+            .to_string(),
         }
     }
 
@@ -599,7 +612,7 @@ mod tests {
     #[case::legacy_plan(legacy_render_case())]
     #[case::grouped_step_filters_private_entries(grouped_render_case())]
     #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
-    #[case::single_visible_pr_omits_section(one_visible_pull_request_render_case())]
+    #[case::single_visible_pr_step_omits_step_summary(one_visible_pull_request_step_render_case())]
     #[case::summaries_escape_markdown_syntax(escaped_summary_render_case())]
     #[case::created_non_current_pr_uses_reference_in_nested_list(
         created_non_current_nested_pr_render_case()
@@ -615,8 +628,45 @@ mod tests {
                 &case.created_pull_requests,
             )
             .unwrap()
-            .unwrap_or_default(),
+            .unwrap(),
             case.expected,
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::without_steps(false)]
+    #[case::with_one_entry_step(true)]
+    fn omits_section_when_plan_has_one_pull_request(#[case] with_steps: bool) {
+        let mut plan = plan();
+        plan.pull_requests.truncate(1);
+        if with_steps {
+            plan.steps = Some(vec![PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            }]);
+        }
+
+        assert_eq!(
+            render_section(&plan, "schema", "Existing body", &privacy(), &[]).unwrap(),
+            None,
+        );
+    }
+
+    #[test]
+    fn omits_section_when_privacy_filter_leaves_one_pull_request() {
+        let mut repository_privacy = privacy();
+        repository_privacy.insert("acme/notify-api".to_string(), true);
+
+        assert_eq!(
+            render_section(
+                &plan(),
+                "docs",
+                "Existing body",
+                &repository_privacy,
+                &created_docs(),
+            )
+            .unwrap(),
+            None,
         );
     }
 
@@ -853,36 +903,28 @@ mod tests {
         "}.trim_end_matches('\n'),
         "",
     )]
+    #[case::between_paragraphs_crlf(
+        concat!(
+            "Before",
+            "\r\n",
+            "\r\n",
+            "<!-- pr-series:start -->",
+            "\r\n",
+            "Old section",
+            "\r\n",
+            "<!-- pr-series:end -->",
+            "\r\n",
+            "\r\n",
+            "After",
+        ),
+        concat!("Before", "\r\n", "\r\n", "After"),
+    )]
     #[case::no_section("Before", "Before")]
     fn removes_managed_section_and_adjacent_blank_lines(
         #[case] body: &str,
         #[case] expected: &str,
     ) {
         assert_eq!(remove_managed_section(body).unwrap(), expected);
-    }
-
-    #[test]
-    fn removes_managed_section_without_mixing_crlf_lines() {
-        let body = indoc! {"
-            Before
-
-            <!-- pr-series:start -->
-            Old section
-            <!-- pr-series:end -->
-
-            After
-        "}
-        .trim_end_matches('\n')
-        .replace('\n', "\r\n");
-        let expected = indoc! {"
-            Before
-
-            After
-        "}
-        .trim_end_matches('\n')
-        .replace('\n', "\r\n");
-
-        assert_eq!(remove_managed_section(&body).unwrap(), expected);
     }
 
     #[rstest::rstest]
