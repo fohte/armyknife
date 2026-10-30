@@ -186,9 +186,10 @@ fn render_pull_request(
         } else {
             "this PR"
         };
+        // Unicode whitespace next to the bold delimiters prevents GitHub from rendering emphasis.
         format!(
             "**{}** ({current_label})",
-            escape_markdown_text(&entry.summary)
+            escape_markdown_text(entry.summary.trim())
         )
     } else if let Some(pull_request) = created_by_id.get(entry.id.as_str()) {
         format!(
@@ -648,8 +649,11 @@ mod tests {
     #[case::leading_spaces_before_marker("   # heading", r"\# heading")]
     #[case::leading_tab_before_numbered_list("\t12. item", r"12\. item")]
     #[case::leading_spaces_are_removed("   plain summary", "plain summary")]
-    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading", "\u{3000}# heading")]
-    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading", "\u{00a0}# heading")]
+    #[case::trailing_spaces_are_removed("plain summary   ", "plain summary")]
+    #[case::leading_ideographic_space_is_removed("\u{3000}# heading", r"\# heading")]
+    #[case::trailing_ideographic_space_is_removed("plain summary\u{3000}", "plain summary")]
+    #[case::leading_nonbreaking_space_is_removed("\u{00a0}# heading", r"\# heading")]
+    #[case::trailing_nonbreaking_space_is_removed("plain summary\u{00a0}", "plain summary")]
     #[case::https_url_is_not_linked(
         "see https://example.test/?a=1&b=2 now",
         r"see https\://example.test/?a=1\&b=2 now"
@@ -685,6 +689,34 @@ mod tests {
 
                 1. Add preference tables (not created yet)
                 2. **{expected_summary}** (this PR)
+                <!-- pr-series:end -->
+            "},
+            expected_summary = expected_summary,
+        );
+
+        assert_eq!(actual, expected.trim_end_matches('\n'));
+    }
+
+    #[rstest::rstest]
+    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading", "\u{3000}# heading")]
+    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading", "\u{00a0}# heading")]
+    #[case::leading_spaces_before_marker_are_escaped("   # heading", r"\# heading")]
+    #[case::leading_tab_before_numbered_list_is_escaped("\t12. item", r"12\. item")]
+    fn renders_non_bold_summaries_with_required_markdown_escapes(
+        #[case] summary: &str,
+        #[case] expected_summary: &str,
+    ) {
+        let mut plan = plan();
+        plan.pull_requests[0].summary = summary.to_string();
+        let actual =
+            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+        let expected = format!(
+            indoc! {"
+                <!-- pr-series:start -->
+                ### Notification preferences
+
+                1. {expected_summary} (not created yet)
+                2. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "},
             expected_summary = expected_summary,
