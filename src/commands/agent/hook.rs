@@ -617,7 +617,6 @@ fn process_hook_event_impl_with_settings(
         (may_contain_work_type || session.work_type.is_some()).then(config::load_config_or_default);
 
     // Update session fields
-    session.cwd.clone_from(&input.cwd);
     session.updated_at = now;
 
     // Any hook event other than SessionEnd means the process is still
@@ -3380,6 +3379,37 @@ mod tests {
         session.session_id = session_id.to_string();
         mutate(&mut session);
         store::save_session_to(sessions_dir, &session).expect("save");
+    }
+
+    #[test]
+    fn hook_event_keeps_session_cwd_from_record_creation() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let launch_cwd = PathBuf::from("/tmp/session-start");
+        let mut start_input = create_test_input(None);
+        start_input.cwd.clone_from(&launch_cwd);
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            start_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("session-start hook should succeed");
+
+        let mut later_input = create_test_input(None);
+        later_input.cwd = PathBuf::from("/tmp/changed-directory");
+        process_hook_event_impl(
+            HookEvent::UserPromptSubmit,
+            later_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("later hook should succeed");
+
+        let session = store::load_session_from(sessions_dir, "test-123")
+            .expect("session should load")
+            .expect("session should exist");
+        assert_eq!(session.cwd, launch_cwd);
     }
 
     #[derive(Debug, Clone, Copy)]
