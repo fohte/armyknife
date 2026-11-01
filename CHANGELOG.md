@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.501](https://github.com/fohte/armyknife/compare/v0.1.500...v0.1.501) (2026-11-01)
+
+
+### Bug Fixes
+
+* **agent/hook:** preserve session cwd at creation ([#1350](https://github.com/fohte/armyknife/issues/1350)) ([ce3f198](https://github.com/fohte/armyknife/commit/ce3f198258373a74b2b00b9df438f260e69c4393))
+
 ## [0.1.500](https://github.com/fohte/armyknife/compare/v0.1.499...v0.1.500) (2026-10-30)
 
 
