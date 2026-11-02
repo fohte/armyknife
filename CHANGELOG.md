@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.505](https://github.com/fohte/armyknife/compare/v0.1.504...v0.1.505) (2026-11-02)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** localize the PR list heading ([#1357](https://github.com/fohte/armyknife/issues/1357)) ([bc3b862](https://github.com/fohte/armyknife/commit/bc3b8622cb4a604b1188eff3764c4b6d94c69168))
+
 ## [0.1.504](https://github.com/fohte/armyknife/compare/v0.1.503...v0.1.504) (2026-11-02)
 
 
