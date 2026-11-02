@@ -983,6 +983,58 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::blank_line_between_markers("", false)]
+    #[case::whitespace_only_between_markers(" ", false)]
+    #[case::crlf_body_with_blank_line_between_markers("", true)]
+    fn copies_existing_section_into_whitespace_only_placeholder(
+        #[case] section_content: &str,
+        #[case] use_crlf: bool,
+    ) {
+        let existing_body = indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let submitted_body = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            __empty_section_content__
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .replace("__empty_section_content__", section_content)
+        .trim_end_matches('\n')
+        .to_string();
+        let expected = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let (existing_body, submitted_body, expected) = if use_crlf {
+            (
+                existing_body.replace('\n', "\r\n"),
+                submitted_body.replace('\n', "\r\n"),
+                expected.replace('\n', "\r\n"),
+            )
+        } else {
+            (existing_body, submitted_body, expected)
+        };
+
+        assert_eq!(
+            preserve_managed_section(&existing_body, &submitted_body).unwrap(),
+            expected,
+        );
+    }
+
+    #[rstest::rstest]
     #[case::submitted_section_wins(
         (indoc! {"
             Existing body
