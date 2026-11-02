@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 
 use super::model::{CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests};
-use super::render::{render_section, replace_managed_section};
+use super::render::{remove_managed_section, render_section, replace_managed_section};
 use super::storage;
 use crate::infra::github::{GitHubClient, PrBodyClient, RepoClient, UpdatePrBodyParams};
 use crate::infra::tq::TqClient;
@@ -203,13 +203,16 @@ pub(super) fn synchronized_body(
     repository_privacy: &HashMap<String, bool>,
     created_pull_requests: &[CreatedPullRequest],
 ) -> Result<String> {
-    let section = render_section(
+    let Some(section) = render_section(
         plan,
         entry_id,
         body,
         repository_privacy,
         created_pull_requests,
-    )?;
+    )?
+    else {
+        return remove_managed_section(body);
+    };
     replace_managed_section(body, &section)
 }
 
@@ -437,6 +440,54 @@ mod tests {
         github
     }
 
+    fn fixture_with_one_public_pr_visible() -> (PrSeriesPlan, Vec<CreatedPullRequest>, FakeGitHub) {
+        let plan = sample_plan();
+        let pull_requests = created_pull_requests();
+        let mut github = fake_github();
+        github
+            .private_repositories
+            .insert("acme/notify-api".to_string(), true);
+        github.add_body(
+            "acme/notify-web",
+            31,
+            indoc! {"
+            Settings details
+
+            <!-- pr-series:start -->
+            ### Old series
+
+            1. Old overview
+            <!-- pr-series:end -->
+        "}
+            .trim_end_matches('\n'),
+        );
+        (plan, pull_requests, github)
+    }
+
+    fn expected_bodies_after_sync() -> HashMap<(String, u64), String> {
+        HashMap::from([
+            (
+                ("acme/notify-api".to_string(), 12),
+                indoc! {"
+                    API details
+
+                    <!-- pr-series:start -->
+                    ### Notification preferences
+
+                    1. **Add preference tables** (this PR)
+                    2. acme/notify-web#31
+                    <!-- pr-series:end -->
+                "}
+                .trim_end_matches('\n')
+                .to_string(),
+            ),
+            (
+                ("acme/notify-web".to_string(), 31),
+                "Settings details".to_string(),
+            ),
+        ])
+    }
+
     #[tokio::test]
     async fn retries_failed_updates_and_skips_bodies_already_in_sync() {
         let github = fake_github();
@@ -506,8 +557,7 @@ mod tests {
     async fn preserves_body_edits_seen_before_patch() {
         let github = fake_github();
         github.edit_body_after_first_read("acme/notify-api", 12, "API details\nConcurrent edit");
-        let mut plan = sample_plan();
-        plan.pull_requests.truncate(1);
+        let plan = sample_plan();
         let pull_requests = vec![created_pull_requests()[0].clone()];
 
         let report = sync_created_pull_requests(&plan, &pull_requests, &github)
@@ -533,6 +583,7 @@ mod tests {
                             ### Notification preferences
 
                             1. **Add preference tables** (this PR)
+                            2. Add the settings page (not created yet)
                             <!-- pr-series:end -->
                         "}
                         .trim_end_matches('\n')
@@ -543,6 +594,41 @@ mod tests {
                         "Settings details".to_string(),
                     ),
                 ]),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn submit_sync_removes_section_when_only_one_pr_is_visible() {
+        let (plan, pull_requests, github) = fixture_with_one_public_pr_visible();
+
+        let failed = sync_after_submit(&plan, &pull_requests, &github)
+            .await
+            .unwrap();
+
+        assert_eq!((failed, github.bodies()), (0, expected_bodies_after_sync()));
+    }
+
+    #[tokio::test]
+    async fn manual_sync_removes_section_when_only_one_pr_is_visible() {
+        let (plan, pull_requests, github) = fixture_with_one_public_pr_visible();
+
+        let report = sync_created_pull_requests(&plan, &pull_requests, &github)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (report, github.bodies()),
+            (
+                SyncReport {
+                    updated: vec![
+                        "https://github.com/acme/notify-api/pull/12".to_string(),
+                        "https://github.com/acme/notify-web/pull/31".to_string(),
+                    ],
+                    unchanged: Vec::new(),
+                    failed: Vec::new(),
+                },
+                expected_bodies_after_sync(),
             ),
         );
     }

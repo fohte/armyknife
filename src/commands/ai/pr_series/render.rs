@@ -14,7 +14,7 @@ pub fn render_section(
     current_body: &str,
     repository_privacy: &HashMap<String, bool>,
     created_pull_requests: &[CreatedPullRequest],
-) -> Result<String> {
+) -> Result<Option<String>> {
     let current = plan
         .pull_requests
         .iter()
@@ -41,6 +41,9 @@ pub fn render_section(
             .any(|(entry, _)| entry.id == current_entry_id),
         "current pull request `{current_entry_id}` is hidden by repository privacy filtering"
     );
+    if visible_entries.len() <= 1 {
+        return Ok(None);
+    }
 
     let visible_by_id = visible_entries
         .iter()
@@ -104,7 +107,7 @@ pub fn render_section(
         name = plan.name,
         steps = numbered_steps,
     );
-    Ok(section.trim_end_matches('\n').to_string())
+    Ok(Some(section.trim_end_matches('\n').to_string()))
 }
 
 pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
@@ -126,6 +129,23 @@ pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
         section,
         &body[section_range.end..]
     ))
+}
+
+pub fn remove_managed_section(body: &str) -> Result<String> {
+    let Some(section_range) = managed_section_range(body)? else {
+        return Ok(body.to_string());
+    };
+
+    let before = body[..section_range.start].trim_end_matches(['\r', '\n']);
+    let after = body[section_range.end..].trim_start_matches(['\r', '\n']);
+    let newline = if body.contains("\r\n") { "\r\n" } else { "\n" };
+
+    match (before.is_empty(), after.is_empty()) {
+        (true, true) => Ok(String::new()),
+        (true, false) => Ok(after.to_string()),
+        (false, true) => Ok(before.to_string()),
+        (false, false) => Ok(format!("{before}{newline}{newline}{after}")),
+    }
 }
 
 pub fn preserve_managed_section(existing_body: &str, submitted_body: &str) -> Result<String> {
@@ -434,12 +454,18 @@ mod tests {
         }
     }
 
-    fn one_visible_pull_request_render_case() -> RenderCase {
+    fn one_visible_pull_request_step_render_case() -> RenderCase {
         let mut plan = plan();
-        plan.steps = Some(vec![PrSeriesStep {
-            summary: Some("Set up storage and rotate credentials.".to_string()),
-            pull_requests: vec!["credentials".to_string(), "docs".to_string()],
-        }]);
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            },
+            PrSeriesStep {
+                summary: Some("Set up storage and rotate credentials.".to_string()),
+                pull_requests: vec!["credentials".to_string(), "docs".to_string()],
+            },
+        ]);
         RenderCase {
             plan,
             current_entry_id: "docs",
@@ -450,7 +476,8 @@ mod tests {
                 <!-- pr-series:start -->
                 ### Notification preferences
 
-                1. **Document the settings** (this PR)
+                1. Add preference tables (not created yet)
+                2. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "}
             .trim_end_matches('\n')
@@ -586,7 +613,7 @@ mod tests {
     #[case::legacy_plan(legacy_render_case())]
     #[case::grouped_step_filters_private_entries(grouped_render_case())]
     #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
-    #[case::single_visible_pr_omits_step_summary(one_visible_pull_request_render_case())]
+    #[case::single_visible_pr_step_omits_step_summary(one_visible_pull_request_step_render_case())]
     #[case::summaries_escape_markdown_syntax(escaped_summary_render_case())]
     #[case::created_non_current_pr_uses_reference_in_nested_list(
         created_non_current_nested_pr_render_case()
@@ -601,8 +628,65 @@ mod tests {
                 &case.repository_privacy,
                 &case.created_pull_requests,
             )
+            .unwrap()
             .unwrap(),
             case.expected,
+        );
+    }
+
+    #[derive(Debug)]
+    struct SectionOmissionCase {
+        plan: PrSeriesPlan,
+        current_entry_id: &'static str,
+        repository_privacy: HashMap<String, bool>,
+        created_pull_requests: Vec<CreatedPullRequest>,
+    }
+
+    fn single_pull_request_omission_case(with_steps: bool) -> SectionOmissionCase {
+        let mut plan = plan();
+        plan.pull_requests.truncate(1);
+        if with_steps {
+            plan.steps = Some(vec![PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            }]);
+        }
+
+        SectionOmissionCase {
+            plan,
+            current_entry_id: "schema",
+            repository_privacy: privacy(),
+            created_pull_requests: Vec::new(),
+        }
+    }
+
+    fn privacy_filter_leaves_one_pull_request_case() -> SectionOmissionCase {
+        let mut repository_privacy = privacy();
+        repository_privacy.insert("acme/notify-api".to_string(), true);
+
+        SectionOmissionCase {
+            plan: plan(),
+            current_entry_id: "docs",
+            repository_privacy,
+            created_pull_requests: created_docs(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::one_pr_without_steps(single_pull_request_omission_case(false))]
+    #[case::one_pr_with_step(single_pull_request_omission_case(true))]
+    #[case::privacy_filter_leaves_one_pr(privacy_filter_leaves_one_pull_request_case())]
+    fn omits_section_when_one_pull_request_is_visible(#[case] case: SectionOmissionCase) {
+        assert_eq!(
+            render_section(
+                &case.plan,
+                case.current_entry_id,
+                "Existing body",
+                &case.repository_privacy,
+                &case.created_pull_requests,
+            )
+            .unwrap(),
+            None,
         );
     }
 
@@ -680,8 +764,9 @@ mod tests {
     ) {
         let mut plan = plan();
         plan.pull_requests[2].summary = summary.to_string();
-        let actual =
-            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+        let actual = render_section(&plan, "docs", "Existing body", &privacy(), &created_docs())
+            .unwrap()
+            .unwrap();
         let expected = format!(
             indoc! {"
                 <!-- pr-series:start -->
@@ -722,7 +807,7 @@ mod tests {
             expected_summary = expected_summary,
         );
 
-        assert_eq!(actual, expected.trim_end_matches('\n'));
+        assert_eq!(actual, Some(expected.trim_end_matches('\n').to_string()),);
     }
 
     #[test]
@@ -732,11 +817,13 @@ mod tests {
         let privacy = privacy();
         let created = created_docs();
         let initial_body = "Existing English body";
-        let first_section =
-            render_section(&plan, "docs", initial_body, &privacy, &created).unwrap();
+        let first_section = render_section(&plan, "docs", initial_body, &privacy, &created)
+            .unwrap()
+            .unwrap();
         let first_body = replace_managed_section(initial_body, &first_section).unwrap();
-        let second_section =
-            render_section(&plan, "docs", &first_body, &privacy, &created).unwrap();
+        let second_section = render_section(&plan, "docs", &first_body, &privacy, &created)
+            .unwrap()
+            .unwrap();
         let second_body = replace_managed_section(&first_body, &second_section).unwrap();
         let expected = indoc! {"
             Existing English body
@@ -820,6 +907,75 @@ mod tests {
             "}
             .trim_end_matches('\n'),
         );
+    }
+
+    #[rstest::rstest]
+    #[case::between_paragraphs(
+        indoc! {"
+            Before
+
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+
+            After
+        "}.trim_end_matches('\n'),
+        indoc! {"
+            Before
+
+            After
+        "}.trim_end_matches('\n'),
+    )]
+    #[case::at_start(
+        indoc! {"
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+
+            After
+        "}.trim_end_matches('\n'),
+        "After",
+    )]
+    #[case::at_end(
+        indoc! {"
+            Before
+
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+        "}.trim_end_matches('\n'),
+        "Before",
+    )]
+    #[case::only_section(
+        indoc! {"
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+        "}.trim_end_matches('\n'),
+        "",
+    )]
+    #[case::between_paragraphs_crlf(
+        concat!(
+            "Before",
+            "\r\n",
+            "\r\n",
+            "<!-- pr-series:start -->",
+            "\r\n",
+            "Old section",
+            "\r\n",
+            "<!-- pr-series:end -->",
+            "\r\n",
+            "\r\n",
+            "After",
+        ),
+        concat!("Before", "\r\n", "\r\n", "After"),
+    )]
+    #[case::no_section("Before", "Before")]
+    fn removes_managed_section_and_adjacent_blank_lines(
+        #[case] body: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(remove_managed_section(body).unwrap(), expected);
     }
 
     #[rstest::rstest]
