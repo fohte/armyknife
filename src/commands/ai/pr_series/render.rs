@@ -824,14 +824,16 @@ mod tests {
 
     #[test]
     fn language_detection_ignores_the_managed_section_on_reruns() {
-        let mut plan = plan();
-        plan.name = "通知設定".to_string();
+        let plan = plan();
         let privacy = privacy();
         let created = created_docs();
         let initial_body = indoc! {"
             Existing English body
 
             <!-- pr-series:start -->
+            ### 通知設定
+
+            1. 古い一覧
             <!-- pr-series:end -->
         "}
         .trim_end_matches('\n');
