@@ -435,8 +435,28 @@ mod tests {
         github
             .private_repositories
             .insert("acme/notify-web".to_string(), false);
-        github.add_body("acme/notify-api", 12, "API details");
-        github.add_body("acme/notify-web", 31, "Settings details");
+        github.add_body(
+            "acme/notify-api",
+            12,
+            indoc! {"
+                API details
+
+                <!-- pr-series:start -->
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n'),
+        );
+        github.add_body(
+            "acme/notify-web",
+            31,
+            indoc! {"
+                Settings details
+
+                <!-- pr-series:start -->
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n'),
+        );
         github
     }
 
@@ -542,11 +562,25 @@ mod tests {
                 HashMap::from([
                     (
                         ("acme/notify-api".to_string(), 12),
-                        "API details".to_string()
+                        indoc! {"
+                            API details
+
+                            <!-- pr-series:start -->
+                            <!-- pr-series:end -->
+                        "}
+                        .trim_end_matches('\n')
+                        .to_string()
                     ),
                     (
                         ("acme/notify-web".to_string(), 31),
-                        "Settings details".to_string()
+                        indoc! {"
+                            Settings details
+
+                            <!-- pr-series:start -->
+                            <!-- pr-series:end -->
+                        "}
+                        .trim_end_matches('\n')
+                        .to_string()
                     ),
                 ]),
             ),
@@ -556,7 +590,18 @@ mod tests {
     #[tokio::test]
     async fn preserves_body_edits_seen_before_patch() {
         let github = fake_github();
-        github.edit_body_after_first_read("acme/notify-api", 12, "API details\nConcurrent edit");
+        github.edit_body_after_first_read(
+            "acme/notify-api",
+            12,
+            indoc! {"
+                API details
+                Concurrent edit
+
+                <!-- pr-series:start -->
+                <!-- pr-series:end -->
+            "}
+            .trim_end_matches('\n'),
+        );
         let plan = sample_plan();
         let pull_requests = vec![created_pull_requests()[0].clone()];
 
@@ -591,7 +636,51 @@ mod tests {
                     ),
                     (
                         ("acme/notify-web".to_string(), 31),
-                        "Settings details".to_string(),
+                        indoc! {"
+                            Settings details
+
+                            <!-- pr-series:start -->
+                            <!-- pr-series:end -->
+                        "}
+                        .trim_end_matches('\n')
+                        .to_string(),
+                    ),
+                ]),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn leaves_bodies_without_markers_unchanged() {
+        let github = fake_github();
+        github.add_body("acme/notify-api", 12, "API details");
+        github.add_body("acme/notify-web", 31, "Settings details");
+        let plan = sample_plan();
+        let pull_requests = created_pull_requests();
+
+        let report = sync_created_pull_requests(&plan, &pull_requests, &github)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (report, github.bodies()),
+            (
+                SyncReport {
+                    updated: Vec::new(),
+                    unchanged: vec![
+                        "https://github.com/acme/notify-api/pull/12".to_string(),
+                        "https://github.com/acme/notify-web/pull/31".to_string(),
+                    ],
+                    failed: Vec::new(),
+                },
+                HashMap::from([
+                    (
+                        ("acme/notify-api".to_string(), 12),
+                        "API details".to_string()
+                    ),
+                    (
+                        ("acme/notify-web".to_string(), 31),
+                        "Settings details".to_string()
                     ),
                 ]),
             ),
