@@ -1379,16 +1379,22 @@ mod tests {
             <!-- pr-series:end -->
         "}
         .trim_end_matches('\n');
+        let submitted_body = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .trim_end_matches('\n');
         let updated_body = indoc! {"
             Updated body
-
             <!-- pr-series:start -->
             ### Notification preferences
 
             Existing diagram
             <!-- pr-series:end -->
-        "}
-        .trim_end_matches('\n');
+            More updated body
+        "};
         let env = setup_test_env_with_existing_pr(
             "owner",
             "repo_submit_update",
@@ -1404,7 +1410,7 @@ mod tests {
             &env.repo,
             "feature/existing-pr",
             "Updated title",
-            "Updated body",
+            submitted_body,
         );
 
         let args = SubmitArgs {

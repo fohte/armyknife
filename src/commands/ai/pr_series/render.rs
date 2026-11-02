@@ -110,17 +110,13 @@ pub fn render_section(
     Ok(Some(section.trim_end_matches('\n').to_string()))
 }
 
+pub(super) fn has_managed_section(body: &str) -> Result<bool> {
+    Ok(managed_section_range(body)?.is_some())
+}
+
 pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
     let Some(section_range) = managed_section_range(body)? else {
-        if body.is_empty() {
-            return Ok(section.to_string());
-        }
-        let separator = if body.ends_with('\n') {
-            "\n"
-        } else {
-            concat!("\n", "\n")
-        };
-        return Ok(format!("{body}{separator}{section}"));
+        return Ok(body.to_string());
     };
 
     Ok(format!(
@@ -149,13 +145,24 @@ pub fn remove_managed_section(body: &str) -> Result<String> {
 }
 
 pub fn preserve_managed_section(existing_body: &str, submitted_body: &str) -> Result<String> {
-    if managed_section_range(submitted_body)?.is_some() {
+    let Some(submitted_range) = managed_section_range(submitted_body)? else {
+        return Ok(submitted_body.to_string());
+    };
+    let submitted_section_content = &submitted_body
+        [submitted_range.start + START_MARKER.len()..submitted_range.end - END_MARKER.len()];
+    if !submitted_section_content.trim().is_empty() {
         return Ok(submitted_body.to_string());
     }
     let Some(existing_range) = managed_section_range(existing_body)? else {
         return Ok(submitted_body.to_string());
     };
-    replace_managed_section(submitted_body, &existing_body[existing_range])
+
+    Ok(format!(
+        "{}{}{}",
+        &submitted_body[..submitted_range.start],
+        &existing_body[existing_range],
+        &submitted_body[submitted_range.end..]
+    ))
 }
 
 fn body_without_managed_section(body: &str) -> Result<String> {
@@ -816,7 +823,13 @@ mod tests {
         plan.name = "通知設定".to_string();
         let privacy = privacy();
         let created = created_docs();
-        let initial_body = "Existing English body";
+        let initial_body = indoc! {"
+            Existing English body
+
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
         let first_section = render_section(&plan, "docs", initial_body, &privacy, &created)
             .unwrap()
             .unwrap();
@@ -884,7 +897,7 @@ mod tests {
     }
 
     #[test]
-    fn appends_the_section_when_no_markers_exist() {
+    fn leaves_body_unchanged_when_no_markers_exist() {
         let section = indoc! {"
             <!-- pr-series:start -->
             ### New series
@@ -896,16 +909,7 @@ mod tests {
 
         assert_eq!(
             replace_managed_section("Existing text", section).unwrap(),
-            indoc! {"
-                Existing text
-
-                <!-- pr-series:start -->
-                ### New series
-
-                1. Add the sample feature
-                <!-- pr-series:end -->
-            "}
-            .trim_end_matches('\n'),
+            "Existing text",
         );
     }
 
@@ -979,6 +983,58 @@ mod tests {
     }
 
     #[rstest::rstest]
+    #[case::blank_line_between_markers("", false)]
+    #[case::whitespace_only_between_markers(" ", false)]
+    #[case::crlf_body_with_blank_line_between_markers("", true)]
+    fn copies_existing_section_into_whitespace_only_placeholder(
+        #[case] section_content: &str,
+        #[case] use_crlf: bool,
+    ) {
+        let existing_body = indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let submitted_body = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            __empty_section_content__
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .replace("__empty_section_content__", section_content)
+        .trim_end_matches('\n')
+        .to_string();
+        let expected = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let (existing_body, submitted_body, expected) = if use_crlf {
+            (
+                existing_body.replace('\n', "\r\n"),
+                submitted_body.replace('\n', "\r\n"),
+                expected.replace('\n', "\r\n"),
+            )
+        } else {
+            (existing_body, submitted_body, expected)
+        };
+
+        assert_eq!(
+            preserve_managed_section(&existing_body, &submitted_body).unwrap(),
+            expected,
+        );
+    }
+
+    #[rstest::rstest]
     #[case::submitted_section_wins(
         (indoc! {"
             Existing body
@@ -1003,7 +1059,7 @@ mod tests {
         "}).trim_end_matches('\n')),
     )]
     #[case::existing_without_section("Existing body", "Updated body", Ok("Updated body"))]
-    #[case::existing_section_is_carried_forward(
+    #[case::submitted_body_without_markers_does_not_carry_existing_section(
         (indoc! {"
             Existing body
 
@@ -1012,11 +1068,40 @@ mod tests {
             <!-- pr-series:end -->
         "}).trim_end_matches('\n'),
         "Updated body",
-        Ok((indoc! {"
-            Updated body
+        Ok("Updated body"),
+    )]
+    #[case::empty_submitted_section_uses_existing_content_at_placeholder(
+        (indoc! {"
+            Existing body
 
             <!-- pr-series:start -->
             Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        (indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+            More updated body
+        "}).trim_end_matches('\n'),
+        Ok((indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+            More updated body
+        "}).trim_end_matches('\n')),
+    )]
+    #[case::empty_submitted_section_without_existing_section_stays_empty(
+        "Existing body",
+        (indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        Ok((indoc! {"
+            Updated body
+            <!-- pr-series:start -->
             <!-- pr-series:end -->
         "}).trim_end_matches('\n')),
     )]
@@ -1026,7 +1111,7 @@ mod tests {
             <!-- pr-series:start -->
         "}).trim_end_matches('\n'),
         "Updated body",
-        Err("PR series markers must occur exactly once"),
+        Ok("Updated body"),
     )]
     #[case::submitted_partial_marker(
         (indoc! {"
