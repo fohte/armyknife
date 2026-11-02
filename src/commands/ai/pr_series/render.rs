@@ -94,17 +94,22 @@ pub fn render_section(
         .map(|(index, step)| format!("{}. {step}", index + 1))
         .collect::<Vec<_>>()
         .join("\n");
+    let heading = if body_is_japanese {
+        "PR 一覧"
+    } else {
+        "Pull requests"
+    };
     let section = format!(
         indoc! {"
             {START_MARKER}
-            ### {name}
+            ### {heading}
 
             {steps}
             {END_MARKER}
         "},
         START_MARKER = START_MARKER,
         END_MARKER = END_MARKER,
-        name = plan.name,
+        heading = heading,
         steps = numbered_steps,
     );
     Ok(Some(section.trim_end_matches('\n').to_string()))
@@ -397,7 +402,7 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Add preference tables (not created yet)
                 2. **Document the settings** (this PR)
@@ -428,7 +433,7 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Add preference storage and document the settings.
                    - Add preference tables (not created yet)
@@ -449,7 +454,7 @@ mod tests {
             created_pull_requests: created_private_infra(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### PR 一覧
 
                 1. Add preference tables (未作成)
                 2. **Rotate mail credentials** (今回の PR)
@@ -481,7 +486,7 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Add preference tables (not created yet)
                 2. **Document the settings** (this PR)
@@ -508,7 +513,7 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {r"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Group \*storage\* with \[docs\](guide)
                    - Build \[preference\] tables (not created yet)
@@ -550,7 +555,7 @@ mod tests {
             created_pull_requests: created,
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Store preferences and document the settings.
                    - acme/notify-api#12
@@ -595,7 +600,7 @@ mod tests {
             created_pull_requests: Vec::new(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification workflow
+                ### Pull requests
 
                 1. Implement notification stage 1 (not created yet)
                 2. Implement notification stage 2 (not created yet)
@@ -777,7 +782,7 @@ mod tests {
         let expected = format!(
             indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Add preference tables (not created yet)
                 2. **{expected_summary}** (this PR)
@@ -805,7 +810,7 @@ mod tests {
         let expected = format!(
             indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. {expected_summary} (not created yet)
                 2. **Document the settings** (this PR)
@@ -842,7 +847,7 @@ mod tests {
             Existing English body
 
             <!-- pr-series:start -->
-            ### 通知設定
+            ### Pull requests
 
             1. Add preference tables (not created yet)
             2. **Document the settings** (this PR)
