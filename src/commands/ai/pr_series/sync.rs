@@ -19,6 +19,7 @@ pub struct SyncArgs {
 struct SyncReport {
     updated: Vec<String>,
     unchanged: Vec<String>,
+    skipped: Vec<String>,
     failed: Vec<(String, String)>,
 }
 
@@ -119,7 +120,11 @@ async fn sync_created_pull_requests(
             &repository_privacy,
             created_pull_requests,
         ) {
-            Ok(body) => body,
+            Ok(Some(body)) => body,
+            Ok(None) => {
+                report.skipped.push(pull_request.url.clone());
+                continue;
+            }
             Err(error) => {
                 report
                     .failed
@@ -165,7 +170,11 @@ async fn sync_created_pull_requests(
                 &repository_privacy,
                 created_pull_requests,
             ) {
-                Ok(body) => body,
+                Ok(Some(body)) => body,
+                Ok(None) => {
+                    report.skipped.push(pending.pull_request.url.clone());
+                    continue;
+                }
                 Err(error) => {
                     report
                         .failed
@@ -202,7 +211,10 @@ pub(super) fn synchronized_body(
     body: &str,
     repository_privacy: &HashMap<String, bool>,
     created_pull_requests: &[CreatedPullRequest],
-) -> Result<String> {
+) -> Result<Option<String>> {
+    if !super::render::has_managed_section(body)? {
+        return Ok(None);
+    }
     let Some(section) = render_section(
         plan,
         entry_id,
@@ -211,9 +223,9 @@ pub(super) fn synchronized_body(
         created_pull_requests,
     )?
     else {
-        return remove_managed_section(body);
+        return remove_managed_section(body).map(Some);
     };
-    replace_managed_section(body, &section)
+    replace_managed_section(body, &section).map(Some)
 }
 
 fn print_report(report: &SyncReport) {
@@ -222,6 +234,9 @@ fn print_report(report: &SyncReport) {
     }
     for url in &report.unchanged {
         println!("Already synchronized {url}");
+    }
+    for url in &report.skipped {
+        println!("Skipped {url}: no pr-series markers");
     }
     for (url, error) in &report.failed {
         eprintln!("Failed to synchronize {url}: {error}");
@@ -528,6 +543,7 @@ mod tests {
                 SyncReport {
                     updated: vec!["https://github.com/acme/notify-web/pull/31".to_string()],
                     unchanged: Vec::new(),
+                    skipped: Vec::new(),
                     failed: vec![(
                         "https://github.com/acme/notify-api/pull/12".to_string(),
                         "temporary API failure".to_string(),
@@ -536,6 +552,7 @@ mod tests {
                 SyncReport {
                     updated: vec!["https://github.com/acme/notify-api/pull/12".to_string()],
                     unchanged: vec!["https://github.com/acme/notify-web/pull/31".to_string()],
+                    skipped: Vec::new(),
                     failed: Vec::new(),
                 },
             ),
@@ -615,6 +632,7 @@ mod tests {
                 SyncReport {
                     updated: vec!["https://github.com/acme/notify-api/pull/12".to_string()],
                     unchanged: Vec::new(),
+                    skipped: Vec::new(),
                     failed: Vec::new(),
                 },
                 HashMap::from([
@@ -667,7 +685,8 @@ mod tests {
             (
                 SyncReport {
                     updated: Vec::new(),
-                    unchanged: vec![
+                    unchanged: Vec::new(),
+                    skipped: vec![
                         "https://github.com/acme/notify-api/pull/12".to_string(),
                         "https://github.com/acme/notify-web/pull/31".to_string(),
                     ],
@@ -715,6 +734,7 @@ mod tests {
                         "https://github.com/acme/notify-web/pull/31".to_string(),
                     ],
                     unchanged: Vec::new(),
+                    skipped: Vec::new(),
                     failed: Vec::new(),
                 },
                 expected_bodies_after_sync(),

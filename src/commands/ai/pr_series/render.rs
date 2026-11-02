@@ -110,6 +110,10 @@ pub fn render_section(
     Ok(Some(section.trim_end_matches('\n').to_string()))
 }
 
+pub(super) fn has_managed_section(body: &str) -> Result<bool> {
+    Ok(managed_section_range(body)?.is_some())
+}
+
 pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
     let Some(section_range) = managed_section_range(body)? else {
         return Ok(body.to_string());

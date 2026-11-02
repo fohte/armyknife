@@ -276,7 +276,12 @@ Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
-When updating an existing PR, `submit` uses the draft's `pr-series` section when it contains content. If the draft includes an empty marker pair, `submit` fills it with the existing section's content at that position. A draft without markers does not inherit the existing section.
+When updating an existing PR, `submit` uses the draft's `pr-series` section when it contains content. If the draft includes an empty marker pair, `submit` fills it with the existing section's content at that position. A draft without markers does not inherit the existing section. To choose the section's position, put an empty marker pair in the draft:
+
+```md
+<!-- pr-series:start -->
+<!-- pr-series:end -->
+```
 
 ```sh
 a ai pr-series set <task-id> --file plan.json
@@ -337,7 +342,7 @@ For example, if `schema` is already created and `settings` is the current PR, th
 <!-- pr-series:end -->
 ```
 
-`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` replaces the section at its marked position when at least two PRs are visible and leaves bodies without markers unchanged. If at most one PR remains visible after private repositories are filtered from public PR bodies, `sync` omits the section and removes an existing section with its markers. It leaves titles and the rest of each body unchanged, and can be rerun after partial failures.
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` replaces the section at its marked position when at least two PRs are visible. Bodies without markers remain unchanged and are reported as skipped. If at most one PR remains visible after private repositories are filtered from public PR bodies, `sync` omits the section and removes an existing section with its markers. It leaves titles and the rest of each body unchanged, and can be rerun after partial failures.
 
 #### `a ai review`
 
