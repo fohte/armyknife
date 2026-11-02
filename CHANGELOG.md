@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.503](https://github.com/fohte/armyknife/compare/v0.1.502...v0.1.503) (2026-11-02)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** use GET in base PR hint ([#1353](https://github.com/fohte/armyknife/issues/1353)) ([9029dd3](https://github.com/fohte/armyknife/commit/9029dd381f305e0e8187ae6fc85683b9eb33c297))
+
 ## [0.1.502](https://github.com/fohte/armyknife/compare/v0.1.501...v0.1.502) (2026-11-02)
 
 
