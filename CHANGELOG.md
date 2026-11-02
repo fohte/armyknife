@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.502](https://github.com/fohte/armyknife/compare/v0.1.501...v0.1.502) (2026-11-02)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** omit single-PR overviews ([#1345](https://github.com/fohte/armyknife/issues/1345)) ([8d96c79](https://github.com/fohte/armyknife/commit/8d96c79333d161fc47f4ea526b37d99f1dda3c39))
+
 ## [0.1.501](https://github.com/fohte/armyknife/compare/v0.1.500...v0.1.501) (2026-11-01)
 
 
