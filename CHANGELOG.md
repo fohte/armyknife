@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.504](https://github.com/fohte/armyknife/compare/v0.1.503...v0.1.504) (2026-11-02)
+
+
+### Bug Fixes
+
+* **ai/pr-series:** honor section markers ([#1355](https://github.com/fohte/armyknife/issues/1355)) ([9763dd8](https://github.com/fohte/armyknife/commit/9763dd87d99b339be130bca28e43ea41706449ed))
+
 ## [0.1.503](https://github.com/fohte/armyknife/compare/v0.1.502...v0.1.503) (2026-11-02)
 
 
