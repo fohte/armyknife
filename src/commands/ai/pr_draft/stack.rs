@@ -19,7 +19,7 @@ pub(super) async fn stack_created_pull_request(
         Ok(_) => return None,
         Err(error) => {
             let command = format!(
-                "gh api repos/{owner}/{repo}/pulls -f {} -f 'state=open'",
+                "gh api -X GET repos/{owner}/{repo}/pulls -f {} -f 'state=open'",
                 shell_quote(&format!("head={owner}:{base_branch}")),
             );
             let instructions = indoc::formatdoc! {"
@@ -344,7 +344,7 @@ mod tests {
         indoc::indoc! {r#"
             Warning: the PR was created, but its base branch could not be checked for an open PR: base lookup failed
             Check manually with:
-            gh api repos/sample-owner/sample-repo/pulls -f 'head=sample-owner:main' -f 'state=open'
+            gh api -X GET repos/sample-owner/sample-repo/pulls -f 'head=sample-owner:main' -f 'state=open'
         "#}
     )]
     #[case::stack_lookup_failure(
