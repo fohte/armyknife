@@ -507,7 +507,7 @@ mod tests {
                     API details
 
                     <!-- pr-series:start -->
-                    ### Notification preferences
+                    ### Pull requests
 
                     1. **Add preference tables** (this PR)
                     2. acme/notify-web#31
@@ -643,7 +643,7 @@ mod tests {
                             Concurrent edit
 
                             <!-- pr-series:start -->
-                            ### Notification preferences
+                            ### Pull requests
 
                             1. **Add preference tables** (this PR)
                             2. Add the settings page (not created yet)
