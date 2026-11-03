@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.506](https://github.com/fohte/armyknife/compare/v0.1.505...v0.1.506) (2026-11-03)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** avoid branch rules 404 ([#1359](https://github.com/fohte/armyknife/issues/1359)) ([7b29a4e](https://github.com/fohte/armyknife/commit/7b29a4eb2d8f75c36eab7458d4dd349d0db9bf9d))
+
 ## [0.1.505](https://github.com/fohte/armyknife/compare/v0.1.504...v0.1.505) (2026-11-02)
 
 
