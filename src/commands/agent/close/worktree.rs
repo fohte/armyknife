@@ -66,13 +66,15 @@ pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
 /// cwds instead: worktree cleanup kills every tmux window with a pane inside
 /// the worktree and every process group with a member inside it.
 fn ensure_caller_outside_worktree(worktree_root: &Path) -> Result<()> {
-    let window_pane_pids = crate::shared::caller_pane::resolve_caller_pane_id()
-        .and_then(|pane_id| crate::infra::tmux::get_window_pane_pids(&pane_id).ok())
-        .unwrap_or_default();
-    check_caller_pids_in_worktree(crate::infra::process::find_caller_pids_in_path(
-        worktree_root,
-        &window_pane_pids,
-    ))
+    let window_pane_pids = match crate::shared::caller_pane::resolve_caller_pane_id() {
+        Some(pane_id) => crate::infra::tmux::get_window_pane_pids(&pane_id).ok(),
+        None => Some(Vec::new()),
+    };
+    check_caller_pids_in_worktree(
+        window_pane_pids.and_then(|roots| {
+            crate::infra::process::find_caller_pids_in_path(worktree_root, &roots)
+        }),
+    )
 }
 
 fn check_caller_pids_in_worktree(caller_pids: Option<Vec<u32>>) -> Result<()> {
