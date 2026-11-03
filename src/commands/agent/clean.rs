@@ -645,21 +645,19 @@ mod tests {
     use std::{cell::RefCell, time::Duration};
 
     #[rstest]
-    #[case::long_yes("--yes")]
-    #[case::short_yes("-y")]
-    fn agent_clean_accepts_worktree_cleanup_options(#[case] yes_flag: &str) {
+    #[case::without_yes(&[], false)]
+    #[case::long_yes(&["--yes"], true)]
+    #[case::short_yes(&["-y"], true)]
+    fn agent_clean_accepts_worktree_cleanup_options(
+        #[case] yes_flags: &[&str],
+        #[case] expected_yes: bool,
+    ) {
         use clap::Parser;
 
-        let parsed = crate::cli::Cli::try_parse_from([
-            "a",
-            "agent",
-            "clean",
-            "--dry-run",
-            "--all",
-            "--force",
-            yes_flag,
-        ])
-        .expect("the clean command should parse");
+        let argv = ["a", "agent", "clean", "--dry-run", "--all", "--force"]
+            .iter()
+            .chain(yes_flags);
+        let parsed = crate::cli::Cli::try_parse_from(argv).expect("the clean command should parse");
 
         let clean_args = match parsed.command {
             crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
@@ -668,7 +666,7 @@ mod tests {
             _ => None,
         };
 
-        assert_eq!(clean_args, Some((true, true, true, true)));
+        assert_eq!(clean_args, Some((true, true, true, expected_yes)));
     }
 
     /// Returns (confirmed, prompt written, input left unread).
