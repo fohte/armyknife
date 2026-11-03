@@ -21,5 +21,5 @@ pub use pr::{
     PrProgressInfo, PrState, UpdatePrBodyParams, UpdatePrParams,
 };
 pub use pr_number::PrNumberQuery;
-pub use pr_stack::{PrStackClient, PullRequestStack};
+pub use pr_stack::{AsyncMergeResult, PrStackClient, PullRequestStack};
 pub use repo::RepoClient;
