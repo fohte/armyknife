@@ -7,7 +7,10 @@ use crate::commands::agent::{close_worktree_path, ensure_repo_vibe_access, is_vi
 use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
-    github::{AsyncMergeResult, GitHubClient, PrStackClient, PrState, PullRequestStack},
+    github::{
+        AsyncMergeResult, GitHubClient, PrStackClient, PrState, PullRequestStack,
+        PullRequestStackEntry,
+    },
 };
 use crate::shared::{
     config::{Config, load_config},
@@ -77,6 +80,12 @@ trait PrMergeClient {
         repo: &str,
         pr_number: u64,
     ) -> anyhow::Result<Option<PullRequestStack>>;
+    async fn get_pull_requests_in_stack(
+        &self,
+        owner: &str,
+        repo: &str,
+        stack_number: u64,
+    ) -> anyhow::Result<Vec<PullRequestStackEntry>>;
     fn wait_for_required_checks(
         &self,
         owner: &str,
@@ -121,13 +130,14 @@ async fn run_merge(
         .get_stack_for_pull_request(owner, repo, pr_number)
         .await
         .context("Failed to inspect stack membership before merge")?
-        && stack.position > 1
     {
-        bail!(
-            "PR #{pr_number} is at position {}/{} in a stack; merge the lower PRs first.",
-            stack.position,
-            stack.size,
-        );
+        let stack_pull_requests = client
+            .get_pull_requests_in_stack(owner, repo, stack.number)
+            .await
+            .context("Failed to inspect pull request states in the stack")?;
+        if let Some(lower_pr) = unmerged_lower_pr(&stack_pull_requests, pr_number)? {
+            bail!("PR #{pr_number} cannot be merged because lower PR #{lower_pr} is not merged.");
+        }
     }
 
     let pr_number_string = pr_number.to_string();
@@ -183,6 +193,21 @@ async fn run_merge(
             })))
         }
     }
+}
+
+fn unmerged_lower_pr(
+    stack_pull_requests: &[PullRequestStackEntry],
+    pull_request: u64,
+) -> anyhow::Result<Option<u64>> {
+    let current_index = stack_pull_requests
+        .iter()
+        .position(|stack_pull_request| stack_pull_request.number == pull_request)
+        .with_context(|| format!("PR #{pull_request} is missing from its stack response"))?;
+
+    Ok(stack_pull_requests[..current_index]
+        .iter()
+        .find(|stack_pull_request| stack_pull_request.merged_at.is_none())
+        .map(|stack_pull_request| stack_pull_request.number))
 }
 
 async fn run_merge_and_close<C, F>(
@@ -402,6 +427,17 @@ impl PrMergeClient for GhCli {
             .await
     }
 
+    async fn get_pull_requests_in_stack(
+        &self,
+        owner: &str,
+        repo: &str,
+        stack_number: u64,
+    ) -> anyhow::Result<Vec<PullRequestStackEntry>> {
+        GitHubClient::get()?
+            .get_pull_requests_in_stack(owner, repo, stack_number)
+            .await
+    }
+
     fn wait_for_required_checks(
         &self,
         owner: &str,
@@ -480,6 +516,7 @@ mod tests {
         checks_error: bool,
         merge_error: bool,
         stack: Option<PullRequestStack>,
+        stack_pull_requests: Vec<PullRequestStackEntry>,
         merge_result: AsyncMergeResult,
     }
 
@@ -510,6 +547,18 @@ mod tests {
         ) -> anyhow::Result<Option<PullRequestStack>> {
             self.events.borrow_mut().push("stack".to_string());
             Ok(self.stack.clone())
+        }
+
+        async fn get_pull_requests_in_stack(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _stack_number: u64,
+        ) -> anyhow::Result<Vec<PullRequestStackEntry>> {
+            self.events
+                .borrow_mut()
+                .push("stack-pull-requests".to_string());
+            Ok(self.stack_pull_requests.clone())
         }
 
         fn wait_for_required_checks(
@@ -563,6 +612,7 @@ mod tests {
             checks_error,
             merge_error,
             stack: None,
+            stack_pull_requests: Vec::new(),
             merge_result: AsyncMergeResult::Merged {
                 sha: Some("merge-a".to_string()),
             },
@@ -584,9 +634,19 @@ mod tests {
         );
         client.stack = Some(PullRequestStack {
             number: 99,
-            position: 1,
+            position: 2,
             size: 2,
         });
+        client.stack_pull_requests = vec![
+            PullRequestStackEntry {
+                number: 41,
+                merged_at: Some("2026-01-02T03:04:05Z".to_string()),
+            },
+            PullRequestStackEntry {
+                number: 42,
+                merged_at: None,
+            },
+        ];
         let mut hook = |env: &[(&str, &str)]| {
             events.borrow_mut().push(format!("hook:{env:?}"));
             Ok(())
@@ -601,6 +661,7 @@ mod tests {
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
+                    "stack-pull-requests".to_string(),
                     "hook:[(\"ARMYKNIFE_PR_NUMBER\", \"42\"), (\"ARMYKNIFE_PR_OWNER\", \"example-org\"), (\"ARMYKNIFE_PR_REPO\", \"example-repo\"), (\"ARMYKNIFE_PR_URL\", \"https://github.com/sample-org/sample-repo/pull/42\"), (\"ARMYKNIFE_PR_HEAD_SHA\", \"head-a\")]".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
@@ -923,6 +984,16 @@ mod tests {
             position: 2,
             size: 2,
         });
+        client.stack_pull_requests = vec![
+            PullRequestStackEntry {
+                number: 41,
+                merged_at: None,
+            },
+            PullRequestStackEntry {
+                number: 42,
+                merged_at: None,
+            },
+        ];
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
             Ok(())
@@ -936,8 +1007,12 @@ mod tests {
                 events.borrow().clone()
             ),
             (
-                Err("PR #42 is at position 2/2 in a stack; merge the lower PRs first.".to_string()),
-                vec!["view".to_string(), "stack".to_string()],
+                Err("PR #42 cannot be merged because lower PR #41 is not merged.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                ],
             ),
         );
     }

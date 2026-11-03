@@ -23,5 +23,5 @@ pub use pr::{
 };
 pub use pr_merge::AsyncMergeResult;
 pub use pr_number::PrNumberQuery;
-pub use pr_stack::{PrStackClient, PullRequestStack};
+pub use pr_stack::{PrStackClient, PullRequestStack, PullRequestStackEntry};
 pub use repo::RepoClient;

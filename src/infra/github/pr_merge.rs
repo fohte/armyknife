@@ -10,8 +10,8 @@ use super::{client::GitHubClient, error::api_error_from_response};
 
 const ASYNC_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ASYNC_MERGE_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
-// Stop before GitHub's 24-hour async result retention window expires.
-const ASYNC_MERGE_MAX_WAIT: Duration = Duration::from_secs(23 * 60 * 60);
+// Keep a pending merge within a short interactive wait; callers can retry with its UUID.
+const ASYNC_MERGE_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
 
 /// Final outcome of an asynchronous pull request merge request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,10 +22,19 @@ pub enum AsyncMergeResult {
 
 #[derive(Debug)]
 enum AsyncMergeStatus {
-    Pending { uuid: String },
-    Merged { sha: Option<String> },
-    Enqueued { message: Option<String> },
-    Failed { message: Option<String> },
+    Pending {
+        uuid: String,
+        expected_head_sha: Option<String>,
+    },
+    Merged {
+        sha: Option<String>,
+    },
+    Enqueued {
+        message: Option<String>,
+    },
+    Failed {
+        message: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +48,7 @@ struct AsyncMergeDetails {
     uuid: Option<String>,
     sha: Option<String>,
     message: Option<String>,
+    expected_head_sha: Option<String>,
 }
 
 impl AsyncMergeResponse {
@@ -47,12 +57,14 @@ impl AsyncMergeResponse {
             uuid: None,
             sha: None,
             message: None,
+            expected_head_sha: None,
         });
         match self.status.as_str() {
             "pending" => Ok(AsyncMergeStatus::Pending {
                 uuid: details
                     .uuid
                     .context("GitHub returned a pending merge without a UUID")?,
+                expected_head_sha: details.expected_head_sha,
             }),
             "merged" => Ok(AsyncMergeStatus::Merged { sha: details.sha }),
             "enqueued" => Ok(AsyncMergeStatus::Enqueued {
@@ -112,12 +124,67 @@ impl GitHubClient {
         let mut status: AsyncMergeStatus = serde_json::from_value::<AsyncMergeResponse>(body)
             .context("Failed to parse async merge response")?
             .into_status()?;
+        if status_code == reqwest::StatusCode::CONFLICT {
+            let AsyncMergeStatus::Pending {
+                uuid,
+                expected_head_sha,
+            } = status
+            else {
+                anyhow::bail!(
+                    "GitHub returned a 409 response without a pending merge request for PR #{pull_request}."
+                );
+            };
+            let (actual_head_sha, next_status) = match expected_head_sha {
+                Some(expected_head_sha) => (
+                    expected_head_sha.clone(),
+                    AsyncMergeStatus::Pending {
+                        uuid: uuid.clone(),
+                        expected_head_sha: Some(expected_head_sha),
+                    },
+                ),
+                None => {
+                    let result_route = format!("{route}/{uuid}");
+                    let pending_status: AsyncMergeStatus = self
+                        .rest_get::<AsyncMergeResponse>(&result_route)
+                        .await?
+                        .into_status()?;
+                    let actual_head_sha = match &pending_status {
+                        AsyncMergeStatus::Pending {
+                            uuid: response_uuid,
+                            expected_head_sha: Some(expected_head_sha),
+                        } if response_uuid == &uuid => expected_head_sha.clone(),
+                        AsyncMergeStatus::Pending {
+                            uuid: response_uuid,
+                            ..
+                        } if response_uuid != &uuid => anyhow::bail!(
+                            "GitHub returned async merge request {response_uuid} when checking existing request {uuid} for PR #{pull_request}."
+                        ),
+                        AsyncMergeStatus::Pending {
+                            expected_head_sha: None,
+                            ..
+                        } => anyhow::bail!(
+                            "Existing async merge request {uuid} for PR #{pull_request} did not report its expected head SHA."
+                        ),
+                        _ => anyhow::bail!(
+                            "Existing async merge request {uuid} for PR #{pull_request} completed before its expected head SHA could be verified."
+                        ),
+                    };
+                    (actual_head_sha, pending_status)
+                }
+            };
+            if actual_head_sha != head_sha {
+                anyhow::bail!(
+                    "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {actual_head_sha}, not {head_sha}."
+                );
+            }
+            status = next_status;
+        }
         let started_at = Instant::now();
         let mut last_progress_at: Option<Instant> = None;
 
         loop {
             match status {
-                AsyncMergeStatus::Pending { uuid } => {
+                AsyncMergeStatus::Pending { uuid, .. } => {
                     if started_at.elapsed() >= max_wait {
                         anyhow::bail!(
                             "Timed out waiting for async merge request {uuid} for PR #{pull_request}."
@@ -218,7 +285,10 @@ mod tests {
             .and(path("/repos/example-org/example-repo/pulls/42/merge-async"))
             .respond_with(ResponseTemplate::new(409).set_body_json(json!({
                 "status": "pending",
-                "details": { "uuid": "existing-request" }
+                "details": {
+                    "uuid": "existing-request",
+                    "expected_head_sha": "head-sha"
+                }
             })))
             .expect(1)
             .mount(&server)
@@ -252,6 +322,87 @@ mod tests {
             Ok(AsyncMergeResult::Enqueued {
                 message: Some("Waiting for a queue slot.".into()),
             }),
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn merge_poll_rejects_a_conflicting_request_for_a_different_head_sha() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/example-org/example-repo/pulls/42/merge-async"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "status": "pending",
+                "details": {
+                    "uuid": "existing-request",
+                    "expected_head_sha": "older-head-sha"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .merge_pull_request_async_with_timing(
+                "example-org",
+                "example-repo",
+                42,
+                "head-sha",
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await;
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err("Existing async merge request existing-request for PR #42 targets head SHA older-head-sha, not head-sha.".into()),
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn merge_poll_checks_the_result_endpoint_when_conflict_omits_the_head_sha() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/example-org/example-repo/pulls/42/merge-async"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "status": "pending",
+                "details": { "uuid": "existing-request" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/repos/example-org/example-repo/pulls/42/merge-async/existing-request",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "pending",
+                "details": {
+                    "uuid": "existing-request",
+                    "expected_head_sha": "head-sha"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .merge_pull_request_async_with_timing(
+                "example-org",
+                "example-repo",
+                42,
+                "head-sha",
+                Duration::ZERO,
+                Duration::ZERO,
+            )
+            .await;
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err("Timed out waiting for async merge request existing-request for PR #42.".into()),
         );
     }
 
