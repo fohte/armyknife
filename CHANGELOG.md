@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.507](https://github.com/fohte/armyknife/compare/v0.1.506...v0.1.507) (2026-11-03)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** merge stacks asynchronously ([#1361](https://github.com/fohte/armyknife/issues/1361)) ([234afb7](https://github.com/fohte/armyknife/commit/234afb701931d5bb644d631657b8c9e399a3cc10))
+
 ## [0.1.506](https://github.com/fohte/armyknife/compare/v0.1.505...v0.1.506) (2026-11-03)
 
 
