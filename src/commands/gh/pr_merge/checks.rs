@@ -277,7 +277,7 @@ fn fetch_required_status_check_rules(
     parse_required_status_check_rules(&output.stdout)
 }
 
-fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [String; 6] {
+fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [String; 8] {
     let encoded_branch =
         percent_encoding::utf8_percent_encode(branch, percent_encoding::NON_ALPHANUMERIC);
     let endpoint = format!("repos/{owner}/{repo}/rules/branches/{encoded_branch}");
@@ -286,6 +286,8 @@ fn required_status_check_rules_args(owner: &str, repo: &str, branch: &str) -> [S
         endpoint,
         "--paginate".to_string(),
         "--slurp".to_string(),
+        "-X".to_string(),
+        "GET".to_string(),
         "-F".to_string(),
         "per_page=100".to_string(),
     ]
@@ -578,6 +580,8 @@ mod tests {
                 "repos/owner/repo/rules/branches/feature%2Fbranch".to_string(),
                 "--paginate".to_string(),
                 "--slurp".to_string(),
+                "-X".to_string(),
+                "GET".to_string(),
                 "-F".to_string(),
                 "per_page=100".to_string(),
             ],
