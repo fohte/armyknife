@@ -986,8 +986,12 @@ mod tests {
         });
         client.stack_pull_requests = vec![
             PullRequestStackEntry {
-                number: 41,
+                number: 40,
                 merged_at: None,
+            },
+            PullRequestStackEntry {
+                number: 41,
+                merged_at: Some("2026-01-02T03:04:05Z".to_string()),
             },
             PullRequestStackEntry {
                 number: 42,
@@ -1007,7 +1011,7 @@ mod tests {
                 events.borrow().clone()
             ),
             (
-                Err("PR #42 cannot be merged because lower PR #41 is not merged.".to_string()),
+                Err("PR #42 cannot be merged because lower PR #40 is not merged.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),

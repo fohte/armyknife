@@ -79,7 +79,8 @@ impl AsyncMergeResponse {
 }
 
 impl GitHubClient {
-    /// Request a squash merge and wait until GitHub reports a final result.
+    /// Request a squash merge and wait up to 30 minutes for GitHub's final result.
+    /// A timeout returns the request UUID so the pending request can be retried.
     pub async fn merge_pull_request_async(
         &self,
         owner: &str,
@@ -125,59 +126,9 @@ impl GitHubClient {
             .context("Failed to parse async merge response")?
             .into_status()?;
         if status_code == reqwest::StatusCode::CONFLICT {
-            let AsyncMergeStatus::Pending {
-                uuid,
-                expected_head_sha,
-            } = status
-            else {
-                anyhow::bail!(
-                    "GitHub returned a 409 response without a pending merge request for PR #{pull_request}."
-                );
-            };
-            let (actual_head_sha, next_status) = match expected_head_sha {
-                Some(expected_head_sha) => (
-                    expected_head_sha.clone(),
-                    AsyncMergeStatus::Pending {
-                        uuid: uuid.clone(),
-                        expected_head_sha: Some(expected_head_sha),
-                    },
-                ),
-                None => {
-                    let result_route = format!("{route}/{uuid}");
-                    let pending_status: AsyncMergeStatus = self
-                        .rest_get::<AsyncMergeResponse>(&result_route)
-                        .await?
-                        .into_status()?;
-                    let actual_head_sha = match &pending_status {
-                        AsyncMergeStatus::Pending {
-                            uuid: response_uuid,
-                            expected_head_sha: Some(expected_head_sha),
-                        } if response_uuid == &uuid => expected_head_sha.clone(),
-                        AsyncMergeStatus::Pending {
-                            uuid: response_uuid,
-                            ..
-                        } if response_uuid != &uuid => anyhow::bail!(
-                            "GitHub returned async merge request {response_uuid} when checking existing request {uuid} for PR #{pull_request}."
-                        ),
-                        AsyncMergeStatus::Pending {
-                            expected_head_sha: None,
-                            ..
-                        } => anyhow::bail!(
-                            "Existing async merge request {uuid} for PR #{pull_request} did not report its expected head SHA."
-                        ),
-                        _ => anyhow::bail!(
-                            "Existing async merge request {uuid} for PR #{pull_request} completed before its expected head SHA could be verified."
-                        ),
-                    };
-                    (actual_head_sha, pending_status)
-                }
-            };
-            if actual_head_sha != head_sha {
-                anyhow::bail!(
-                    "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {actual_head_sha}, not {head_sha}."
-                );
-            }
-            status = next_status;
+            status = self
+                .verify_existing_request(&route, pull_request, head_sha, status)
+                .await?;
         }
         let started_at = Instant::now();
         let mut last_progress_at: Option<Instant> = None;
@@ -216,6 +167,67 @@ impl GitHubClient {
                 }
             }
         }
+    }
+
+    async fn verify_existing_request(
+        &self,
+        route: &str,
+        pull_request: u64,
+        head_sha: &str,
+        status: AsyncMergeStatus,
+    ) -> anyhow::Result<AsyncMergeStatus> {
+        let uuid = match &status {
+            AsyncMergeStatus::Pending { uuid, .. } => uuid.clone(),
+            _ => anyhow::bail!(
+                "GitHub returned a 409 response without a pending merge request for PR #{pull_request}."
+            ),
+        };
+
+        if let AsyncMergeStatus::Pending {
+            expected_head_sha: Some(expected_head_sha),
+            ..
+        } = &status
+        {
+            if expected_head_sha != head_sha {
+                anyhow::bail!(
+                    "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {expected_head_sha}, not {head_sha}."
+                );
+            }
+            return Ok(status);
+        }
+
+        let result_route = format!("{route}/{uuid}");
+        let pending_status: AsyncMergeStatus = self
+            .rest_get::<AsyncMergeResponse>(&result_route)
+            .await?
+            .into_status()?;
+        let actual_head_sha = match &pending_status {
+            AsyncMergeStatus::Pending {
+                uuid: response_uuid,
+                expected_head_sha: Some(expected_head_sha),
+            } if response_uuid == &uuid => expected_head_sha.clone(),
+            AsyncMergeStatus::Pending {
+                uuid: response_uuid,
+                ..
+            } if response_uuid != &uuid => anyhow::bail!(
+                "GitHub returned async merge request {response_uuid} when checking existing request {uuid} for PR #{pull_request}."
+            ),
+            AsyncMergeStatus::Pending {
+                expected_head_sha: None,
+                ..
+            } => anyhow::bail!(
+                "Existing async merge request {uuid} for PR #{pull_request} did not report its expected head SHA."
+            ),
+            _ => anyhow::bail!(
+                "Existing async merge request {uuid} for PR #{pull_request} completed before its expected head SHA could be verified."
+            ),
+        };
+        if actual_head_sha != head_sha {
+            anyhow::bail!(
+                "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {actual_head_sha}, not {head_sha}."
+            );
+        }
+        Ok(pending_status)
     }
 }
 
