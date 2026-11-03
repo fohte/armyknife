@@ -476,8 +476,13 @@ fn confirm_deletion<R: BufRead, W: Write>(yes: bool, input: &mut R, output: &mut
         return true;
     }
 
-    let _ = write!(output, "\nDelete these worktrees? [y/N] ");
-    output.flush().ok();
+    // An unseen prompt must not let piped input confirm the deletion.
+    if write!(output, "\nDelete these worktrees? [y/N] ")
+        .and_then(|()| output.flush())
+        .is_err()
+    {
+        return false;
+    }
 
     let mut line = String::new();
     input.read_line(&mut line).ok();
@@ -692,6 +697,29 @@ mod tests {
             ),
             expected
         );
+    }
+
+    struct ClosedWriter;
+
+    impl Write for ClosedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_confirm_deletion_declines_when_prompt_cannot_be_written() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+
+        let confirmed = confirm_deletion(false, &mut reader, &mut ClosedWriter);
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!((confirmed, unread.as_str()), (false, "y\n"));
     }
 
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
