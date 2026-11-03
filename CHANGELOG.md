@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.508](https://github.com/fohte/armyknife/compare/v0.1.507...v0.1.508) (2026-11-03)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** stop deleting the worktree the caller runs in ([#1363](https://github.com/fohte/armyknife/issues/1363)) ([a77831a](https://github.com/fohte/armyknife/commit/a77831ab8295df8d25bb5ec6f2e5fade6503a3c3))
+
 ## [0.1.507](https://github.com/fohte/armyknife/compare/v0.1.506...v0.1.507) (2026-11-03)
 
 
