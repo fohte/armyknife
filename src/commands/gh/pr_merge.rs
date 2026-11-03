@@ -119,7 +119,8 @@ async fn run_merge(
 
     if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
-        .await?
+        .await
+        .context("Failed to inspect stack membership before merge")?
         && stack.position > 1
     {
         bail!(
@@ -144,10 +145,22 @@ async fn run_merge(
     let current = client.view_pr(owner, repo, pr_number)?;
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
-    match client
+    let merge_result = match client
         .merge_async(owner, repo, pr_number, &initial.head_sha)
-        .await?
+        .await
     {
+        Ok(result) => result,
+        Err(merge_error) => {
+            if let Ok(merged) = client.view_pr(owner, repo, pr_number)
+                && merged.state == PrState::Merged
+            {
+                return Ok(MergeOutcome::Merged(merged));
+            }
+            return Err(merge_error);
+        }
+    };
+
+    match merge_result {
         AsyncMergeResult::Merged { .. } => match client.view_pr(owner, repo, pr_number) {
             Ok(merged) if merged.state == PrState::Merged => Ok(MergeOutcome::Merged(merged)),
             Ok(refreshed) => {
@@ -559,7 +572,7 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn run_merge_calls_hook_and_checks_before_async_merge(events: Rc<RefCell<Vec<String>>>) {
-        let client = fake_client(
+        let mut client = fake_client(
             &[
                 snapshot(PrState::Open, "head-a", "CLEAN"),
                 snapshot(PrState::Open, "head-a", "CLEAN"),
@@ -569,6 +582,11 @@ mod tests {
             false,
             false,
         );
+        client.stack = Some(PullRequestStack {
+            number: 99,
+            position: 1,
+            size: 2,
+        });
         let mut hook = |env: &[(&str, &str)]| {
             events.borrow_mut().push(format!("hook:{env:?}"));
             Ok(())
@@ -968,7 +986,9 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn run_merge_and_close_stops_when_async_merge_fails(events: Rc<RefCell<Vec<String>>>) {
+    async fn run_merge_and_close_accepts_async_merge_error_when_pr_is_merged(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
         let client = fake_client(
             &[
                 snapshot(PrState::Open, "head-a", "CLEAN"),
@@ -994,7 +1014,7 @@ mod tests {
             run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
 
         assert_eq!(
-            (result.is_err(), events.borrow().clone()),
+            (result.is_ok(), events.borrow().clone()),
             (
                 true,
                 vec![
@@ -1003,6 +1023,54 @@ mod tests {
                     "checks".to_string(),
                     "view".to_string(),
                     "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "close:topic/example-branch".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_and_close_keeps_worktree_when_merge_fails_and_pr_is_open(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            true,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+        let close = |_: PrSnapshot| {
+            let events = Rc::clone(&events);
+            async move {
+                events.borrow_mut().push("close".to_string());
+                Ok(())
+            }
+        };
+
+        let result =
+            run_merge_and_close(&client, &mut hook, "sample-org", "sample-repo", 42, close).await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                events.borrow().clone()
+            ),
+            (
+                Err("fake merge failed".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
                 ],
             ),
         );
