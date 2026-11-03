@@ -18,6 +18,9 @@ pub(super) async fn close_worktree(
     refuse_current_session: bool,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
+    if refuse_current_session {
+        ensure_caller_outside_worktree(worktree_root)?;
+    }
     let sessions = super::super::store::list_sessions()?;
     let matching_sessions = select_worktree_sessions(&sessions, worktree_root);
     let caller_pane_id = if !matching_sessions.is_empty() {
@@ -56,6 +59,36 @@ pub(super) async fn close_worktree(
 pub(crate) async fn close_worktree_path(worktree_path: &Path) -> Result<()> {
     let args = CloseArgs::default();
     close_worktree(worktree_path, &args, true, None).await
+}
+
+/// Session records keep the launch cwd, so they miss a caller that entered
+/// the worktree later (e.g. Claude Code's EnterWorktree). Check live process
+/// cwds instead: worktree cleanup kills every tmux window with a pane inside
+/// the worktree and every process group with a member inside it.
+fn ensure_caller_outside_worktree(worktree_root: &Path) -> Result<()> {
+    let window_pane_pids = crate::shared::caller_pane::resolve_caller_pane_id()
+        .and_then(|pane_id| crate::infra::tmux::get_window_pane_pids(&pane_id).ok())
+        .unwrap_or_default();
+    check_caller_pids_in_worktree(crate::infra::process::find_caller_pids_in_path(
+        worktree_root,
+        &window_pane_pids,
+    ))
+}
+
+fn check_caller_pids_in_worktree(caller_pids: Option<Vec<u32>>) -> Result<()> {
+    match caller_pids {
+        Some(pids) if pids.is_empty() => Ok(()),
+        Some(pids) => bail!(
+            "Processes of the caller run inside the target worktree (PIDs: {}); skipping close",
+            pids.iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        None => bail!(
+            "Could not check whether processes of the caller run inside the target worktree; skipping close"
+        ),
+    }
 }
 
 struct WorktreeCloseContext<'a> {
@@ -475,6 +508,26 @@ mod tests {
         assert_eq!(
             ensure_not_closing_current_session(&[&session], caller_session_id, current_pane_id,)
                 .map_err(|error| error.to_string()),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::caller_outside(Some(vec![]), Ok(()))]
+    #[case::caller_inside(
+        Some(vec![30, 51]),
+        Err("Processes of the caller run inside the target worktree (PIDs: 30, 51); skipping close".to_string())
+    )]
+    #[case::process_table_unavailable(
+        None,
+        Err("Could not check whether processes of the caller run inside the target worktree; skipping close".to_string())
+    )]
+    fn refuses_to_close_a_worktree_the_callers_processes_run_in(
+        #[case] caller_pids: Option<Vec<u32>>,
+        #[case] expected: std::result::Result<(), String>,
+    ) {
+        assert_eq!(
+            check_caller_pids_in_worktree(caller_pids).map_err(|error| error.to_string()),
             expected,
         );
     }

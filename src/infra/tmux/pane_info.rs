@@ -1,4 +1,13 @@
-use super::{PaneInfo, query_pane_value};
+use super::{PaneInfo, Result, query_pane_value, run_tmux_output};
+
+/// Lists the root process of every pane in the window that contains `pane_id`.
+pub fn get_window_pane_pids(pane_id: &str) -> Result<Vec<u32>> {
+    let output = run_tmux_output(&["list-panes", "-t", pane_id, "-F", "#{pane_pid}"])?;
+    Ok(output
+        .lines()
+        .filter_map(|line| line.parse().ok())
+        .collect())
+}
 
 /// Gets tmux pane information for a pane ID.
 /// Returns None if the pane doesn't exist or tmux is unavailable.

@@ -31,7 +31,7 @@ pub(crate) use editor_pane::{
 };
 pub(crate) use floating_pane::{FloatingPaneSpec, open_floating_pane};
 pub(crate) use format::escape_format_value;
-pub use pane_info::get_pane_info_by_pane_id;
+pub use pane_info::{get_pane_info_by_pane_id, get_window_pane_pids};
 pub(crate) use server::PaneLiveness;
 pub use server::{
     capture_pane_for_socket, capture_pane_with_escapes_for_socket, current_socket_path,
