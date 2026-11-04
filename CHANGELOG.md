@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.509](https://github.com/fohte/armyknife/compare/v0.1.508...v0.1.509) (2026-11-04)
+
+
+### Bug Fixes
+
+* **agent/attribution:** keep title out of trailers ([#1365](https://github.com/fohte/armyknife/issues/1365)) ([853ec19](https://github.com/fohte/armyknife/commit/853ec19a98401fabace976881572eaeb4f97a46f))
+
 ## [0.1.508](https://github.com/fohte/armyknife/compare/v0.1.507...v0.1.508) (2026-11-03)
 
 
