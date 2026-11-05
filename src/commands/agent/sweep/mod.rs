@@ -259,6 +259,12 @@ pub(crate) trait SessionProbe: DraftProbe {
     fn has_pending_bg_run(&self, _session: &Session) -> bool {
         false
     }
+
+    /// Returns whether the agent process `pid` has a Claude Code Remote
+    /// Control connection, which a pause would take offline.
+    fn has_remote_control(&self, _pid: u32) -> bool {
+        false
+    }
 }
 
 struct TmuxSessionProbe<'a, A: DraftProbe> {
@@ -291,6 +297,10 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
                 true
             }
         }
+    }
+
+    fn has_remote_control(&self, pid: u32) -> bool {
+        super::claude_registry::has_remote_control(pid)
     }
 
     fn resolve_pid(&self, session: &Session) -> Result<Option<u32>> {
@@ -340,7 +350,8 @@ pub struct SweepReport {
     pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
-    /// Sessions in an active state or with a detached background command pending.
+    /// Sessions in an active state, with a detached background command
+    /// pending, or with a Remote Control connection.
     pub active: usize,
 }
 
@@ -443,6 +454,14 @@ where
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => match probe.resolve_pid(&session) {
+                Ok(Some(pid)) if probe.has_remote_control(pid) => {
+                    tracing::info!(
+                        event = "agent.sweep.remote_control_active",
+                        session = %session.session_id,
+                        pid = pid,
+                    );
+                    report.active += 1;
+                }
                 Ok(Some(pid)) => {
                     // Still resolves to a live agent pid -- a shutdown request
                     // does not guarantee prompt exit (see module docs), so we
@@ -661,6 +680,7 @@ mod tests {
         pids: RefCell<HashMap<String, u32>>,
         drafts: RefCell<HashSet<String>>,
         failed_queries: RefCell<HashSet<String>>,
+        remote_control_pids: HashSet<u32>,
     }
 
     struct ResumingProbe {
@@ -691,6 +711,11 @@ mod tests {
             }
             self
         }
+
+        fn with_remote_control(mut self, pids: &[u32]) -> Self {
+            self.remote_control_pids.extend(pids);
+            self
+        }
     }
 
     impl DraftProbe for FakeProbe {
@@ -712,6 +737,10 @@ mod tests {
                 return Err(anyhow::anyhow!("fixture tmux query failure"));
             }
             Ok(self.pids.borrow().get(&session.session_id).copied())
+        }
+
+        fn has_remote_control(&self, pid: u32) -> bool {
+            self.remote_control_pids.contains(&pid)
         }
     }
 
@@ -1174,6 +1203,58 @@ mod tests {
             reloaded.sweep_signaled,
             "signaling should mark sweep_signaled so hook.rs's SessionEnd \
              handler can recognize this shutdown as sweep's own"
+        );
+    }
+
+    #[rstest]
+    fn remote_control_blocks_pause(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        for id in ["remote", "local"] {
+            save_session_to(
+                &test_dir.path,
+                &make_session(id, SessionStatus::Stopped, old),
+            )
+            .expect("save");
+        }
+
+        let sender = RecordingSender::default();
+        let probe =
+            FakeProbe::with_pids(&[("remote", 1111), ("local", 2222)]).with_remote_control(&[1111]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+
+        let state = |id: &str| {
+            let session = store::load_session_from(&test_dir.path, id)
+                .expect("load")
+                .expect("session exists");
+            (session.status, session.sweep_signaled)
+        };
+        assert_eq!(
+            (
+                report,
+                sender.calls.borrow().clone(),
+                state("remote"),
+                state("local"),
+            ),
+            (
+                SweepReport {
+                    scanned: 2,
+                    paused: 0,
+                    signaled: 1,
+                    waiting: 0,
+                    active: 1,
+                },
+                vec![(2222, libc::SIGTERM)],
+                (SessionStatus::Stopped, false),
+                (SessionStatus::Stopped, true),
+            ),
         );
     }
 
