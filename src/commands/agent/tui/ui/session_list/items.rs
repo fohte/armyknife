@@ -355,7 +355,7 @@ fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String 
 
 fn has_crit_badge(entry: &SessionRowEntry<'_>, stage: Option<CurrentPrStage>) -> bool {
     !entry.session.crit_urls.is_empty()
-        && stage.is_none_or(|stage| stage.label() != "crit")
+        && stage.is_none_or(|stage| !stage.is_crit())
         && !entry
             .user_turn
             .is_some_and(|turn| turn.kind == UserTurnKind::Crit)
@@ -595,6 +595,23 @@ mod tests {
         expected_stage_badge: Some(" implementing"),
         expected_user_turn_label: Some(" you "),
         expected_padding: "",
+    })]
+    #[case::non_crit_stage_keeps_stale_crit_badge(TitleLabelCase {
+        has_crit_url: true,
+        user_turn_label: None,
+        title: "worker",
+        title_width: 28,
+        marks: Some(StageMarks {
+            implementation: ProgressMark::Done,
+            diff_review: ProgressMark::Done,
+            pr_body: ProgressMark::Done,
+            ci: ProgressMark::Working,
+            merge: ProgressMark::Waiting,
+        }),
+        expected_crit_badge: Some(" [crit]"),
+        expected_stage_badge: Some(" CI running "),
+        expected_user_turn_label: None,
+        expected_padding: "   ",
     })]
     #[case::crit_only_has_trailing_separator(TitleLabelCase {
         has_crit_url: true,

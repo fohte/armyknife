@@ -1856,10 +1856,66 @@ mod tests {
     }
 
     #[rstest]
-    fn o_on_a_matched_pr_worker_waiting_for_crit_opens_crit(crit_tmux_info: TmuxInfo) {
+    #[case::tmux_pane_available(true, None)]
+    #[case::tmux_pane_missing(false, Some("Crit review requires a tmux pane"))]
+    fn o_on_a_matched_pr_worker_waiting_for_crit_prefers_crit(
+        crit_tmux_info: TmuxInfo,
+        #[case] has_tmux_pane: bool,
+        #[case] expected_error: Option<&str>,
+    ) {
         let mut app = inline_progress_test_app();
         app.sessions[1].crit_urls = vec!["http://review.example.test:40123/session".to_string()];
-        app.sessions[1].tmux_info = Some(crit_tmux_info);
+        app.sessions[1].status = SessionStatus::WaitingInput;
+        app.sessions[1].tmux_info = has_tmux_pane.then_some(crit_tmux_info);
+        let session = app.sessions[1].clone();
+        app.apply_worker_pr_progress_result(Ok(vec![FetchedDelegate {
+            session,
+            checklist_item_id: Some("item-a".to_string()),
+            pull_request: Some(PrProgressInfo {
+                pull_request: PrInfo {
+                    number: 23,
+                    title: "Example change".to_string(),
+                    state: PrState::Open,
+                    url: "https://example.test/pull/23".to_string(),
+                },
+                ci_state: PrCiState::InProgress,
+            }),
+            lookup_unavailable: false,
+        }]));
+        select_inline_progress_row(
+            &mut app,
+            &SessionRowKey::Progress {
+                source_session_id: "session-0".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-a".to_string(),
+                    item_id: "item-a".to_string(),
+                },
+                session_id: Some("session-1".to_string()),
+            },
+        );
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));
+
+        assert_eq!(
+            (effects, app.error_message.as_deref()),
+            (
+                if has_tmux_pane {
+                    KeyEffects {
+                        open_crit_session_id: Some("session-1".to_string()),
+                        ..KeyEffects::default()
+                    }
+                } else {
+                    KeyEffects::default()
+                },
+                expected_error,
+            ),
+        );
+    }
+
+    #[test]
+    fn o_on_a_worker_with_a_stale_crit_url_opens_its_pull_request() {
+        let mut app = inline_progress_test_app();
+        app.sessions[1].crit_urls = vec!["http://review.example.test:40123/session".to_string()];
         select_inline_progress_row(
             &mut app,
             &SessionRowKey::Progress {
@@ -1877,7 +1933,9 @@ mod tests {
         assert_eq!(
             effects,
             KeyEffects {
-                open_crit_session_id: Some("session-1".to_string()),
+                open_progress_target: Some(ProgressOpenTarget::OpenUrl(
+                    "https://example.test/pull/23".to_string()
+                )),
                 ..KeyEffects::default()
             },
         );

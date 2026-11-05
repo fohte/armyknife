@@ -1,6 +1,7 @@
 use super::App;
 use crate::commands::agent::tui::progress::{
-    ProgressFetchState, ProgressOpenTarget, ProgressRow, ProgressSelectionKey, open_pr_url_target,
+    CurrentPrStage, ProgressFetchState, ProgressOpenTarget, ProgressRow, ProgressSelectionKey,
+    current_pr_stage, open_pr_url_target,
 };
 use crate::commands::agent::tui::session_rows::SessionRowKey;
 
@@ -236,9 +237,11 @@ impl App {
     pub(in crate::commands::agent::tui) fn selected_progress_open_target(
         &self,
     ) -> Option<ProgressOpenTarget> {
-        if self
-            .selected_session()
-            .is_some_and(|session| !session.crit_urls.is_empty())
+        let selected_session = self.selected_session();
+        if selected_session.is_some_and(|session| !session.crit_urls.is_empty())
+            && self
+                .selected_session_pr_stage()
+                .is_some_and(CurrentPrStage::is_crit)
         {
             return None;
         }
@@ -262,6 +265,21 @@ impl App {
                 .and_then(open_pr_url_target)
                 .or_else(|| self.worker_pr_open_target(session_id)),
         }
+    }
+
+    fn selected_session_pr_stage(&self) -> Option<CurrentPrStage> {
+        let session = self.selected_session()?;
+        self.worker_pr_stage_for_session(session).or_else(|| {
+            self.progress_rows.iter().find_map(|row| {
+                let row = match row {
+                    ProgressRow::PullRequest(row)
+                    | ProgressRow::ChecklistPullRequest { row, .. } => row,
+                    _ => return None,
+                };
+                (row.session_id == session.session_id)
+                    .then(|| current_pr_stage(row.stages, row.pr_stage_info.as_ref()))
+            })
+        })
     }
 
     fn selected_inline_progress_key(&self) -> Option<(String, ProgressSelectionKey)> {

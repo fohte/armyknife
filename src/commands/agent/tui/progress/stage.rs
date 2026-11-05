@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::{ProgressMark, StageMarks};
 
+const CRIT_STAGE_LABEL: &str = "crit";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::commands::agent::tui) struct CurrentPrStage {
     label: &'static str,
@@ -23,6 +25,10 @@ impl CurrentPrStage {
 
     pub(in crate::commands::agent::tui) fn label(self) -> &'static str {
         self.label
+    }
+
+    pub(in crate::commands::agent::tui) fn is_crit(self) -> bool {
+        self.label == CRIT_STAGE_LABEL
     }
 
     pub(in crate::commands::agent::tui) fn waiting_for_user(self) -> bool {
@@ -74,7 +80,7 @@ pub(in crate::commands::agent::tui) fn current_pr_stage(
         return CurrentPrStage::new("body", true);
     }
     if stages.diff_review == User {
-        return CurrentPrStage::new("crit", true);
+        return CurrentPrStage::new(CRIT_STAGE_LABEL, true);
     }
     if matches!(stages.pr_body, Working | Waiting) {
         return CurrentPrStage::new("body", false);
@@ -89,7 +95,7 @@ pub(in crate::commands::agent::tui) fn current_pr_stage(
         }
     }
     if matches!(stages.diff_review, Working | Waiting) {
-        return CurrentPrStage::new("crit", false);
+        return CurrentPrStage::new(CRIT_STAGE_LABEL, false);
     }
     if matches!(stages.ci, Working | Waiting) {
         return CurrentPrStage::new("CI running", false);
