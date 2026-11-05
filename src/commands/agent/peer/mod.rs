@@ -27,9 +27,11 @@ use super::types::{AgentStatus, Engine, Session};
 use crate::shared::env_var::EnvVars;
 
 mod adopt;
+mod detach;
 pub(crate) mod notify;
 mod wake;
 use adopt::AdoptArgs;
+use detach::DetachArgs;
 use notify::NotifyArgs;
 use wake::WakeArgs;
 
@@ -63,6 +65,9 @@ pub enum PeerCommands {
 
     /// Adopt an existing session as a direct child of the calling session
     Adopt(AdoptArgs),
+
+    /// Detach a direct child of the calling session so it has no parent
+    Detach(DetachArgs),
 }
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -127,6 +132,7 @@ pub fn run(cmd: &PeerCommands) -> Result<()> {
         PeerCommands::Wake(args) => wake::run(args),
         PeerCommands::Notify(args) => notify::run(args),
         PeerCommands::Adopt(args) => adopt::run(args),
+        PeerCommands::Detach(args) => detach::run(args),
     }
 }
 

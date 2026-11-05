@@ -566,6 +566,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `peer parent`                                              |         | List the session that delegated to this one, if any (JSON)                                  |
 | `peer children`                                            |         | List the sessions this one delegated to (JSON)                                              |
 | `peer adopt <session_id> [--force]`                        |         | Adopt an existing session as a direct child                                                 |
+| `peer detach <session_id>`                                 |         | Detach a direct child so it has no parent                                                   |
 | `peer list [-R <repo>]`                                    |         | List tracked sessions, with their SendMessage names (JSON)                                  |
 | `peer me`                                                  |         | Print the session running in the caller's own tmux pane (JSON)                              |
 | `peer wake <session_id>`                                   |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
@@ -907,6 +908,13 @@ $ a agent peer adopt session-x
 $ a agent peer children | jq -r '.[].session_id'
 session-x
 $ a agent peer adopt session-y --force
+```
+
+Run `a agent peer detach <session_id>` from a tracked Claude Code or Codex session to release one of its direct children. The command clears the target's `ancestor_session_ids`, so the target's `peer parent` becomes empty and the caller's `peer children` no longer lists it; messages a child sends to its parent, such as vibe draft notifications, stop reaching the caller. It prints nothing on success. It refuses a missing target and any session that is not a direct child of the caller. Detaching also clears the target's inherited vibe marker. Descendants of the target keep their recorded ancestor chains.
+
+```console
+$ a agent peer detach session-x
+$ a agent peer children | jq -r '.[].session_id'
 ```
 
 `a agent peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-agent-session-id` user option (see above), the same mechanism `a agent resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a agent peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a agent sweep`).
