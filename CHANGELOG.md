@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.512](https://github.com/fohte/armyknife/compare/v0.1.511...v0.1.512) (2026-11-05)
+
+
+### Bug Fixes
+
+* **agent/vibe:** keep inherited vibe past cleanup ([#1373](https://github.com/fohte/armyknife/issues/1373)) ([1c860df](https://github.com/fohte/armyknife/commit/1c860df4618bd8ef69bf65aa1a035f52a1ed3243))
+
 ## [0.1.511](https://github.com/fohte/armyknife/compare/v0.1.510...v0.1.511) (2026-11-05)
 
 
