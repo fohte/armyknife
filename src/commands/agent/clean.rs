@@ -389,6 +389,7 @@ fn status_icon(status: &MergeStatus) -> &'static str {
 }
 
 /// Column widths for table display
+const ACTION_WIDTH: usize = 6;
 const REPO_WIDTH: usize = 34;
 const NAME_WIDTH: usize = 28;
 const BRANCH_WIDTH: usize = 28;
@@ -413,6 +414,7 @@ fn render_worktrees_table<W: Write>(
     show_repo: bool,
 ) -> io::Result<()> {
     // Print header
+    write!(writer, "{} ", pad_or_truncate("ACTION", ACTION_WIDTH))?;
     if show_repo {
         writeln!(
             writer,
@@ -430,8 +432,14 @@ fn render_worktrees_table<W: Write>(
         )?;
     }
 
-    // Combine: to_delete first, then to_keep
-    for info in to_delete.iter().chain(to_keep.iter()) {
+    // Combine: to_delete first, then to_keep. The action is spelled out so the
+    // [y/N] prompt doesn't rely on icon or color to tell what gets deleted.
+    let rows = to_delete
+        .iter()
+        .map(|info| ("DELETE", info))
+        .chain(to_keep.iter().map(|info| ("KEEP", info)));
+    for (action, info) in rows {
+        write!(writer, "{} ", pad_or_truncate(action, ACTION_WIDTH))?;
         let name_cell = pad_or_truncate(&info.wt.name, NAME_WIDTH);
         let branch_cell = pad_or_truncate(&info.wt.branch, BRANCH_WIDTH);
 
@@ -833,7 +841,7 @@ mod tests {
         // Header only, no data rows
         assert_eq!(
             result,
-            "NAME                         BRANCH                       STATUS\n"
+            "ACTION NAME                         BRANCH                       STATUS\n"
         );
     }
 
@@ -856,8 +864,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
@@ -882,8 +890,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                KEEP   wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -916,6 +924,17 @@ mod tests {
                     reason: "Not merged".to_string(),
                 },
             ),
+            CleanWorktreeInfo {
+                has_active_session: true,
+                ..make_clean_info(
+                    "merged-in-use",
+                    test_repo.path().join(".worktrees/merged-in-use"),
+                    "fohte/merged-in-use",
+                    MergeStatus::Merged {
+                        reason: "Merged (git)".to_string(),
+                    },
+                )
+            },
         ];
 
         let mut output = Vec::new();
@@ -927,10 +946,11 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
-                open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
-                no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                KEEP   open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                KEEP   no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
+                KEEP   merged-in-use                fohte/merged-in-use          \x1b[35m✓ Merged (git)\x1b[0m\x1b[33m ⏵ active session\x1b[0m
             "}
         );
     }
@@ -954,8 +974,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
@@ -998,10 +1018,10 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
-                pr-closed                    fohte/pr-closed              \x1b[31m✗ closed\x1b[0m
-                pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
+                DELETE pr-closed                    fohte/pr-closed              \x1b[31m✗ closed\x1b[0m
+                KEEP   pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -1018,7 +1038,7 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "REPO                               NAME                         BRANCH                       STATUS\n"
+            "ACTION REPO                               NAME                         BRANCH                       STATUS\n"
         );
     }
 
@@ -1052,9 +1072,9 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                REPO                               NAME                         BRANCH                       STATUS
-                github.com/fohte/armyknife         merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
-                github.com/fohte/other-repo        open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                ACTION REPO                               NAME                         BRANCH                       STATUS
+                DELETE github.com/fohte/armyknife         merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                KEEP   github.com/fohte/other-repo        open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -1257,8 +1277,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                wip                          fohte/wip                    \x1b[32mopen\x1b[0m\x1b[33m ⏵ active session\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                KEEP   wip                          fohte/wip                    \x1b[32mopen\x1b[0m\x1b[33m ⏵ active session\x1b[0m
             "}
         );
     }
@@ -1283,8 +1303,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                REPO                               NAME                         BRANCH                       STATUS
-                github.com/very-long-org-name/v... feature                      fohte/feature                \x1b[35m✓ merged\x1b[0m
+                ACTION REPO                               NAME                         BRANCH                       STATUS
+                DELETE github.com/very-long-org-name/v... feature                      fohte/feature                \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
