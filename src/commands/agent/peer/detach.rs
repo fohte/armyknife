@@ -98,15 +98,18 @@ mod tests {
         save_session(dir, "caller", &["root"]);
         save_session(dir, "target", &["root", "caller"]);
         save_session(dir, "sibling", &["root", "caller"]);
+        save_session(dir, "descendant", &["root", "caller", "target"]);
 
         detach_in(dir, "caller", "target").expect("direct child should detach");
 
-        let sessions = ["caller", "target", "sibling"].map(|id| load_session(dir, id));
+        let sessions =
+            ["caller", "target", "sibling", "descendant"].map(|id| load_session(dir, id));
         let target = &sessions[1];
         assert_eq!(
             (
                 target.ancestor_session_ids.clone(),
                 target.launched_with_vibe,
+                sessions[3].ancestor_session_ids.clone(),
                 super::super::filter_parent(&sessions, target)
                     .iter()
                     .map(|session| session.session_id.as_str())
@@ -116,7 +119,17 @@ mod tests {
                     .map(|session| session.session_id.as_str())
                     .collect::<Vec<_>>(),
             ),
-            (Vec::<String>::new(), false, vec![], vec!["sibling"]),
+            (
+                Vec::<String>::new(),
+                false,
+                vec![
+                    "root".to_string(),
+                    "caller".to_string(),
+                    "target".to_string()
+                ],
+                vec![],
+                vec!["sibling"]
+            ),
         );
     }
 
