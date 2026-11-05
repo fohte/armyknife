@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use anyhow::Result;
@@ -79,13 +80,25 @@ where
     }
 
     let retention = TimeDelta::days(super::ENDED_SESSION_RETENTION_DAYS);
+    let sessions = super::database::all_sessions(dir)?;
+    let vibe_inheritance_ancestors = vibe_inheritance_ancestors(&sessions, now, retention);
     let mut changed_any = false;
 
-    for session in super::database::all_sessions(dir)? {
+    for session in &sessions {
         let session_id = session.session_id.as_str();
-        if is_collectable(&session, now, retention) {
-            changed_any |=
-                collect_expired_session(dir, session_id, now, retention, &mut archive_codex_thread);
+        if is_collectable(session, now, retention) {
+            // Descendants resolve inherited vibe mode by reading this record.
+            let keeps_vibe_inheritance =
+                session.vibe_enabled && vibe_inheritance_ancestors.contains(session_id);
+            if !keeps_vibe_inheritance {
+                changed_any |= collect_expired_session(
+                    dir,
+                    session_id,
+                    now,
+                    retention,
+                    &mut archive_codex_thread,
+                );
+            }
             continue;
         }
 
@@ -98,11 +111,23 @@ where
 
         if stale_pane || orphaned {
             changed_any |=
-                archive_stale_session(dir, session_id, &session, stale_pane, now, &cwd_exists);
+                archive_stale_session(dir, session_id, session, stale_pane, now, &cwd_exists);
         }
     }
 
     Ok(changed_any)
+}
+
+fn vibe_inheritance_ancestors(
+    sessions: &[Session],
+    now: DateTime<Utc>,
+    retention: TimeDelta,
+) -> HashSet<&str> {
+    sessions
+        .iter()
+        .filter(|session| session.launched_with_vibe && !is_collectable(session, now, retention))
+        .flat_map(|session| session.ancestor_session_ids.iter().map(String::as_str))
+        .collect()
 }
 
 fn collect_expired_session<A>(

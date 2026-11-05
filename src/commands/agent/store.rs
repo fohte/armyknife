@@ -1743,6 +1743,64 @@ mod tests {
         }
 
         #[rstest]
+        #[case::inheriting_descendant_keeps_enabling_ancestor(
+            true,
+            true,
+            false,
+            vec!["descendant", "enabling-ancestor"]
+        )]
+        #[case::disabled_ancestor_is_collected(false, true, false, vec!["descendant"])]
+        #[case::descendant_without_inheritance(true, false, false, vec!["descendant"])]
+        #[case::expired_descendant_releases_ancestor(true, true, true, vec![])]
+        fn keeps_expired_vibe_ancestor_while_a_descendant_inherits_from_it(
+            temp_session_dir: TempSessionDir,
+            #[case] ancestor_vibe_enabled: bool,
+            #[case] descendant_launched_with_vibe: bool,
+            #[case] descendant_expired: bool,
+            #[case] expected_remaining: Vec<&str>,
+        ) {
+            let now = Utc
+                .with_ymd_and_hms(2026, 1, 10, 0, 0, 0)
+                .single()
+                .expect("timestamp should be valid");
+            let mut ancestor = create_test_session("enabling-ancestor");
+            ancestor.status = SessionStatus::Ended;
+            ancestor.updated_at = now - TimeDelta::days(8);
+            ancestor.vibe_enabled = ancestor_vibe_enabled;
+            let mut descendant = create_test_session("descendant");
+            descendant.ancestor_session_ids = vec!["enabling-ancestor".to_string()];
+            descendant.launched_with_vibe = descendant_launched_with_vibe;
+            if descendant_expired {
+                descendant.status = SessionStatus::Ended;
+                descendant.updated_at = now - TimeDelta::days(8);
+            } else {
+                descendant.status = SessionStatus::Paused;
+                descendant.updated_at = now;
+            }
+            for session in [&ancestor, &descendant] {
+                save_session_to(&temp_session_dir.sessions_path, session)
+                    .expect("save should succeed");
+            }
+
+            archive::cleanup_stale_sessions_in_with_archive_at(
+                &temp_session_dir.sessions_path,
+                mock_pane_always_alive,
+                mock_cwd_always_exists,
+                now,
+                |_| Ok(()),
+            )
+            .expect("cleanup should succeed");
+
+            let mut remaining = database::all_sessions(&temp_session_dir.sessions_path)
+                .expect("sessions should load")
+                .into_iter()
+                .map(|session| session.session_id)
+                .collect::<Vec<_>>();
+            remaining.sort();
+            assert_eq!(remaining, expected_remaining);
+        }
+
+        #[rstest]
         fn retains_archived_session_until_its_archive_retention_expires(
             temp_session_dir: TempSessionDir,
         ) {
