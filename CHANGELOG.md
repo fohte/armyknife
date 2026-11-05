@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.511](https://github.com/fohte/armyknife/compare/v0.1.510...v0.1.511) (2026-11-05)
+
+
+### Features
+
+* **agent/clean:** show DELETE or KEEP on each row ([#1371](https://github.com/fohte/armyknife/issues/1371)) ([b218a8f](https://github.com/fohte/armyknife/commit/b218a8f36c872e1091ab435f9c6c572b115cabd0))
+
 ## [0.1.510](https://github.com/fohte/armyknife/compare/v0.1.509...v0.1.510) (2026-11-05)
 
 
