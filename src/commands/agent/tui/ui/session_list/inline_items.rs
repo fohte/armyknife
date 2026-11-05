@@ -12,7 +12,7 @@ use crate::commands::agent::tui::session_rows::inline_progress::InlineProgressEn
 
 use super::super::helpers::{DIM_FG, REPO_COLUMN_WIDTH};
 use super::items::{
-    MARKER_WIDTH, TASK_NUMBER_COLUMN_WIDTH, build_session_item_with_annotation,
+    TASK_NUMBER_COLUMN_WIDTH, WAITING_QUESTION_BASE_INDENT, build_session_item_with_annotation,
     state_label_column_shift, tree_branch_text, work_type_column_width,
 };
 
@@ -55,13 +55,7 @@ pub(super) fn build_inline_progress_item(
     let state_label_gap = state_label_column_shift(stage.is_some());
     let stage_badge_width = stage.map_or(0, |stage| format!(" {} ", stage.label()).width());
     let title_width = term_width.saturating_sub(
-        MARKER_WIDTH
-            + 2
-            + REPO_COLUMN_WIDTH
-            + TASK_NUMBER_COLUMN_WIDTH
-            + work_type_width
-            + branch_width
-            + stage_badge_width,
+        WAITING_QUESTION_BASE_INDENT + work_type_width + branch_width + stage_badge_width,
     ) + state_label_gap;
     let (status, title, style) = match (entry.progress.as_ref(), entry.label.as_deref()) {
         (_, Some(label)) => ("!", label.to_string(), Style::default().fg(Color::Yellow)),
