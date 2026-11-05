@@ -1,4 +1,4 @@
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -41,6 +41,10 @@ pub struct CleanArgs {
     /// Without this flag, such worktrees are kept regardless of merge status.
     #[arg(long)]
     pub force: bool,
+
+    /// Delete without asking for confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 /// Worktree with merge status for clean command.
@@ -88,7 +92,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion() {
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
         println!("Cancelled.");
         return Ok(());
     }
@@ -260,7 +264,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion() {
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
         println!("Cancelled.");
         return Ok(());
     }
@@ -466,15 +470,23 @@ fn render_worktrees_table<W: Write>(
     Ok(())
 }
 
-/// Prompt user for confirmation
-fn confirm_deletion() -> bool {
-    println!();
-    print!("Delete these worktrees? [y/N] ");
-    io::stdout().flush().ok();
+/// Prompt user for confirmation; `yes` skips the prompt without reading input.
+fn confirm_deletion<R: BufRead, W: Write>(yes: bool, input: &mut R, output: &mut W) -> bool {
+    if yes {
+        return true;
+    }
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).ok();
-    input.trim().eq_ignore_ascii_case("y")
+    // An unseen prompt must not let piped input confirm the deletion.
+    if write!(output, "\nDelete these worktrees? [y/N] ")
+        .and_then(|()| output.flush())
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut line = String::new();
+    input.read_line(&mut line).ok();
+    line.trim().eq_ignore_ascii_case("y")
 }
 
 /// Prints the indented detail lines for a successful worktree cleanup
@@ -632,28 +644,80 @@ mod tests {
     use std::path::PathBuf;
     use std::{cell::RefCell, time::Duration};
 
-    #[test]
-    fn agent_clean_accepts_worktree_cleanup_options() {
+    #[rstest]
+    #[case::without_yes(&[], false)]
+    #[case::long_yes(&["--yes"], true)]
+    #[case::short_yes(&["-y"], true)]
+    fn agent_clean_accepts_worktree_cleanup_options(
+        #[case] yes_flags: &[&str],
+        #[case] expected_yes: bool,
+    ) {
         use clap::Parser;
 
-        let parsed = crate::cli::Cli::try_parse_from([
-            "a",
-            "agent",
-            "clean",
-            "--dry-run",
-            "--all",
-            "--force",
-        ])
-        .expect("the clean command should parse");
+        let argv = ["a", "agent", "clean", "--dry-run", "--all", "--force"]
+            .iter()
+            .chain(yes_flags);
+        let parsed = crate::cli::Cli::try_parse_from(argv).expect("the clean command should parse");
 
         let clean_args = match parsed.command {
             crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
-                Some((args.dry_run, args.all, args.force))
+                Some((args.dry_run, args.all, args.force, args.yes))
             }
             _ => None,
         };
 
-        assert_eq!(clean_args, Some((true, true, true)));
+        assert_eq!(clean_args, Some((true, true, true, expected_yes)));
+    }
+
+    /// Returns (confirmed, prompt written, input left unread).
+    #[rstest]
+    #[case::yes_skips_prompt(true, "n\n", (true, "", "n\n"))]
+    #[case::prompt_accepts_y(false, "y\n", (true, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::prompt_rejects_n(false, "n\n", (false, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::prompt_rejects_eof(false, "", (false, "\nDelete these worktrees? [y/N] ", ""))]
+    fn test_confirm_deletion(
+        #[case] yes: bool,
+        #[case] input: &str,
+        #[case] expected: (bool, &str, &str),
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+
+        let confirmed = confirm_deletion(yes, &mut reader, &mut output);
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!(
+            (
+                confirmed,
+                String::from_utf8(output).expect("utf8 prompt").as_str(),
+                unread.as_str()
+            ),
+            expected
+        );
+    }
+
+    struct ClosedWriter;
+
+    impl Write for ClosedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_confirm_deletion_declines_when_prompt_cannot_be_written() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+
+        let confirmed = confirm_deletion(false, &mut reader, &mut ClosedWriter);
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!((confirmed, unread.as_str()), (false, "y\n"));
     }
 
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {

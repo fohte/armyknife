@@ -1101,6 +1101,7 @@ Options:
 | `-n, --dry-run` | Show what would be deleted without actually deleting                              |
 | `--all`         | Clean worktrees across all repositories under `agent.worktree.repos_root`         |
 | `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
+| `-y, --yes`     | Delete without asking for confirmation                                            |
 
 Worktrees with an active agent session (not paused or ended, with pending
 background tasks, or with an unsent composer draft) are kept by default
