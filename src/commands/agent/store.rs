@@ -1767,8 +1767,16 @@ mod tests {
             ancestor.status = SessionStatus::Ended;
             ancestor.updated_at = now - TimeDelta::days(8);
             ancestor.vibe_enabled = ancestor_vibe_enabled;
+            let mut intermediate = create_test_session("intermediate-ancestor");
+            intermediate.status = SessionStatus::Ended;
+            intermediate.updated_at = now - TimeDelta::days(8);
+            intermediate.ancestor_session_ids = vec!["enabling-ancestor".to_string()];
+            intermediate.launched_with_vibe = true;
             let mut descendant = create_test_session("descendant");
-            descendant.ancestor_session_ids = vec!["enabling-ancestor".to_string()];
+            descendant.ancestor_session_ids = vec![
+                "enabling-ancestor".to_string(),
+                "intermediate-ancestor".to_string(),
+            ];
             descendant.launched_with_vibe = descendant_launched_with_vibe;
             if descendant_expired {
                 descendant.status = SessionStatus::Ended;
@@ -1777,7 +1785,7 @@ mod tests {
                 descendant.status = SessionStatus::Paused;
                 descendant.updated_at = now;
             }
-            for session in [&ancestor, &descendant] {
+            for session in [&ancestor, &intermediate, &descendant] {
                 save_session_to(&temp_session_dir.sessions_path, session)
                     .expect("save should succeed");
             }
