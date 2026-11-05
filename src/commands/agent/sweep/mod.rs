@@ -262,7 +262,7 @@ pub(crate) trait SessionProbe: DraftProbe {
 
     /// Returns whether the agent process `pid` has a Claude Code Remote
     /// Control connection, which a pause would take offline.
-    fn has_remote_control(&self, _pid: u32) -> bool {
+    fn has_remote_control(&self, _session: &Session, _pid: u32) -> bool {
         false
     }
 }
@@ -299,8 +299,19 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
         }
     }
 
-    fn has_remote_control(&self, pid: u32) -> bool {
-        super::claude_registry::has_remote_control(pid)
+    fn has_remote_control(&self, session: &Session, pid: u32) -> bool {
+        match super::claude_registry::has_remote_control(pid) {
+            Ok(connected) => connected,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.sweep.remote_control_check_failed",
+                    session = %session.session_id,
+                    pid = pid,
+                    error = %format!("{error:#}"),
+                );
+                true
+            }
+        }
     }
 
     fn resolve_pid(&self, session: &Session) -> Result<Option<u32>> {
@@ -454,7 +465,7 @@ where
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => match probe.resolve_pid(&session) {
-                Ok(Some(pid)) if probe.has_remote_control(pid) => {
+                Ok(Some(pid)) if probe.has_remote_control(&session, pid) => {
                     tracing::info!(
                         event = "agent.sweep.remote_control_active",
                         session = %session.session_id,
@@ -739,7 +750,7 @@ mod tests {
             Ok(self.pids.borrow().get(&session.session_id).copied())
         }
 
-        fn has_remote_control(&self, pid: u32) -> bool {
+        fn has_remote_control(&self, _session: &Session, pid: u32) -> bool {
             self.remote_control_pids.contains(&pid)
         }
     }

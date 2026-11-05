@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use anyhow::Context;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
@@ -32,10 +33,6 @@ struct RegistryEntry {
     messaging_socket_path: Option<String>,
     #[serde(default)]
     tmux: Option<String>,
-    /// Set while the process has a Remote Control connection and reset to
-    /// `null` when the connection closes.
-    #[serde(default, rename = "bridgeSessionId")]
-    bridge_session_id: Option<String>,
 }
 
 /// Reads every `~/.claude/sessions/*.json` file into a `session_id ->
@@ -138,22 +135,35 @@ fn load_peer_connection_by_tmux_in(home: &Path, tmux: &str) -> Option<PeerConnec
 }
 
 /// Returns whether the Claude Code process `pid` currently has a Remote
-/// Control connection. An unreadable or unrecognized registry file counts as
-/// no connection.
-pub fn has_remote_control(pid: u32) -> bool {
-    crate::shared::dirs::home_dir().is_some_and(|home| has_remote_control_in(&home, pid))
+/// Control connection. A missing registry file counts as no connection:
+/// non-Claude processes and Claude Code builds without a registry have none.
+pub fn has_remote_control(pid: u32) -> anyhow::Result<bool> {
+    match crate::shared::dirs::home_dir() {
+        Some(home) => has_remote_control_in(&home, pid),
+        None => Ok(false),
+    }
 }
 
-fn has_remote_control_in(home: &Path, pid: u32) -> bool {
+fn has_remote_control_in(home: &Path, pid: u32) -> anyhow::Result<bool> {
     let path = home
         .join(".claude")
         .join("sessions")
         .join(format!("{pid}.json"));
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|content| serde_json::from_str::<RegistryEntry>(&content).ok())
-        .and_then(|entry| entry.bridge_session_id)
-        .is_some_and(|id| !id.is_empty())
+    let content = match std::fs::read_to_string(&path) {
+        Ok(content) => content,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    let entry: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    // Claude Code sets `bridgeSessionId` when Remote Control connects and
+    // resets it to `null` when the connection closes.
+    Ok(entry
+        .get("bridgeSessionId")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| !id.is_empty()))
 }
 
 fn load_peer_connection_in(home: &Path, session_id: &str) -> Option<PeerConnection> {
@@ -388,11 +398,24 @@ mod tests {
         &[("222.json", r#"{"pid":222,"sessionId":"bbb","bridgeSessionId":"session_example"}"#)],
         false
     )]
-    #[case::unparseable_file(&[("111.json", "not json")], false)]
+    #[case::unrecognized_registry_shape(&[("111.json", r#"{"bridgeSessionId":"session_example"}"#)], true)]
     fn has_remote_control_in_cases(#[case] files: &[(&str, &str)], #[case] expected: bool) {
         let home = TempDir::new().unwrap();
         write_files(home.path(), files);
 
-        assert_eq!(has_remote_control_in(home.path(), 111), expected);
+        assert_eq!(has_remote_control_in(home.path(), 111).unwrap(), expected);
+    }
+
+    #[test]
+    fn has_remote_control_in_fails_on_unparseable_file() {
+        let home = TempDir::new().unwrap();
+        write_files(home.path(), &[("111.json", "not json")]);
+
+        let error = has_remote_control_in(home.path(), 111).unwrap_err();
+
+        assert_eq!(
+            format!("{error:#}").replace(&home.path().display().to_string(), "<home>"),
+            "failed to parse <home>/.claude/sessions/111.json: expected ident at line 1 column 2",
+        );
     }
 }
