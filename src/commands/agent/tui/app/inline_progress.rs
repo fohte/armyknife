@@ -236,6 +236,13 @@ impl App {
     pub(in crate::commands::agent::tui) fn selected_progress_open_target(
         &self,
     ) -> Option<ProgressOpenTarget> {
+        if self
+            .selected_session()
+            .is_some_and(|session| !session.crit_urls.is_empty())
+        {
+            return None;
+        }
+
         match self.selected_row_key()? {
             SessionRowKey::Progress { selection_key, .. } => self
                 .progress_rows

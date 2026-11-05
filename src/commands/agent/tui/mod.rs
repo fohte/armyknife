@@ -584,6 +584,17 @@ mod tests {
         app.list_state.select(Some(position));
     }
 
+    #[fixture]
+    fn crit_tmux_info() -> TmuxInfo {
+        TmuxInfo {
+            session_name: "watch-test".to_string(),
+            window_name: "agent".to_string(),
+            window_index: 0,
+            pane_id: "%77".to_string(),
+            socket_path: None,
+        }
+    }
+
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent {
             code,
@@ -1844,6 +1855,34 @@ mod tests {
         );
     }
 
+    #[rstest]
+    fn o_on_a_matched_pr_worker_waiting_for_crit_opens_crit(crit_tmux_info: TmuxInfo) {
+        let mut app = inline_progress_test_app();
+        app.sessions[1].crit_urls = vec!["http://review.example.test:40123/session".to_string()];
+        app.sessions[1].tmux_info = Some(crit_tmux_info);
+        select_inline_progress_row(
+            &mut app,
+            &SessionRowKey::Progress {
+                source_session_id: "session-0".to_string(),
+                selection_key: ProgressSelectionKey::ChecklistItem {
+                    batch_id: "batch-a".to_string(),
+                    item_id: "item-a".to_string(),
+                },
+                session_id: Some("session-1".to_string()),
+            },
+        );
+
+        let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));
+
+        assert_eq!(
+            effects,
+            KeyEffects {
+                open_crit_session_id: Some("session-1".to_string()),
+                ..KeyEffects::default()
+            },
+        );
+    }
+
     #[test]
     fn o_on_an_unmatched_session_opens_its_real_pull_request() {
         let mut app = inline_progress_test_app();
@@ -1918,17 +1957,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn o_without_a_pr_url_keeps_the_existing_crit_action() {
+    #[rstest]
+    fn o_without_a_pr_url_keeps_the_existing_crit_action(crit_tmux_info: TmuxInfo) {
         let mut app = create_test_app_with_sessions(1);
         app.sessions[0].crit_urls = vec!["http://review.example.test:40123/session".to_string()];
-        app.sessions[0].tmux_info = Some(TmuxInfo {
-            session_name: "watch-test".to_string(),
-            window_name: "agent".to_string(),
-            window_index: 0,
-            pane_id: "%77".to_string(),
-            socket_path: None,
-        });
+        app.sessions[0].tmux_info = Some(crit_tmux_info);
         select_inline_progress_row(&mut app, &SessionRowKey::Task("session-0".to_string()));
 
         let effects = handle_key_event(&mut app, key(KeyCode::Char('o')));

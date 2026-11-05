@@ -93,12 +93,12 @@ pub(super) fn build_inline_progress_item(
                 .add_modifier(Modifier::BOLD),
         ),
         (Some(ProgressRow::PlannedPullRequest { title, .. }), _) => (
-            "",
+            " ",
             format!("Planned PR · {title}"),
             Style::default().fg(DIM_FG),
         ),
         (Some(ProgressRow::ChecklistPullRequest { row, .. }), _) => (
-            "",
+            " ",
             format!(
                 "PR {} · {}",
                 row.number
@@ -108,7 +108,7 @@ pub(super) fn build_inline_progress_item(
             Style::default(),
         ),
         (Some(ProgressRow::PullRequest(row)), _) => (
-            "",
+            " ",
             format!(
                 "PR {} · {}",
                 row.number
@@ -194,5 +194,107 @@ fn truncate_inline_title(title: &str, width: usize) -> String {
             output.push('…');
         }
         output
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::agent::tui::progress::{
+        PrProgressRow, ProgressMark, ProgressRow, StageMarks,
+    };
+    use crate::commands::agent::tui::ui::test_support::create_test_session;
+    use ratatui::{Terminal, backend::TestBackend, widgets::List};
+    use rstest::rstest;
+
+    fn pr_row() -> PrProgressRow {
+        PrProgressRow {
+            session_id: "missing-worker".to_string(),
+            repo: Some("example-project".to_string()),
+            title: "Example change".to_string(),
+            number: Some(17),
+            url: Some("https://example.test/pull/17".to_string()),
+            pane_id: None,
+            is_ended: false,
+            lookup_unavailable: false,
+            pr_stage_info: None,
+            stages: StageMarks {
+                implementation: ProgressMark::Done,
+                diff_review: ProgressMark::Done,
+                pr_body: ProgressMark::Done,
+                ci: ProgressMark::Waiting,
+                merge: ProgressMark::NotStarted,
+            },
+        }
+    }
+
+    #[rstest]
+    #[case::planned_pr(
+        ProgressRow::PlannedPullRequest {
+            batch_id: "batch-a".to_string(),
+            checklist_item_id: "item-a".to_string(),
+            title: "Planned change".to_string(),
+        },
+        None,
+        "Planned PR · Planned change",
+    )]
+    #[case::checklist_pr(
+        ProgressRow::ChecklistPullRequest {
+            batch_id: "batch-a".to_string(),
+            checklist_item_id: "item-a".to_string(),
+            row: pr_row(),
+        },
+        Some("CI running"),
+        "PR #17 · Example change",
+    )]
+    #[case::pr(
+        ProgressRow::PullRequest(pr_row()),
+        Some("CI running"),
+        "PR #17 · Example change"
+    )]
+    fn rows_without_a_status_glyph_keep_the_status_column(
+        #[case] progress: ProgressRow,
+        #[case] stage: Option<&str>,
+        #[case] title: &str,
+    ) {
+        let now = Utc::now();
+        let app = App::with_sessions(vec![create_test_session("source")]);
+        let entry = InlineProgressEntry {
+            progress: Some(progress),
+            label: None,
+            session: None,
+            tree_prefix: vec![false],
+            is_last_sibling: true,
+            selection_key: None,
+        };
+        let item = build_inline_progress_item(&entry, &app, now, 140);
+        let mut terminal = Terminal::new(TestBackend::new(140, 1)).expect("test terminal created");
+        terminal
+            .draw(|frame| frame.render_widget(List::new(vec![item]), frame.area()))
+            .expect("inline progress row rendered");
+        let buffer = terminal.backend().buffer();
+        let actual = (0..buffer.area.width)
+            .map(|x| buffer[(x, 0)].symbol())
+            .fold(String::new(), |mut output, symbol| {
+                output.push_str(symbol);
+                output
+            });
+        let expected = format!(
+            "  {}{}│  └─ {}{}{}",
+            " ".repeat(REPO_COLUMN_WIDTH),
+            " ".repeat(TASK_NUMBER_COLUMN_WIDTH),
+            " ".repeat(
+                work_type_column_width(&app)
+                    .saturating_sub(state_label_column_shift(stage.is_some()))
+            ),
+            stage.map_or_else(String::new, |stage| format!(" {stage} ")),
+            title,
+        );
+        let expected = format!(
+            "{expected}{}",
+            " ".repeat(140usize.saturating_sub(expected.chars().count()))
+        );
+
+        assert_eq!(actual, expected);
     }
 }

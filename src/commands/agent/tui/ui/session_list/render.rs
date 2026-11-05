@@ -422,7 +422,7 @@ mod tests {
             >● project                 Design source                                                                                            just now
              ▾                       └─   Implementation plan · 0/1 PRs merged
              ▾                          └─   Batch: Batch A · 0 PRs merged
-                                          └─   Planned PR · Planned change
+                                           └─   Planned PR · Planned change
 
 
              ?: keys   /: search   Tab: toggle progress   q: quit"};
@@ -459,7 +459,7 @@ mod tests {
             >● project                 Design source            just now
              ▾                       └─   Implementation plan · 0/1 PRs
              ▾                          └─   Batch: Batch A · 0 PRs merg
-                                          └─   implementing PR #17 · A …
+                                           └─   implementing PR #17 · A
 
 
 

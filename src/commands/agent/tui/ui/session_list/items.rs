@@ -353,8 +353,9 @@ fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String 
     }
 }
 
-fn has_crit_badge(entry: &SessionRowEntry<'_>) -> bool {
+fn has_crit_badge(entry: &SessionRowEntry<'_>, stage: Option<CurrentPrStage>) -> bool {
     !entry.session.crit_urls.is_empty()
+        && stage.is_none_or(|stage| stage.label() != "crit")
         && !entry
             .user_turn
             .is_some_and(|turn| turn.kind == UserTurnKind::Crit)
@@ -371,7 +372,9 @@ fn user_turn_label_before_title<'a>(
 }
 
 fn has_state_label(entry: &SessionRowEntry<'_>, stage: Option<CurrentPrStage>) -> bool {
-    stage.is_some() || has_crit_badge(entry) || user_turn_label_before_title(entry, stage).is_some()
+    stage.is_some()
+        || has_crit_badge(entry, stage)
+        || user_turn_label_before_title(entry, stage).is_some()
 }
 
 /// Action labels lead the title so truncation leaves the current state visible.
@@ -387,7 +390,7 @@ fn build_title_spans(
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
     let raw_user_turn_label = user_turn_label_before_title(entry, stage);
     let mut state_badges = Vec::new();
-    if has_crit_badge(entry) {
+    if has_crit_badge(entry, stage) {
         state_badges.push((
             "[crit]".to_string(),
             Style::default().fg(Color::Indexed(98)),
@@ -484,6 +487,7 @@ mod tests {
         expected_crit_badge: Option<&'a str>,
         expected_stage_badge: Option<&'a str>,
         expected_user_turn_label: Option<&'a str>,
+        expected_padding: &'a str,
     }
 
     #[rstest]
@@ -570,9 +574,10 @@ mod tests {
             ci: ProgressMark::NotStarted,
             merge: ProgressMark::NotStarted,
         }),
-        expected_crit_badge: Some(" [crit]"),
+        expected_crit_badge: None,
         expected_stage_badge: Some(" crit "),
         expected_user_turn_label: None,
+        expected_padding: "       ",
     })]
     #[case::stage_and_user_have_one_separator(TitleLabelCase {
         has_crit_url: false,
@@ -589,6 +594,7 @@ mod tests {
         expected_crit_badge: None,
         expected_stage_badge: Some(" implementing"),
         expected_user_turn_label: Some(" you "),
+        expected_padding: "",
     })]
     #[case::crit_only_has_trailing_separator(TitleLabelCase {
         has_crit_url: true,
@@ -599,6 +605,7 @@ mod tests {
         expected_crit_badge: Some(" [crit] "),
         expected_stage_badge: None,
         expected_user_turn_label: None,
+        expected_padding: "",
     })]
     fn test_title_labels_have_one_space_between_each_part(#[case] case: TitleLabelCase<'_>) {
         let mut session = create_test_session(case.title);
@@ -639,6 +646,9 @@ mod tests {
             expected.push(Span::styled(label, user_turn_label_style()));
         }
         expected.push(Span::styled(case.title.to_string(), title_style));
+        if !case.expected_padding.is_empty() {
+            expected.push(Span::raw(case.expected_padding));
+        }
 
         assert_eq!(
             build_title_spans(
