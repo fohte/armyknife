@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.1.510](https://github.com/fohte/armyknife/compare/v0.1.509...v0.1.510) (2026-11-05)
+
+
+### Features
+
+* **agent/clean:** add -y/--yes to skip the prompt ([#1368](https://github.com/fohte/armyknife/issues/1368)) ([684b7de](https://github.com/fohte/armyknife/commit/684b7de75517285e9f125da0bfa4d99fee8bb941))
+* **agent/peer:** add detach to release a child ([#1367](https://github.com/fohte/armyknife/issues/1367)) ([df920ce](https://github.com/fohte/armyknife/commit/df920ce4a028eaec5db7c3274f2081f022b183f7))
+* **agent/sweep:** skip Remote Control sessions ([#1369](https://github.com/fohte/armyknife/issues/1369)) ([0836c41](https://github.com/fohte/armyknife/commit/0836c4117e4fe05eba8ddb5fc73def292c5aa234))
+
 ## [0.1.509](https://github.com/fohte/armyknife/compare/v0.1.508...v0.1.509) (2026-11-04)
 
 
