@@ -431,6 +431,52 @@ mod tests {
     }
 
     #[test]
+    fn long_planned_pr_title_is_ellipsized_within_narrow_terminal() {
+        let now = Utc::now();
+        let mut design = create_test_session("design");
+        design.updated_at = now;
+        design.label = Some("Design source".to_string());
+        let output = render_inline_progress_screen(
+            &[design],
+            Some(0),
+            now,
+            56,
+            8,
+            vec![
+                ProgressRow::ImplementationHeader {
+                    merged_pr_count: 0,
+                    total_pr_count: 1,
+                    collapsed: false,
+                },
+                ProgressRow::BatchHeader {
+                    batch_id: "batch-a".to_string(),
+                    title: "Batch A".to_string(),
+                    merged_pr_count: 0,
+                    collapsed: false,
+                },
+                ProgressRow::PlannedPullRequest {
+                    batch_id: "batch-a".to_string(),
+                    checklist_item_id: "item-a".to_string(),
+                    title: "A long planned implementation title that needs truncation".to_string(),
+                },
+            ],
+            &[None, Some("design")],
+        );
+
+        let expected = indoc! {"
+             agent watch            0 needs you · 1 running · 0 idle
+            >● project                 Design source        just now
+             ▾                       └─   Implementation plan · 0/1…
+             ▾                          └─   Batch: Batch A · 0 PRs…
+                                           └─   Planned PR · A long…
+
+
+             ?: keys   /: search   Tab: toggle progress   q: quit"};
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
     fn unmatched_pr_stage_precedes_truncated_title() {
         let now = Utc::now();
         let mut design = create_test_session("design");
@@ -457,9 +503,9 @@ mod tests {
         let expected = indoc! {"
              agent watch                0 needs you · 1 running · 0 idle
             >● project                 Design source            just now
-             ▾                       └─   Implementation plan · 0/1 PRs
-             ▾                          └─   Batch: Batch A · 0 PRs merg
-                                           └─   implementing PR #17 · A
+             ▾                       └─   Implementation plan · 0/1 PRs…
+             ▾                          └─   Batch: Batch A · 0 PRs mer…
+                                           └─   implementing PR #17 · A…
 
 
 

@@ -28,7 +28,7 @@ use super::task_number::task_number_style;
 /// selection marker). Every row -- selected or not -- occupies this column,
 /// so it counts toward the fixed-width column budget below even though it
 /// is never part of a `Line`'s own spans.
-const MARKER_WIDTH: usize = 1;
+pub(super) const MARKER_WIDTH: usize = 1;
 /// Status glyph (1 col, `session.display_symbol()` is always single-width)
 /// plus one space of padding before the repo column.
 const STATUS_COLUMN_WIDTH: usize = 2;
