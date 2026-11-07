@@ -894,6 +894,48 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn run_merge_does_not_sync_merge_after_the_pr_closes_before_fallback(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Closed, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = Some(timed_out_merge_error());
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42)
+            .await
+            .map_err(|error| format!("{error:#}"));
+
+        assert_eq!(
+            (result, events.borrow().clone()),
+            (
+                Err("Cannot fall back to synchronous merge for async merge request request-id: PR #42 is not open (state: Closed).".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn run_merge_does_not_sync_merge_for_a_merge_queue_branch(
         events: Rc<RefCell<Vec<String>>>,
     ) {
@@ -922,7 +964,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Cannot use synchronous fallback for PR #42 because base branch `main` requires a merge queue. Pending async merge request request-id remains. Retrying polls the same request but cannot clear it while it remains pending.".to_string()),
+                Err("Cannot use synchronous fallback for PR #42 because base branch `main` requires a merge queue. Pending async merge request request-id remains. Retrying waits on the same request and will time out again while it remains pending.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1052,8 +1094,40 @@ mod tests {
     }
 
     #[rstest]
+    #[case::timed_out(
+        timed_out_merge_error(),
+        "Pending async merge request request-id remains. Retrying waits on the same request and will time out again while it remains pending."
+    )]
+    #[case::different_pending_head(
+        AsyncMergeFallback::HeadMismatch {
+            request_uuid: "request-id".to_string(),
+            pull_request: 42,
+            pending_head_sha: "older-head".to_string(),
+            current_head_sha: "head-a".to_string(),
+        },
+        "Pending async merge request request-id remains. Retrying fails immediately because it targets head SHA older-head, not head-a."
+    )]
+    #[case::head_unavailable(
+        AsyncMergeFallback::HeadUnavailable {
+            request_uuid: "request-id".to_string(),
+            pull_request: 42,
+        },
+        "Pending async merge request request-id remains. Retrying fails immediately because GitHub did not report its expected head SHA."
+    )]
+    #[case::request_uuid_mismatch(
+        AsyncMergeFallback::RequestUuidMismatch {
+            request_uuid: "request-id".to_string(),
+            response_uuid: "different-request".to_string(),
+            pull_request: 42,
+        },
+        "Pending async merge request request-id remains. Retrying fails immediately because GitHub returned a different request UUID."
+    )]
     #[tokio::test]
-    async fn run_merge_does_not_sync_merge_for_a_stacked_pr(events: Rc<RefCell<Vec<String>>>) {
+    async fn run_merge_does_not_sync_merge_for_a_stacked_pr(
+        events: Rc<RefCell<Vec<String>>>,
+        #[case] fallback_error: AsyncMergeFallback,
+        #[case] expected_retry_note: &str,
+    ) {
         let mut client = fake_client(
             &[
                 snapshot(PrState::Open, "head-a", "CLEAN"),
@@ -1064,7 +1138,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = Some(timed_out_merge_error());
+        client.fallback_error = Some(fallback_error);
         client.stack = Some(PullRequestStack {
             number: 99,
             position: 1,
@@ -1087,7 +1161,9 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Cannot use synchronous fallback for stacked PR #42. Pending async merge request request-id remains. Retrying polls the same request but cannot clear it while it remains pending.".to_string()),
+                Err(format!(
+                    "Cannot use synchronous fallback for stacked PR #42. {expected_retry_note}"
+                )),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),

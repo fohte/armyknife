@@ -91,32 +91,23 @@ async fn recover_async_merge_error(
     is_stacked: bool,
     merge_error: anyhow::Error,
 ) -> anyhow::Result<MergeOutcome> {
-    let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>() else {
+    let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>().cloned() else {
         if let Some(merged) = already_merged(client, owner, repo, pr_number) {
             return Ok(MergeOutcome::Merged(merged));
         }
         return Err(merge_error);
     };
-    let request_uuid = fallback.request_uuid().to_string();
     if is_stacked {
         if let Some(merged) = already_merged(client, owner, repo, pr_number) {
             return Ok(MergeOutcome::Merged(merged));
         }
         return Err(merge_error).context(format!(
             "Cannot use synchronous fallback for stacked PR #{pr_number}. {}",
-            pending_request_retry_note(&request_uuid),
+            pending_request_retry_note(&fallback),
         ));
     }
 
-    fallback_to_sync_merge(
-        client,
-        owner,
-        repo,
-        pr_number,
-        &initial.head_sha,
-        &request_uuid,
-    )
-    .await
+    fallback_to_sync_merge(client, owner, repo, pr_number, &initial.head_sha, &fallback).await
 }
 
 async fn fallback_to_sync_merge(
@@ -125,8 +116,9 @@ async fn fallback_to_sync_merge(
     repo: &str,
     pr_number: u64,
     confirmed_head_sha: &str,
-    request_uuid: &str,
+    fallback: &AsyncMergeFallback,
 ) -> anyhow::Result<MergeOutcome> {
+    let request_uuid = fallback.request_uuid();
     let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
         format!(
             "Could not verify PR #{pr_number} before synchronous fallback for async merge request {request_uuid}"
@@ -150,7 +142,7 @@ async fn fallback_to_sync_merge(
         bail!(
             "Cannot use synchronous fallback for PR #{pr_number} because base branch `{}` requires a merge queue. {}",
             before_sync.base_ref_name,
-            pending_request_retry_note(request_uuid),
+            pending_request_retry_note(fallback),
         );
     }
 
@@ -177,10 +169,26 @@ async fn fallback_to_sync_merge(
     ))
 }
 
-fn pending_request_retry_note(request_uuid: &str) -> String {
-    format!(
-        "Pending async merge request {request_uuid} remains. Retrying polls the same request but cannot clear it while it remains pending."
-    )
+fn pending_request_retry_note(fallback: &AsyncMergeFallback) -> String {
+    let request_uuid = fallback.request_uuid();
+    match fallback {
+        AsyncMergeFallback::TimedOut { .. } => format!(
+            "Pending async merge request {request_uuid} remains. Retrying waits on the same request and will time out again while it remains pending."
+        ),
+        AsyncMergeFallback::HeadMismatch {
+            pending_head_sha,
+            current_head_sha,
+            ..
+        } => format!(
+            "Pending async merge request {request_uuid} remains. Retrying fails immediately because it targets head SHA {pending_head_sha}, not {current_head_sha}."
+        ),
+        AsyncMergeFallback::HeadUnavailable { .. } => format!(
+            "Pending async merge request {request_uuid} remains. Retrying fails immediately because GitHub did not report its expected head SHA."
+        ),
+        AsyncMergeFallback::RequestUuidMismatch { .. } => format!(
+            "Pending async merge request {request_uuid} remains. Retrying fails immediately because GitHub returned a different request UUID."
+        ),
+    }
 }
 
 fn already_merged(
