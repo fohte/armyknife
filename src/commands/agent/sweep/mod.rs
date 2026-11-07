@@ -24,6 +24,8 @@
 //!
 //! Auto-pause only considers Stopped sessions. A separate pass closes idle
 //! Stopped or Paused sessions after their linked-worktree pull request merges.
+//! Another retries recent background completion notifications that could not be
+//! delivered, waking the session when it is Paused.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -47,6 +49,7 @@ use crate::shared::log::short_run_id;
 mod codex_turn_status;
 mod merged_close;
 mod service;
+mod undelivered_redelivery;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SweepArgs {
@@ -59,8 +62,8 @@ pub struct SweepArgs {
     #[arg(long, global = true)]
     pub timeout: Option<String>,
 
-    /// Dry-run: log what would be paused, marked failed or stopped, or closed
-    /// without sending signals or updating session records.
+    /// Dry-run: log what would be paused, marked failed or stopped, closed, or
+    /// redelivered without sending signals or updating session records.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -145,6 +148,13 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         |warning| eprintln!("{warning}"),
     )
     .await;
+    // Runs last so it sees the sessions the other passes signaled or closed.
+    let redelivery_started = recover_sweep_pass(
+        undelivered_redelivery::spawn_recent(&sessions_dir, args.dry_run),
+        "agent.sweep.redelivery_failed",
+        "undelivered notification redelivery failed",
+        &mut |warning: &str| eprintln!("{warning}"),
+    );
     tracing::info!(
         event = "agent.sweep.summary",
         scanned = report.scanned,
@@ -155,6 +165,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         codex_failed = codex_updates.failed,
         codex_interrupted = codex_updates.interrupted,
         merged_closed,
+        redelivery_started,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
@@ -168,12 +179,13 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     // above already records every signal for anyone tailing the JSONL log.
     if report.paused > 0 || codex_updates.total() > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             codex_updates.failed,
             codex_updates.interrupted,
             merged_closed,
+            redelivery_started,
             report.signaled,
             report.waiting,
             report.active,

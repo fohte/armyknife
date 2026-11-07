@@ -83,7 +83,15 @@ pub(super) fn has_pending(session_id: &str) -> Result<bool> {
     has_pending_in(&root_dir()?, session_id)
 }
 
+pub(super) fn has_pending_since(session_id: &str, since: SystemTime) -> Result<bool> {
+    has_pending_since_in(&root_dir()?, session_id, since)
+}
+
 fn has_pending_in(root: &Path, session_id: &str) -> Result<bool> {
+    has_pending_since_in(root, session_id, SystemTime::UNIX_EPOCH)
+}
+
+fn has_pending_since_in(root: &Path, session_id: &str, since: SystemTime) -> Result<bool> {
     let dir = session_dir(root, session_id);
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
@@ -101,6 +109,11 @@ fn has_pending_in(root: &Path, session_id: &str) -> Result<bool> {
                 .file_name()
                 .to_str()
                 .is_some_and(|name| Uuid::parse_str(name).is_ok())
+            && entry
+                .metadata()?
+                .modified()
+                .unwrap_or(SystemTime::UNIX_EPOCH)
+                >= since
         {
             return Ok(true);
         }
@@ -182,7 +195,8 @@ fn remove_in(root: &Path, session_id: &str, task_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::fixture;
+    use rstest::{fixture, rstest};
+    use std::time::Duration;
     use tempfile::TempDir;
 
     const SESSION_ID: &str = "fixture-session";
@@ -193,6 +207,38 @@ mod tests {
         let temp_dir = TempDir::new().expect("temporary directory should be created");
         let root = temp_dir.path().join("agent-bg").join("undelivered");
         (temp_dir, root)
+    }
+
+    #[rstest]
+    #[case::saved_before_the_cutoff(99, false)]
+    #[case::saved_at_the_cutoff(100, true)]
+    #[case::saved_after_the_cutoff(101, true)]
+    fn has_pending_since_compares_save_time_with_the_cutoff(
+        #[case] saved_at_secs: u64,
+        #[case] expected: bool,
+    ) {
+        let (_temp_dir, root) = root();
+        save_in(&root, SESSION_ID, TASK_ID, "fixture message")
+            .expect("notification should be saved");
+        File::options()
+            .write(true)
+            .open(message_path(&root, SESSION_ID, TASK_ID).expect("path should be valid"))
+            .expect("notification should open")
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(saved_at_secs)),
+            )
+            .expect("timestamp should be set");
+
+        assert_eq!(
+            has_pending_since_in(
+                &root,
+                SESSION_ID,
+                SystemTime::UNIX_EPOCH + Duration::from_secs(100),
+            )
+            .expect("pending scan should succeed"),
+            expected,
+        );
     }
 
     #[test]
