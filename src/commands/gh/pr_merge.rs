@@ -685,12 +685,71 @@ mod tests {
     }
 
     #[rstest]
+    #[case::merged_before_retry(false)]
+    #[case::merged_during_required_checks(true)]
+    #[tokio::test]
+    async fn run_merge_accepts_a_pr_merged_before_or_during_retry(
+        events: Rc<RefCell<Vec<String>>>,
+        #[case] merged_during_checks: bool,
+    ) {
+        let snapshots = if merged_during_checks {
+            vec![
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ]
+        } else {
+            vec![snapshot(PrState::Merged, "head-a", "CLEAN")]
+        };
+        let client = fake_client(&snapshots, Rc::clone(&events), false, false);
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42)
+            .await
+            .map_err(|error| error.to_string());
+        let expected_events = if merged_during_checks {
+            vec![
+                "view".to_string(),
+                "stack".to_string(),
+                "hook".to_string(),
+                "checks".to_string(),
+                "view".to_string(),
+            ]
+        } else {
+            vec!["view".to_string()]
+        };
+
+        assert_eq!(
+            (result, events.borrow().clone()),
+            (
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
+                expected_events,
+            ),
+        );
+    }
+
+    #[rstest]
     #[case::timeout(timed_out_merge_error())]
     #[case::different_pending_head(AsyncMergeFallback::HeadMismatch {
         request_uuid: "request-id".to_string(),
         pull_request: 42,
         pending_head_sha: "older-head".to_string(),
         current_head_sha: "head-a".to_string(),
+    })]
+    #[case::head_unavailable(AsyncMergeFallback::HeadUnavailable {
+        request_uuid: "request-id".to_string(),
+        pull_request: 42,
+    })]
+    #[case::request_uuid_mismatch(AsyncMergeFallback::RequestUuidMismatch {
+        request_uuid: "request-id".to_string(),
+        response_uuid: "different-request".to_string(),
+        pull_request: 42,
     })]
     #[tokio::test]
     async fn run_merge_falls_back_to_sync_merge_with_the_confirmed_head(
@@ -866,7 +925,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Cannot fall back to synchronous merge for PR #42 because base branch `main` requires a merge queue; async merge request request-id is still pending.".to_string()),
+                Err("Cannot use synchronous fallback for PR #42 because base branch `main` requires a merge queue; pending async merge request request-id remains. Retrying `a gh pr-merge` will not resolve it.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1031,7 +1090,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Timed out waiting for async merge request request-id for PR #42.".to_string()),
+                Err("Cannot use synchronous fallback for stacked PR #42; pending async merge request request-id remains. Retrying `a gh pr-merge` will not resolve it.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),

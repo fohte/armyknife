@@ -17,6 +17,9 @@ pub(super) async fn run_merge(
     pr_number: u64,
 ) -> anyhow::Result<MergeOutcome> {
     let initial = client.view_pr(owner, repo, pr_number)?;
+    if initial.state == PrState::Merged {
+        return Ok(MergeOutcome::Merged(initial));
+    }
     ensure_pr_is_open_and_safe(&initial, pr_number, None)?;
 
     let is_stacked = if let Some(stack) = client
@@ -49,6 +52,9 @@ pub(super) async fn run_merge(
     client.wait_for_required_checks(owner, repo, pr_number)?;
 
     let current = client.view_pr(owner, repo, pr_number)?;
+    if current.state == PrState::Merged {
+        return Ok(MergeOutcome::Merged(current));
+    }
     ensure_pr_is_open_and_safe(&current, pr_number, Some(&initial.head_sha))?;
 
     let merge_result = match client
@@ -96,7 +102,9 @@ async fn recover_async_merge_error(
         if let Some(merged) = already_merged(client, owner, repo, pr_number) {
             return Ok(MergeOutcome::Merged(merged));
         }
-        return Err(merge_error);
+        return Err(merge_error).context(format!(
+            "Cannot use synchronous fallback for stacked PR #{pr_number}; pending async merge request {request_uuid} remains. Retrying `a gh pr-merge` will not resolve it."
+        ));
     }
 
     fallback_to_sync_merge(
@@ -139,7 +147,7 @@ async fn fallback_to_sync_merge(
         })?;
     if merge_queue_enabled {
         bail!(
-            "Cannot fall back to synchronous merge for PR #{pr_number} because base branch `{}` requires a merge queue; async merge request {request_uuid} is still pending.",
+            "Cannot use synchronous fallback for PR #{pr_number} because base branch `{}` requires a merge queue; pending async merge request {request_uuid} remains. Retrying `a gh pr-merge` will not resolve it.",
             before_sync.base_ref_name
         );
     }
