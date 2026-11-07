@@ -26,9 +26,6 @@ pub enum CcError {
     #[error("Session not found: {0}")]
     SessionNotFound(String),
 
-    #[error("{0}")]
-    SessionNotFoundWithSuggestions(String),
-
     #[error("No tracked parent session is recorded for the current session")]
     NoTrackedParent,
 

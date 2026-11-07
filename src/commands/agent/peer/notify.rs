@@ -22,6 +22,7 @@ use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::infra::notification::{self, Notification};
 use crate::shared::env_var::EnvVars;
+use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
 
 const MAX_SESSION_ID_SUGGESTIONS: usize = 3;
@@ -57,6 +58,8 @@ pub enum Delivery {
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
+    let span = tracing::info_span!("agent.peer.notify", run_id = %short_run_id());
+    let _enter = span.enter();
     let output = run_with(
         args,
         super::resolve_parent_session,
@@ -75,7 +78,7 @@ fn run_with(
     resolve_parent: impl FnOnce() -> Result<Session>,
     deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
     save: impl FnOnce(&str, &str) -> Result<()>,
-    alert_user: impl FnOnce(&str),
+    alert_user: impl FnOnce(&str, &str),
 ) -> Result<Option<String>> {
     let session_id =
         resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
@@ -109,7 +112,7 @@ fn run_with(
             session = %session_id,
             error = %failure,
         );
-        alert_user(&failure);
+        alert_user(&session_id, &failure);
         anyhow::bail!(failure);
     }
     tracing::warn!(
@@ -130,7 +133,6 @@ fn is_permanent_failure(error: &anyhow::Error) -> bool {
             CcError::SelfNotify(_)
                 | CcError::InvalidSessionId(_)
                 | CcError::SessionNotFound(_)
-                | CcError::SessionNotFoundWithSuggestions(_)
                 | CcError::SessionEnded(_)
                 | CcError::NoMessagingSocket(_)
                 | CcError::NoTmuxInfo(_)
@@ -138,10 +140,14 @@ fn is_permanent_failure(error: &anyhow::Error) -> bool {
     )
 }
 
-fn alert_user(failure: &str) {
+fn alert_user(session_id: &str, failure: &str) {
     let notification = Notification::new("Peer message not delivered", failure);
     if let Err(error) = notification::send(&notification) {
-        tracing::warn!(event = "agent.peer.notify.alert_failed", error = %error);
+        tracing::warn!(
+            event = "agent.peer.notify.alert_failed",
+            session = %session_id,
+            error = %error,
+        );
     }
 }
 
@@ -221,7 +227,6 @@ fn ensure_not_self_notify(session_id: &str, from: Option<&str>) -> Result<()> {
 }
 
 fn session_not_found_error(session_id: &str) -> anyhow::Error {
-    let error = CcError::SessionNotFound(session_id.to_string());
     let suggestions = match store::list_sessions() {
         Ok(sessions) => similar_session_ids(session_id, &sessions),
         // Suggestions are best effort; keep the original lookup error if listing fails.
@@ -229,7 +234,7 @@ fn session_not_found_error(session_id: &str) -> anyhow::Error {
     };
 
     if suggestions.is_empty() {
-        return error.into();
+        return CcError::SessionNotFound(session_id.to_string()).into();
     }
 
     let suggestions = suggestions
@@ -237,8 +242,8 @@ fn session_not_found_error(session_id: &str) -> anyhow::Error {
         .map(|suggestion| format!("- {suggestion}"))
         .collect::<Vec<_>>()
         .join("\n");
-    CcError::SessionNotFoundWithSuggestions(indoc::formatdoc! {"
-        {error}
+    CcError::SessionNotFound(indoc::formatdoc! {"
+        {session_id}
         Did you mean:
         {suggestions}"
     })
@@ -526,7 +531,7 @@ mod tests {
         session_store: &TestSessionStore,
         session_id: &str,
         sessions: &[(&str, SessionStatus, Engine)],
-    ) -> String {
+    ) -> (String, bool) {
         for (id, status, engine) in sessions {
             store::save_session_to(
                 &session_store.sessions_dir,
@@ -538,9 +543,9 @@ mod tests {
         temp_env::with_vars(
             [("XDG_CACHE_HOME", Some(session_store.cache_home.as_str()))],
             || {
-                notify(session_id, "hello", None, None)
-                    .expect_err("untracked session should be rejected")
-                    .to_string()
+                let error = notify(session_id, "hello", None, None)
+                    .expect_err("untracked session should be rejected");
+                (error.to_string(), is_permanent_failure(&error))
             },
         )
     }
@@ -684,7 +689,7 @@ mod tests {
                         Ok(Delivery::Sent)
                     },
                     |_, _| Ok(()),
-                    |_| {},
+                    |_, _| {},
                 )
             },
         );
@@ -714,7 +719,7 @@ mod tests {
     type DeliveryFailureOutcome = (
         std::result::Result<Option<String>, String>,
         Vec<(String, String)>,
-        Vec<String>,
+        Vec<(String, String)>,
     );
 
     fn run_with_delivery_result(
@@ -747,7 +752,7 @@ mod tests {
                         saved.push((target.to_string(), content.to_string()));
                         save_result
                     },
-                    |failure| alerts.push(failure.to_string()),
+                    |target, failure| alerts.push((target.to_string(), failure.to_string())),
                 )
             },
         );
@@ -785,7 +790,7 @@ mod tests {
             (
                 Err(failure.clone()),
                 vec![("fixture-target".to_string(), ENVELOPED_HELLO.to_string())],
-                vec![failure],
+                vec![("fixture-target".to_string(), failure)],
             ),
         );
     }
@@ -794,7 +799,6 @@ mod tests {
     #[case::self_notify(CcError::SelfNotify("fixture".to_string()))]
     #[case::invalid_id(CcError::InvalidSessionId("fixture".to_string()))]
     #[case::not_found(CcError::SessionNotFound("fixture".to_string()))]
-    #[case::not_found_with_suggestions(CcError::SessionNotFoundWithSuggestions("fixture".to_string()))]
     #[case::ended(CcError::SessionEnded("fixture".to_string()))]
     #[case::no_socket(CcError::NoMessagingSocket("fixture".to_string()))]
     #[case::no_tmux(CcError::NoTmuxInfo("fixture".to_string()))]
@@ -953,7 +957,7 @@ mod tests {
     ) {
         assert_eq!(
             missing_session_error(&session_store, session_id, sessions),
-            expected,
+            (expected.to_string(), true),
         );
     }
 
