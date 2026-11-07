@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.516](https://github.com/fohte/armyknife/compare/v0.1.515...v0.1.516) (2026-11-07)
+
+
+### Bug Fixes
+
+* **gh/pr-merge:** recover stalled async merges ([#1381](https://github.com/fohte/armyknife/issues/1381)) ([ed01796](https://github.com/fohte/armyknife/commit/ed0179643d2c90d86f82e931c91056d85a0a1bce))
+
 ## [0.1.515](https://github.com/fohte/armyknife/compare/v0.1.514...v0.1.515) (2026-11-07)
 
 
