@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.514](https://github.com/fohte/armyknife/compare/v0.1.513...v0.1.514) (2026-11-07)
+
+
+### Bug Fixes
+
+* **agent/sweep:** resend undelivered notifications ([#1377](https://github.com/fohte/armyknife/issues/1377)) ([8cece6e](https://github.com/fohte/armyknife/commit/8cece6e39177ec89acad50b30f3b5af58bd7834e))
+
 ## [0.1.513](https://github.com/fohte/armyknife/compare/v0.1.512...v0.1.513) (2026-11-07)
 
 
