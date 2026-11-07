@@ -21,7 +21,7 @@ pub use pr::{
     BranchPrQuery, CreatePrParams, CreatedPullRequest, PrBodyClient, PrCiState, PrClient, PrInfo,
     PrProgressInfo, PrState, UpdatePrBodyParams, UpdatePrParams,
 };
-pub use pr_merge::AsyncMergeResult;
+pub use pr_merge::{AsyncMergeFallback, AsyncMergeResult};
 pub use pr_number::PrNumberQuery;
 pub use pr_stack::{PrStackClient, PullRequestStack, PullRequestStackEntry};
 pub use repo::RepoClient;

@@ -10,8 +10,37 @@ use super::{client::GitHubClient, error::api_error_from_response};
 
 const ASYNC_MERGE_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ASYNC_MERGE_PROGRESS_INTERVAL: Duration = Duration::from_secs(60);
+const MERGE_QUEUE_QUERY: &str = "query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { mergeQueue(branch: $branch) { id } } }";
 // Keep a pending merge within a short interactive wait; callers can retry with its UUID.
-const ASYNC_MERGE_MAX_WAIT: Duration = Duration::from_secs(30 * 60);
+const ASYNC_MERGE_MAX_WAIT: Duration = Duration::from_secs(5 * 60);
+
+#[derive(Debug, thiserror::Error)]
+pub enum AsyncMergeFallback {
+    #[error("Timed out waiting for async merge request {request_uuid} for PR #{pull_request}.")]
+    TimedOut {
+        request_uuid: String,
+        pull_request: u64,
+    },
+    #[error(
+        "Existing async merge request {request_uuid} for PR #{pull_request} targets head SHA {expected_head_sha}, not {actual_head_sha}."
+    )]
+    HeadMismatch {
+        request_uuid: String,
+        pull_request: u64,
+        expected_head_sha: String,
+        actual_head_sha: String,
+    },
+}
+
+impl AsyncMergeFallback {
+    pub fn request_uuid(&self) -> &str {
+        match self {
+            Self::TimedOut { request_uuid, .. } | Self::HeadMismatch { request_uuid, .. } => {
+                request_uuid
+            }
+        }
+    }
+}
 
 /// Final outcome of an asynchronous pull request merge request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,7 +108,7 @@ impl AsyncMergeResponse {
 }
 
 impl GitHubClient {
-    /// Request a squash merge and wait up to 30 minutes for GitHub's final result.
+    /// Request a squash merge and wait up to five minutes for GitHub's final result.
     /// A timeout returns the request UUID so the pending request can be retried.
     pub async fn merge_pull_request_async(
         &self,
@@ -137,9 +166,11 @@ impl GitHubClient {
             match status {
                 AsyncMergeStatus::Pending { uuid, .. } => {
                     if started_at.elapsed() >= max_wait {
-                        anyhow::bail!(
-                            "Timed out waiting for async merge request {uuid} for PR #{pull_request}."
-                        );
+                        return Err(AsyncMergeFallback::TimedOut {
+                            request_uuid: uuid,
+                            pull_request,
+                        }
+                        .into());
                     }
                     if last_progress_at
                         .is_none_or(|last| last.elapsed() >= ASYNC_MERGE_PROGRESS_INTERVAL)
@@ -189,9 +220,13 @@ impl GitHubClient {
         } = &status
         {
             if expected_head_sha != head_sha {
-                anyhow::bail!(
-                    "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {expected_head_sha}, not {head_sha}."
-                );
+                return Err(AsyncMergeFallback::HeadMismatch {
+                    request_uuid: uuid,
+                    pull_request,
+                    expected_head_sha: expected_head_sha.clone(),
+                    actual_head_sha: head_sha.to_string(),
+                }
+                .into());
             }
             return Ok(status);
         }
@@ -223,12 +258,87 @@ impl GitHubClient {
             ),
         };
         if actual_head_sha != head_sha {
-            anyhow::bail!(
-                "Existing async merge request {uuid} for PR #{pull_request} targets head SHA {actual_head_sha}, not {head_sha}."
-            );
+            return Err(AsyncMergeFallback::HeadMismatch {
+                request_uuid: uuid,
+                pull_request,
+                expected_head_sha: actual_head_sha,
+                actual_head_sha: head_sha.to_string(),
+            }
+            .into());
         }
         Ok(pending_status)
     }
+
+    pub async fn merge_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pull_request: u64,
+        head_sha: &str,
+    ) -> anyhow::Result<AsyncMergeResult> {
+        let route = format!("/repos/{owner}/{repo}/pulls/{pull_request}/merge");
+        let response: SyncMergeResponse = self
+            .http
+            .put(self.url(&route))
+            .json(&json!({ "sha": head_sha, "merge_method": "squash" }))
+            .send()
+            .await?
+            .json()
+            .await
+            .context("Failed to parse synchronous merge response")?;
+        if !response.merged {
+            anyhow::bail!(
+                "Synchronous merge failed: {}",
+                response
+                    .message
+                    .unwrap_or_else(|| "No details were returned.".into())
+            );
+        }
+        Ok(AsyncMergeResult::Merged { sha: response.sha })
+    }
+
+    pub async fn branch_requires_merge_queue(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> anyhow::Result<bool> {
+        let response: MergeQueueQueryResponse = self
+            .graphql(
+                MERGE_QUEUE_QUERY,
+                json!({ "owner": owner, "name": repo, "branch": branch }),
+            )
+            .await?;
+        let repository = response
+            .repository
+            .context("GitHub did not return the repository when checking its merge queue")?;
+        Ok(repository.merge_queue.is_some())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SyncMergeResponse {
+    merged: bool,
+    sha: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeQueueQueryResponse {
+    repository: Option<MergeQueueRepository>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeQueueRepository {
+    merge_queue: Option<MergeQueue>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MergeQueue {
+    #[serde(rename = "id")]
+    _id: String,
 }
 
 #[cfg(test)]
@@ -287,6 +397,70 @@ mod tests {
                 sha: Some("merge-sha".into())
             }),
         );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn sync_merge_sends_the_expected_head_and_uses_squash() {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/example-org/example-repo/pulls/42/merge"))
+            .and(body_json(
+                json!({ "sha": "head-sha", "merge_method": "squash" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "merged": true,
+                "sha": "merge-sha",
+                "message": "Pull Request successfully merged"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .merge_pull_request("example-org", "example-repo", 42, "head-sha")
+            .await;
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Ok(AsyncMergeResult::Merged {
+                sha: Some("merge-sha".into())
+            }),
+        );
+    }
+
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn branch_rules_report_when_merge_queue_is_required() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(body_json(json!({
+                "query": MERGE_QUEUE_QUERY,
+                "variables": {
+                    "owner": "example-org",
+                    "name": "example-repo",
+                    "branch": "main"
+                }
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "repository": {
+                        "mergeQueue": { "id": "queue-id" }
+                    }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .branch_requires_merge_queue("example-org", "example-repo", "main")
+            .await;
+
+        assert_eq!(result.map_err(|error| error.to_string()), Ok(true));
     }
 
     #[rstest::rstest]

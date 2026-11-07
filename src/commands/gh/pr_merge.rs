@@ -8,8 +8,8 @@ use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
     github::{
-        AsyncMergeResult, GitHubClient, PrStackClient, PrState, PullRequestStack,
-        PullRequestStackEntry,
+        AsyncMergeFallback, AsyncMergeResult, GitHubClient, PrStackClient, PrState,
+        PullRequestStack, PullRequestStackEntry,
     },
 };
 use crate::shared::{
@@ -99,6 +99,19 @@ trait PrMergeClient {
         pr_number: u64,
         head_sha: &str,
     ) -> anyhow::Result<AsyncMergeResult>;
+    async fn merge_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        head_sha: &str,
+    ) -> anyhow::Result<AsyncMergeResult>;
+    async fn branch_requires_merge_queue(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> anyhow::Result<bool>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,6 +119,7 @@ struct PrSnapshot {
     state: PrState,
     head_sha: String,
     head_ref_name: String,
+    base_ref_name: String,
     head_repository: Option<String>,
     merge_state_status: String,
     url: String,
@@ -126,11 +140,13 @@ async fn run_merge(
     let initial = client.view_pr(owner, repo, pr_number)?;
     ensure_pr_is_open_and_safe(&initial, pr_number, None)?;
 
+    let mut is_stacked = false;
     if let Some(stack) = client
         .get_stack_for_pull_request(owner, repo, pr_number)
         .await
         .context("Failed to inspect stack membership before merge")?
     {
+        is_stacked = true;
         let stack_pull_requests = client
             .get_pull_requests_in_stack(owner, repo, stack.number)
             .await
@@ -161,12 +177,84 @@ async fn run_merge(
     {
         Ok(result) => result,
         Err(merge_error) => {
-            if let Ok(merged) = client.view_pr(owner, repo, pr_number)
-                && merged.state == PrState::Merged
-            {
-                return Ok(MergeOutcome::Merged(merged));
+            let Some(fallback) = merge_error.downcast_ref::<AsyncMergeFallback>() else {
+                if let Ok(merged) = client.view_pr(owner, repo, pr_number)
+                    && merged.state == PrState::Merged
+                {
+                    return Ok(MergeOutcome::Merged(merged));
+                }
+                return Err(merge_error);
+            };
+            let request_uuid = fallback.request_uuid();
+            if is_stacked {
+                if let Ok(merged) = client.view_pr(owner, repo, pr_number)
+                    && merged.state == PrState::Merged
+                {
+                    return Ok(MergeOutcome::Merged(merged));
+                }
+                return Err(merge_error);
             }
-            return Err(merge_error);
+
+            let before_sync = client.view_pr(owner, repo, pr_number).with_context(|| {
+                format!(
+                    "Could not verify PR #{pr_number} before synchronous fallback for async merge request {request_uuid}"
+                )
+            })?;
+            if before_sync.state == PrState::Merged {
+                return Ok(MergeOutcome::Merged(before_sync));
+            }
+            ensure_pr_is_open_and_safe(&before_sync, pr_number, Some(&initial.head_sha))
+                .with_context(|| {
+                    format!(
+                        "Cannot fall back to synchronous merge for async merge request {request_uuid}"
+                    )
+                })?;
+            let merge_queue_enabled = client
+                .branch_requires_merge_queue(owner, repo, &before_sync.base_ref_name)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Could not determine whether PR #{pr_number} uses a merge queue before synchronous fallback for async merge request {request_uuid}"
+                    )
+                })?;
+            if merge_queue_enabled {
+                bail!(
+                    "Cannot fall back to synchronous merge for PR #{pr_number} because base branch `{}` requires a merge queue; async merge request {request_uuid} is still pending.",
+                    before_sync.base_ref_name
+                );
+            }
+
+            if let Err(sync_error) = client
+                .merge_sync(owner, repo, pr_number, &initial.head_sha)
+                .await
+            {
+                if let Ok(merged) = client.view_pr(owner, repo, pr_number)
+                    && merged.state == PrState::Merged
+                {
+                    return Ok(MergeOutcome::Merged(merged));
+                }
+                return Err(sync_error).with_context(|| {
+                    format!(
+                        "Synchronous merge fallback failed for PR #{pr_number} after async merge request {request_uuid}"
+                    )
+                });
+            }
+            return match client.view_pr(owner, repo, pr_number) {
+                Ok(merged) if merged.state == PrState::Merged => Ok(MergeOutcome::Merged(merged)),
+                Ok(refreshed) => {
+                    eprintln!(
+                        "PR #{pr_number} was merged, but GitHub reports state {:?}; continuing with worktree close.",
+                        refreshed.state,
+                    );
+                    Ok(MergeOutcome::Merged(refreshed))
+                }
+                Err(error) => {
+                    eprintln!(
+                        "PR #{pr_number} was merged, but its state could not be refreshed: {error:#}; continuing with worktree close."
+                    );
+                    Ok(MergeOutcome::Merged(before_sync))
+                }
+            };
         }
     };
 
@@ -399,7 +487,7 @@ impl PrMergeClient for GhCli {
             "--repo",
             repository.as_str(),
             "--json",
-            "state,headRefOid,headRefName,headRepository,mergeStateStatus,url",
+            "state,headRefOid,headRefName,baseRefName,headRepository,mergeStateStatus,url",
         ];
         let output = run_gh(&args)?;
         let response: GhPrResponse = serde_json::from_slice(&output.stdout)
@@ -408,6 +496,7 @@ impl PrMergeClient for GhCli {
             state: parse_pr_state(&response.state)?,
             head_sha: response.head_ref_oid,
             head_ref_name: response.head_ref_name,
+            base_ref_name: response.base_ref_name,
             head_repository: response
                 .head_repository
                 .map(|repository| repository.name_with_owner),
@@ -458,6 +547,29 @@ impl PrMergeClient for GhCli {
             .merge_pull_request_async(owner, repo, pr_number, head_sha)
             .await
     }
+
+    async fn merge_sync(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        head_sha: &str,
+    ) -> anyhow::Result<AsyncMergeResult> {
+        GitHubClient::get()?
+            .merge_pull_request(owner, repo, pr_number, head_sha)
+            .await
+    }
+
+    async fn branch_requires_merge_queue(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> anyhow::Result<bool> {
+        GitHubClient::get()?
+            .branch_requires_merge_queue(owner, repo, branch)
+            .await
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -466,6 +578,7 @@ struct GhPrResponse {
     state: String,
     head_ref_oid: String,
     head_ref_name: String,
+    base_ref_name: String,
     head_repository: Option<GhRepository>,
     merge_state_status: Option<String>,
     url: String,
@@ -515,6 +628,9 @@ mod tests {
         events: Rc<RefCell<Vec<String>>>,
         checks_error: bool,
         merge_error: bool,
+        fallback_error: bool,
+        sync_merge_error: bool,
+        merge_queue_enabled: bool,
         stack: Option<PullRequestStack>,
         stack_pull_requests: Vec<PullRequestStackEntry>,
         merge_result: AsyncMergeResult,
@@ -585,7 +701,44 @@ mod tests {
             if self.merge_error {
                 anyhow::bail!("fake merge failed");
             }
+            if self.fallback_error {
+                return Err(AsyncMergeFallback::TimedOut {
+                    request_uuid: "request-id".to_string(),
+                    pull_request: 42,
+                }
+                .into());
+            }
             Ok(self.merge_result.clone())
+        }
+
+        async fn merge_sync(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            head_sha: &str,
+        ) -> anyhow::Result<AsyncMergeResult> {
+            self.events
+                .borrow_mut()
+                .push(format!("merge-sync:{head_sha}"));
+            if self.sync_merge_error {
+                anyhow::bail!("fake synchronous merge failed");
+            }
+            Ok(AsyncMergeResult::Merged {
+                sha: Some("sync-merge".to_string()),
+            })
+        }
+
+        async fn branch_requires_merge_queue(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            branch: &str,
+        ) -> anyhow::Result<bool> {
+            self.events
+                .borrow_mut()
+                .push(format!("merge-queue:{branch}"));
+            Ok(self.merge_queue_enabled)
         }
     }
 
@@ -594,6 +747,7 @@ mod tests {
             state,
             head_sha: head_sha.to_string(),
             head_ref_name: "topic/example-branch".to_string(),
+            base_ref_name: "main".to_string(),
             head_repository: Some("sample-org/sample-repo".to_string()),
             merge_state_status: merge_state_status.to_string(),
             url: "https://github.com/sample-org/sample-repo/pull/42".to_string(),
@@ -611,6 +765,9 @@ mod tests {
             events,
             checks_error,
             merge_error,
+            fallback_error: false,
+            sync_merge_error: false,
+            merge_queue_enabled: false,
             stack: None,
             stack_pull_requests: Vec::new(),
             merge_result: AsyncMergeResult::Merged {
@@ -663,6 +820,292 @@ mod tests {
                     "stack".to_string(),
                     "stack-pull-requests".to_string(),
                     "hook:[(\"ARMYKNIFE_PR_NUMBER\", \"42\"), (\"ARMYKNIFE_PR_OWNER\", \"example-org\"), (\"ARMYKNIFE_PR_REPO\", \"example-repo\"), (\"ARMYKNIFE_PR_URL\", \"https://github.com/sample-org/sample-repo/pull/42\"), (\"ARMYKNIFE_PR_HEAD_SHA\", \"head-a\")]".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_falls_back_to_sync_merge_with_the_confirmed_head(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result
+                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
+                    .map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Ok(true),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "merge-queue:main".to_string(),
+                    "merge-sync:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_accepts_a_late_async_merge_before_sync_fallback(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result
+                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
+                    .map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Ok(true),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_does_not_sync_merge_after_the_head_changes(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-b", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err(
+                    "Cannot fall back to synchronous merge for async merge request request-id"
+                        .to_string()
+                ),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_does_not_sync_merge_for_a_merge_queue_branch(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        client.merge_queue_enabled = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("Cannot fall back to synchronous merge for PR #42 because base branch `main` requires a merge queue; async merge request request-id is still pending.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "merge-queue:main".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_accepts_a_sync_merge_error_when_the_pr_is_already_merged(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Merged, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        client.sync_merge_error = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result
+                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
+                    .map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Ok(true),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "merge-queue:main".to_string(),
+                    "merge-sync:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_does_not_sync_merge_for_a_stacked_pr(events: Rc<RefCell<Vec<String>>>) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = true;
+        client.stack = Some(PullRequestStack {
+            number: 99,
+            position: 1,
+            size: 1,
+        });
+        client.stack_pull_requests = vec![PullRequestStackEntry {
+            number: 42,
+            merged_at: None,
+        }];
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42).await;
+
+        assert_eq!(
+            (
+                result.map(|_| ()).map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("Timed out waiting for async merge request request-id for PR #42.".to_string()),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "stack-pull-requests".to_string(),
+                    "hook".to_string(),
                     "checks".to_string(),
                     "view".to_string(),
                     "merge:head-a".to_string(),
