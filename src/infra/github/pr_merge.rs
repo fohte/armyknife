@@ -56,6 +56,30 @@ impl AsyncMergeFallback {
             | Self::RequestUuidMismatch { request_uuid, .. } => request_uuid,
         }
     }
+
+    pub(crate) fn retry_hint(&self) -> String {
+        match self {
+            Self::TimedOut { .. } => {
+                "Retrying waits on the same request and will time out again while it remains pending."
+                    .to_string()
+            }
+            Self::HeadMismatch {
+                pending_head_sha,
+                current_head_sha,
+                ..
+            } => format!(
+                "Retrying fails immediately because it targets head SHA {pending_head_sha}, not {current_head_sha}."
+            ),
+            Self::HeadUnavailable { .. } => {
+                "Retrying fails immediately because GitHub did not report its expected head SHA."
+                    .to_string()
+            }
+            Self::RequestUuidMismatch { .. } => {
+                "Retrying fails immediately because GitHub returned a different request UUID."
+                    .to_string()
+            }
+        }
+    }
 }
 
 /// Final outcome of an asynchronous pull request merge request.

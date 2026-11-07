@@ -170,25 +170,11 @@ async fn fallback_to_sync_merge(
 }
 
 fn pending_request_retry_note(fallback: &AsyncMergeFallback) -> String {
-    let request_uuid = fallback.request_uuid();
-    match fallback {
-        AsyncMergeFallback::TimedOut { .. } => format!(
-            "Pending async merge request {request_uuid} remains. Retrying waits on the same request and will time out again while it remains pending."
-        ),
-        AsyncMergeFallback::HeadMismatch {
-            pending_head_sha,
-            current_head_sha,
-            ..
-        } => format!(
-            "Pending async merge request {request_uuid} remains. Retrying fails immediately because it targets head SHA {pending_head_sha}, not {current_head_sha}."
-        ),
-        AsyncMergeFallback::HeadUnavailable { .. } => format!(
-            "Pending async merge request {request_uuid} remains. Retrying fails immediately because GitHub did not report its expected head SHA."
-        ),
-        AsyncMergeFallback::RequestUuidMismatch { .. } => format!(
-            "Pending async merge request {request_uuid} remains. Retrying fails immediately because GitHub returned a different request UUID."
-        ),
-    }
+    format!(
+        "Pending async merge request {} remains. {}",
+        fallback.request_uuid(),
+        fallback.retry_hint(),
+    )
 }
 
 fn already_merged(
