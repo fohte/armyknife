@@ -3,7 +3,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -16,6 +16,9 @@ use super::undelivered;
 use crate::shared::command;
 use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
+
+const SEND_OR_SAVE_RETRY_INTERVAL: Duration = Duration::from_secs(60);
+const SEND_OR_SAVE_RETRY_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct RunDetachedArgs {
@@ -66,12 +69,14 @@ pub fn run(args: &RunDetachedArgs) -> Result<()> {
 
     let message = completion_message(args, status.as_ref().ok(), execution_error.as_deref());
     send_completion_before_joining_reminder(
-        || match record_failed_completion_notification(
+        || match send_or_save_completion(
             &args.session,
             &args.task_id,
             &message,
-            notify::notify(&args.session, &message, None, None),
+            || notify::notify(&args.session, &message, None, None),
             undelivered::save,
+            Instant::now,
+            thread::sleep,
         ) {
             Ok(_) => tracing::info!(
                 event = "agent.bg_run.completed",
@@ -121,24 +126,38 @@ fn record_worker_pid_then_run<T>(
     run_command()
 }
 
-fn record_failed_completion_notification(
+/// Sends the message, or saves it for a later retry. This worker holds the only
+/// copy until one of them works, so it keeps retrying through outages that block
+/// both, such as a full disk.
+fn send_or_save_completion(
     session_id: &str,
     task_id: &str,
     message: &str,
-    result: Result<notify::Delivery>,
+    mut send: impl FnMut() -> Result<notify::Delivery>,
     mut save: impl FnMut(&str, &str, &str) -> Result<()>,
+    mut now: impl FnMut() -> Instant,
+    mut sleep: impl FnMut(Duration),
 ) -> Result<notify::Delivery> {
-    if result.is_err()
-        && let Err(error) = save(session_id, task_id, message)
-    {
+    let deadline = now() + SEND_OR_SAVE_RETRY_WINDOW;
+    loop {
+        let result = send();
+        if result.is_ok() {
+            return result;
+        }
+        let Err(error) = save(session_id, task_id, message) else {
+            return result;
+        };
         tracing::warn!(
             event = "agent.bg_run.undelivered_save_failed",
             session = %session_id,
             task = %task_id,
             error = %format!("{error:#}"),
         );
+        if now() >= deadline {
+            return result;
+        }
+        sleep(SEND_OR_SAVE_RETRY_INTERVAL);
     }
-    result
 }
 
 fn send_completion_before_joining_reminder(
@@ -310,8 +329,153 @@ fn exit_description(status: Option<&ExitStatus>, execution_error: Option<&str>) 
 mod tests {
     use super::*;
     use indoc::indoc;
+    use rstest::rstest;
+    use std::cell::Cell;
     use std::sync::mpsc;
-    use std::time::Duration;
+
+    const SESSION_ID: &str = "fixture-session";
+    const TASK_ID: &str = "a1b2c3d4-e5f6-4789-8abc-def012345678";
+    const MESSAGE: &str = "fixture completion";
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct SendOrSaveRun {
+        result: Result<notify::Delivery, String>,
+        sends: usize,
+        saved: Vec<(String, String, String)>,
+        sleeps: Vec<Duration>,
+    }
+
+    /// Runs `send_or_save_completion` on a fake clock that only advances while
+    /// sleeping. The closures take the 1-based attempt number.
+    fn run_send_or_save(
+        send_ok_from_attempt: Option<usize>,
+        save_ok_from_attempt: Option<usize>,
+    ) -> SendOrSaveRun {
+        let attempt_is_ok = |first_ok: Option<usize>, attempt: usize| {
+            first_ok.is_some_and(|first| attempt >= first)
+        };
+        let elapsed = Cell::new(Duration::ZERO);
+        let started_at = Instant::now();
+        let mut sends = 0;
+        let mut save_attempts = 0;
+        let mut saved = Vec::new();
+        let mut sleeps = Vec::new();
+
+        let result = send_or_save_completion(
+            SESSION_ID,
+            TASK_ID,
+            MESSAGE,
+            || {
+                sends += 1;
+                if attempt_is_ok(send_ok_from_attempt, sends) {
+                    return Ok(notify::Delivery::Started);
+                }
+                anyhow::bail!("fixture delivery failure")
+            },
+            |session_id, task_id, message| {
+                save_attempts += 1;
+                if attempt_is_ok(save_ok_from_attempt, save_attempts) {
+                    saved.push((
+                        session_id.to_string(),
+                        task_id.to_string(),
+                        message.to_string(),
+                    ));
+                    return Ok(());
+                }
+                anyhow::bail!("fixture save failure")
+            },
+            || started_at + elapsed.get(),
+            |duration| {
+                sleeps.push(duration);
+                elapsed.set(elapsed.get() + duration);
+            },
+        );
+
+        SendOrSaveRun {
+            result: result.map_err(|error| error.to_string()),
+            sends,
+            saved,
+            sleeps,
+        }
+    }
+
+    fn saved_message() -> (String, String, String) {
+        (
+            SESSION_ID.to_string(),
+            TASK_ID.to_string(),
+            MESSAGE.to_string(),
+        )
+    }
+
+    #[rstest]
+    #[case::accepted_on_first_send(
+        Some(1),
+        None,
+        SendOrSaveRun {
+            result: Ok(notify::Delivery::Started),
+            sends: 1,
+            saved: vec![],
+            sleeps: vec![],
+        },
+    )]
+    #[case::saved_after_failed_send(
+        None,
+        Some(1),
+        SendOrSaveRun {
+            result: Err("fixture delivery failure".to_string()),
+            sends: 1,
+            saved: vec![saved_message()],
+            sleeps: vec![],
+        },
+    )]
+    #[case::retries_until_save_recovers(
+        None,
+        Some(3),
+        SendOrSaveRun {
+            result: Err("fixture delivery failure".to_string()),
+            sends: 3,
+            saved: vec![saved_message()],
+            sleeps: vec![SEND_OR_SAVE_RETRY_INTERVAL; 2],
+        },
+    )]
+    #[case::retries_until_send_recovers(
+        Some(2),
+        None,
+        SendOrSaveRun {
+            result: Ok(notify::Delivery::Started),
+            sends: 2,
+            saved: vec![],
+            sleeps: vec![SEND_OR_SAVE_RETRY_INTERVAL],
+        },
+    )]
+    fn send_or_save_completion_cases(
+        #[case] send_ok_from_attempt: Option<usize>,
+        #[case] save_ok_from_attempt: Option<usize>,
+        #[case] expected: SendOrSaveRun,
+    ) {
+        assert_eq!(
+            run_send_or_save(send_ok_from_attempt, save_ok_from_attempt),
+            expected,
+        );
+    }
+
+    #[test]
+    fn send_or_save_completion_gives_up_after_the_retry_window() {
+        let retries_in_window = usize::try_from(
+            SEND_OR_SAVE_RETRY_WINDOW.as_secs() / SEND_OR_SAVE_RETRY_INTERVAL.as_secs(),
+        )
+        .expect("retry count should fit in usize");
+
+        assert_eq!(
+            run_send_or_save(None, None),
+            SendOrSaveRun {
+                result: Err("fixture delivery failure".to_string()),
+                sends: retries_in_window + 1,
+                saved: vec![],
+                sleeps: vec![SEND_OR_SAVE_RETRY_INTERVAL; retries_in_window],
+            },
+        );
+    }
 
     #[test]
     fn runs_command_when_worker_pid_recording_fails() {
@@ -388,57 +552,5 @@ mod tests {
         completion.join().unwrap();
 
         assert_eq!((reminder_started, completion_sent), (true, true));
-    }
-
-    #[test]
-    fn saves_completion_message_when_notification_fails() {
-        let message = "fixture completion";
-        let mut saved = None;
-        let result = record_failed_completion_notification(
-            "fixture-session",
-            "a1b2c3d4-e5f6-4789-8abc-def012345678",
-            message,
-            Err(anyhow::anyhow!("fixture delivery failure")),
-            |session_id, task_id, saved_message| {
-                saved = Some((
-                    session_id.to_string(),
-                    task_id.to_string(),
-                    saved_message.to_string(),
-                ));
-                Ok(())
-            },
-        );
-
-        assert_eq!(
-            (result.map_err(|error| error.to_string()), saved,),
-            (
-                Err("fixture delivery failure".to_string()),
-                Some((
-                    "fixture-session".to_string(),
-                    "a1b2c3d4-e5f6-4789-8abc-def012345678".to_string(),
-                    message.to_string(),
-                )),
-            ),
-        );
-    }
-
-    #[test]
-    fn does_not_save_completion_message_when_notification_is_accepted() {
-        let mut save_called = false;
-        let result = record_failed_completion_notification(
-            "fixture-session",
-            "a1b2c3d4-e5f6-4789-8abc-def012345678",
-            "fixture completion",
-            Ok(notify::Delivery::Started),
-            |_, _, _| {
-                save_called = true;
-                anyhow::bail!("save should not be called")
-            },
-        );
-
-        assert_eq!(
-            (result.map_err(|error| error.to_string()), save_called),
-            (Ok(notify::Delivery::Started), false),
-        );
     }
 }
