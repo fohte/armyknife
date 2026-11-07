@@ -8,7 +8,7 @@ use crate::infra::{
     external_tool::ExternalTool,
     git::{self, GitRepo, github_owner_and_repo},
     github::{
-        AsyncMergeResult, GitHubClient, PrStackClient, PrState, PullRequestStack,
+        AsyncMergeResult, GitHubClient, MergeResult, PrStackClient, PrState, PullRequestStack,
         PullRequestStackEntry,
     },
 };
@@ -108,7 +108,7 @@ trait PrMergeClient {
         repo: &str,
         pr_number: u64,
         head_sha: &str,
-    ) -> anyhow::Result<AsyncMergeResult>;
+    ) -> anyhow::Result<MergeResult>;
     async fn branch_requires_merge_queue(
         &self,
         owner: &str,
@@ -128,6 +128,7 @@ struct PrSnapshot {
     url: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 enum MergeOutcome {
     Merged(PrSnapshot),
     Enqueued(String),
@@ -404,7 +405,7 @@ impl PrMergeClient for GhCli {
         repo: &str,
         pr_number: u64,
         head_sha: &str,
-    ) -> anyhow::Result<AsyncMergeResult> {
+    ) -> anyhow::Result<MergeResult> {
         GitHubClient::get()?
             .merge_pull_request(owner, repo, pr_number, head_sha)
             .await
@@ -479,7 +480,7 @@ mod tests {
         events: Rc<RefCell<Vec<String>>>,
         checks_error: bool,
         merge_error: bool,
-        fallback_error: bool,
+        fallback_error: Option<AsyncMergeFallback>,
         sync_merge_error: bool,
         merge_queue_enabled: bool,
         stack: Option<PullRequestStack>,
@@ -552,12 +553,8 @@ mod tests {
             if self.merge_error {
                 anyhow::bail!("fake merge failed");
             }
-            if self.fallback_error {
-                return Err(AsyncMergeFallback::TimedOut {
-                    request_uuid: "request-id".to_string(),
-                    pull_request: 42,
-                }
-                .into());
+            if let Some(fallback_error) = &self.fallback_error {
+                return Err(anyhow::Error::new(fallback_error.clone()));
             }
             Ok(self.merge_result.clone())
         }
@@ -568,14 +565,14 @@ mod tests {
             _repo: &str,
             _pr_number: u64,
             head_sha: &str,
-        ) -> anyhow::Result<AsyncMergeResult> {
+        ) -> anyhow::Result<MergeResult> {
             self.events
                 .borrow_mut()
                 .push(format!("merge-sync:{head_sha}"));
             if self.sync_merge_error {
                 anyhow::bail!("fake synchronous merge failed");
             }
-            Ok(AsyncMergeResult::Merged {
+            Ok(MergeResult::Merged {
                 sha: Some("sync-merge".to_string()),
             })
         }
@@ -616,7 +613,7 @@ mod tests {
             events,
             checks_error,
             merge_error,
-            fallback_error: false,
+            fallback_error: None,
             sync_merge_error: false,
             merge_queue_enabled: false,
             stack: None,
@@ -624,6 +621,13 @@ mod tests {
             merge_result: AsyncMergeResult::Merged {
                 sha: Some("merge-a".to_string()),
             },
+        }
+    }
+
+    fn timed_out_merge_error() -> AsyncMergeFallback {
+        AsyncMergeFallback::TimedOut {
+            request_uuid: "request-id".to_string(),
+            pull_request: 42,
         }
     }
 
@@ -681,9 +685,17 @@ mod tests {
     }
 
     #[rstest]
+    #[case::timeout(timed_out_merge_error())]
+    #[case::different_pending_head(AsyncMergeFallback::HeadMismatch {
+        request_uuid: "request-id".to_string(),
+        pull_request: 42,
+        pending_head_sha: "older-head".to_string(),
+        current_head_sha: "head-a".to_string(),
+    })]
     #[tokio::test]
     async fn run_merge_falls_back_to_sync_merge_with_the_confirmed_head(
         events: Rc<RefCell<Vec<String>>>,
+        #[case] fallback_error: AsyncMergeFallback,
     ) {
         let mut client = fake_client(
             &[
@@ -696,7 +708,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(fallback_error);
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
             Ok(())
@@ -706,13 +718,15 @@ mod tests {
 
         assert_eq!(
             (
-                result
-                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
-                    .map_err(|error| error.to_string()),
+                result.map_err(|error| error.to_string()),
                 events.borrow().clone(),
             ),
             (
-                Ok(true),
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -744,7 +758,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(timed_out_merge_error());
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
             Ok(())
@@ -754,13 +768,15 @@ mod tests {
 
         assert_eq!(
             (
-                result
-                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
-                    .map_err(|error| error.to_string()),
+                result.map_err(|error| error.to_string()),
                 events.borrow().clone(),
             ),
             (
-                Ok(true),
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -789,7 +805,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(timed_out_merge_error());
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
             Ok(())
@@ -835,7 +851,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(timed_out_merge_error());
         client.merge_queue_enabled = true;
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
@@ -881,7 +897,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(timed_out_merge_error());
         client.sync_merge_error = true;
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
@@ -892,13 +908,77 @@ mod tests {
 
         assert_eq!(
             (
-                result
-                    .map(|outcome| matches!(outcome, MergeOutcome::Merged(_)))
-                    .map_err(|error| error.to_string()),
+                result.map_err(|error| error.to_string()),
                 events.borrow().clone(),
             ),
             (
-                Ok(true),
+                Ok(MergeOutcome::Merged(snapshot(
+                    PrState::Merged,
+                    "head-a",
+                    "CLEAN",
+                ))),
+                vec![
+                    "view".to_string(),
+                    "stack".to_string(),
+                    "hook".to_string(),
+                    "checks".to_string(),
+                    "view".to_string(),
+                    "merge:head-a".to_string(),
+                    "view".to_string(),
+                    "merge-queue:main".to_string(),
+                    "merge-sync:head-a".to_string(),
+                    "view".to_string(),
+                ],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_keeps_worktree_open_when_sync_merge_fails_and_pr_is_open(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let mut client = fake_client(
+            &[
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+                snapshot(PrState::Open, "head-a", "CLEAN"),
+            ],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        client.fallback_error = Some(timed_out_merge_error());
+        client.sync_merge_error = true;
+        let mut hook = |_: &[(&str, &str)]| {
+            events.borrow_mut().push("hook".to_string());
+            Ok(())
+        };
+
+        let result = run_merge_and_close(
+            &client,
+            &mut hook,
+            "example-org",
+            "example-repo",
+            42,
+            |_| {
+                let close_events = Rc::clone(&events);
+                async move {
+                    close_events.borrow_mut().push("close".to_string());
+                    Ok(())
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                events.borrow().clone(),
+            ),
+            (
+                Err("Synchronous merge fallback failed for PR #42 after async merge request request-id".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -928,7 +1008,7 @@ mod tests {
             false,
             false,
         );
-        client.fallback_error = true;
+        client.fallback_error = Some(timed_out_merge_error());
         client.stack = Some(PullRequestStack {
             number: 99,
             position: 1,
