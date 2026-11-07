@@ -35,6 +35,14 @@ struct RegistryEntry {
     tmux: Option<String>,
 }
 
+/// Parses the JSON value at the start of a registry file and ignores what
+/// follows it. Claude Code can leave stray bytes after the object (seen as a
+/// doubled closing brace after a disk-full period) and then stops rewriting
+/// the file, so a strict parse would hide a live session until it exits.
+fn parse_registry_file<'de, T: Deserialize<'de>>(content: &'de str) -> serde_json::Result<T> {
+    T::deserialize(&mut serde_json::Deserializer::from_str(content))
+}
+
 /// Reads every `~/.claude/sessions/*.json` file into a `session_id ->
 /// RegistryEntry` map, keeping only the most recently started entry per
 /// `session_id` (see `RegistryEntry::started_at`). Files that don't parse
@@ -59,7 +67,7 @@ fn load_registry_entries_in(home: &Path) -> HashMap<String, RegistryEntry> {
         let Ok(content) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let Ok(parsed) = serde_json::from_str::<RegistryEntry>(&content) else {
+        let Ok(parsed) = parse_registry_file::<RegistryEntry>(&content) else {
             continue;
         };
 
@@ -156,7 +164,7 @@ fn has_remote_control_in(home: &Path, pid: u32) -> anyhow::Result<bool> {
             return Err(error).with_context(|| format!("failed to read {}", path.display()));
         }
     };
-    let entry: serde_json::Value = serde_json::from_str(&content)
+    let entry: serde_json::Value = parse_registry_file(&content)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     // Claude Code sets `bridgeSessionId` when Remote Control connects and
     // resets it to `null` when the connection closes.
@@ -231,6 +239,14 @@ mod tests {
         ],
         &[("aaa", "timestamped")]
     )]
+    #[case::reads_an_entry_followed_by_stray_bytes(
+        &[("111.json", r#"{"pid":111,"sessionId":"aaa","name":"repo-1a"}}"#)],
+        &[("aaa", "repo-1a")]
+    )]
+    #[case::skips_an_entry_cut_off_before_its_end(
+        &[("111.json", r#"{"pid":111,"sessionId":"aaa","name":"repo-1a""#)],
+        &[]
+    )]
     fn load_name_map_in_cases(#[case] files: &[(&str, &str)], #[case] expected: &[(&str, &str)]) {
         let home = TempDir::new().unwrap();
         write_files(home.path(), files);
@@ -292,6 +308,17 @@ mod tests {
         Some(PeerConnection {
             pid: 222,
             messaging_socket_path: Some("/tmp/cc-socks/222.sock".to_string()),
+        })
+    )]
+    #[case::reads_an_entry_followed_by_stray_bytes(
+        &[(
+            "111.json",
+            r#"{"pid":111,"sessionId":"aaa","messagingSocketPath":"/tmp/cc-socks/111.sock"}}"#,
+        )],
+        "aaa",
+        Some(PeerConnection {
+            pid: 111,
+            messaging_socket_path: Some("/tmp/cc-socks/111.sock".to_string()),
         })
     )]
     fn load_peer_connection_in_cases(
@@ -399,6 +426,10 @@ mod tests {
         false
     )]
     #[case::unrecognized_registry_shape(&[("111.json", r#"{"bridgeSessionId":"session_example"}"#)], true)]
+    #[case::disconnected_entry_followed_by_stray_bytes(
+        &[("111.json", r#"{"pid":111,"sessionId":"aaa","bridgeSessionId":null}}"#)],
+        false
+    )]
     fn has_remote_control_in_cases(#[case] files: &[(&str, &str)], #[case] expected: bool) {
         let home = TempDir::new().unwrap();
         write_files(home.path(), files);
