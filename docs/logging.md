@@ -144,7 +144,10 @@ Stop hook (parent process):
 | `agent.sweep.ctrl_d_timeout`                 | Codex remained alive after Ctrl+D; falling back to SIGTERM                                                                                                                      |
 | `agent.sweep.ctrl_d_failed`                  | Sending Ctrl+D through tmux failed; falling back to SIGTERM                                                                                                                     |
 | `agent.sweep.sigterm_failed`                 | SIGTERM to the resolved pid failed (non-ESRCH)                                                                                                                                  |
-| `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / …)                                                                                          |
+| `agent.sweep.redelivery_started`             | A detached redelivery started for a session with a recent undelivered notification; with `dry_run=true` it was only counted                                                     |
+| `agent.sweep.redelivery_scan_failed`         | A session's undelivered notifications could not be read; the session was skipped and remaining sessions were processed                                                          |
+| `agent.sweep.redelivery_failed`              | The undelivered notification pass failed; the summary reports zero redeliveries started                                                                                         |
+| `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / `redelivery_started` / …)                                                                   |
 
 ### `agent composer`
 
