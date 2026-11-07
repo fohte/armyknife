@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.513](https://github.com/fohte/armyknife/compare/v0.1.512...v0.1.513) (2026-11-07)
+
+
+### Bug Fixes
+
+* **agent/registry:** ignore trailing JSON bytes ([#1375](https://github.com/fohte/armyknife/issues/1375)) ([33e3012](https://github.com/fohte/armyknife/commit/33e301287bab9fd051d06362e9c665f11cfaae8b))
+
 ## [0.1.512](https://github.com/fohte/armyknife/compare/v0.1.511...v0.1.512) (2026-11-05)
 
 
