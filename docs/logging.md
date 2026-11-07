@@ -149,6 +149,14 @@ Stop hook (parent process):
 | `agent.sweep.redelivery_failed`              | The undelivered notification pass failed; the summary reports zero redeliveries started                                                                                         |
 | `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / `redelivery_started` / …)                                                                   |
 
+### `agent peer notify`
+
+| event                               | meaning                                                                                            |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `agent.peer.notify.saved_for_retry` | Delivery failed in a way a retry could fix; the message was saved for redelivery                   |
+| `agent.peer.notify.save_failed`     | Delivery failed and the message could not be saved; the command exits non-zero and alerts the user |
+| `agent.peer.notify.alert_failed`    | The desktop notification about an unsaved message could not be sent                                |
+
 ### `agent composer`
 
 | event                            | meaning                                                     |
