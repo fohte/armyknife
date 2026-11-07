@@ -5,7 +5,6 @@ use clap::Args;
 
 use super::super::peer::notify;
 use super::undelivered;
-#[cfg(not(test))]
 use crate::infra::process;
 
 const RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -33,6 +32,10 @@ pub(super) fn spawn_if_pending(session_id: &str) {
         }
     }
 
+    spawn(session_id);
+}
+
+pub(super) fn spawn(session_id: &str) {
     process::spawn_self_detached(
         "agent.bg_run.redelivery.spawn",
         "agent.bg_run.redelivery.spawn_failed",
