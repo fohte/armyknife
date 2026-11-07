@@ -254,46 +254,42 @@ impl GitHubClient {
             .rest_get::<AsyncMergeResponse>(&result_route)
             .await?
             .into_status()?;
-        let actual_head_sha = match &pending_status {
-            AsyncMergeStatus::Pending {
-                uuid: response_uuid,
-                expected_head_sha: Some(expected_head_sha),
-            } if response_uuid == &uuid => expected_head_sha.clone(),
+        match &pending_status {
             AsyncMergeStatus::Pending {
                 uuid: response_uuid,
                 ..
-            } if response_uuid != &uuid => {
-                return Err(AsyncMergeFallback::RequestUuidMismatch {
-                    request_uuid: uuid,
-                    response_uuid: response_uuid.clone(),
-                    pull_request,
+            } if response_uuid != &uuid => Err(AsyncMergeFallback::RequestUuidMismatch {
+                request_uuid: uuid.clone(),
+                response_uuid: response_uuid.clone(),
+                pull_request,
+            }
+            .into()),
+            AsyncMergeStatus::Pending {
+                expected_head_sha: Some(expected_head_sha),
+                ..
+            } => {
+                if expected_head_sha != head_sha {
+                    Err(AsyncMergeFallback::HeadMismatch {
+                        request_uuid: uuid,
+                        pull_request,
+                        pending_head_sha: expected_head_sha.clone(),
+                        current_head_sha: head_sha.to_string(),
+                    }
+                    .into())
+                } else {
+                    Ok(pending_status)
                 }
-                .into());
             }
             AsyncMergeStatus::Pending {
                 expected_head_sha: None,
                 ..
-            } => {
-                return Err(AsyncMergeFallback::HeadUnavailable {
-                    request_uuid: uuid,
-                    pull_request,
-                }
-                .into());
-            }
-            _ => anyhow::bail!(
-                "Existing async merge request {uuid} for PR #{pull_request} completed before its expected head SHA could be verified."
-            ),
-        };
-        if actual_head_sha != head_sha {
-            return Err(AsyncMergeFallback::HeadMismatch {
+            } => Err(AsyncMergeFallback::HeadUnavailable {
                 request_uuid: uuid,
                 pull_request,
-                pending_head_sha: actual_head_sha,
-                current_head_sha: head_sha.to_string(),
             }
-            .into());
+            .into()),
+            _ => Ok(pending_status),
         }
-        Ok(pending_status)
     }
 
     pub async fn merge_pull_request(
@@ -736,6 +732,64 @@ mod tests {
             result.map_err(|error| error.downcast::<AsyncMergeFallback>().ok()),
             Err(Some(expected)),
         );
+    }
+
+    #[rstest::rstest]
+    #[case::merged(
+        json!({
+            "status": "merged",
+            "details": { "sha": "merge-sha" }
+        }),
+        AsyncMergeResult::Merged {
+            sha: Some("merge-sha".into())
+        }
+    )]
+    #[case::enqueued(
+        json!({
+            "status": "enqueued",
+            "details": { "message": "Waiting for a queue slot." }
+        }),
+        AsyncMergeResult::Enqueued {
+            message: Some("Waiting for a queue slot.".into())
+        }
+    )]
+    #[tokio::test]
+    async fn merge_poll_returns_completed_result_when_pending_head_is_missing(
+        #[case] status_body: Value,
+        #[case] expected: AsyncMergeResult,
+    ) {
+        let server = MockServer::start().await;
+        Mock::given(method("PUT"))
+            .and(path("/repos/example-org/example-repo/pulls/42/merge-async"))
+            .respond_with(ResponseTemplate::new(409).set_body_json(json!({
+                "status": "pending",
+                "details": { "uuid": "existing-request" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/repos/example-org/example-repo/pulls/42/merge-async/existing-request",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(status_body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = GitHubClient::with_base_url(&server.uri(), "test-token").unwrap();
+
+        let result = client
+            .merge_pull_request_async_with_timing(
+                "example-org",
+                "example-repo",
+                42,
+                "head-sha",
+                Duration::ZERO,
+                Duration::from_secs(60),
+            )
+            .await;
+
+        assert_eq!(result.map_err(|error| error.to_string()), Ok(expected));
     }
 
     #[rstest::rstest]

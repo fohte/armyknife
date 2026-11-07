@@ -131,6 +131,7 @@ struct PrSnapshot {
 #[derive(Debug, PartialEq, Eq)]
 enum MergeOutcome {
     Merged(PrSnapshot),
+    AlreadyMerged(PrSnapshot),
     Enqueued(String),
 }
 
@@ -171,6 +172,9 @@ where
                     merged.head_ref_name,
                 );
             }
+        }
+        MergeOutcome::AlreadyMerged(_) => {
+            println!("PR #{pr_number} was already merged.");
         }
         MergeOutcome::Enqueued(message) => {
             println!("PR #{pr_number} was added to the merge queue and has not merged: {message}");
@@ -685,21 +689,32 @@ mod tests {
     }
 
     #[rstest]
-    #[case::merged_before_retry(false)]
-    #[case::merged_during_required_checks(true)]
+    #[case::merged_before_retry(
+        vec![snapshot(PrState::Merged, "head-a", "CLEAN")],
+        MergeOutcome::AlreadyMerged(snapshot(PrState::Merged, "head-a", "CLEAN")),
+        vec!["view".to_string()]
+    )]
+    #[case::merged_during_required_checks(
+        vec![
+            snapshot(PrState::Open, "head-a", "CLEAN"),
+            snapshot(PrState::Merged, "head-a", "CLEAN")
+        ],
+        MergeOutcome::Merged(snapshot(PrState::Merged, "head-a", "CLEAN")),
+        vec![
+            "view".to_string(),
+            "stack".to_string(),
+            "hook".to_string(),
+            "checks".to_string(),
+            "view".to_string()
+        ]
+    )]
     #[tokio::test]
     async fn run_merge_accepts_a_pr_merged_before_or_during_retry(
         events: Rc<RefCell<Vec<String>>>,
-        #[case] merged_during_checks: bool,
+        #[case] snapshots: Vec<PrSnapshot>,
+        #[case] expected_outcome: MergeOutcome,
+        #[case] expected_events: Vec<String>,
     ) {
-        let snapshots = if merged_during_checks {
-            vec![
-                snapshot(PrState::Open, "head-a", "CLEAN"),
-                snapshot(PrState::Merged, "head-a", "CLEAN"),
-            ]
-        } else {
-            vec![snapshot(PrState::Merged, "head-a", "CLEAN")]
-        };
         let client = fake_client(&snapshots, Rc::clone(&events), false, false);
         let mut hook = |_: &[(&str, &str)]| {
             events.borrow_mut().push("hook".to_string());
@@ -709,28 +724,10 @@ mod tests {
         let result = run_merge(&client, &mut hook, "example-org", "example-repo", 42)
             .await
             .map_err(|error| error.to_string());
-        let expected_events = if merged_during_checks {
-            vec![
-                "view".to_string(),
-                "stack".to_string(),
-                "hook".to_string(),
-                "checks".to_string(),
-                "view".to_string(),
-            ]
-        } else {
-            vec!["view".to_string()]
-        };
 
         assert_eq!(
             (result, events.borrow().clone()),
-            (
-                Ok(MergeOutcome::Merged(snapshot(
-                    PrState::Merged,
-                    "head-a",
-                    "CLEAN",
-                ))),
-                expected_events,
-            ),
+            (Ok(expected_outcome), expected_events),
         );
     }
 
@@ -925,7 +922,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Cannot use synchronous fallback for PR #42 because base branch `main` requires a merge queue; pending async merge request request-id remains. Retrying `a gh pr-merge` will not resolve it.".to_string()),
+                Err("Cannot use synchronous fallback for PR #42 because base branch `main` requires a merge queue. Pending async merge request request-id remains. Retrying polls the same request but cannot clear it while it remains pending.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1090,7 +1087,7 @@ mod tests {
                 events.borrow().clone(),
             ),
             (
-                Err("Cannot use synchronous fallback for stacked PR #42; pending async merge request request-id remains. Retrying `a gh pr-merge` will not resolve it.".to_string()),
+                Err("Cannot use synchronous fallback for stacked PR #42. Pending async merge request request-id remains. Retrying polls the same request but cannot clear it while it remains pending.".to_string()),
                 vec![
                     "view".to_string(),
                     "stack".to_string(),
@@ -1102,6 +1099,42 @@ mod tests {
                     "view".to_string(),
                 ],
             ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn run_merge_and_close_skips_worktree_for_a_pr_already_merged_before_retry(
+        events: Rc<RefCell<Vec<String>>>,
+    ) {
+        let client = fake_client(
+            &[snapshot(PrState::Merged, "head-a", "CLEAN")],
+            Rc::clone(&events),
+            false,
+            false,
+        );
+        let mut hook = |_: &[(&str, &str)]| Ok(());
+
+        let result = run_merge_and_close(
+            &client,
+            &mut hook,
+            "example-org",
+            "example-repo",
+            42,
+            |_| {
+                let close_events = Rc::clone(&events);
+                async move {
+                    close_events.borrow_mut().push("close".to_string());
+                    Ok(())
+                }
+            },
+        )
+        .await
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, events.borrow().clone()),
+            (Ok(()), vec!["view".to_string()]),
         );
     }
 
