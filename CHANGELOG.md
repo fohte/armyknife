@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.515](https://github.com/fohte/armyknife/compare/v0.1.514...v0.1.515) (2026-11-07)
+
+
+### Bug Fixes
+
+* **agent/peer:** retry undelivered peer messages ([#1379](https://github.com/fohte/armyknife/issues/1379)) ([2093c9a](https://github.com/fohte/armyknife/commit/2093c9aec0c74a50605d575c872b1748cf4af106))
+
 ## [0.1.514](https://github.com/fohte/armyknife/compare/v0.1.513...v0.1.514) (2026-11-07)
 
 
