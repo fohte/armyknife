@@ -1,6 +1,7 @@
 mod assets;
 mod events;
 mod security;
+mod session_enrichment;
 mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};

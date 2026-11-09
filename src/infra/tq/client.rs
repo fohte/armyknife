@@ -20,7 +20,18 @@ mod checklist;
 pub use checklist::{TqChecklist, TqChecklistItem, TqGithubLink};
 
 const SESSION_LIST_ARGS: &[&str] = &["session", "list", "--limit", "unlimited"];
-const TASK_LIST_ARGS: &[&str] = &["task", "list", "--context", "all"];
+const TASK_LIST_ARGS: &[&str] = &[
+    "task",
+    "list",
+    "--context",
+    "all",
+    "--status",
+    "all",
+    "--limit",
+    "unlimited",
+    "--sort-by",
+    "priority",
+];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
 /// Claude Code's provider identifier in tq's agent-session schema. Always
@@ -577,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn build_task_list_args_uses_all_context_and_comma_separated_ids() {
+    fn build_task_list_args_uses_all_statuses_unlimited_and_tq_priority_order() {
         assert_eq!(
             build_task_list_args(&["task-one".to_string(), "task-two".to_string()]),
             vec![
@@ -585,6 +596,12 @@ mod tests {
                 "list",
                 "--context",
                 "all",
+                "--status",
+                "all",
+                "--limit",
+                "unlimited",
+                "--sort-by",
+                "priority",
                 "--ids",
                 "task-one,task-two"
             ]

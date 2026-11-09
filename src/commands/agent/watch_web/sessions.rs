@@ -1,6 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::future::Future;
-use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
@@ -10,19 +9,16 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
-use crate::commands::agent::tq_session_tasks::{
-    SessionTask as LinkedSessionTask, build_task_by_session, fetch_session_tasks_with_parents,
-};
+#[cfg(test)]
+use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::git::{github_owner_and_repo, open_repo_at};
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo, PrState};
-use crate::infra::tq::{TqClient, TqTaskSummary};
+use crate::infra::github::{PrInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
-
-const EXTERNAL_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,6 +46,8 @@ struct TqTaskView {
     number: u32,
     title: String,
     priority: Option<i32>,
+    #[serde(skip)]
+    priority_order: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -99,20 +97,13 @@ struct SessionSnapshot {
     agent_config: AgentConfig,
 }
 
-type TaskLink = LinkedSessionTask;
-
 trait SessionSource: Clone + Send + Sync + 'static {
     fn load_snapshot(&self) -> impl Future<Output = anyhow::Result<SessionSnapshot>> + Send;
 
-    fn fetch_task_links(
+    fn fetch_task_metadata(
         &self,
         sessions: &[Session],
-    ) -> impl Future<Output = HashMap<String, TaskLink>> + Send;
-
-    fn fetch_task_priorities(
-        &self,
-        task_links: &HashMap<String, TaskLink>,
-    ) -> impl Future<Output = HashMap<String, Option<i32>>> + Send;
+    ) -> impl Future<Output = SessionTaskMetadata> + Send;
 
     fn fetch_pull_requests(
         &self,
@@ -122,27 +113,22 @@ trait SessionSource: Clone + Send + Sync + 'static {
     fn now(&self) -> DateTime<Utc>;
 }
 
-#[derive(Clone)]
-struct LiveSessionSource;
+#[derive(Clone, Default)]
+struct LiveSessionSource {
+    enrichment: SessionEnrichmentCache,
+}
 
 impl SessionSource for LiveSessionSource {
     async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
         tokio::task::spawn_blocking(load_snapshot).await?
     }
 
-    async fn fetch_task_links(&self, sessions: &[Session]) -> HashMap<String, TaskLink> {
-        fetch_task_links(sessions).await
-    }
-
-    async fn fetch_task_priorities(
-        &self,
-        task_links: &HashMap<String, TaskLink>,
-    ) -> HashMap<String, Option<i32>> {
-        fetch_task_priorities(task_links).await
+    async fn fetch_task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
+        self.enrichment.task_metadata(sessions).await
     }
 
     async fn fetch_pull_requests(&self, sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
-        fetch_pull_requests(sessions).await
+        self.enrichment.pull_requests(sessions).await
     }
 
     fn now(&self) -> DateTime<Utc> {
@@ -151,7 +137,7 @@ impl SessionSource for LiveSessionSource {
 }
 
 pub(super) fn router() -> Router {
-    router_with_source(LiveSessionSource)
+    router_with_source(LiveSessionSource::default())
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {
@@ -168,26 +154,10 @@ async fn list_sessions<S: SessionSource>(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let task_enrichment = async {
-        let task_links = source.fetch_task_links(&snapshot.sessions).await;
-        let task_priorities = source.fetch_task_priorities(&task_links).await;
-        (task_links, task_priorities)
-    };
-    let (task_enrichment, pull_requests) = tokio::join!(
-        tokio::time::timeout(EXTERNAL_ENRICHMENT_TIMEOUT, task_enrichment),
-        tokio::time::timeout(
-            EXTERNAL_ENRICHMENT_TIMEOUT,
-            source.fetch_pull_requests(&snapshot.sessions),
-        )
+    let (task_metadata, pull_requests) = tokio::join!(
+        source.fetch_task_metadata(&snapshot.sessions),
+        source.fetch_pull_requests(&snapshot.sessions),
     );
-    let (task_links, task_priorities) = task_enrichment.unwrap_or_else(|_| {
-        tracing::warn!("Timed out fetching optional tq session metadata for agent watch");
-        (HashMap::new(), HashMap::new())
-    });
-    let pull_requests = pull_requests.unwrap_or_else(|_| {
-        tracing::warn!("Timed out fetching optional GitHub pull request metadata for agent watch");
-        HashMap::new()
-    });
     let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -198,12 +168,20 @@ async fn list_sessions<S: SessionSource>(
         .sessions
         .iter()
         .map(|session| {
-            let task = task_links.get(&session.session_id).map(|task| TqTaskView {
-                id: task.task_id.clone(),
-                number: task.task_number,
-                title: task.task_title.clone(),
-                priority: task_priorities.get(&task.task_id).copied().flatten(),
-            });
+            let task = task_metadata
+                .links
+                .get(&session.session_id)
+                .map(|task| TqTaskView {
+                    id: task.task_id.clone(),
+                    number: task.task_number,
+                    title: task.task_title.clone(),
+                    priority: task_metadata
+                        .priorities
+                        .get(&task.task_id)
+                        .copied()
+                        .flatten(),
+                    priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
+                });
             let parent = session
                 .ancestor_session_ids
                 .last()
@@ -296,108 +274,6 @@ fn resolve_repo(cwd: &std::path::Path) -> String {
         .unwrap_or_else(|| cwd.display().to_string())
 }
 
-async fn fetch_task_links(sessions: &[Session]) -> HashMap<String, TaskLink> {
-    let session_ids = sessions
-        .iter()
-        .map(|session| session.session_id.clone())
-        .collect::<HashSet<_>>();
-    let Some(client) = detected_tq_client().await else {
-        return HashMap::new();
-    };
-    let tq_sessions = match fetch_session_tasks_with_parents(&client, &session_ids).await {
-        Ok(sessions) => sessions,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq session links");
-            return HashMap::new();
-        }
-    };
-
-    build_task_by_session(tq_sessions, &session_ids)
-}
-
-async fn fetch_task_priorities(
-    task_links: &HashMap<String, TaskLink>,
-) -> HashMap<String, Option<i32>> {
-    if task_links.is_empty() {
-        return HashMap::new();
-    }
-    let task_ids = task_links
-        .values()
-        .map(|task| task.task_id.clone())
-        .collect::<HashSet<_>>();
-    let Some(client) = detected_tq_client().await else {
-        return HashMap::new();
-    };
-    let tasks = match client.list_tasks(&task_ids).await {
-        Ok(tasks) => tasks,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch tq task priorities");
-            return HashMap::new();
-        }
-    };
-
-    tasks
-        .into_iter()
-        .map(|task: TqTaskSummary| (task.id, task.priority))
-        .collect()
-}
-
-async fn detected_tq_client() -> Option<TqClient> {
-    match tokio::task::spawn_blocking(TqClient::detect).await {
-        Ok(client) => client,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to detect tq for agent watch");
-            None
-        }
-    }
-}
-
-async fn fetch_pull_requests(sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
-    let mut query_by_session = HashMap::new();
-    let mut queries = Vec::new();
-    let mut seen = HashSet::new();
-    for session in sessions {
-        let Some(context) = session.pr_context.as_ref() else {
-            continue;
-        };
-        let query = BranchPrQuery {
-            owner: context.owner.clone(),
-            repo: context.repo.clone(),
-            branch: context.branch.clone(),
-        };
-        if seen.insert(query.key()) {
-            queries.push(query.clone());
-        }
-        query_by_session.insert(session.session_id.clone(), query);
-    }
-    if queries.is_empty() {
-        return HashMap::new();
-    }
-    let client = match tokio::task::spawn_blocking(GitHubClient::get).await {
-        Ok(Ok(client)) => client,
-        Ok(Err(error)) => {
-            tracing::warn!(%error, "Failed to initialize GitHub client for agent watch");
-            return HashMap::new();
-        }
-        Err(error) => {
-            tracing::warn!(%error, "GitHub client initialization task failed for agent watch");
-            return HashMap::new();
-        }
-    };
-    let prs = match client.get_prs_for_branches_batch(&queries).await {
-        Ok(prs) => prs,
-        Err(error) => {
-            tracing::warn!(%error, "Failed to fetch agent watch pull requests");
-            return HashMap::new();
-        }
-    };
-
-    query_by_session
-        .into_iter()
-        .map(|(session_id, query)| (session_id, prs.get(&query.key()).cloned().unwrap_or(None)))
-        .collect()
-}
-
 fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategory {
     if turn.is_some()
         || session.status == SessionStatus::Stopped
@@ -457,16 +333,16 @@ fn kind_for(session: &Session, turn: Option<UserTurnKind>) -> Option<SessionKind
                 Some(SessionKind::Stopped)
             }
         }
-        UserTurnKind::Merge => None,
+        UserTurnKind::Merge => Some(SessionKind::Review),
     }
 }
 
 fn compare_tasks(left: &Option<TqTaskView>, right: &Option<TqTaskView>) -> std::cmp::Ordering {
     match (left, right) {
         (Some(left), Some(right)) => left
-            .priority
-            .unwrap_or(i32::MAX)
-            .cmp(&right.priority.unwrap_or(i32::MAX)),
+            .priority_order
+            .unwrap_or(usize::MAX)
+            .cmp(&right.priority_order.unwrap_or(usize::MAX)),
         (Some(_), None) => std::cmp::Ordering::Less,
         (None, Some(_)) => std::cmp::Ordering::Greater,
         (None, None) => std::cmp::Ordering::Equal,
@@ -536,7 +412,7 @@ mod tests {
     fn row(
         id: &str,
         category: SessionCategory,
-        task: Option<(i32, u32)>,
+        task: Option<(Option<i32>, Option<usize>, u32)>,
         updated_at: i64,
     ) -> SessionView {
         SessionView {
@@ -549,11 +425,12 @@ mod tests {
             updated_at: Utc.timestamp_opt(updated_at, 0).unwrap(),
             elapsed_seconds: 0,
             unread: false,
-            task: task.map(|(priority, number)| TqTaskView {
+            task: task.map(|(priority, priority_order, number)| TqTaskView {
                 id: format!("task-{number}"),
                 number,
                 title: id.to_string(),
-                priority: Some(priority),
+                priority,
+                priority_order,
             }),
             repo: String::new(),
             parent: None,
@@ -567,8 +444,9 @@ mod tests {
         sessions: Vec<Session>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
-        task_links: HashMap<String, TaskLink>,
+        task_links: HashMap<String, LinkedSessionTask>,
         task_priorities: HashMap<String, Option<i32>>,
+        task_priority_order: HashMap<String, usize>,
         pull_requests: HashMap<String, Option<PrInfo>>,
         now: DateTime<Utc>,
     }
@@ -584,15 +462,12 @@ mod tests {
             })
         }
 
-        async fn fetch_task_links(&self, _sessions: &[Session]) -> HashMap<String, TaskLink> {
-            self.task_links.clone()
-        }
-
-        async fn fetch_task_priorities(
-            &self,
-            _task_links: &HashMap<String, TaskLink>,
-        ) -> HashMap<String, Option<i32>> {
-            self.task_priorities.clone()
+        async fn fetch_task_metadata(&self, _sessions: &[Session]) -> SessionTaskMetadata {
+            SessionTaskMetadata {
+                links: self.task_links.clone(),
+                priorities: self.task_priorities.clone(),
+                priority_order: self.task_priority_order.clone(),
+            }
         }
 
         async fn fetch_pull_requests(
@@ -642,6 +517,7 @@ mod tests {
                 },
             )]),
             task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
+            task_priority_order: HashMap::from([("task-id".to_string(), 0)]),
             pull_requests: HashMap::from([(
                 "child-session".to_string(),
                 Some(PrInfo {
@@ -714,7 +590,7 @@ mod tests {
     #[case::crit_review(UserTurnKind::Crit, Some(SessionKind::Review))]
     #[case::draft_review(UserTurnKind::Body, Some(SessionKind::Review))]
     #[case::failure(UserTurnKind::Failed, Some(SessionKind::Error))]
-    #[case::merge(UserTurnKind::Merge, None)]
+    #[case::merge(UserTurnKind::Merge, Some(SessionKind::Review))]
     fn maps_user_turn_kinds_to_web_kinds(
         #[case] turn: UserTurnKind,
         #[case] expected: Option<SessionKind>,
@@ -824,21 +700,24 @@ mod tests {
     }
 
     #[rstest]
-    #[case::lower_priority_first(Some((Some(0), 1)), Some((Some(1), 2)), std::cmp::Ordering::Less)]
-    #[case::no_priority_after_prioritized(Some((Some(0), 1)), Some((None, 2)), std::cmp::Ordering::Less)]
-    #[case::same_priority_ties(Some((Some(1), 1)), Some((Some(1), 2)), std::cmp::Ordering::Equal)]
-    #[case::taskless_last(Some((Some(1), 1)), None, std::cmp::Ordering::Less)]
+    #[case::lower_priority_first(Some((Some(1), Some(0), 1)), Some((Some(0), Some(1), 2)), std::cmp::Ordering::Less)]
+    #[case::unset_before_deferred(Some((None, Some(3), 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Less)]
+    #[case::deferred_after_regular(Some((Some(-1), Some(4), 1)), Some((Some(0), Some(2), 2)), std::cmp::Ordering::Greater)]
+    #[case::missing_order_after_known(Some((Some(1), None, 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Greater)]
+    #[case::same_priority_ties(Some((Some(1), Some(2), 1)), Some((Some(1), Some(2), 2)), std::cmp::Ordering::Equal)]
+    #[case::taskless_last(Some((Some(1), Some(2), 1)), None, std::cmp::Ordering::Less)]
     fn compares_task_priority(
-        #[case] left: Option<(Option<i32>, u32)>,
-        #[case] right: Option<(Option<i32>, u32)>,
+        #[case] left: Option<(Option<i32>, Option<usize>, u32)>,
+        #[case] right: Option<(Option<i32>, Option<usize>, u32)>,
         #[case] expected: std::cmp::Ordering,
     ) {
-        let to_task = |task: Option<(Option<i32>, u32)>| {
-            task.map(|(priority, number)| TqTaskView {
+        let to_task = |task: Option<(Option<i32>, Option<usize>, u32)>| {
+            task.map(|(priority, priority_order, number)| TqTaskView {
                 id: "task".to_string(),
                 number,
                 title: "task".to_string(),
                 priority,
+                priority_order,
             })
         };
         assert_eq!(compare_tasks(&to_task(left), &to_task(right)), expected);
@@ -847,18 +726,25 @@ mod tests {
     #[rstest]
     #[case::category_then_priority(
         vec![
-            row("done", SessionCategory::Done, Some((0, 1)), 1),
-            row("working", SessionCategory::InProgress, Some((0, 2)), 1),
-            row("needs_low", SessionCategory::NeedsAction, Some((2, 3)), 1),
-            row("needs_high", SessionCategory::NeedsAction, Some((1, 4)), 1),
+            row("done", SessionCategory::Done, Some((Some(0), Some(0), 1)), 1),
+            row("working", SessionCategory::InProgress, Some((Some(0), Some(0), 2)), 1),
+            row("needs_low", SessionCategory::NeedsAction, Some((Some(2), Some(1), 3)), 1),
+            row("needs_high", SessionCategory::NeedsAction, Some((Some(1), Some(0), 4)), 1),
             row("needs_without_task", SessionCategory::NeedsAction, None, 0),
         ],
         vec!["needs_high", "needs_low", "needs_without_task", "working", "done"]
     )]
+    #[case::unset_before_deferred(
+        vec![
+            row("deferred", SessionCategory::NeedsAction, Some((Some(-1), Some(4), 2)), 1),
+            row("inbox", SessionCategory::NeedsAction, Some((None, Some(3), 1)), 1),
+        ],
+        vec!["inbox", "deferred"]
+    )]
     #[case::oldest_waiting_first(
         vec![
-            row("newer", SessionCategory::NeedsAction, Some((1, 1)), 20),
-            row("older", SessionCategory::NeedsAction, Some((1, 2)), 10),
+            row("newer", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
+            row("older", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 10),
         ],
         vec!["older", "newer"]
     )]
