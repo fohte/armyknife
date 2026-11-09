@@ -14,3 +14,5 @@ minimumReleaseAge: 10080
 # First-party scopes: publisher account is trusted, so skip the release-age delay.
 minimumReleaseAgeExclude:
   - '@fohte/*'
+  # Renovate security update: vite@8.3.3
+  - vite@8.3.3
