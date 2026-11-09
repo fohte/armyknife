@@ -36,7 +36,9 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         .filter(|row| matches!(row, SessionRow::Session(_) | SessionRow::SectionHeader(_)))
         .collect::<Vec<_>>();
 
-    let source_placement = find_source_placement(&task_rows, source_session_id).or_else(|| {
+    let source_placement = find_source_placement(&task_rows, source_session_id);
+    let source_was_removed = source_placement.is_none();
+    let source_placement = source_placement.or_else(|| {
         if !matched_session_ids.contains(source_session_id) {
             return None;
         }
@@ -49,7 +51,7 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
             .find_map(|ancestor_id| find_source_placement(&task_rows, ancestor_id))
     });
     let Some(source_placement) = source_placement else {
-        return task_rows;
+        return original_rows;
     };
     let inline_rows = build_inline_progress_rows(
         source_session_id,
@@ -61,6 +63,13 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         &descendants,
     );
 
+    if source_was_removed
+        && !inline_rows
+            .iter()
+            .any(|row| row.session_id() == Some(source_session_id))
+    {
+        return original_rows;
+    }
     if inline_rows.is_empty() {
         return task_rows;
     }

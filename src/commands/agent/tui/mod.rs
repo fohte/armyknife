@@ -513,7 +513,13 @@ mod tests {
     }
 
     fn inline_progress_test_app() -> App {
-        let mut app = create_test_app_with_sessions(2);
+        let mut app = inline_progress_test_app_with_sessions(2);
+        prepare_inline_progress_rendered_rows(&mut app);
+        app
+    }
+
+    fn inline_progress_test_app_with_sessions(session_count: usize) -> App {
+        let mut app = create_test_app_with_sessions(session_count);
         app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];
         app.progress_inline_source_id = Some("session-0".to_string());
         app.progress_session_id = Some("session-0".to_string());
@@ -559,13 +565,16 @@ mod tests {
                 title: "Another planned change".to_string(),
             },
         ];
+        app
+    }
+
+    fn prepare_inline_progress_rendered_rows(app: &mut App) {
         let rows = app.build_display_rows();
         let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
         drop(rows);
         let heights = vec![1; row_keys.len()];
         let viewport_height = heights.len();
         app.update_rendered_rows(&row_keys, &heights, viewport_height);
-        app
     }
 
     fn select_inline_progress_row(app: &mut App, key: &SessionRowKey) {
@@ -1675,11 +1684,7 @@ mod tests {
             .insert("session-1".to_string(), ProgressFetchState::Ready);
         app.task_by_session
             .insert("session-1".to_string(), test_task("task-worker"));
-        let rows = app.build_display_rows();
-        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
-        drop(rows);
-        let row_heights = vec![1; row_keys.len()];
-        app.update_rendered_rows(&row_keys, &row_heights, row_heights.len());
+        prepare_inline_progress_rendered_rows(&mut app);
         select_inline_progress_row(&mut app, &SessionRowKey::Task("session-1".to_string()));
 
         handle_key_event(&mut app, key(KeyCode::Tab));
@@ -1732,6 +1737,95 @@ mod tests {
                     session_id: Some("session-1".to_string()),
                 }),
                 Some("session-1"),
+            ),
+        );
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum MissingProgressAnchorCase {
+        MatchedWorkerRoot,
+        FilteredAncestor,
+        MatchedParent,
+    }
+
+    #[rstest]
+    #[case::matched_worker_root(
+        MissingProgressAnchorCase::MatchedWorkerRoot,
+        2,
+        "session-1",
+        vec![
+            None,
+            Some(SessionRowKey::Task("session-0".to_string())),
+            Some(SessionRowKey::Task("session-1".to_string())),
+        ],
+    )]
+    #[case::filtered_ancestor(
+        MissingProgressAnchorCase::FilteredAncestor,
+        2,
+        "session-1",
+        vec![
+            None,
+            Some(SessionRowKey::Task("session-1".to_string())),
+        ],
+    )]
+    #[case::matched_parent(
+        MissingProgressAnchorCase::MatchedParent,
+        3,
+        "session-2",
+        vec![
+            None,
+            Some(SessionRowKey::Task("session-0".to_string())),
+            Some(SessionRowKey::Task("session-1".to_string())),
+            Some(SessionRowKey::Task("session-2".to_string())),
+        ],
+    )]
+    fn tab_keeps_the_selected_session_when_progress_has_no_visible_anchor(
+        #[case] scenario: MissingProgressAnchorCase,
+        #[case] session_count: usize,
+        #[case] source_session_id: &str,
+        #[case] expected_row_keys: Vec<Option<SessionRowKey>>,
+    ) {
+        let mut app = inline_progress_test_app_with_sessions(session_count);
+        app.progress_inline_source_id = None;
+        app.progress_session_id = Some(source_session_id.to_string());
+        app.progress_fetch_states
+            .insert(source_session_id.to_string(), ProgressFetchState::Ready);
+        app.task_by_session
+            .insert(source_session_id.to_string(), test_task("task-worker"));
+        match scenario {
+            MissingProgressAnchorCase::MatchedWorkerRoot => {
+                app.sessions[1].ancestor_session_ids.clear();
+            }
+            MissingProgressAnchorCase::FilteredAncestor => {
+                app.filtered_indices = vec![1];
+            }
+            MissingProgressAnchorCase::MatchedParent => {
+                app.sessions[2].ancestor_session_ids =
+                    vec!["session-0".to_string(), "session-1".to_string()];
+            }
+        }
+        prepare_inline_progress_rendered_rows(&mut app);
+        select_inline_progress_row(
+            &mut app,
+            &SessionRowKey::Task(source_session_id.to_string()),
+        );
+
+        handle_key_event(&mut app, key(KeyCode::Tab));
+
+        let rows = app.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        assert_eq!(
+            (
+                row_keys,
+                app.selected_row_key().cloned(),
+                app.selected_session_id(),
+                app.progress_inline_source_id.clone(),
+            ),
+            (
+                expected_row_keys,
+                Some(SessionRowKey::Task(source_session_id.to_string())),
+                Some(source_session_id),
+                Some(source_session_id.to_string()),
             ),
         );
     }
