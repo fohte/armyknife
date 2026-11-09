@@ -28,7 +28,14 @@ export function App() {
   useEffect(
     () =>
       startSessionFeed((response) => {
-        setSessions(response.sessions)
+        setSessions(
+          response.sessions.filter(
+            (session) =>
+              session.category === 'needs_action' ||
+              session.category === 'in_progress' ||
+              session.category === 'done',
+          ),
+        )
         setLoaded(true)
       }, setError),
     [],

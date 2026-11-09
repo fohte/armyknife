@@ -30,81 +30,288 @@ class FakeEventSource {
   }
 }
 
-it('fetches sessions on startup and after a sessions event reconnects', async () => {
-  let revision = 5
-  let title = 'Update retry handling'
-  const revisions: number[] = []
-  const titles: string[] = []
-  const errors: (string | null)[] = []
-  const session = {
-    id: 'sample-session',
-    category: 'needs_action',
-    kind: 'Question',
-    preview: 'Should retries stop after three attempts?',
-    elapsedSeconds: 8,
-    unread: true,
-    task: {
-      id: 'sample-task',
-      number: 2048,
-      title: 'Improve request reliability',
-      priority: 1,
-    },
-    repo: 'example/service',
-    pullRequest: null,
-  }
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {}
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve
+  })
+
+  return { promise, resolve }
+}
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+it('coalesces session events and refreshes when the stream reconnects', async () => {
   const source = new FakeEventSource()
-  let releaseInitial: (() => void) | undefined
-  let releaseUpdate: (() => void) | undefined
-  const initialLoaded = new Promise<void>((resolve) => {
-    releaseInitial = resolve
-  })
-  const updateLoaded = new Promise<void>((resolve) => {
-    releaseUpdate = resolve
-  })
-  const fetcher = vi.fn(() =>
-    Promise.resolve(
-      new Response(
-        JSON.stringify({ revision, sessions: [{ ...session, title }] }),
-        {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        },
-      ),
-    ),
-  )
+  const firstRequestStarted = deferred<undefined>()
+  const firstResponse = deferred<Response>()
+  const updateReceived = deferred<undefined>()
+  const reconnectReceived = deferred<undefined>()
+  const responses: unknown[] = []
+  const errors: (string | null)[] = []
+  const fetcher = vi
+    .fn()
+    .mockImplementationOnce(() => {
+      firstRequestStarted.resolve(undefined)
+      return firstResponse.promise
+    })
+    .mockResolvedValueOnce(
+      jsonResponse({
+        revision: 6,
+        sessions: [
+          {
+            id: 'session-update',
+            category: 'in_progress',
+            kind: 'FutureKind',
+            title: 'Updated session',
+            preview: null,
+            elapsedSeconds: 12,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+          },
+          {
+            id: 'session-future-category',
+            category: 'later',
+            kind: 'Question',
+            title: 'Session in an unrecognized category',
+            preview: null,
+            elapsedSeconds: 12,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+          },
+        ],
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        revision: 7,
+        sessions: [
+          {
+            id: 'session-reconnected',
+            category: 'needs_action',
+            kind: 'Question',
+            title: 'Latest session after reconnect',
+            preview: 'The stream reconnected.',
+            elapsedSeconds: 14,
+            unread: true,
+            task: {
+              id: 'task-reconnected',
+              number: 2048,
+              title: 'Restore event delivery',
+              priority: 1,
+            },
+            repo: 'example/service',
+            pullRequest: { number: 81, state: 'Open' },
+          },
+        ],
+      }),
+    )
+
   const stop = startSessionFeed(
     (response) => {
-      revisions.push(response.revision)
-      titles.push(response.sessions[0]?.title ?? 'No session')
-      if (response.revision === 5) {
-        releaseInitial?.()
-      } else if (response.revision === 6) {
-        releaseUpdate?.()
+      responses.push(response)
+      if (response.revision === 6) {
+        updateReceived.resolve(undefined)
+      } else if (response.revision === 7) {
+        reconnectReceived.resolve(undefined)
       }
     },
     (message) => errors.push(message),
     { fetcher, createEventSource: () => source },
   )
 
-  await initialLoaded
-  revision = 6
-  title = 'Retry handling updated'
+  await firstRequestStarted.promise
   source.emit('sessions')
-  await updateLoaded
+  firstResponse.resolve(
+    jsonResponse({
+      revision: 5,
+      sessions: [
+        {
+          id: 'session-initial',
+          category: 'needs_action',
+          kind: 'Question',
+          title: 'Initial session',
+          preview: 'Please review this request.',
+          elapsedSeconds: 10,
+          unread: true,
+          task: {
+            id: 'task-initial',
+            number: 2047,
+            title: 'Review a request',
+            priority: 1,
+          },
+          repo: 'example/service',
+          pullRequest: null,
+        },
+      ],
+    }),
+  )
+  await updateReceived.promise
+
+  source.emit('error')
+  source.emit('open')
+  await reconnectReceived.promise
   stop()
 
   const snapshot = () => [
-    revisions,
-    titles,
+    responses,
     errors,
     fetcher.mock.calls.length,
     source.closed,
   ]
 
   expect(snapshot()).toEqual([
-    [5, 6],
-    ['Update retry handling', 'Retry handling updated'],
-    [null, null],
+    [
+      {
+        revision: 5,
+        sessions: [
+          {
+            id: 'session-initial',
+            category: 'needs_action',
+            kind: 'Question',
+            title: 'Initial session',
+            preview: 'Please review this request.',
+            elapsedSeconds: 10,
+            unread: true,
+            task: {
+              id: 'task-initial',
+              number: 2047,
+              title: 'Review a request',
+              priority: 1,
+            },
+            repo: 'example/service',
+            pullRequest: null,
+          },
+        ],
+      },
+      {
+        revision: 6,
+        sessions: [
+          {
+            id: 'session-update',
+            category: 'in_progress',
+            kind: 'FutureKind',
+            title: 'Updated session',
+            preview: null,
+            elapsedSeconds: 12,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+          },
+          {
+            id: 'session-future-category',
+            category: 'later',
+            kind: 'Question',
+            title: 'Session in an unrecognized category',
+            preview: null,
+            elapsedSeconds: 12,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+          },
+        ],
+      },
+      {
+        revision: 7,
+        sessions: [
+          {
+            id: 'session-reconnected',
+            category: 'needs_action',
+            kind: 'Question',
+            title: 'Latest session after reconnect',
+            preview: 'The stream reconnected.',
+            elapsedSeconds: 14,
+            unread: true,
+            task: {
+              id: 'task-reconnected',
+              number: 2048,
+              title: 'Restore event delivery',
+              priority: 1,
+            },
+            repo: 'example/service',
+            pullRequest: { number: 81, state: 'Open' },
+          },
+        ],
+      },
+    ],
+    [null, null, 'Connection lost. Reconnecting…', null, null],
+    3,
+    true,
+  ])
+})
+
+it('retries a failed session request and clears the error after success', async () => {
+  const source = new FakeEventSource()
+  const failureReported = deferred<undefined>()
+  const retryReceived = deferred<undefined>()
+  const revisions: number[] = []
+  const errors: (string | null)[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(new Response(null, { status: 503 }))
+    .mockResolvedValueOnce(
+      jsonResponse({
+        revision: 8,
+        sessions: [
+          {
+            id: 'session-retried',
+            category: 'done',
+            kind: 'Stopped',
+            title: 'Session after retry',
+            preview: null,
+            elapsedSeconds: 21,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            pullRequest: null,
+          },
+        ],
+      }),
+    )
+
+  const stop = startSessionFeed(
+    (response) => {
+      revisions.push(response.revision)
+      retryReceived.resolve(undefined)
+    },
+    (message) => {
+      errors.push(message)
+      if (message === 'Unable to load sessions. Retrying…') {
+        failureReported.resolve(undefined)
+      }
+    },
+    {
+      fetcher,
+      createEventSource: () => source,
+      requestRetryDelayMs: 5,
+    },
+  )
+
+  await failureReported.promise
+  await retryReceived.promise
+  stop()
+
+  const snapshot = () => [
+    revisions,
+    errors,
+    fetcher.mock.calls.length,
+    source.closed,
+  ]
+
+  expect(snapshot()).toEqual([
+    [8],
+    ['Unable to load sessions. Retrying…', null],
     2,
     true,
   ])

@@ -9,6 +9,7 @@ type SessionEventSource = {
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
+  requestRetryDelayMs?: number
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -35,23 +36,12 @@ function isSession(value: unknown): value is Session {
     pullRequest === null ||
     (isRecord(pullRequest) &&
       typeof pullRequest['number'] === 'number' &&
-      typeof pullRequest['state'] === 'string' &&
-      ['Open', 'Closed', 'Merged'].includes(pullRequest['state']))
-  const validCategory =
-    category === 'needs_action' ||
-    category === 'in_progress' ||
-    category === 'done'
-  const validKind =
-    kind === null ||
-    (typeof kind === 'string' &&
-      ['Question', 'Approve', 'Review', 'Error', 'Plan', 'Stopped'].includes(
-        kind,
-      ))
+      typeof pullRequest['state'] === 'string')
 
   return (
     typeof value['id'] === 'string' &&
-    validCategory &&
-    validKind &&
+    typeof category === 'string' &&
+    (kind === null || typeof kind === 'string') &&
     typeof value['title'] === 'string' &&
     (value['preview'] === null || typeof value['preview'] === 'string') &&
     typeof value['elapsedSeconds'] === 'number' &&
@@ -77,19 +67,53 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
+    requestRetryDelayMs = 2_000,
   }: SessionFeedDependencies = {},
 ) {
   let active = true
-  let latestRequest = 0
+  let requestPending = false
+  let refreshQueued = false
+  let requestError = false
+  let streamError = false
+  let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
 
-  const refresh = () => {
-    const requestId = ++latestRequest
-
-    const reportError = () => {
-      if (active && requestId === latestRequest) {
-        onError('Unable to load sessions. Reconnecting…')
-      }
+  const reportStatus = () => {
+    if (requestError) {
+      onError('Unable to load sessions. Retrying…')
+    } else if (streamError) {
+      onError('Connection lost. Reconnecting…')
+    } else {
+      onError(null)
     }
+  }
+
+  const clearRequestRetry = () => {
+    if (requestRetryTimer !== null) {
+      clearTimeout(requestRetryTimer)
+      requestRetryTimer = null
+    }
+  }
+
+  const scheduleRequestRetry = () => {
+    if (requestRetryTimer === null) {
+      requestRetryTimer = setTimeout(() => {
+        requestRetryTimer = null
+        refresh()
+      }, requestRetryDelayMs)
+    }
+  }
+
+  const reportRequestError = () => {
+    if (active) {
+      requestError = true
+      reportStatus()
+      scheduleRequestRetry()
+    }
+  }
+
+  const runRefresh = () => {
+    refreshQueued = false
 
     void Promise.resolve()
       .then(() => fetcher('/api/sessions'))
@@ -100,30 +124,73 @@ export function startSessionFeed(
       )
       .then((body: unknown) => {
         if (!isSessionsResponse(body)) {
-          reportError()
+          reportRequestError()
           return
         }
 
-        if (active && requestId === latestRequest) {
+        if (active) {
           onSessions(body)
-          onError(null)
+          requestError = false
+          clearRequestRetry()
+          reportStatus()
         }
       })
-      .catch(reportError)
+      .catch(reportRequestError)
+      .finally(() => {
+        if (!active) {
+          requestPending = false
+        } else if (refreshQueued) {
+          runRefresh()
+        } else {
+          requestPending = false
+        }
+      })
+  }
+
+  const refresh = () => {
+    refreshQueued = true
+    if (!requestPending) {
+      requestPending = true
+      runRefresh()
+    }
   }
 
   const eventSource = createEventSource('/api/events')
   const onSessionsEvent: EventListener = () => {
     refresh()
   }
+  const onConnectionError: EventListener = () => {
+    streamError = true
+    reportStatus()
+    if (reconnectPollTimer === null) {
+      reconnectPollTimer = setInterval(refresh, requestRetryDelayMs)
+    }
+  }
+  const onConnectionOpen: EventListener = () => {
+    streamError = false
+    if (reconnectPollTimer !== null) {
+      clearInterval(reconnectPollTimer)
+      reconnectPollTimer = null
+    }
+    reportStatus()
+    refresh()
+  }
 
   eventSource.addEventListener('sessions', onSessionsEvent)
+  eventSource.addEventListener('error', onConnectionError)
+  eventSource.addEventListener('open', onConnectionOpen)
   refresh()
 
   return () => {
     active = false
-    latestRequest += 1
+    clearRequestRetry()
+    if (reconnectPollTimer !== null) {
+      clearInterval(reconnectPollTimer)
+      reconnectPollTimer = null
+    }
     eventSource.removeEventListener('sessions', onSessionsEvent)
+    eventSource.removeEventListener('error', onConnectionError)
+    eventSource.removeEventListener('open', onConnectionOpen)
     eventSource.close()
   }
 }

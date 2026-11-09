@@ -1,7 +1,13 @@
-type SessionCategory = 'needs_action' | 'in_progress' | 'done'
+type SessionCategory = 'needs_action' | 'in_progress' | 'done' | (string & {})
 
 type SessionKind =
-  'Question' | 'Approve' | 'Review' | 'Error' | 'Plan' | 'Stopped'
+  | 'Question'
+  | 'Approve'
+  | 'Review'
+  | 'Error'
+  | 'Plan'
+  | 'Stopped'
+  | (string & {})
 
 type SessionTask = {
   id: string
@@ -12,7 +18,7 @@ type SessionTask = {
 
 type PullRequest = {
   number: number
-  state: 'Open' | 'Closed' | 'Merged'
+  state: 'Open' | 'Closed' | 'Merged' | (string & {})
 }
 
 export type Session = {
