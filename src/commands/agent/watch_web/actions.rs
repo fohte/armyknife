@@ -52,7 +52,13 @@ struct ActionState {
 trait ActionRuntime: Send + Sync {
     fn send_message(&self, session: &Session, content: &str) -> Result<()>;
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String>;
-    fn send_keys(&self, tmux_info: &TmuxInfo, keys: &[&str]) -> Result<()>;
+    fn send_keys_if_agent_is_running(
+        &self,
+        tmux_info: &TmuxInfo,
+        engine: Engine,
+        current_command: &str,
+        keys: &[&str],
+    ) -> Result<bool>;
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()>;
 }
 
@@ -75,20 +81,46 @@ impl ActionRuntime for LiveActionRuntime {
         }
     }
 
-    fn send_keys(&self, tmux_info: &TmuxInfo, keys: &[&str]) -> Result<()> {
-        crate::infra::tmux::send_keys_sequence_for_socket(
-            tmux_info.socket_path.as_deref(),
-            &tmux_info.pane_id,
-            keys,
-        )
-        .map_err(anyhow::Error::from)
-    }
-
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
         crate::infra::tmux::get_pane_current_command_for_socket(
             tmux_info.socket_path.as_deref(),
             &tmux_info.pane_id,
         )
+    }
+
+    fn send_keys_if_agent_is_running(
+        &self,
+        tmux_info: &TmuxInfo,
+        engine: Engine,
+        current_command: &str,
+        keys: &[&str],
+    ) -> Result<bool> {
+        let Some(pane_pid) = crate::infra::tmux::get_pane_pid_for_socket(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+        )
+        .ok()
+        .flatten() else {
+            return Ok(false);
+        };
+        let Some(process_snapshot) = crate::infra::process::ProcessSnapshot::capture() else {
+            return Ok(false);
+        };
+        if !super::super::pane::process::pane_has_live_agent_process(
+            pane_pid,
+            engine,
+            Some(&process_snapshot),
+        ) {
+            return Ok(false);
+        }
+
+        crate::infra::tmux::send_keys_if_pane_command_matches_for_socket(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+            current_command,
+            keys,
+        )
+        .map_err(anyhow::Error::from)
     }
 
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {
@@ -172,15 +204,20 @@ async fn actions(
 ) -> Result<Json<ActionCapabilities>, ApiError> {
     let session = load_session(state, id).await?;
     let has_tmux = session.tmux_info.is_some();
+    let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
         message: true,
-        answer_question: session.engine == Engine::Claude && is_ask_user_question(&session),
-        permission: (session.engine == Engine::Claude && session.has_pending_permission_requests())
-            .then_some(PermissionCapabilities {
-                approve: true,
-                reject: true,
-            }),
-        interrupt: has_tmux,
+        answer_question: has_live_session
+            && session.engine == Engine::Claude
+            && is_ask_user_question(&session),
+        permission: (has_live_session
+            && session.engine == Engine::Claude
+            && session.has_pending_permission_requests())
+        .then_some(PermissionCapabilities {
+            approve: true,
+            reject: true,
+        }),
+        interrupt: has_live_session && has_tmux,
         open_in_terminal: has_tmux,
     }))
 }
@@ -233,7 +270,7 @@ async fn answer_question(
         9 => "9",
         _ => return Err(ApiError::bad_request("choice must be between 1 and 9")),
     };
-    send_keys(state.runtime, tmux_info, vec![key, "Enter"]).await?;
+    send_keys(state.runtime, &session, tmux_info, vec![key, "Enter"]).await?;
     Ok(Json(Success::new()))
 }
 
@@ -268,7 +305,7 @@ async fn resolve_permission_action(
     } else {
         vec!["Escape"]
     };
-    send_keys(state.runtime, tmux_info, keys).await?;
+    send_keys(state.runtime, &session, tmux_info, keys).await?;
     Ok(Json(Success::new()))
 }
 
@@ -278,7 +315,7 @@ async fn interrupt(
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
     let tmux_info = require_tmux(&session)?;
-    send_keys(state.runtime, tmux_info, vec!["Escape"]).await?;
+    send_keys(state.runtime, &session, tmux_info, vec!["Escape"]).await?;
     Ok(Json(Success::new()))
 }
 
@@ -336,10 +373,8 @@ async fn archive(
 }
 
 fn is_active_session(session: &Session) -> bool {
-    matches!(
-        session.status,
-        SessionStatus::Running | SessionStatus::WaitingInput
-    ) || session.has_pending_bg_tasks()
+    session.has_active_work(session.status)
+        || (session.status != SessionStatus::Ended && session.has_pending_permission_requests())
 }
 
 #[derive(Serialize)]
@@ -396,36 +431,31 @@ fn resolve_sessions_dir(override_dir: Option<PathBuf>) -> Result<PathBuf> {
 
 async fn send_keys(
     runtime: Arc<dyn ActionRuntime>,
+    session: &Session,
     tmux_info: &TmuxInfo,
     keys: Vec<&'static str>,
 ) -> Result<(), ApiError> {
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
     let tmux_info = tmux_info.clone();
+    let engine = session.engine;
     let result = tokio::task::spawn_blocking(move || {
-        let current_command = runtime.pane_current_command(&tmux_info);
-        if current_command
-            .as_deref()
-            .is_none_or(|command| SHELL_COMMANDS.contains(&command))
-        {
-            return Err(KeyActionError::PaneInactive);
+        let Some(current_command) = runtime.pane_current_command(&tmux_info) else {
+            return Ok(false);
+        };
+        if SHELL_COMMANDS.contains(&current_command.as_str()) {
+            return Ok(false);
         }
-        runtime
-            .send_keys(&tmux_info, &keys)
-            .map_err(KeyActionError::Operation)
+        runtime.send_keys_if_agent_is_running(&tmux_info, engine, &current_command, &keys)
     })
     .await
     .map_err(ApiError::internal)?;
     match result {
-        Ok(()) => Ok(()),
-        Err(KeyActionError::PaneInactive) => {
-            Err(ApiError::conflict("session pane is idle or unavailable"))
-        }
-        Err(KeyActionError::Operation(error)) => Err(ApiError::operation(error)),
+        Ok(true) => Ok(()),
+        Ok(false) => Err(ApiError::conflict("session pane is idle or unavailable")),
+        Err(error) => Err(ApiError::operation(error)),
     }
-}
-
-enum KeyActionError {
-    PaneInactive,
-    Operation(anyhow::Error),
 }
 
 async fn run_blocking<T>(
@@ -466,6 +496,8 @@ mod tests {
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         pane_command: Mutex<Option<String>>,
+        pane_has_agent_process: Mutex<bool>,
+        pane_command_matches: Mutex<bool>,
     }
 
     impl Default for FakeRuntime {
@@ -473,6 +505,8 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 pane_command: Mutex::new(Some("claude".to_string())),
+                pane_has_agent_process: Mutex::new(true),
+                pane_command_matches: Mutex::new(true),
             }
         }
     }
@@ -496,14 +530,34 @@ mod tests {
             self.pane_command.lock().unwrap().clone()
         }
 
-        fn send_keys(&self, tmux_info: &TmuxInfo, keys: &[&str]) -> Result<()> {
+        fn send_keys_if_agent_is_running(
+            &self,
+            tmux_info: &TmuxInfo,
+            engine: Engine,
+            current_command: &str,
+            keys: &[&str],
+        ) -> Result<bool> {
+            let pane_has_agent_process = *self.pane_has_agent_process.lock().unwrap();
+            let pane_command_matches = *self.pane_command_matches.lock().unwrap();
+            self.calls.lock().unwrap().push(json!({
+                "kind": "guarded-keys",
+                "paneId": tmux_info.pane_id,
+                "engine": engine,
+                "currentCommand": current_command,
+                "keys": &keys,
+                "paneHasAgentProcess": pane_has_agent_process,
+                "paneCommandMatches": pane_command_matches,
+            }));
+            if !pane_has_agent_process || !pane_command_matches {
+                return Ok(false);
+            }
             self.calls.lock().unwrap().push(json!({
                 "kind": "keys",
                 "paneId": tmux_info.pane_id,
                 "socketPath": tmux_info.socket_path,
                 "keys": keys,
             }));
-            Ok(())
+            Ok(true)
         }
 
         fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {
@@ -541,6 +595,14 @@ mod tests {
 
         fn set_pane_command(&self, command: Option<&str>) {
             *self.runtime.pane_command.lock().unwrap() = command.map(str::to_string);
+        }
+
+        fn set_pane_has_agent_process(&self, has_agent_process: bool) {
+            *self.runtime.pane_has_agent_process.lock().unwrap() = has_agent_process;
+        }
+
+        fn set_pane_command_matches(&self, matches: bool) {
+            *self.runtime.pane_command_matches.lock().unwrap() = matches;
         }
     }
 
@@ -714,6 +776,14 @@ mod tests {
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
                 }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": ["2", "Enter"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
                     "kind": "keys",
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
@@ -756,6 +826,14 @@ mod tests {
                     "kind": "pane-command",
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": expected_keys,
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
                 }, {
                     "kind": "keys",
                     "paneId": "%4",
@@ -929,9 +1007,18 @@ mod tests {
     }
 
     #[rstest]
+    #[case::claude(Engine::Claude, "claude")]
+    #[case::codex(Engine::Codex, "a")]
     #[tokio::test]
-    async fn interrupt_sends_escape_to_the_session_pane(action_context: ActionContext) {
-        action_context.save_session(&session("sample-session"));
+    async fn interrupt_sends_escape_to_the_session_pane(
+        #[case] engine: Engine,
+        #[case] current_command: &str,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.engine = engine;
+        action_context.save_session(&session);
+        action_context.set_pane_command(Some(current_command));
 
         let response = action_context
             .router()
@@ -948,6 +1035,14 @@ mod tests {
                     "kind": "pane-command",
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": engine,
+                    "currentCommand": current_command,
+                    "keys": ["Escape"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
                 }, {
                     "kind": "keys",
                     "paneId": "%4",
@@ -1024,35 +1119,55 @@ mod tests {
     }
 
     #[rstest]
-    #[case::answer_missing("answer", None)]
-    #[case::answer_shell("answer", Some("zsh"))]
-    #[case::permission_missing("permission", None)]
-    #[case::permission_shell("permission", Some("bash"))]
-    #[case::interrupt_missing("interrupt", None)]
-    #[case::interrupt_shell("interrupt", Some("fish"))]
+    #[case::answer_missing("answer", None, true, true)]
+    #[case::answer_shell("answer", Some("zsh"), true, true)]
+    #[case::answer_other_program("answer", Some("nvim"), false, true)]
+    #[case::permission_missing("permission", None, true, true)]
+    #[case::permission_shell("permission", Some("bash"), true, true)]
+    #[case::permission_other_program("permission", Some("nvim"), false, true)]
+    #[case::interrupt_missing("interrupt", None, true, true)]
+    #[case::interrupt_shell("interrupt", Some("fish"), true, true)]
+    #[case::interrupt_other_program("interrupt", Some("nvim"), false, true)]
+    #[case::interrupt_command_changed("interrupt", Some("claude"), true, false)]
     #[tokio::test]
     async fn key_actions_reject_unavailable_or_idle_panes(
         #[case] action: &str,
         #[case] pane_command: Option<&str>,
+        #[case] pane_has_agent_process: bool,
+        #[case] pane_command_matches: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
-        let (uri, body) = match action {
+        let (uri, body, keys) = match action {
             "answer" => {
                 session.current_tool = Some("AskUserQuestion".to_string());
-                ("/sessions/sample-session/answer", json!({ "choice": 1 }))
+                (
+                    "/sessions/sample-session/answer",
+                    json!({ "choice": 1 }),
+                    vec!["1", "Enter"],
+                )
             }
             "permission" => {
                 session
                     .pending_permission_agent_ids
                     .insert("main".to_string());
-                ("/sessions/sample-session/permission/approve", json!({}))
+                (
+                    "/sessions/sample-session/permission/approve",
+                    json!({}),
+                    vec!["1", "Enter"],
+                )
             }
-            "interrupt" => ("/sessions/sample-session/interrupt", json!({})),
+            "interrupt" => (
+                "/sessions/sample-session/interrupt",
+                json!({}),
+                vec!["Escape"],
+            ),
             _ => unreachable!(),
         };
         action_context.save_session(&session);
         action_context.set_pane_command(pane_command);
+        action_context.set_pane_has_agent_process(pane_has_agent_process);
+        action_context.set_pane_command_matches(pane_command_matches);
 
         let response = action_context
             .router()
@@ -1060,30 +1175,140 @@ mod tests {
             .await
             .unwrap();
 
+        let mut expected_calls = vec![json!({
+            "kind": "pane-command",
+            "paneId": "%4",
+            "socketPath": "/tmp/example-tmux.sock",
+        })];
+        if pane_command.is_some_and(|command| !SHELL_COMMANDS.contains(&command)) {
+            expected_calls.push(json!({
+                "kind": "guarded-keys",
+                "paneId": "%4",
+                "engine": "claude",
+                "currentCommand": pane_command,
+                "keys": &keys,
+                "paneHasAgentProcess": pane_has_agent_process,
+                "paneCommandMatches": pane_command_matches,
+            }));
+            if pane_has_agent_process && pane_command_matches {
+                expected_calls.push(json!({
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": &keys,
+                }));
+            }
+        }
+
         assert_eq!(
             response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::CONFLICT.as_u16(),
                 "body": { "error": "session pane is idle or unavailable" },
-                "calls": [{
-                    "kind": "pane-command",
-                    "paneId": "%4",
-                    "socketPath": "/tmp/example-tmux.sock",
-                }],
+                "calls": expected_calls,
             }),
         );
     }
 
     #[rstest]
-    #[case::running(SessionStatus::Running)]
-    #[case::waiting_for_input(SessionStatus::WaitingInput)]
+    #[tokio::test]
+    async fn ended_sessions_hide_and_reject_key_actions(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.status = SessionStatus::Ended;
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session
+            .pending_permission_agent_ids
+            .insert("main".to_string());
+        action_context.save_session(&session);
+        let app = action_context.router();
+
+        let capabilities = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let answer = app
+            .clone()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "choice": 1 }),
+            ))
+            .await
+            .unwrap();
+        let permission = app
+            .clone()
+            .oneshot(post_empty("/sessions/sample-session/permission/approve"))
+            .await
+            .unwrap();
+        let interrupt = app
+            .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(capabilities, &action_context).await,
+                response_snapshot(answer, &action_context).await,
+                response_snapshot(permission, &action_context).await,
+                response_snapshot(interrupt, &action_context).await,
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": {
+                        "message": true,
+                        "answerQuestion": false,
+                        "interrupt": false,
+                        "openInTerminal": true,
+                    },
+                    "calls": [],
+                }),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "session has ended" },
+                    "calls": [],
+                }),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "session has ended" },
+                    "calls": [],
+                }),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "session has ended" },
+                    "calls": [],
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running, false, false)]
+    #[case::waiting_for_input(SessionStatus::WaitingInput, false, false)]
+    #[case::failed_with_pending_permission(SessionStatus::Failed, true, false)]
+    #[case::stopped_with_pending_task(SessionStatus::Stopped, false, true)]
     #[tokio::test]
     async fn archive_rejects_active_sessions(
         #[case] status: SessionStatus,
+        #[case] pending_permission: bool,
+        #[case] pending_task: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.status = status;
+        if pending_permission {
+            session
+                .pending_permission_agent_ids
+                .insert("subagent".to_string());
+        }
+        if pending_task {
+            session.pending_bg_task_ids.insert("task".to_string());
+        }
         action_context.save_session(&session);
 
         let response = action_context

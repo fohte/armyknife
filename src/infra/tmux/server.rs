@@ -228,6 +228,60 @@ pub fn send_keys_sequence_for_socket(
     run_tmux_for_socket(socket_path, &args)
 }
 
+/// Sends keys only if the pane still runs the command observed by the caller.
+pub fn send_keys_if_pane_command_matches_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    expected_current_command: &str,
+    keys: &[&str],
+) -> Result<bool> {
+    if !is_safe_pane_id(pane_id)
+        || !is_safe_tmux_word(expected_current_command)
+        || keys.is_empty()
+        || keys.iter().any(|key| !is_safe_key(key))
+    {
+        return Err(TmuxError::Internal(
+            "invalid pane command key sequence".to_string(),
+        ));
+    }
+
+    let condition = format!("#{{==:#{{pane_current_command}},{expected_current_command}}}");
+    let send_command = format!("send-keys -t {pane_id} {}", keys.join(" "));
+    let reject_command = "display-message -p '__ARMYKNIFE_PANE_COMMAND_CHANGED__'";
+    let output = run_tmux_output_for_socket(
+        socket_path,
+        &[
+            "if-shell",
+            "-F",
+            "-t",
+            pane_id,
+            &condition,
+            &send_command,
+            reject_command,
+        ],
+    )?;
+
+    Ok(output.trim() != "__ARMYKNIFE_PANE_COMMAND_CHANGED__")
+}
+
+fn is_safe_pane_id(pane_id: &str) -> bool {
+    pane_id
+        .strip_prefix('%')
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn is_safe_tmux_word(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+fn is_safe_key(key: &str) -> bool {
+    matches!(key, "Enter" | "Escape")
+        || (key.len() == 1 && matches!(key.as_bytes()[0], b'1'..=b'9'))
+}
+
 /// Focuses a pane on its recorded tmux server.
 pub fn focus_pane_for_socket(socket_path: Option<&str>, pane_id: &str) -> Result<()> {
     let Some(socket_path) = socket_path else {
