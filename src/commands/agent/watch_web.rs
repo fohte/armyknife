@@ -5,6 +5,7 @@ mod session_enrichment;
 mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};
+use tokio::sync::watch;
 
 use anyhow::Result;
 use axum::Router;
@@ -21,6 +22,26 @@ use super::browser;
 pub struct WatchWebArgs {}
 
 const LISTEN_PORT: u16 = 4317;
+
+#[derive(Clone)]
+pub(super) struct EnrichmentUpdates {
+    sender: watch::Sender<()>,
+}
+
+impl EnrichmentUpdates {
+    fn new() -> Self {
+        let (sender, _) = watch::channel(());
+        Self { sender }
+    }
+
+    pub(super) fn subscribe(&self) -> watch::Receiver<()> {
+        self.sender.subscribe()
+    }
+
+    pub(super) fn notify(&self) {
+        self.sender.send_replace(());
+    }
+}
 
 pub async fn run(_args: &WatchWebArgs) -> Result<()> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
@@ -40,9 +61,10 @@ fn app() -> Router {
 }
 
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
+    let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
-        .merge(sessions::router())
-        .merge(events::router())
+        .merge(sessions::router(enrichment_updates.clone()))
+        .merge(events::router(enrichment_updates))
         .fallback(api_not_found);
 
     Router::new()

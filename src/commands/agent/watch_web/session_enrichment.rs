@@ -3,6 +3,7 @@ use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
     SessionTask, build_task_by_session, fetch_session_tasks_with_parents,
 };
@@ -12,13 +13,20 @@ use crate::infra::tq::{TqClient, TqTaskSummary};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub(super) struct SessionEnrichmentCache {
     tq: Arc<RefreshingCache<SessionTaskMetadata>>,
     pull_requests: Arc<RefreshingCache<HashMap<String, Option<PrInfo>>>>,
 }
 
 impl SessionEnrichmentCache {
+    pub(super) fn new(updates: EnrichmentUpdates) -> Self {
+        Self {
+            tq: Arc::new(RefreshingCache::new(updates.clone())),
+            pull_requests: Arc::new(RefreshingCache::new(updates)),
+        }
+    }
+
     pub(super) async fn task_metadata(&self, sessions: &[Session]) -> SessionTaskMetadata {
         if sessions.is_empty() {
             return SessionTaskMetadata::default();
@@ -58,7 +66,9 @@ pub(super) struct SessionTaskMetadata {
 
 struct RefreshingCache<T> {
     state: tokio::sync::Mutex<CacheState<T>>,
+    #[cfg(test)]
     refresh_finished: tokio::sync::Notify,
+    updates: EnrichmentUpdates,
 }
 
 struct CacheState<T> {
@@ -67,15 +77,17 @@ struct CacheState<T> {
     refresh_in_flight: bool,
 }
 
-impl<T> Default for RefreshingCache<T> {
-    fn default() -> Self {
+impl<T> RefreshingCache<T> {
+    fn new(updates: EnrichmentUpdates) -> Self {
         Self {
             state: tokio::sync::Mutex::new(CacheState {
                 value: None,
                 last_attempt: None,
                 refresh_in_flight: false,
             }),
+            #[cfg(test)]
             refresh_finished: tokio::sync::Notify::new(),
+            updates,
         }
     }
 }
@@ -108,15 +120,23 @@ where
                 let result = fetch(previous).await;
                 let mut state = cache.state.lock().await;
                 state.last_attempt = Some(Instant::now());
-                match result {
-                    Ok(value) => state.value = Some(value),
+                let refreshed = match result {
+                    Ok(value) => {
+                        state.value = Some(value);
+                        true
+                    }
                     Err(error) => {
                         tracing::warn!(%error, resource, "Failed to refresh agent watch metadata; keeping cached values");
+                        false
                     }
-                }
+                };
                 state.refresh_in_flight = false;
                 drop(state);
+                #[cfg(test)]
                 cache.refresh_finished.notify_one();
+                if refreshed {
+                    cache.updates.notify();
+                }
             });
         }
 
@@ -290,13 +310,16 @@ mod tests {
 
     #[tokio::test]
     async fn refresh_is_single_flight_and_failure_keeps_the_latest_value() {
+        let updates = EnrichmentUpdates::new();
         let cache = Arc::new(RefreshingCache {
             state: tokio::sync::Mutex::new(CacheState {
                 value: Some("cached".to_string()),
                 last_attempt: Some(Instant::now() - CACHE_TTL - Duration::from_secs(1)),
                 refresh_in_flight: false,
             }),
+            #[cfg(test)]
             refresh_finished: tokio::sync::Notify::new(),
+            updates,
         });
         let calls = Arc::new(AtomicUsize::new(0));
         let started = Arc::new(Notify::new());
@@ -352,6 +375,36 @@ mod tests {
                 1,
                 "cached".to_string()
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_refresh_replaces_cached_value_and_notifies_clients() {
+        let updates = EnrichmentUpdates::new();
+        let mut update_receiver = updates.subscribe();
+        let cache = Arc::new(RefreshingCache {
+            state: tokio::sync::Mutex::new(CacheState {
+                value: Some("cached".to_string()),
+                last_attempt: Some(Instant::now() - CACHE_TTL - Duration::from_secs(1)),
+                refresh_in_flight: false,
+            }),
+            #[cfg(test)]
+            refresh_finished: tokio::sync::Notify::new(),
+            updates,
+        });
+
+        let stale = cache
+            .get_or_refresh("test", |_| async { Ok("refreshed".to_string()) })
+            .await;
+        tokio::time::timeout(Duration::from_secs(1), update_receiver.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        let refreshed = cache.current().await;
+
+        assert_eq!(
+            (stale, refreshed),
+            ("cached".to_string(), "refreshed".to_string())
         );
     }
 }

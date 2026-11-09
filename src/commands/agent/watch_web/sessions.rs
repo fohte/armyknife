@@ -9,6 +9,7 @@ use axum::routing::get;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 
+use super::EnrichmentUpdates;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
@@ -113,7 +114,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
     fn now(&self) -> DateTime<Utc>;
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct LiveSessionSource {
     enrichment: SessionEnrichmentCache,
 }
@@ -136,8 +137,10 @@ impl SessionSource for LiveSessionSource {
     }
 }
 
-pub(super) fn router() -> Router {
-    router_with_source(LiveSessionSource::default())
+pub(super) fn router(updates: EnrichmentUpdates) -> Router {
+    router_with_source(LiveSessionSource {
+        enrichment: SessionEnrichmentCache::new(updates),
+    })
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {

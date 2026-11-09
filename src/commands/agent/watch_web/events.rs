@@ -3,26 +3,33 @@ use std::future::Future;
 use std::time::Duration;
 
 use axum::Router;
+use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::routing::get;
 use futures_util::stream::{self, Stream};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::watch;
 use tokio::time::{self, Interval};
 
+use super::EnrichmentUpdates;
 use crate::commands::agent::store;
 
 const REVISION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-pub(super) fn router() -> Router {
-    Router::new().route("/events", get(events))
+pub(super) fn router(updates: EnrichmentUpdates) -> Router {
+    Router::new()
+        .route("/events", get(events))
+        .with_state(updates)
 }
 
-async fn events() -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+async fn events(
+    State(updates): State<EnrichmentUpdates>,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (signal_tx, signal_rx) = mpsc::unbounded_channel();
     let watcher = create_watcher(signal_tx).await;
-    let stream = revision_stream(signal_rx, watcher, current_revision);
+    let stream = revision_stream(signal_rx, updates.subscribe(), watcher, current_revision);
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
@@ -60,15 +67,19 @@ async fn current_revision() -> Option<i64> {
 struct RevisionStreamState<F> {
     last_revision: Option<i64>,
     initial_event_pending: bool,
+    enrichment_update_pending: bool,
     signals: UnboundedReceiver<()>,
     watcher: Option<RecommendedWatcher>,
     watch_channel_open: bool,
+    enrichment_updates: watch::Receiver<()>,
+    enrichment_channel_open: bool,
     interval: Interval,
     read_revision: F,
 }
 
 fn revision_stream<F, Fut>(
     signals: UnboundedReceiver<()>,
+    enrichment_updates: watch::Receiver<()>,
     watcher: Option<RecommendedWatcher>,
     read_revision: F,
 ) -> impl Stream<Item = Result<Event, Infallible>>
@@ -82,30 +93,43 @@ where
         RevisionStreamState {
             last_revision: None,
             initial_event_pending: true,
+            enrichment_update_pending: false,
             signals,
             watcher,
             watch_channel_open: true,
+            enrichment_updates,
+            enrichment_channel_open: true,
             interval,
             read_revision,
         },
         |mut state| async move {
             loop {
                 let _keep_watcher_alive = state.watcher.as_ref();
-                tokio::select! {
-                    _ = state.interval.tick() => {}
+                let enrichment_update = tokio::select! {
+                    _ = state.interval.tick() => false,
                     signal = state.signals.recv(), if state.watch_channel_open => {
                         if signal.is_none() {
                             state.watch_channel_open = false;
                         }
+                        false
                     }
-                }
+                    update = state.enrichment_updates.changed(), if state.enrichment_channel_open => {
+                        if update.is_err() {
+                            state.enrichment_channel_open = false;
+                        }
+                        update.is_ok()
+                    }
+                };
+                state.enrichment_update_pending |= enrichment_update;
 
                 let Some(revision) = (state.read_revision)().await else {
                     continue;
                 };
-                let should_emit =
-                    state.initial_event_pending || state.last_revision != Some(revision);
+                let should_emit = state.initial_event_pending
+                    || state.last_revision != Some(revision)
+                    || state.enrichment_update_pending;
                 state.initial_event_pending = false;
+                state.enrichment_update_pending = false;
                 state.last_revision = Some(revision);
                 if !should_emit {
                     continue;
@@ -132,9 +156,10 @@ mod tests {
     use std::sync::atomic::{AtomicI64, Ordering};
 
     #[tokio::test]
-    async fn sends_current_revision_on_connect_and_after_a_change() {
+    async fn sends_current_revision_on_connect_and_after_store_or_enrichment_changes() {
         let revision = Arc::new(AtomicI64::new(7));
         let (signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let (enrichment_tx, enrichment_rx) = watch::channel(());
         let read_revision = {
             let revision = Arc::clone(&revision);
             move || {
@@ -142,9 +167,14 @@ mod tests {
                 async move { Some(revision.load(Ordering::SeqCst)) }
             }
         };
-        let body = Sse::new(revision_stream(signal_rx, None, read_revision))
-            .into_response()
-            .into_body();
+        let body = Sse::new(revision_stream(
+            signal_rx,
+            enrichment_rx,
+            None,
+            read_revision,
+        ))
+        .into_response()
+        .into_body();
         let mut chunks = body.into_data_stream();
         let first = next_chunk(&mut chunks).await;
 
@@ -152,7 +182,11 @@ mod tests {
         signal_tx.send(()).unwrap();
         let second = next_chunk(&mut chunks).await;
 
+        enrichment_tx.send_replace(());
+        let enrichment_update = next_chunk(&mut chunks).await;
+
         let (_reconnect_signal_tx, reconnect_signal_rx) = mpsc::unbounded_channel();
+        let (_reconnect_enrichment_tx, reconnect_enrichment_rx) = watch::channel(());
         let read_current_revision = {
             let revision = Arc::clone(&revision);
             move || {
@@ -162,6 +196,7 @@ mod tests {
         };
         let reconnect_body = Sse::new(revision_stream(
             reconnect_signal_rx,
+            reconnect_enrichment_rx,
             None,
             read_current_revision,
         ))
@@ -171,11 +206,17 @@ mod tests {
         let reconnected = next_chunk(&mut reconnect_chunks).await;
 
         assert_eq!(
-            (first, second, reconnected),
+            (first, second, enrichment_update, reconnected),
             (
                 indoc! {"
                     event: sessions
                     data: 7
+
+                "}
+                .to_string(),
+                indoc! {"
+                    event: sessions
+                    data: 8
 
                 "}
                 .to_string(),
