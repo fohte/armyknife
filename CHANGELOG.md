@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.517](https://github.com/fohte/armyknife/compare/v0.1.516...v0.1.517) (2026-11-09)
+
+
+### Features
+
+* **agent:** add watch-web ([#1387](https://github.com/fohte/armyknife/issues/1387)) ([a51e0e6](https://github.com/fohte/armyknife/commit/a51e0e62e85822723285bfd180a62a9cfe762319))
+
 ## [0.1.516](https://github.com/fohte/armyknife/compare/v0.1.515...v0.1.516) (2026-11-07)
 
 
