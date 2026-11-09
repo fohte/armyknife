@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.520](https://github.com/fohte/armyknife/compare/v0.1.519...v0.1.520) (2026-11-09)
+
+
+### Features
+
+* **agent/watch-web:** add sessions API and SSE ([#1393](https://github.com/fohte/armyknife/issues/1393)) ([dcaca4b](https://github.com/fohte/armyknife/commit/dcaca4b369187dd57696c92ebe23550b61d63a6e))
+
 ## [0.1.519](https://github.com/fohte/armyknife/compare/v0.1.518...v0.1.519) (2026-11-09)
 
 
