@@ -66,6 +66,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 }
                 _ => {}
             }
+        } else if matches!(
+            payload.get("type").and_then(Value::as_str),
+            Some("task_complete" | "turn_aborted")
+        ) {
+            // Missing tool outputs must not suppress actions from the next turn.
+            pending_tool_calls.clear();
         } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
             && let Some(item) = payload.get("item")
         {
@@ -148,6 +154,8 @@ mod tests {
     use std::io::Cursor;
 
     use indoc::indoc;
+    use rstest::rstest;
+    use serde_json::json;
 
     use super::parse;
     use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
@@ -248,6 +256,66 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action · 1 file edited".to_string(),
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::aborted("turn_aborted")]
+    #[case::completed("task_complete")]
+    fn terminal_turn_events_clear_unanswered_tool_calls(#[case] event_type: &str) {
+        let transcript = [
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "fixture-unanswered-call",
+                    "name": "exec",
+                    "input": "printf 'fictional command output'",
+                },
+            }),
+            json!({"type": "event_msg", "payload": {"type": event_type}}),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "CommandExecution",
+                        "id": "fixture-command-id",
+                        "command": "printf fixture",
+                        "cwd": "/fixture/project",
+                        "duration": 1,
+                        "exit_code": 0,
+                        "status": "completed",
+                    },
+                },
+            }),
+            json!({
+                "type": "event_msg",
+                "payload": {
+                    "type": "item_completed",
+                    "item": {
+                        "type": "FileChange",
+                        "changes": {
+                            "src/fixture.rs": {
+                                "type": "update",
+                                "unified_diff": "fictional diff",
+                                "move_path": null,
+                            },
+                        },
+                    },
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| serde_json::to_string(&record).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "3 actions · 1 file edited".to_string(),
             }]
         );
     }
