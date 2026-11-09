@@ -1,9 +1,13 @@
 mod actions;
 mod assets;
+mod events;
 mod messages;
 mod security;
+mod session_enrichment;
+mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};
+use tokio::sync::watch;
 
 use anyhow::Result;
 use axum::Router;
@@ -22,6 +26,26 @@ use crate::commands::agent::types::Session;
 pub struct WatchWebArgs {}
 
 const LISTEN_PORT: u16 = 4317;
+
+#[derive(Clone)]
+pub(super) struct EnrichmentUpdates {
+    sender: watch::Sender<()>,
+}
+
+impl EnrichmentUpdates {
+    fn new() -> Self {
+        let (sender, _) = watch::channel(());
+        Self { sender }
+    }
+
+    pub(super) fn subscribe(&self) -> watch::Receiver<()> {
+        self.sender.subscribe()
+    }
+
+    pub(super) fn notify(&self) {
+        self.sender.send_replace(());
+    }
+}
 
 pub async fn run(_args: &WatchWebArgs) -> Result<()> {
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
@@ -48,8 +72,11 @@ fn app_with_assets_and_loader(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
 ) -> Router {
+    let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
         .merge(actions::router())
+        .merge(sessions::router(enrichment_updates.clone()))
+        .merge(events::router(enrichment_updates))
         .merge(messages::routes_with(load_session))
         .fallback(api_not_found);
 

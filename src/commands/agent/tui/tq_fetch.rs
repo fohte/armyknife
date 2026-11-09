@@ -2,13 +2,12 @@
 //! task, keyed by session_id, for the session list's task-number column.
 //! Pure read-only against tq; never touches local session state.
 
-use std::collections::{HashMap, HashSet};
-use std::future::Future;
-
-use super::session_rows::SessionTask;
 use super::tq_snapshot::TqSnapshot;
-use crate::commands::agent::claude_sessions::normalize_title;
-use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
+use crate::commands::agent::tq_session_tasks::{
+    build_all_tasks_by_session, fetch_session_tasks_with_parents,
+};
+use crate::infra::tq::TqClient;
+use std::collections::HashSet;
 
 /// Fetches tq task links for local sessions and their missing parent sessions.
 ///
@@ -26,156 +25,23 @@ pub async fn fetch_task_snapshot(
         return Ok(None);
     };
 
-    let sessions = client
-        .list_session_tasks(&local_session_ids)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let client_ref = &client;
-    let parent_sessions = fetch_missing_parent_sessions(
-        &sessions,
-        &local_session_ids,
-        |parent_session_ids| async move { client_ref.list_session_tasks(&parent_session_ids).await },
-    )
-    .await
-    .map_err(|e| e.to_string())?;
-
-    let mut sessions = sessions;
-    sessions.extend(parent_sessions);
+    let sessions = fetch_session_tasks_with_parents(&client, &local_session_ids).await?;
     let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
 
     Ok(Some(TqSnapshot::new(session_tasks)))
 }
 
-fn parent_session_ids(
-    sessions: &[SessionTasks],
-    local_session_ids: &HashSet<String>,
-) -> HashSet<String> {
-    sessions
-        .iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .filter_map(|session| session.parent_session_id.clone())
-        .collect()
-}
-
-fn missing_parent_session_ids(
-    sessions: &[SessionTasks],
-    local_session_ids: &HashSet<String>,
-) -> HashSet<String> {
-    let returned_session_ids = sessions
-        .iter()
-        .map(|session| session.session_id.clone())
-        .collect::<HashSet<_>>();
-    parent_session_ids(sessions, local_session_ids)
-        .difference(&returned_session_ids)
-        .cloned()
-        .collect()
-}
-
-async fn fetch_missing_parent_sessions<F, Fut, E>(
-    sessions: &[SessionTasks],
-    local_session_ids: &HashSet<String>,
-    fetch: F,
-) -> Result<Vec<SessionTasks>, E>
-where
-    F: FnOnce(HashSet<String>) -> Fut,
-    Fut: Future<Output = Result<Vec<SessionTasks>, E>>,
-{
-    let missing_parent_session_ids = missing_parent_session_ids(sessions, local_session_ids);
-    if missing_parent_session_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let mut parent_sessions = fetch(missing_parent_session_ids.clone()).await?;
-    parent_sessions.retain(|session| missing_parent_session_ids.contains(&session.session_id));
-    Ok(parent_sessions)
-}
-
-/// Reduces tq's session -> tasks listing to one [`SessionTask`] per locally
-/// known session_id. It prefers tasks not linked to the parent session, then
-/// open tasks, then newer links. Remaining ties retain tq's ordering.
-///
-/// The `local_session_ids` filter here is also the fallback for a `tq`
-/// binary predating `--session-id`, which silently ignores the flag and
-/// returns every session it knows about.
-#[cfg(test)]
-fn build_task_by_session(
-    sessions: Vec<SessionTasks>,
-    local_session_ids: &HashSet<String>,
-) -> HashMap<String, SessionTask> {
-    build_all_tasks_by_session(sessions, local_session_ids)
-        .into_iter()
-        .filter_map(|(session_id, tasks)| {
-            let task = tasks.into_iter().next()?;
-            Some((session_id, task))
-        })
-        .collect()
-}
-
-fn build_all_tasks_by_session(
-    sessions: Vec<SessionTasks>,
-    local_session_ids: &HashSet<String>,
-) -> HashMap<String, Vec<SessionTask>> {
-    let referenced_parent_session_ids = parent_session_ids(&sessions, local_session_ids);
-    let task_ids_by_parent_session = sessions
-        .iter()
-        .filter(|session| referenced_parent_session_ids.contains(&session.session_id))
-        .map(|session| {
-            (
-                session.session_id.clone(),
-                session
-                    .tasks
-                    .iter()
-                    .map(|task| task.id.clone())
-                    .collect::<HashSet<_>>(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
-    sessions
-        .into_iter()
-        .filter(|session| local_session_ids.contains(&session.session_id))
-        .map(|session| {
-            let inherited_task_ids = session
-                .parent_session_id
-                .as_ref()
-                .and_then(|parent_id| task_ids_by_parent_session.get(parent_id));
-            let mut tasks = session.tasks;
-            tasks.sort_by(|left, right| {
-                let inherited_order =
-                    inherited_task_ids.map_or(std::cmp::Ordering::Equal, |task_ids| {
-                        task_ids
-                            .contains(&left.id)
-                            .cmp(&task_ids.contains(&right.id))
-                    });
-                inherited_order
-                    .then_with(|| {
-                        (left.status == TqTaskStatus::Completed)
-                            .cmp(&(right.status == TqTaskStatus::Completed))
-                    })
-                    .then_with(|| right.linked_at.cmp(&left.linked_at))
-            });
-            let tasks = tasks
-                .into_iter()
-                .map(|task| SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
-                })
-                .collect();
-            (session.session_id, tasks)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use rstest::rstest;
 
     use super::*;
-    use crate::infra::tq::TqTask;
+    use crate::commands::agent::tq_session_tasks::{
+        SessionTask, build_task_by_session, fetch_missing_parent_sessions,
+    };
+    use crate::infra::tq::{SessionTasks, TqTask, TqTaskStatus};
 
     fn ids(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| s.to_string()).collect()

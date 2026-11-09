@@ -1,5 +1,5 @@
-use crate::commands::agent::claude_sessions;
 use crate::commands::agent::session_status;
+pub(super) use crate::commands::agent::session_title::title_display_name as get_title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::types::Engine;
@@ -349,30 +349,6 @@ pub(super) fn build_title_cache(sessions: &[Session]) -> HashMap<String, String>
         .iter()
         .map(|session| (session.session_id.clone(), get_title_display_name(session)))
         .collect()
-}
-
-/// Gets the title display name for a session.
-/// Priority: label (armyknife) > last custom-title entry > last ai-title
-/// entry > .jsonl first user prompt > cwd basename.
-/// All outputs are sanitized to strip ANSI escape sequences.
-pub(super) fn get_title_display_name(session: &Session) -> String {
-    // Prefer armyknife's own label (set via env var or auto-generated)
-    if let Some(ref label) = session.label {
-        return claude_sessions::normalize_title(label);
-    }
-
-    if let Some(title) = claude_sessions::get_session_title(&session.cwd, &session.session_id) {
-        return title;
-    }
-
-    // Extract last component of cwd path
-    let raw_title = session
-        .cwd
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(String::from)
-        .unwrap_or_else(|| session.cwd.display().to_string());
-    claude_sessions::normalize_title(&raw_title)
 }
 
 /// Loads sessions from disk.

@@ -108,6 +108,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "futures-util",
  "httparse",
  "include_dir",
  "indicatif",

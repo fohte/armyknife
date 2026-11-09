@@ -1088,7 +1088,35 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold with no session views yet; the backend exposes session action endpoints under `/api/sessions/{id}` and `GET /api/sessions/{id}/messages` for conversation items. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; the UI is not implemented yet. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+
+- `GET /api/sessions/{id}/actions`
+- `POST /api/sessions/{id}/messages` with `{"content":"..."}`
+- `POST /api/sessions/{id}/answer` with `{"choice":1}`
+- `POST /api/sessions/{id}/permission/approve`
+- `POST /api/sessions/{id}/permission/reject`
+- `POST /api/sessions/{id}/interrupt`
+- `POST /api/sessions/{id}/focus`
+- `POST /api/sessions/{id}/read`
+- `POST /api/sessions/{id}/archive`
+
+For example, send a message with:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/messages \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"Hello"}'
+```
+
+Answer a question with:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"choice":1}'
+```
 
 ```sh
 cd agent-watch-web
