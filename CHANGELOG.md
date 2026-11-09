@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.519](https://github.com/fohte/armyknife/compare/v0.1.518...v0.1.519) (2026-11-09)
+
+
+### Features
+
+* **agent-watch:** add session conversation API ([#1391](https://github.com/fohte/armyknife/issues/1391)) ([143d876](https://github.com/fohte/armyknife/commit/143d8760119a5821e90459d767fcc2cea27ac76d))
+
+## [0.1.518](https://github.com/fohte/armyknife/compare/v0.1.517...v0.1.518) (2026-11-09)
+
+
+### Features
+
+* **agent-watch-web:** add session action APIs ([#1389](https://github.com/fohte/armyknife/issues/1389)) ([aa78289](https://github.com/fohte/armyknife/commit/aa7828903426fd583bd290ddb532d8f5714f313b))
+
 ## [0.1.517](https://github.com/fohte/armyknife/compare/v0.1.516...v0.1.517) (2026-11-09)
 
 
