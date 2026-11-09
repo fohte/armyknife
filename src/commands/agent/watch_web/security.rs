@@ -113,12 +113,12 @@ mod tests {
     }
 
     #[rstest]
-    #[case::get(axum::http::Method::GET)]
-    #[case::head(axum::http::Method::HEAD)]
-    fn reads_do_not_require_an_origin(#[case] method: axum::http::Method) {
+    #[case::get(axum::http::Method::GET, true)]
+    #[case::head(axum::http::Method::HEAD, true)]
+    fn reads_do_not_require_an_origin(#[case] method: axum::http::Method, #[case] expected: bool) {
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("localhost"));
 
-        assert!(request_is_allowed(&method, &headers));
+        assert_eq!(request_is_allowed(&method, &headers), expected);
     }
 }

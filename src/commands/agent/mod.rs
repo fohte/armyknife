@@ -6,6 +6,7 @@ pub(crate) mod auto_pause;
 mod bg;
 mod bg_storage;
 pub(crate) mod bg_tasks;
+mod browser;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
 mod claude_sessions;

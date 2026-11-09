@@ -10,7 +10,7 @@ use axum::response::IntoResponse;
 use clap::Args;
 use tokio::net::TcpListener;
 
-use crate::shared::command;
+use super::browser;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WatchWebArgs {}
@@ -22,7 +22,9 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
     let listener = TcpListener::bind(address).await?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
-    open_browser(&url);
+    if let Err(error) = browser::open_url(&url) {
+        eprintln!("Could not open a browser automatically: {error}");
+    }
 
     axum::serve(listener, app()).await?;
     Ok(())
@@ -41,14 +43,49 @@ async fn api_not_found() -> impl IntoResponse {
     (StatusCode::NOT_FOUND, "API route not found")
 }
 
-fn open_browser(url: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
+#[cfg(test)]
+mod tests {
+    use axum::body::{Body, to_bytes};
+    use axum::http::header::{CONTENT_TYPE, HOST};
+    use axum::http::{Request, Response, StatusCode};
+    use tower::ServiceExt;
 
-    if let Err(error) = command::new(opener).arg(url).spawn() {
-        eprintln!("Could not open a browser automatically: {error}");
+    use super::app;
+
+    #[tokio::test]
+    async fn unknown_api_routes_return_not_found_instead_of_the_spa() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .uri("/api/unimplemented")
+                    .header(HOST, "localhost")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::NOT_FOUND,
+                Some("text/plain; charset=utf-8".to_owned()),
+                "API route not found".to_owned(),
+            )
+        );
+    }
+
+    async fn response_snapshot(response: Response<Body>) -> (StatusCode, Option<String>, String) {
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (
+            status,
+            content_type,
+            String::from_utf8(body.to_vec()).unwrap(),
+        )
     }
 }
