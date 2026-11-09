@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn peer_origin_uses_the_message_header_even_when_meta() {
         let transcript = indoc! {r#"
-            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-other-origin-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n- Sender engine: fixture-engine\n\nSynthetic peer request contains </peer-message> inside.\n</peer-message>"}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-other-origin-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n- Sender engine: fixture-engine\n\nSynthetic peer request contains </peer-message> inside.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
             {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-other-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-other-id\n\nSynthetic unrelated request.\n</peer-message>"}}
             {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"Synthetic task notification."}}
         "#};

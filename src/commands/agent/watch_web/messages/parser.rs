@@ -159,11 +159,9 @@ pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    let envelope = message
-        .split_once("<peer-message>")?
-        .1
-        .strip_suffix(PEER_MESSAGE_END)?
-        .strip_prefix('\n')?;
+    let envelope = message.split_once("<peer-message>")?.1;
+    let end = envelope.rfind(PEER_MESSAGE_END)?;
+    let envelope = envelope[..end].strip_prefix('\n')?;
     let (header, body) = envelope.split_once(PEER_MESSAGE_HEADER_SEPARATOR)?;
     let mut header_lines = header.lines();
     let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
