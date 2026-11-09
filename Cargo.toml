@@ -8,8 +8,9 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.494"
+version = "0.1.520"
 edition = "2024"
+build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
 repository = "https://github.com/fohte/armyknife"
@@ -30,10 +31,12 @@ schema-gen = ["dep:schemars"]
 
 [dependencies]
 anyhow = "=1.0.104"
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "json", "tokio"] }
 base64 = "=0.23.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.6", features = ["derive"] }
 clap_complete = "=4.6.9"
+futures-util = "=0.3.34"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "query"] }
 percent-encoding = "=2.3.2"
 tokio = { version = "=1.52.3", features = ["rt-multi-thread", "macros", "net", "time"] }
@@ -56,9 +59,11 @@ similar = "=3.1.1"
 tempfile = "=3.27.0"
 termimad = "=0.34.1"
 toml_edit = "=0.25.15"
-thiserror = "=2.0.20"
+thiserror = "=2.0.21"
 unicode-width = "=0.2.2"
 indicatif = "=0.18.6"
+include_dir = "=0.7.4"
+mime_guess = "=2.0.5"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
 notify = "=8.2.0"
@@ -71,6 +76,7 @@ uuid = { version = "=1.23.5", features = ["v4"] }
 [dev-dependencies]
 rstest = "=0.26.1"
 temp-env = "=0.3.6"
+tower = { version = "=0.5.3", features = ["util"] }
 wiremock = "=0.6.5"
 
 [lints.clippy]

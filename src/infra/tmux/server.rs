@@ -214,7 +214,117 @@ pub fn capture_pane_with_escapes_for_socket(
 
 /// Sends keys to a pane on its recorded server.
 pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
-    run_tmux_for_socket(socket_path, &["send-keys", "-t", pane_id, keys])
+    send_keys_sequence_for_socket(socket_path, pane_id, &[keys])
+}
+
+/// Sends a sequence of tmux keys in one command so concurrent actions cannot interleave it.
+pub fn send_keys_sequence_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    keys: &[&str],
+) -> Result<()> {
+    let mut args = vec!["send-keys", "-t", pane_id];
+    args.extend_from_slice(keys);
+    run_tmux_for_socket(socket_path, &args)
+}
+
+/// Sends keys only if the pane still runs the command observed by the caller.
+pub fn send_keys_if_pane_command_matches_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    expected_current_command: &str,
+    keys: &[&str],
+) -> Result<bool> {
+    send_keys_if_pane_command_matches_with(
+        socket_path,
+        pane_id,
+        expected_current_command,
+        keys,
+        |socket_path, args| run_tmux_output_for_socket(socket_path, &args),
+    )
+}
+
+fn send_keys_if_pane_command_matches_with(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    expected_current_command: &str,
+    keys: &[&str],
+    run_command: impl FnOnce(Option<&str>, Vec<String>) -> Result<String>,
+) -> Result<bool> {
+    if !is_safe_pane_id(pane_id)
+        || !is_safe_tmux_word(expected_current_command)
+        || keys.is_empty()
+        || keys.iter().any(|key| !is_safe_key(key))
+    {
+        return Err(TmuxError::Internal(
+            "invalid pane command key sequence".to_string(),
+        ));
+    }
+
+    let condition = format!("#{{==:#{{pane_current_command}},{expected_current_command}}}");
+    let send_command = format!("send-keys -t {pane_id} {}", keys.join(" "));
+    let reject_command = "display-message -p '__ARMYKNIFE_PANE_COMMAND_CHANGED__'";
+    let args = vec![
+        "if-shell".to_owned(),
+        "-F".to_owned(),
+        "-t".to_owned(),
+        pane_id.to_owned(),
+        condition,
+        send_command,
+        reject_command.to_owned(),
+    ];
+    let output = run_command(socket_path, args)?;
+
+    Ok(output.trim() != "__ARMYKNIFE_PANE_COMMAND_CHANGED__")
+}
+
+fn is_safe_pane_id(pane_id: &str) -> bool {
+    pane_id
+        .strip_prefix('%')
+        .is_some_and(|id| !id.is_empty() && id.bytes().all(|byte| byte.is_ascii_digit()))
+}
+
+fn is_safe_tmux_word(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+}
+
+fn is_safe_key(key: &str) -> bool {
+    matches!(key, "Down" | "Enter" | "Escape")
+}
+
+/// Focuses a pane on its recorded tmux server.
+pub fn focus_pane_for_socket(socket_path: Option<&str>, pane_id: &str) -> Result<()> {
+    let Some(socket_path) = socket_path else {
+        return super::focus_pane(pane_id);
+    };
+
+    if super::current_socket_path().ok().flatten().as_deref() == Some(socket_path) {
+        return super::focus_pane(pane_id);
+    }
+
+    let clients_output = run_tmux_output_for_socket(
+        Some(socket_path),
+        &["list-clients", "-F", "#{client_activity} #{client_tty}"],
+    )?;
+    if let Some(client_tty) = clients_output
+        .lines()
+        .filter_map(|line| {
+            let (activity, tty) = line.split_once(' ')?;
+            Some((activity.parse::<u64>().ok()?, tty))
+        })
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, tty)| tty)
+    {
+        run_tmux_for_socket(
+            Some(socket_path),
+            &["switch-client", "-c", client_tty, "-t", pane_id],
+        )
+    } else {
+        run_tmux_for_socket(Some(socket_path), &["select-pane", "-t", pane_id])
+    }
 }
 
 /// Kills a pane on its recorded server.
@@ -269,6 +379,65 @@ mod tests {
         assert_eq!(
             socket_selector_args(socket_path),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn guarded_key_sender_runs_fixed_keys_through_the_pane_check() {
+        let mut invocation = None;
+        let result = send_keys_if_pane_command_matches_with(
+            Some("/tmp/armyknife-test/private.sock"),
+            "%47",
+            "claude",
+            &["Down", "Enter", "Escape"],
+            |socket_path, args| {
+                invocation = Some((socket_path.map(str::to_owned), args));
+                Ok(String::new())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, invocation),
+            (
+                Ok(true),
+                Some((
+                    Some("/tmp/armyknife-test/private.sock".to_owned()),
+                    vec![
+                        "if-shell".to_owned(),
+                        "-F".to_owned(),
+                        "-t".to_owned(),
+                        "%47".to_owned(),
+                        "#{==:#{pane_current_command},claude}".to_owned(),
+                        "send-keys -t %47 Down Enter Escape".to_owned(),
+                        "display-message -p '__ARMYKNIFE_PANE_COMMAND_CHANGED__'".to_owned(),
+                    ],
+                )),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::numeric_key(vec!["1"])]
+    #[case::untrusted_key(vec!["Enter; display-message injected"])]
+    fn guarded_key_sender_rejects_unlisted_keys_before_running_tmux(#[case] keys: Vec<&str>) {
+        let mut invoked = false;
+        let result = send_keys_if_pane_command_matches_with(
+            Some("/tmp/armyknife-test/private.sock"),
+            "%47",
+            "claude",
+            &keys,
+            |_, _| {
+                invoked = true;
+                Ok(String::new())
+            },
+        )
+        .map(|_| "sent")
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, invoked),
+            (Err("invalid pane command key sequence".to_owned()), false),
         );
     }
 

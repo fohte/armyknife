@@ -1,6 +1,8 @@
 //! GitHub API client implementation using reqwest.
 
 use std::sync::OnceLock;
+#[cfg(not(test))]
+use std::time::Duration;
 
 use anyhow::Context;
 use indoc::indoc;
@@ -11,9 +13,13 @@ mod partial_graphql;
 use super::error::{GitHubError, Result, api_error_from_response};
 #[cfg(not(test))]
 use crate::infra::external_tool::ExternalTool;
+#[cfg(not(test))]
+use crate::infra::process::run_with_timeout;
 
 const GITHUB_API_BASE: &str = "https://api.github.com";
 const GITHUB_GRAPHQL_URL: &str = "https://api.github.com/graphql";
+#[cfg(not(test))]
+const GH_AUTH_TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Internal wrapper for GitHub GraphQL API responses.
 ///
@@ -1131,10 +1137,9 @@ fn get_gh_token() -> Result<String> {
 
     #[cfg(not(test))]
     {
-        let output = ExternalTool::Gh
-            .command()
-            .args(["auth", "token"])
-            .output()
+        let mut command = ExternalTool::Gh.command();
+        command.args(["auth", "token"]);
+        let output = run_with_timeout(command, GH_AUTH_TOKEN_TIMEOUT)
             .context("Failed to run gh auth token")?;
 
         if !output.status.success() {

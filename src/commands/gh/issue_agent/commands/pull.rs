@@ -64,11 +64,10 @@ async fn run_with_client_and_storage(
     // Check for local changes before overwriting
     if storage.dir().exists() {
         let changes = storage.detect_changes(&issue, &comments)?;
-        if changes.has_changes() {
-            // Always show diff when there are local changes
+        if changes.has_changes() || !changes.new_comment_files.is_empty() {
             display_local_changes(storage, &issue, &comments, &changes)?;
 
-            if !args.force {
+            if changes.has_changes() && !args.force {
                 anyhow::bail!(
                     "Local changes would be overwritten. Use 'pull --force' to discard local changes."
                 );
@@ -82,7 +81,7 @@ async fn run_with_client_and_storage(
     Ok(issue.title.clone())
 }
 
-/// Display local changes that differ from remote to stdout.
+/// Display detected local changes and preserved new comments to stdout.
 /// Ignores BrokenPipe errors (e.g., when piped to `head`).
 fn display_local_changes(
     storage: &IssueStorage,
@@ -108,7 +107,7 @@ fn display_local_changes(
     Ok(())
 }
 
-/// Write local changes that differ from remote to a writer.
+/// Write detected local changes and preserved new comments to a writer.
 fn write_local_changes<W: Write>(
     writer: &mut W,
     storage: &IssueStorage,
@@ -139,8 +138,48 @@ fn write_local_changes<W: Write>(
         writeln!(writer, "+ {}", remote_issue.title)?;
     }
 
+    if (changes.labels_changed || changes.sub_issues_changed || changes.parent_issue_changed)
+        && let Ok(local_metadata) = storage.read_metadata()
+    {
+        if changes.labels_changed {
+            let local_labels = local_metadata.labels.iter().cloned();
+            let remote_labels = remote_issue.labels.iter().map(|label| label.name.clone());
+            writeln!(writer)?;
+            writeln!(writer, "=== Labels ===")?;
+            writeln!(writer, "- {}", format_values(local_labels))?;
+            writeln!(writer, "+ {}", format_values(remote_labels))?;
+        }
+
+        if changes.sub_issues_changed {
+            let local_sub_issues = local_metadata.sub_issues.iter().cloned();
+            let remote_sub_issues = remote_issue
+                .sub_issues
+                .iter()
+                .map(|issue| issue.to_ref_string());
+            writeln!(writer)?;
+            writeln!(writer, "=== Sub-issues ===")?;
+            writeln!(writer, "- {}", format_values(local_sub_issues))?;
+            writeln!(writer, "+ {}", format_values(remote_sub_issues))?;
+        }
+
+        if changes.parent_issue_changed {
+            let local_parent = local_metadata.parent_issue.as_deref().unwrap_or("(none)");
+            let remote_parent = remote_issue
+                .parent_issue
+                .as_ref()
+                .map(|issue| issue.to_ref_string())
+                .unwrap_or_else(|| "(none)".to_string());
+            writeln!(writer)?;
+            writeln!(writer, "=== Parent issue ===")?;
+            writeln!(writer, "- {local_parent}")?;
+            writeln!(writer, "+ {remote_parent}")?;
+        }
+    }
+
     // Show comment changes (read comments once for both modified and new)
-    if (!changes.modified_comment_ids.is_empty() || !changes.new_comment_files.is_empty())
+    if (!changes.modified_comment_ids.is_empty()
+        || !changes.deleted_comment_ids.is_empty()
+        || !changes.new_comment_files.is_empty())
         && let Ok(local_comments) = storage.read_comments()
     {
         // Show modified comments
@@ -151,16 +190,39 @@ fn write_local_changes<W: Write>(
             for local_comment in &local_comments {
                 if let Some(comment_id) = &local_comment.metadata.id
                     && changes.modified_comment_ids.contains(comment_id)
-                    && let Some(remote_comment) = remote_comments_map.get(comment_id.as_str())
                 {
                     writeln!(writer)?;
                     writeln!(writer, "=== Comment: {} ===", local_comment.filename)?;
-                    write_diff(writer, &local_comment.body, &remote_comment.body, false)?;
+                    if let Some(remote_comment) = remote_comments_map.get(comment_id.as_str()) {
+                        write_diff(writer, &local_comment.body, &remote_comment.body, false)?;
+                    } else {
+                        writeln!(writer, "Comment removed remotely:")?;
+                        for line in local_comment.body.lines() {
+                            writeln!(writer, "- {}", line)?;
+                        }
+                    }
                 }
             }
         }
 
-        // Show new comments (preserved during pull --force)
+        if !changes.deleted_comment_ids.is_empty() {
+            let base_comments = storage.read_base_comments()?.unwrap_or_default();
+            let base_comments_map: HashMap<&str, _> = base_comments
+                .iter()
+                .map(|comment| (comment.id.as_str(), comment))
+                .collect();
+            for comment_id in &changes.deleted_comment_ids {
+                if let Some(base_comment) = base_comments_map.get(comment_id.as_str()) {
+                    writeln!(writer)?;
+                    writeln!(writer, "=== Comment removed locally: {} ===", comment_id)?;
+                    for line in base_comment.body.lines() {
+                        writeln!(writer, "- {}", line)?;
+                    }
+                }
+            }
+        }
+
+        // Show new comments that remain in the local directory after pull.
         for local_comment in &local_comments {
             if changes.new_comment_files.contains(&local_comment.filename) {
                 writeln!(writer)?;
@@ -179,6 +241,15 @@ fn write_local_changes<W: Write>(
     writeln!(writer)?;
 
     Ok(())
+}
+
+fn format_values(values: impl IntoIterator<Item = String>) -> String {
+    let values = values.into_iter().collect::<Vec<_>>().join(", ");
+    if values.is_empty() {
+        "(none)".to_string()
+    } else {
+        values
+    }
 }
 
 /// Save issue data to local storage.
@@ -511,6 +582,158 @@ mod tests {
 
         #[rstest]
         #[tokio::test]
+        async fn test_succeeds_when_comment_differs_only_by_crlf(test_dir: TempDir) {
+            use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
+
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_abc123",
+                database_id: 12345,
+                author: "commenter",
+                body: "Test comment\r\n",
+            }])
+            .await;
+            ctx.sub_issues_empty(123).await;
+
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: commenter -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Test comment
+                "},
+            )
+            .unwrap();
+
+            let client = mock.client();
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: false,
+            };
+
+            let result = run_with_client_and_storage(&args, &client, &storage).await;
+
+            assert_eq!(result.unwrap(), "Test Issue".to_string());
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_succeeds_when_only_remote_data_changed_since_snapshot(test_dir: TempDir) {
+            use crate::commands::gh::issue_agent::commands::test_helpers::RemoteComment;
+
+            let base_issue = factories::issue_with(|issue| {
+                issue.number = 123;
+                issue.title = "Base title".to_string();
+                issue.body = Some("Base body".to_string());
+                issue.labels = factories::labels(&["bug"]);
+            });
+            let base_comment = factories::comment_with(|comment| {
+                comment.id = "IC_abc123".to_string();
+                comment.database_id = 12345;
+                comment.body = "Base comment".to_string();
+            });
+            let storage = IssueStorage::from_dir(test_dir.path());
+            storage
+                .save_issue(&IssueFrontmatter::from_issue(&base_issue), "Base body")
+                .unwrap();
+            storage
+                .save_comments(std::slice::from_ref(&base_comment))
+                .unwrap();
+
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123)
+                .title("Remote title")
+                .body("Remote body")
+                .labels(vec!["enhancement"])
+                .get()
+                .await;
+            ctx.graphql_comments(&[RemoteComment {
+                id: "IC_abc123",
+                database_id: 12345,
+                author: "commenter",
+                body: "Remote comment",
+            }])
+            .await;
+            ctx.sub_issues_empty(123).await;
+
+            let client = mock.client();
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: false,
+            };
+
+            let title = run_with_client_and_storage(&args, &client, &storage)
+                .await
+                .unwrap();
+            let body = storage.read_body().unwrap();
+            let comment_bodies = storage
+                .read_comments()
+                .unwrap()
+                .into_iter()
+                .map(|comment| comment.body)
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                (title, body, comment_bodies),
+                (
+                    "Remote title".to_string(),
+                    "Remote body".to_string(),
+                    vec!["Remote comment".to_string()],
+                )
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
+        async fn test_preserves_new_comment_without_stopping_pull(test_dir: TempDir) {
+            let mock = GitHubMockServer::start().await;
+            let ctx = mock.repo("owner", "repo");
+            ctx.issue(123).get().await;
+            ctx.graphql_comments(&[]).await;
+            ctx.sub_issues_empty(123).await;
+
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(comments_dir.join("new_draft.md"), "Draft comment").unwrap();
+
+            let client = mock.client();
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let args = PullArgs {
+                issue: IssueArgs {
+                    issue_number: 123,
+                    repo: Some("owner/repo".to_string()),
+                },
+                force: false,
+            };
+
+            let title = run_with_client_and_storage(&args, &client, &storage)
+                .await
+                .unwrap();
+            let preserved_comment = fs::read_to_string(comments_dir.join("new_draft.md")).unwrap();
+
+            assert_eq!(
+                (title, preserved_comment),
+                ("Test Issue".to_string(), "Draft comment".to_string())
+            );
+        }
+
+        #[rstest]
+        #[tokio::test]
         async fn test_succeeds_when_dir_does_not_exist(test_dir: TempDir) {
             let mock = GitHubMockServer::start().await;
             let ctx = mock.repo("owner", "repo");
@@ -805,9 +1028,7 @@ mod tests {
 
             let changes = LocalChanges {
                 body_changed: true,
-                title_changed: false,
-                modified_comment_ids: vec![],
-                new_comment_files: vec![],
+                ..LocalChanges::default()
             };
 
             let output =
@@ -851,10 +1072,8 @@ mod tests {
             });
 
             let changes = LocalChanges {
-                body_changed: false,
                 title_changed: true,
-                modified_comment_ids: vec![],
-                new_comment_files: vec![],
+                ..LocalChanges::default()
             };
 
             let output =
@@ -870,6 +1089,85 @@ mod tests {
                     + Remote Title
 
                 "}
+            );
+        }
+
+        fn test_metadata() -> IssueMetadata {
+            IssueMetadata {
+                number: 123,
+                title: "Test Issue".to_string(),
+                state: "OPEN".to_string(),
+                labels: vec![],
+                assignees: vec![],
+                milestone: None,
+                author: "testuser".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-02T00:00:00Z".to_string(),
+                last_edited_at: None,
+                parent_issue: None,
+                sub_issues: vec![],
+            }
+        }
+
+        #[rstest]
+        #[case::labels(
+            IssueMetadata { labels: vec!["bug".to_string()], ..test_metadata() },
+            LocalChanges { labels_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Labels ===
+                - bug
+                + (none)
+
+            "},
+        )]
+        #[case::sub_issues(
+            IssueMetadata { sub_issues: vec!["owner/repo#456".to_string()], ..test_metadata() },
+            LocalChanges { sub_issues_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Sub-issues ===
+                - owner/repo#456
+                + (none)
+
+            "},
+        )]
+        #[case::parent_issue(
+            IssueMetadata { parent_issue: Some("owner/repo#789".to_string()), ..test_metadata() },
+            LocalChanges { parent_issue_changed: true, ..LocalChanges::default() },
+            indoc! {"
+
+                === Local changes detected ===
+
+                === Parent issue ===
+                - owner/repo#789
+                + (none)
+
+            "},
+        )]
+        fn test_issue_field_changes_show_empty_remote_values(
+            test_dir: TempDir,
+            #[case] local_metadata: IssueMetadata,
+            #[case] changes: LocalChanges,
+            #[case] expected: &str,
+        ) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            storage.save_metadata(&local_metadata).unwrap();
+            let remote_issue = factories::issue_with(|issue| {
+                issue.labels = vec![];
+                issue.sub_issues = vec![];
+                issue.parent_issue = None;
+            });
+
+            assert_eq!(
+                to_string(|writer| {
+                    write_local_changes(writer, &storage, &remote_issue, &[], &changes)
+                }),
+                expected
             );
         }
 
@@ -900,10 +1198,8 @@ mod tests {
             })];
 
             let changes = LocalChanges {
-                body_changed: false,
-                title_changed: false,
                 modified_comment_ids: vec!["IC_abc123".to_string()],
-                new_comment_files: vec![],
+                ..LocalChanges::default()
             };
 
             let output = to_string(|w| {
@@ -924,6 +1220,45 @@ mod tests {
         }
 
         #[rstest]
+        fn test_modified_comment_removed_remotely(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            let comments_dir = test_dir.path().join("comments");
+            fs::create_dir_all(&comments_dir).unwrap();
+            fs::write(
+                comments_dir.join("001_comment_12345.md"),
+                indoc! {"
+                    <!-- author: testuser -->
+                    <!-- createdAt: 2024-01-01T00:00:00Z -->
+                    <!-- id: IC_abc123 -->
+                    <!-- databaseId: 12345 -->
+
+                    Local comment
+                "},
+            )
+            .unwrap();
+
+            let changes = LocalChanges {
+                modified_comment_ids: vec!["IC_abc123".to_string()],
+                ..LocalChanges::default()
+            };
+
+            assert_eq!(
+                to_string(|writer| {
+                    write_local_changes(writer, &storage, &factories::issue(), &[], &changes)
+                }),
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Comment: 001_comment_12345.md ===
+                    Comment removed remotely:
+                    - Local comment
+
+                "}
+            );
+        }
+
+        #[rstest]
         fn test_new_comments_preserved(test_dir: TempDir) {
             let storage = IssueStorage::from_dir(test_dir.path());
 
@@ -938,10 +1273,8 @@ mod tests {
             let remote_issue = factories::issue();
 
             let changes = LocalChanges {
-                body_changed: false,
-                title_changed: false,
-                modified_comment_ids: vec![],
                 new_comment_files: vec!["new_my_comment.md".to_string()],
+                ..LocalChanges::default()
             };
 
             let output =
@@ -955,6 +1288,38 @@ mod tests {
                     === New Comment (preserved): new_my_comment.md ===
                     - New comment line 1
                     - New comment line 2
+
+                "}
+            );
+        }
+
+        #[rstest]
+        fn test_deleted_comments(test_dir: TempDir) {
+            let storage = IssueStorage::from_dir(test_dir.path());
+            storage
+                .save_base_comments(
+                    &[crate::commands::gh::issue_agent::storage::CommentSnapshot {
+                        id: "IC_abc123".to_string(),
+                        body: "Base comment".to_string(),
+                    }],
+                )
+                .unwrap();
+
+            let changes = LocalChanges {
+                deleted_comment_ids: vec!["IC_abc123".to_string()],
+                ..LocalChanges::default()
+            };
+
+            let output =
+                to_string(|w| write_local_changes(w, &storage, &factories::issue(), &[], &changes));
+            assert_eq!(
+                output,
+                indoc! {"
+
+                    === Local changes detected ===
+
+                    === Comment removed locally: IC_abc123 ===
+                    - Base comment
 
                 "}
             );
@@ -1017,6 +1382,7 @@ mod tests {
                 title_changed: true,
                 modified_comment_ids: vec!["IC_abc123".to_string()],
                 new_comment_files: vec!["new_draft.md".to_string()],
+                ..LocalChanges::default()
             };
 
             let output = to_string(|w| {

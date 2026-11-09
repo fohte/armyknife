@@ -1,4 +1,4 @@
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -41,6 +41,10 @@ pub struct CleanArgs {
     /// Without this flag, such worktrees are kept regardless of merge status.
     #[arg(long)]
     pub force: bool,
+
+    /// Delete without asking for confirmation
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }
 
 /// Worktree with merge status for clean command.
@@ -88,7 +92,7 @@ pub async fn run(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion() {
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
         println!("Cancelled.");
         return Ok(());
     }
@@ -260,7 +264,7 @@ async fn run_all(args: &CleanArgs) -> Result<()> {
         return Ok(());
     }
 
-    if !confirm_deletion() {
+    if !confirm_deletion(args.yes, &mut io::stdin().lock(), &mut io::stdout()) {
         println!("Cancelled.");
         return Ok(());
     }
@@ -385,6 +389,7 @@ fn status_icon(status: &MergeStatus) -> &'static str {
 }
 
 /// Column widths for table display
+const ACTION_WIDTH: usize = 6;
 const REPO_WIDTH: usize = 34;
 const NAME_WIDTH: usize = 28;
 const BRANCH_WIDTH: usize = 28;
@@ -409,6 +414,7 @@ fn render_worktrees_table<W: Write>(
     show_repo: bool,
 ) -> io::Result<()> {
     // Print header
+    write!(writer, "{} ", pad_or_truncate("ACTION", ACTION_WIDTH))?;
     if show_repo {
         writeln!(
             writer,
@@ -426,8 +432,14 @@ fn render_worktrees_table<W: Write>(
         )?;
     }
 
-    // Combine: to_delete first, then to_keep
-    for info in to_delete.iter().chain(to_keep.iter()) {
+    // Combine: to_delete first, then to_keep. The action is spelled out so the
+    // [y/N] prompt doesn't rely on icon or color to tell what gets deleted.
+    let rows = to_delete
+        .iter()
+        .map(|info| ("DELETE", info))
+        .chain(to_keep.iter().map(|info| ("KEEP", info)));
+    for (action, info) in rows {
+        write!(writer, "{} ", pad_or_truncate(action, ACTION_WIDTH))?;
         let name_cell = pad_or_truncate(&info.wt.name, NAME_WIDTH);
         let branch_cell = pad_or_truncate(&info.wt.branch, BRANCH_WIDTH);
 
@@ -466,15 +478,23 @@ fn render_worktrees_table<W: Write>(
     Ok(())
 }
 
-/// Prompt user for confirmation
-fn confirm_deletion() -> bool {
-    println!();
-    print!("Delete these worktrees? [y/N] ");
-    io::stdout().flush().ok();
+/// Prompt user for confirmation; `yes` skips the prompt without reading input.
+fn confirm_deletion<R: BufRead, W: Write>(yes: bool, input: &mut R, output: &mut W) -> bool {
+    if yes {
+        return true;
+    }
 
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).ok();
-    input.trim().eq_ignore_ascii_case("y")
+    // An unseen prompt must not let piped input confirm the deletion.
+    if write!(output, "\nDelete these worktrees? [y/N] ")
+        .and_then(|()| output.flush())
+        .is_err()
+    {
+        return false;
+    }
+
+    let mut line = String::new();
+    input.read_line(&mut line).ok();
+    line.trim().eq_ignore_ascii_case("y")
 }
 
 /// Prints the indented detail lines for a successful worktree cleanup
@@ -632,28 +652,80 @@ mod tests {
     use std::path::PathBuf;
     use std::{cell::RefCell, time::Duration};
 
-    #[test]
-    fn agent_clean_accepts_worktree_cleanup_options() {
+    #[rstest]
+    #[case::without_yes(&[], false)]
+    #[case::long_yes(&["--yes"], true)]
+    #[case::short_yes(&["-y"], true)]
+    fn agent_clean_accepts_worktree_cleanup_options(
+        #[case] yes_flags: &[&str],
+        #[case] expected_yes: bool,
+    ) {
         use clap::Parser;
 
-        let parsed = crate::cli::Cli::try_parse_from([
-            "a",
-            "agent",
-            "clean",
-            "--dry-run",
-            "--all",
-            "--force",
-        ])
-        .expect("the clean command should parse");
+        let argv = ["a", "agent", "clean", "--dry-run", "--all", "--force"]
+            .iter()
+            .chain(yes_flags);
+        let parsed = crate::cli::Cli::try_parse_from(argv).expect("the clean command should parse");
 
         let clean_args = match parsed.command {
             crate::cli::Commands::Agent(super::super::AgentCommands::Clean(args)) => {
-                Some((args.dry_run, args.all, args.force))
+                Some((args.dry_run, args.all, args.force, args.yes))
             }
             _ => None,
         };
 
-        assert_eq!(clean_args, Some((true, true, true)));
+        assert_eq!(clean_args, Some((true, true, true, expected_yes)));
+    }
+
+    /// Returns (confirmed, prompt written, input left unread).
+    #[rstest]
+    #[case::yes_skips_prompt(true, "n\n", (true, "", "n\n"))]
+    #[case::prompt_accepts_y(false, "y\n", (true, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::prompt_rejects_n(false, "n\n", (false, "\nDelete these worktrees? [y/N] ", ""))]
+    #[case::prompt_rejects_eof(false, "", (false, "\nDelete these worktrees? [y/N] ", ""))]
+    fn test_confirm_deletion(
+        #[case] yes: bool,
+        #[case] input: &str,
+        #[case] expected: (bool, &str, &str),
+    ) {
+        let mut reader = io::Cursor::new(input.as_bytes());
+        let mut output = Vec::new();
+
+        let confirmed = confirm_deletion(yes, &mut reader, &mut output);
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!(
+            (
+                confirmed,
+                String::from_utf8(output).expect("utf8 prompt").as_str(),
+                unread.as_str()
+            ),
+            expected
+        );
+    }
+
+    struct ClosedWriter;
+
+    impl Write for ClosedWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::BrokenPipe.into())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_confirm_deletion_declines_when_prompt_cannot_be_written() {
+        let mut reader = io::Cursor::new("y\n".as_bytes());
+
+        let confirmed = confirm_deletion(false, &mut reader, &mut ClosedWriter);
+
+        let mut unread = String::new();
+        io::Read::read_to_string(&mut reader, &mut unread).expect("read remaining input");
+        assert_eq!((confirmed, unread.as_str()), (false, "y\n"));
     }
 
     fn make_session_at(id: &str, status: SessionStatus, cwd: PathBuf) -> Session {
@@ -769,7 +841,7 @@ mod tests {
         // Header only, no data rows
         assert_eq!(
             result,
-            "NAME                         BRANCH                       STATUS\n"
+            "ACTION NAME                         BRANCH                       STATUS\n"
         );
     }
 
@@ -792,8 +864,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE feature-branch               fohte/feature-branch         \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
@@ -818,8 +890,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                KEEP   wip-feature                  fohte/wip-feature            \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -852,6 +924,17 @@ mod tests {
                     reason: "Not merged".to_string(),
                 },
             ),
+            CleanWorktreeInfo {
+                has_active_session: true,
+                ..make_clean_info(
+                    "merged-in-use",
+                    test_repo.path().join(".worktrees/merged-in-use"),
+                    "fohte/merged-in-use",
+                    MergeStatus::Merged {
+                        reason: "Merged (git)".to_string(),
+                    },
+                )
+            },
         ];
 
         let mut output = Vec::new();
@@ -863,10 +946,11 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
-                open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
-                no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                KEEP   open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                KEEP   no-pr                        fohte/no-pr                  \x1b[32mNot merged\x1b[0m
+                KEEP   merged-in-use                fohte/merged-in-use          \x1b[35m✓ Merged (git)\x1b[0m\x1b[33m ⏵ active session\x1b[0m
             "}
         );
     }
@@ -890,8 +974,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE this-is-a-very-long-workt... fohte/this-is-a-very-long... \x1b[35m✓ merged\x1b[0m
             "}
         );
     }
@@ -934,10 +1018,10 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
-                pr-closed                    fohte/pr-closed              \x1b[31m✗ closed\x1b[0m
-                pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                DELETE pr-merged                    fohte/pr-merged              \x1b[35m✓ merged\x1b[0m
+                DELETE pr-closed                    fohte/pr-closed              \x1b[31m✗ closed\x1b[0m
+                KEEP   pr-open                      fohte/pr-open                \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -954,7 +1038,7 @@ mod tests {
         let result = String::from_utf8(output).expect("valid utf8");
         assert_eq!(
             result,
-            "REPO                               NAME                         BRANCH                       STATUS\n"
+            "ACTION REPO                               NAME                         BRANCH                       STATUS\n"
         );
     }
 
@@ -988,9 +1072,9 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                REPO                               NAME                         BRANCH                       STATUS
-                github.com/fohte/armyknife         merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
-                github.com/fohte/other-repo        open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
+                ACTION REPO                               NAME                         BRANCH                       STATUS
+                DELETE github.com/fohte/armyknife         merged-feature               fohte/merged-feature         \x1b[35m✓ Merged (git)\x1b[0m
+                KEEP   github.com/fohte/other-repo        open-pr                      fohte/open-pr                \x1b[32mopen\x1b[0m
             "}
         );
     }
@@ -1193,8 +1277,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                NAME                         BRANCH                       STATUS
-                wip                          fohte/wip                    \x1b[32mopen\x1b[0m\x1b[33m ⏵ active session\x1b[0m
+                ACTION NAME                         BRANCH                       STATUS
+                KEEP   wip                          fohte/wip                    \x1b[32mopen\x1b[0m\x1b[33m ⏵ active session\x1b[0m
             "}
         );
     }
@@ -1219,8 +1303,8 @@ mod tests {
         assert_eq!(
             result,
             indoc! {"
-                REPO                               NAME                         BRANCH                       STATUS
-                github.com/very-long-org-name/v... feature                      fohte/feature                \x1b[35m✓ merged\x1b[0m
+                ACTION REPO                               NAME                         BRANCH                       STATUS
+                DELETE github.com/very-long-org-name/v... feature                      fohte/feature                \x1b[35m✓ merged\x1b[0m
             "}
         );
     }

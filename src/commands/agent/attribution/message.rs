@@ -81,7 +81,7 @@ fn trailer_block_start(lines: &[String]) -> Option<usize> {
     while start > 0 && (is_trailer_line(&lines[start - 1]) || is_continuation(&lines[start - 1])) {
         start -= 1;
     }
-    if start == end || (start > 0 && !lines[start - 1].is_empty()) {
+    if start == 0 || start == end || !lines[start - 1].is_empty() {
         return None;
     }
     Some(start)
@@ -168,6 +168,24 @@ mod tests {
         assert_eq!(
             prepare_with_trailer(&message, trailer).expect("prepare attributed message"),
             message
+        );
+    }
+
+    #[test]
+    fn title_that_looks_like_a_trailer_is_kept_out_of_the_trailer_block() {
+        let trailer = "Co-authored-by: Codex (fixture-model-blue) <noreply@openai.com>";
+
+        assert_eq!(
+            prepare_with_trailer(indoc! {"scope: fixture subject"}, trailer)
+                .expect("prepare attributed message"),
+            format!(
+                indoc! {"
+                scope: fixture subject
+
+                {trailer}
+            "},
+                trailer = trailer
+            )
         );
     }
 }

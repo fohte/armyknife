@@ -2,6 +2,7 @@ mod common;
 mod hooks;
 mod new;
 mod review;
+mod stack;
 mod submit;
 
 use clap::Subcommand;

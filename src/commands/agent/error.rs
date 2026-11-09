@@ -49,6 +49,9 @@ pub enum CcError {
         parent_id: String,
     },
 
+    #[error("Session '{0}' is not a direct child of the calling session")]
+    NotDirectChild(String),
+
     #[error("Session '{0}' has no tmux information (was not started in tmux)")]
     NoTmuxInfo(String),
 

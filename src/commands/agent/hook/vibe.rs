@@ -20,8 +20,10 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::json;
 
+    use super::super::{SideEffects, process_hook_event_impl};
     use super::*;
-    use crate::commands::agent::types::Engine;
+    use crate::commands::agent::store;
+    use crate::commands::agent::types::{Engine, SessionStatus};
 
     #[derive(Clone, Copy)]
     struct PromptCase {
@@ -223,5 +225,63 @@ mod tests {
         enable_on_prompt_submit(case.event, &input, &mut session);
 
         assert_eq!(session.vibe_enabled, case.expected);
+    }
+
+    #[rstest]
+    #[case::explicitly_enabled(true, false)]
+    #[case::inherited(false, true)]
+    fn sweep_pause_and_resume_keep_vibe_settings(
+        session_factory: fn(bool, bool) -> Session,
+        #[case] vibe_enabled: bool,
+        #[case] launched_with_vibe: bool,
+    ) {
+        let sessions_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let mut session = session_factory(false, vibe_enabled);
+        session.status = SessionStatus::Stopped;
+        session.sweep_signaled = true;
+        session.launched_with_vibe = launched_with_vibe;
+        session.ancestor_session_ids = vec!["ancestor-session".to_string()];
+        store::save_session_to(sessions_dir.path(), &session).expect("session should save");
+        let process = |event, source: Option<&str>| {
+            let input: HookInput = serde_json::from_value(json!({
+                "session_id": "session-test",
+                "cwd": "/tmp/session-test",
+                "source": source,
+            }))
+            .expect("valid test hook input");
+            process_hook_event_impl(event, input, sessions_dir.path(), &SideEffects::none())
+                .expect("hook should succeed");
+            let stored = store::load_session_from(sessions_dir.path(), "session-test")
+                .expect("session should load")
+                .expect("session should exist");
+            (
+                stored.status,
+                stored.vibe_enabled,
+                stored.launched_with_vibe,
+                stored.ancestor_session_ids,
+            )
+        };
+
+        let paused = process(HookEvent::SessionEnd, None);
+        let resumed = process(HookEvent::SessionStart, Some("resume"));
+
+        let ancestors = vec!["ancestor-session".to_string()];
+        assert_eq!(
+            (paused, resumed),
+            (
+                (
+                    SessionStatus::Paused,
+                    vibe_enabled,
+                    launched_with_vibe,
+                    ancestors.clone(),
+                ),
+                (
+                    SessionStatus::Stopped,
+                    vibe_enabled,
+                    launched_with_vibe,
+                    ancestors,
+                ),
+            ),
+        );
     }
 }

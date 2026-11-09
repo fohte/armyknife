@@ -4,8 +4,8 @@ use anyhow::Result;
 use chrono::Utc;
 use clap::Args;
 
-use super::claude_sessions;
 use super::session_status;
+use super::session_title::title_display_name_or_dash as get_title_display_name;
 use super::store;
 #[cfg(test)]
 use super::types::Engine;
@@ -168,17 +168,6 @@ fn render_session_row<W: Write>(
     )?;
 
     Ok(())
-}
-
-/// Gets the title display name for a session.
-/// Priority: label (armyknife) > last custom-title entry > last ai-title
-/// entry > .jsonl first user prompt > "-".
-fn get_title_display_name(session: &Session) -> String {
-    if let Some(ref label) = session.label {
-        return claude_sessions::normalize_title(label);
-    }
-    claude_sessions::get_session_title(&session.cwd, &session.session_id)
-        .unwrap_or_else(|| "-".to_string())
 }
 
 /// Gets the display name for a session.

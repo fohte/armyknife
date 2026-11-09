@@ -220,6 +220,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use anyhow::{Result, bail};
+    use indoc::indoc;
     use rstest::rstest;
 
     use super::*;
@@ -776,18 +777,32 @@ mod tests {
         let tq = fake_submit_tq(None, true);
         let plan = sample_plan();
         let github = FakeGitHub::default();
-        github.add_body("acme/notify-api", 12, "Schema PR body");
-        github.add_body("acme/notify-web", 17, "Settings PR body");
+        let schema_body = indoc! {"
+            Schema PR body
+
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
+        let settings_body = indoc! {"
+            Settings PR body
+
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
+        github.add_body("acme/notify-api", 12, schema_body);
+        github.add_body("acme/notify-web", 17, settings_body);
         github.fail_update_once("acme/notify-web", 17);
         let pull_requests = created_pull_requests();
         let expected_bodies = HashMap::from([
             (
                 ("acme/notify-api".to_string(), 12),
-                expected_body(&plan, "schema", "Schema PR body", &pull_requests),
+                expected_body(&plan, "schema", schema_body, &pull_requests),
             ),
             (
                 ("acme/notify-web".to_string(), 17),
-                "Settings PR body".to_string(),
+                settings_body.to_string(),
             ),
         ]);
 

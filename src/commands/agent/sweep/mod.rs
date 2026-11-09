@@ -24,6 +24,8 @@
 //!
 //! Auto-pause only considers Stopped sessions. A separate pass closes idle
 //! Stopped or Paused sessions after their linked-worktree pull request merges.
+//! Another retries recent background completion notifications that could not be
+//! delivered, waking the session when it is Paused.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -47,6 +49,7 @@ use crate::shared::log::short_run_id;
 mod codex_turn_status;
 mod merged_close;
 mod service;
+mod undelivered_redelivery;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SweepArgs {
@@ -59,8 +62,8 @@ pub struct SweepArgs {
     #[arg(long, global = true)]
     pub timeout: Option<String>,
 
-    /// Dry-run: log what would be paused, marked failed or stopped, or closed
-    /// without sending signals or updating session records.
+    /// Dry-run: log what would be paused, marked failed or stopped, closed, or
+    /// redelivered without sending signals or updating session records.
     #[arg(long, global = true)]
     pub dry_run: bool,
 }
@@ -137,11 +140,12 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
             args.dry_run,
         )
     };
-    let (report, codex_updates, merged_closed) = run_sweep_passes(
+    let (report, codex_updates, merged_closed, redelivery_started) = run_sweep_passes(
         pause_enabled,
         pause_pass,
         codex_status_pass,
         || merged_close::close_merged_sessions(args.dry_run),
+        || undelivered_redelivery::spawn_recent(&sessions_dir, args.dry_run),
         |warning| eprintln!("{warning}"),
     )
     .await;
@@ -155,6 +159,7 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
         codex_failed = codex_updates.failed,
         codex_interrupted = codex_updates.interrupted,
         merged_closed,
+        redelivery_started,
         timeout = %timeout_str,
         dry_run = args.dry_run,
     );
@@ -168,12 +173,13 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     // above already records every signal for anyone tailing the JSONL log.
     if report.paused > 0 || codex_updates.total() > 0 || merged_closed > 0 || args.dry_run {
         eprintln!(
-            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} signaled={} waiting={} active={} (timeout={})",
+            "[armyknife] agent sweep: scanned={} paused={} codex_failed={} codex_interrupted={} merged_closed={} redelivery_started={} signaled={} waiting={} active={} (timeout={})",
             report.scanned,
             report.paused,
             codex_updates.failed,
             codex_updates.interrupted,
             merged_closed,
+            redelivery_started,
             report.signaled,
             report.waiting,
             report.active,
@@ -184,18 +190,25 @@ async fn run_sweep(args: &SweepArgs) -> Result<()> {
     Ok(())
 }
 
-async fn run_sweep_passes<P, C, M, Fut, W>(
+async fn run_sweep_passes<P, C, M, Fut, R, W>(
     pause_enabled: bool,
     pause_pass: P,
     codex_status_pass: C,
     merged_close_pass: M,
+    redelivery_pass: R,
     mut on_pass_failure: W,
-) -> (SweepReport, codex_turn_status::CodexTurnUpdates, usize)
+) -> (
+    SweepReport,
+    codex_turn_status::CodexTurnUpdates,
+    usize,
+    usize,
+)
 where
     P: FnOnce() -> Result<SweepReport>,
     C: FnOnce() -> Result<codex_turn_status::CodexTurnUpdates>,
     M: FnOnce() -> Fut,
     Fut: Future<Output = Result<usize>>,
+    R: FnOnce() -> Result<usize>,
     W: FnMut(&str),
 {
     let report = if pause_enabled {
@@ -220,7 +233,14 @@ where
         "merged-session close failed",
         &mut on_pass_failure,
     );
-    (report, codex_updates, merged_closed)
+    // Runs last so it sees the sessions the other passes signaled or closed.
+    let redelivery_started = recover_sweep_pass(
+        redelivery_pass(),
+        "agent.sweep.redelivery_failed",
+        "undelivered notification redelivery failed",
+        &mut on_pass_failure,
+    );
+    (report, codex_updates, merged_closed, redelivery_started)
 }
 
 fn recover_sweep_pass<T, W>(
@@ -259,6 +279,12 @@ pub(crate) trait SessionProbe: DraftProbe {
     fn has_pending_bg_run(&self, _session: &Session) -> bool {
         false
     }
+
+    /// Returns whether the agent process `pid` has a Claude Code Remote
+    /// Control connection, which a pause would take offline.
+    fn has_remote_control(&self, _session: &Session, _pid: u32) -> bool {
+        false
+    }
 }
 
 struct TmuxSessionProbe<'a, A: DraftProbe> {
@@ -287,6 +313,21 @@ impl<A: DraftProbe> SessionProbe for TmuxSessionProbe<'_, A> {
                     event = "agent.sweep.bg_run_registry_read_failed",
                     session = %session.session_id,
                     error = %error,
+                );
+                true
+            }
+        }
+    }
+
+    fn has_remote_control(&self, session: &Session, pid: u32) -> bool {
+        match super::claude_registry::has_remote_control(pid) {
+            Ok(connected) => connected,
+            Err(error) => {
+                tracing::warn!(
+                    event = "agent.sweep.remote_control_check_failed",
+                    session = %session.session_id,
+                    pid = pid,
+                    error = %format!("{error:#}"),
                 );
                 true
             }
@@ -340,7 +381,8 @@ pub struct SweepReport {
     pub signaled: usize,
     /// Stopped sessions whose timeout has not yet elapsed.
     pub waiting: usize,
-    /// Sessions in an active state or with a detached background command pending.
+    /// Sessions in an active state, with a detached background command
+    /// pending, or with a Remote Control connection.
     pub active: usize,
 }
 
@@ -443,6 +485,14 @@ where
 
         match auto_pause::decide_pause_with_effective(&session, now, timeout, effective) {
             PauseDecision::Pause => match probe.resolve_pid(&session) {
+                Ok(Some(pid)) if probe.has_remote_control(&session, pid) => {
+                    tracing::info!(
+                        event = "agent.sweep.remote_control_active",
+                        session = %session.session_id,
+                        pid = pid,
+                    );
+                    report.active += 1;
+                }
                 Ok(Some(pid)) => {
                     // Still resolves to a live agent pid -- a shutdown request
                     // does not guarantee prompt exit (see module docs), so we
@@ -661,6 +711,7 @@ mod tests {
         pids: RefCell<HashMap<String, u32>>,
         drafts: RefCell<HashSet<String>>,
         failed_queries: RefCell<HashSet<String>>,
+        remote_control_pids: HashSet<u32>,
     }
 
     struct ResumingProbe {
@@ -691,6 +742,11 @@ mod tests {
             }
             self
         }
+
+        fn with_remote_control(mut self, pids: &[u32]) -> Self {
+            self.remote_control_pids.extend(pids);
+            self
+        }
     }
 
     impl DraftProbe for FakeProbe {
@@ -712,6 +768,10 @@ mod tests {
                 return Err(anyhow::anyhow!("fixture tmux query failure"));
             }
             Ok(self.pids.borrow().get(&session.session_id).copied())
+        }
+
+        fn has_remote_control(&self, _session: &Session, pid: u32) -> bool {
+            self.remote_control_pids.contains(&pid)
         }
     }
 
@@ -841,6 +901,7 @@ mod tests {
                 close_calls.set(close_calls.get() + 1);
                 Ok(2)
             },
+            || Ok(4),
             |warning| *warning_output.borrow_mut() = Some(warning.to_string()),
         )
         .await;
@@ -864,6 +925,7 @@ mod tests {
                         interrupted: 0,
                     },
                     2,
+                    4,
                 ),
                 expected_pause_calls,
                 1,
@@ -899,6 +961,7 @@ mod tests {
                     close_calls.set(close_calls.get() + 1);
                     Ok(2)
                 },
+                || Ok(4),
                 |warning| warning_output.borrow_mut().push(warning.to_string()),
             ));
             let mut context = Context::from_waker(Waker::noop());
@@ -921,6 +984,7 @@ mod tests {
                     SweepReport::default(),
                     codex_turn_status::CodexTurnUpdates::default(),
                     2,
+                    4,
                 )),
                 vec![serde_json::json!({
                     "event": "agent.sweep.codex_status_failed",
@@ -959,6 +1023,7 @@ mod tests {
                             .context("opening session database"))
                     })
                 },
+                || Ok(4),
                 |warning| warning_output.borrow_mut().push(warning.to_string()),
             ));
             let mut context = Context::from_waker(Waker::noop());
@@ -981,6 +1046,7 @@ mod tests {
                     SweepReport::default(),
                     codex_turn_status::CodexTurnUpdates::default(),
                     0,
+                    4,
                 )),
                 vec![serde_json::json!({
                     "event": "agent.sweep.sessions_read_failed",
@@ -989,6 +1055,50 @@ mod tests {
                 1,
                 1,
                 vec!["[armyknife] agent sweep: merged-session close failed: opening session database: database is locked".to_string()],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn run_sweep_passes_runs_redelivery_last_and_recovers_its_error() {
+        let calls = RefCell::new(Vec::new());
+        let warnings = RefCell::new(Vec::new());
+        let result = run_sweep_passes(
+            true,
+            || {
+                calls.borrow_mut().push("pause");
+                Ok(SweepReport::default())
+            },
+            || {
+                calls.borrow_mut().push("codex_status");
+                Ok(codex_turn_status::CodexTurnUpdates::default())
+            },
+            || async {
+                calls.borrow_mut().push("merged_close");
+                Ok(2)
+            },
+            || {
+                calls.borrow_mut().push("redelivery");
+                Err(anyhow::anyhow!("fixture scan failure"))
+            },
+            |warning| warnings.borrow_mut().push(warning.to_string()),
+        )
+        .await;
+
+        assert_eq!(
+            (result, calls.into_inner(), warnings.into_inner()),
+            (
+                (
+                    SweepReport::default(),
+                    codex_turn_status::CodexTurnUpdates::default(),
+                    2,
+                    0,
+                ),
+                vec!["pause", "codex_status", "merged_close", "redelivery"],
+                vec![
+                    "[armyknife] agent sweep: undelivered notification redelivery failed: fixture scan failure"
+                        .to_string()
+                ],
             ),
         );
     }
@@ -1174,6 +1284,58 @@ mod tests {
             reloaded.sweep_signaled,
             "signaling should mark sweep_signaled so hook.rs's SessionEnd \
              handler can recognize this shutdown as sweep's own"
+        );
+    }
+
+    #[rstest]
+    fn remote_control_blocks_pause(test_dir: TestDir) {
+        let old = Utc::now() - TimeDelta::hours(1);
+        for id in ["remote", "local"] {
+            save_session_to(
+                &test_dir.path,
+                &make_session(id, SessionStatus::Stopped, old),
+            )
+            .expect("save");
+        }
+
+        let sender = RecordingSender::default();
+        let probe =
+            FakeProbe::with_pids(&[("remote", 1111), ("local", 2222)]).with_remote_control(&[1111]);
+        let report = sweep_impl(
+            &test_dir.path,
+            Duration::from_secs(1),
+            &sender,
+            &probe,
+            &RecordingTmuxStatusSyncer::default(),
+            false,
+        )
+        .expect("sweep");
+
+        let state = |id: &str| {
+            let session = store::load_session_from(&test_dir.path, id)
+                .expect("load")
+                .expect("session exists");
+            (session.status, session.sweep_signaled)
+        };
+        assert_eq!(
+            (
+                report,
+                sender.calls.borrow().clone(),
+                state("remote"),
+                state("local"),
+            ),
+            (
+                SweepReport {
+                    scanned: 2,
+                    paused: 0,
+                    signaled: 1,
+                    waiting: 0,
+                    active: 1,
+                },
+                vec![(2222, libc::SIGTERM)],
+                (SessionStatus::Stopped, false),
+                (SessionStatus::Stopped, true),
+            ),
         );
     }
 

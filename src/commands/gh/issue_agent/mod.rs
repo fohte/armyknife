@@ -1,5 +1,6 @@
 pub(crate) mod body_compare;
 pub mod commands;
+pub(in crate::commands::gh::issue_agent) mod field_comparison;
 pub mod format;
 pub mod models;
 pub mod storage;

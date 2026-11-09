@@ -6,9 +6,10 @@ pub(crate) mod auto_pause;
 mod bg;
 mod bg_storage;
 pub(crate) mod bg_tasks;
+mod browser;
 pub(crate) mod claude_messaging;
 pub(crate) mod claude_registry;
-mod claude_sessions;
+pub(crate) mod claude_sessions;
 mod clean;
 mod clean_detached;
 mod close;
@@ -35,18 +36,21 @@ pub(crate) mod review_queue;
 mod session_init;
 mod session_pr_context;
 pub(crate) mod session_status;
+pub(crate) mod session_title;
 mod signal;
 mod status;
 mod status_inference;
 pub(crate) mod store;
 mod sweep;
 pub(crate) mod tmux_sync;
+pub(crate) mod tq_session_tasks;
 mod transcript;
 mod tui;
 pub(crate) mod types;
 pub(crate) mod user_turn;
 mod vibe;
 mod watch;
+mod watch_web;
 mod window_status;
 
 use clap::Subcommand;
@@ -84,6 +88,7 @@ pub use sweep::SweepArgs;
 pub(crate) use vibe::ensure_repo_vibe_access;
 pub use vibe::{VibeCommands, is_vibe_enabled};
 pub use watch::WatchArgs;
+pub use watch_web::WatchWebArgs;
 pub use window_status::WindowStatusArgs;
 
 #[derive(Subcommand, Clone, PartialEq, Eq)]
@@ -131,6 +136,10 @@ pub enum AgentCommands {
 
     /// Watch Claude Code sessions in real-time (TUI)
     Watch(WatchArgs),
+
+    /// Start the local web UI for watching agent sessions
+    #[command(name = "watch-web")]
+    WatchWeb(WatchWebArgs),
 
     /// Focus on a Claude Code session's tmux pane
     Focus(FocusArgs),
@@ -221,6 +230,7 @@ impl AgentCommands {
             Self::PermissionNotification(args) => hook::permission_notification::run(args)?,
             Self::List(args) => list::run(args)?,
             Self::Watch(args) => watch::run(args)?,
+            Self::WatchWeb(args) => watch_web::run(args).await?,
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,

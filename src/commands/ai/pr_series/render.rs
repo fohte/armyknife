@@ -14,7 +14,7 @@ pub fn render_section(
     current_body: &str,
     repository_privacy: &HashMap<String, bool>,
     created_pull_requests: &[CreatedPullRequest],
-) -> Result<String> {
+) -> Result<Option<String>> {
     let current = plan
         .pull_requests
         .iter()
@@ -41,6 +41,9 @@ pub fn render_section(
             .any(|(entry, _)| entry.id == current_entry_id),
         "current pull request `{current_entry_id}` is hidden by repository privacy filtering"
     );
+    if visible_entries.len() <= 1 {
+        return Ok(None);
+    }
 
     let visible_by_id = visible_entries
         .iter()
@@ -91,33 +94,34 @@ pub fn render_section(
         .map(|(index, step)| format!("{}. {step}", index + 1))
         .collect::<Vec<_>>()
         .join("\n");
+    let heading = if body_is_japanese {
+        "PR 一覧"
+    } else {
+        "Pull requests"
+    };
     let section = format!(
         indoc! {"
             {START_MARKER}
-            ### {name}
+            ### {heading}
 
             {steps}
             {END_MARKER}
         "},
         START_MARKER = START_MARKER,
         END_MARKER = END_MARKER,
-        name = plan.name,
+        heading = heading,
         steps = numbered_steps,
     );
-    Ok(section.trim_end_matches('\n').to_string())
+    Ok(Some(section.trim_end_matches('\n').to_string()))
+}
+
+pub(super) fn has_managed_section(body: &str) -> Result<bool> {
+    Ok(managed_section_range(body)?.is_some())
 }
 
 pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
     let Some(section_range) = managed_section_range(body)? else {
-        if body.is_empty() {
-            return Ok(section.to_string());
-        }
-        let separator = if body.ends_with('\n') {
-            "\n"
-        } else {
-            concat!("\n", "\n")
-        };
-        return Ok(format!("{body}{separator}{section}"));
+        return Ok(body.to_string());
     };
 
     Ok(format!(
@@ -128,14 +132,42 @@ pub fn replace_managed_section(body: &str, section: &str) -> Result<String> {
     ))
 }
 
+pub fn remove_managed_section(body: &str) -> Result<String> {
+    let Some(section_range) = managed_section_range(body)? else {
+        return Ok(body.to_string());
+    };
+
+    let before = body[..section_range.start].trim_end_matches(['\r', '\n']);
+    let after = body[section_range.end..].trim_start_matches(['\r', '\n']);
+    let newline = if body.contains("\r\n") { "\r\n" } else { "\n" };
+
+    match (before.is_empty(), after.is_empty()) {
+        (true, true) => Ok(String::new()),
+        (true, false) => Ok(after.to_string()),
+        (false, true) => Ok(before.to_string()),
+        (false, false) => Ok(format!("{before}{newline}{newline}{after}")),
+    }
+}
+
 pub fn preserve_managed_section(existing_body: &str, submitted_body: &str) -> Result<String> {
-    if managed_section_range(submitted_body)?.is_some() {
+    let Some(submitted_range) = managed_section_range(submitted_body)? else {
+        return Ok(submitted_body.to_string());
+    };
+    let submitted_section_content = &submitted_body
+        [submitted_range.start + START_MARKER.len()..submitted_range.end - END_MARKER.len()];
+    if !submitted_section_content.trim().is_empty() {
         return Ok(submitted_body.to_string());
     }
     let Some(existing_range) = managed_section_range(existing_body)? else {
         return Ok(submitted_body.to_string());
     };
-    replace_managed_section(submitted_body, &existing_body[existing_range])
+
+    Ok(format!(
+        "{}{}{}",
+        &submitted_body[..submitted_range.start],
+        &existing_body[existing_range],
+        &submitted_body[submitted_range.end..]
+    ))
 }
 
 fn body_without_managed_section(body: &str) -> Result<String> {
@@ -186,9 +218,10 @@ fn render_pull_request(
         } else {
             "this PR"
         };
+        // Unicode whitespace next to the bold delimiters prevents GitHub from rendering emphasis.
         format!(
             "**{}** ({current_label})",
-            escape_markdown_text(&entry.summary)
+            escape_markdown_text(entry.summary.trim())
         )
     } else if let Some(pull_request) = created_by_id.get(entry.id.as_str()) {
         format!(
@@ -217,10 +250,47 @@ fn marker_is_on_its_own_line(body: &str, index: usize, marker: &str) -> bool {
 }
 
 fn escape_markdown_text(value: &str) -> String {
-    value
+    // GitHub preserves full-width spaces and NBSP, so trimming them changes the rendered text.
+    let characters = value
+        .trim_start_matches([' ', '\t'])
         .chars()
-        .map(|character| {
-            if character.is_ascii_punctuation() {
+        .collect::<Vec<_>>();
+    let leading_digit_end = characters
+        .iter()
+        .take_while(|character| character.is_ascii_digit())
+        .count();
+    let has_leading_ordered_list_marker = leading_digit_end > 0
+        && matches!(characters.get(leading_digit_end), Some(&'.') | Some(&')'));
+
+    characters
+        .iter()
+        .enumerate()
+        .map(|(index, character)| {
+            // CommonMark cannot open or close emphasis with an underscore between alphanumerics.
+            let has_alphanumeric_neighbors = index > 0
+                && index + 1 < characters.len()
+                && characters[index - 1].is_alphanumeric()
+                && characters[index + 1].is_alphanumeric();
+            let is_leading_block_marker = index == 0 && matches!(character, '#' | '>' | '-' | '+');
+            let is_leading_ordered_list_marker =
+                has_leading_ordered_list_marker && index == leading_digit_end;
+            // GFM autolinks preserve escapes such as \& in the label and href, so break the "://" and "www." triggers to keep URLs as plain text.
+            let is_url_scheme_delimiter = *character == ':'
+                && characters.get(index + 1) == Some(&'/')
+                && characters.get(index + 2) == Some(&'/');
+            let is_www_domain_delimiter = *character == '.'
+                && index >= 3
+                && characters[index - 3] == 'w'
+                && characters[index - 2] == 'w'
+                && characters[index - 1] == 'w';
+            let should_escape = matches!(character, '\\' | '`' | '*' | '~' | '[' | ']' | '<' | '&')
+                || (*character == '_' && !has_alphanumeric_neighbors)
+                || is_leading_block_marker
+                || is_leading_ordered_list_marker
+                || is_url_scheme_delimiter
+                || is_www_domain_delimiter;
+
+            if should_escape {
                 format!("\\{character}")
             } else {
                 character.to_string()
@@ -332,7 +402,7 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
                 1. Add preference tables (not created yet)
                 2. **Document the settings** (this PR)
@@ -363,9 +433,9 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
-                1. Add preference storage and document the settings\\.
+                1. Add preference storage and document the settings.
                    - Add preference tables (not created yet)
                    - **Document the settings** (this PR)
                 <!-- pr-series:end -->
@@ -384,7 +454,7 @@ mod tests {
             created_pull_requests: created_private_infra(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### PR 一覧
 
                 1. Add preference tables (未作成)
                 2. **Rotate mail credentials** (今回の PR)
@@ -396,12 +466,18 @@ mod tests {
         }
     }
 
-    fn one_visible_pull_request_render_case() -> RenderCase {
+    fn one_visible_pull_request_step_render_case() -> RenderCase {
         let mut plan = plan();
-        plan.steps = Some(vec![PrSeriesStep {
-            summary: Some("Set up storage and rotate credentials.".to_string()),
-            pull_requests: vec!["credentials".to_string(), "docs".to_string()],
-        }]);
+        plan.steps = Some(vec![
+            PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            },
+            PrSeriesStep {
+                summary: Some("Set up storage and rotate credentials.".to_string()),
+                pull_requests: vec!["credentials".to_string(), "docs".to_string()],
+            },
+        ]);
         RenderCase {
             plan,
             current_entry_id: "docs",
@@ -410,9 +486,10 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
-                1. **Document the settings** (this PR)
+                1. Add preference tables (not created yet)
+                2. **Document the settings** (this PR)
                 <!-- pr-series:end -->
             "}
             .trim_end_matches('\n')
@@ -436,9 +513,9 @@ mod tests {
             created_pull_requests: created_docs(),
             expected: indoc! {r"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
-                1. Group \*storage\* with \[docs\]\(guide\)
+                1. Group \*storage\* with \[docs\](guide)
                    - Build \[preference\] tables (not created yet)
                    - **Document \`settings\`** (this PR)
                 <!-- pr-series:end -->
@@ -478,9 +555,9 @@ mod tests {
             created_pull_requests: created,
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification preferences
+                ### Pull requests
 
-                1. Store preferences and document the settings\\.
+                1. Store preferences and document the settings.
                    - acme/notify-api#12
                    - **Document the settings** (this PR)
                 <!-- pr-series:end -->
@@ -523,7 +600,7 @@ mod tests {
             created_pull_requests: Vec::new(),
             expected: indoc! {"
                 <!-- pr-series:start -->
-                ### Notification workflow
+                ### Pull requests
 
                 1. Implement notification stage 1 (not created yet)
                 2. Implement notification stage 2 (not created yet)
@@ -548,8 +625,8 @@ mod tests {
     #[case::legacy_plan(legacy_render_case())]
     #[case::grouped_step_filters_private_entries(grouped_render_case())]
     #[case::private_repository_uses_japanese_labels(private_japanese_render_case())]
-    #[case::single_visible_pr_omits_step_summary(one_visible_pull_request_render_case())]
-    #[case::summaries_escape_markdown_punctuation(escaped_summary_render_case())]
+    #[case::single_visible_pr_step_omits_step_summary(one_visible_pull_request_step_render_case())]
+    #[case::summaries_escape_markdown_syntax(escaped_summary_render_case())]
     #[case::created_non_current_pr_uses_reference_in_nested_list(
         created_non_current_nested_pr_render_case()
     )]
@@ -563,29 +640,216 @@ mod tests {
                 &case.repository_privacy,
                 &case.created_pull_requests,
             )
+            .unwrap()
             .unwrap(),
             case.expected,
         );
     }
 
+    #[derive(Debug)]
+    struct SectionOmissionCase {
+        plan: PrSeriesPlan,
+        current_entry_id: &'static str,
+        repository_privacy: HashMap<String, bool>,
+        created_pull_requests: Vec<CreatedPullRequest>,
+    }
+
+    fn single_pull_request_omission_case(with_steps: bool) -> SectionOmissionCase {
+        let mut plan = plan();
+        plan.pull_requests.truncate(1);
+        if with_steps {
+            plan.steps = Some(vec![PrSeriesStep {
+                summary: None,
+                pull_requests: vec!["schema".to_string()],
+            }]);
+        }
+
+        SectionOmissionCase {
+            plan,
+            current_entry_id: "schema",
+            repository_privacy: privacy(),
+            created_pull_requests: Vec::new(),
+        }
+    }
+
+    fn privacy_filter_leaves_one_pull_request_case() -> SectionOmissionCase {
+        let mut repository_privacy = privacy();
+        repository_privacy.insert("acme/notify-api".to_string(), true);
+
+        SectionOmissionCase {
+            plan: plan(),
+            current_entry_id: "docs",
+            repository_privacy,
+            created_pull_requests: created_docs(),
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::one_pr_without_steps(single_pull_request_omission_case(false))]
+    #[case::one_pr_with_step(single_pull_request_omission_case(true))]
+    #[case::privacy_filter_leaves_one_pr(privacy_filter_leaves_one_pull_request_case())]
+    fn omits_section_when_one_pull_request_is_visible(#[case] case: SectionOmissionCase) {
+        assert_eq!(
+            render_section(
+                &case.plan,
+                case.current_entry_id,
+                "Existing body",
+                &case.repository_privacy,
+                &case.created_pull_requests,
+            )
+            .unwrap(),
+            None,
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::backslash("\\", "\\\\")]
+    #[case::backtick("`", r"\`")]
+    #[case::asterisk("*", r"\*")]
+    #[case::tilde("~", r"\~")]
+    #[case::left_bracket("[", r"\[")]
+    #[case::right_bracket("]", r"\]")]
+    #[case::less_than("<", r"\<")]
+    #[case::ampersand("&", r"\&")]
+    #[case::underscore_between_ascii_alphanumeric("config_key", "config_key")]
+    #[case::underscore_between_japanese_alphanumeric("設定_項目", "設定_項目")]
+    #[case::underscore_next_to_punctuation("「_x_」", "「\\_x\\_」")]
+    #[case::leading_underscore("_prefix", "\\_prefix")]
+    #[case::trailing_underscore("suffix_", "suffix\\_")]
+    #[case::underscore_next_to_whitespace("before _ middle", "before \\_ middle")]
+    #[case::leading_hash("# heading", r"\# heading")]
+    #[case::leading_quote("> quote", r"\> quote")]
+    #[case::leading_hyphen("- item", r"\- item")]
+    #[case::leading_plus("+ item", r"\+ item")]
+    #[case::leading_exclamation("!notice", "!notice")]
+    #[case::leading_double_quote(r#""quoted" summary"#, r#""quoted" summary"#)]
+    #[case::leading_percent("% complete", "% complete")]
+    #[case::leading_apostrophe("'quoted' summary", "'quoted' summary")]
+    #[case::leading_parenthesis("(draft) docs", "(draft) docs")]
+    #[case::leading_right_parenthesis(") note", ") note")]
+    #[case::leading_comma(", note", ", note")]
+    #[case::leading_slash("/path", "/path")]
+    #[case::leading_semicolon("; note", "; note")]
+    #[case::leading_equals("= note", "= note")]
+    #[case::leading_question_mark("? note", "? note")]
+    #[case::leading_caret("^ note", "^ note")]
+    #[case::leading_left_brace("{draft}", "{draft}")]
+    #[case::leading_right_brace("} draft", "} draft")]
+    #[case::leading_pipe("| draft", "| draft")]
+    #[case::leading_thematic_break("---", r"\---")]
+    #[case::leading_numbered_list_period("2026. release", r"2026\. release")]
+    #[case::leading_numbered_list_parenthesis("12) continuation", r"12\) continuation")]
+    #[case::number_sequence_without_list_delimiter("123task. release", "123task. release")]
+    #[case::non_ascii_number_sequence("２０２６. release", "２０２６. release")]
+    #[case::numbered_list_delimiter_after_text("task 2. update", "task 2. update")]
+    #[case::leading_spaces_before_marker("   # heading", r"\# heading")]
+    #[case::leading_tab_before_numbered_list("\t12. item", r"12\. item")]
+    #[case::leading_spaces_are_removed("   plain summary", "plain summary")]
+    #[case::trailing_spaces_are_removed("plain summary   ", "plain summary")]
+    #[case::leading_ideographic_space_is_removed("\u{3000}# heading", r"\# heading")]
+    #[case::trailing_ideographic_space_is_removed("plain summary\u{3000}", "plain summary")]
+    #[case::leading_nonbreaking_space_is_removed("\u{00a0}# heading", r"\# heading")]
+    #[case::trailing_nonbreaking_space_is_removed("plain summary\u{00a0}", "plain summary")]
+    #[case::https_url_is_not_linked(
+        "see https://example.test/?a=1&b=2 now",
+        r"see https\://example.test/?a=1\&b=2 now"
+    )]
+    #[case::ftp_url_is_not_linked(
+        "see ftp://example.test/?a=1&b=2 now",
+        r"see ftp\://example.test/?a=1\&b=2 now"
+    )]
+    #[case::www_url_is_not_linked(
+        "see www.example.test/?a=1&b=2 now",
+        r"see www\.example.test/?a=1\&b=2 now"
+    )]
+    #[case::uppercase_www_is_not_escaped(
+        "see WWW.example.test/?a=1&b=2 now",
+        r"see WWW.example.test/?a=1\&b=2 now"
+    )]
+    #[case::other_ascii_punctuation_is_preserved(
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: Fix: x @user #12 $x^2$"#,
+        r#"a.b, c/d (e) 'f' "g" h? i! j=k %m {n} o|p q^r s;t x+y a-b a>b :tada: Fix: x @user #12 $x^2$"#,
+    )]
+    fn renders_summaries_with_only_required_markdown_escapes(
+        #[case] summary: &str,
+        #[case] expected_summary: &str,
+    ) {
+        let mut plan = plan();
+        plan.pull_requests[2].summary = summary.to_string();
+        let actual = render_section(&plan, "docs", "Existing body", &privacy(), &created_docs())
+            .unwrap()
+            .unwrap();
+        let expected = format!(
+            indoc! {"
+                <!-- pr-series:start -->
+                ### Pull requests
+
+                1. Add preference tables (not created yet)
+                2. **{expected_summary}** (this PR)
+                <!-- pr-series:end -->
+            "},
+            expected_summary = expected_summary,
+        );
+
+        assert_eq!(actual, expected.trim_end_matches('\n'));
+    }
+
+    #[rstest::rstest]
+    #[case::leading_ideographic_space_is_preserved("\u{3000}# heading", "\u{3000}# heading")]
+    #[case::leading_nonbreaking_space_is_preserved("\u{00a0}# heading", "\u{00a0}# heading")]
+    #[case::leading_spaces_before_marker_are_escaped("   # heading", r"\# heading")]
+    #[case::leading_tab_before_numbered_list_is_escaped("\t12. item", r"12\. item")]
+    fn renders_non_bold_summaries_with_required_markdown_escapes(
+        #[case] summary: &str,
+        #[case] expected_summary: &str,
+    ) {
+        let mut plan = plan();
+        plan.pull_requests[0].summary = summary.to_string();
+        let actual =
+            render_section(&plan, "docs", "Existing body", &privacy(), &created_docs()).unwrap();
+        let expected = format!(
+            indoc! {"
+                <!-- pr-series:start -->
+                ### Pull requests
+
+                1. {expected_summary} (not created yet)
+                2. **Document the settings** (this PR)
+                <!-- pr-series:end -->
+            "},
+            expected_summary = expected_summary,
+        );
+
+        assert_eq!(actual, Some(expected.trim_end_matches('\n').to_string()),);
+    }
+
     #[test]
     fn language_detection_ignores_the_managed_section_on_reruns() {
-        let mut plan = plan();
-        plan.name = "通知設定".to_string();
+        let plan = plan();
         let privacy = privacy();
         let created = created_docs();
-        let initial_body = "Existing English body";
-        let first_section =
-            render_section(&plan, "docs", initial_body, &privacy, &created).unwrap();
+        let initial_body = indoc! {"
+            Existing English body
+
+            <!-- pr-series:start -->
+            ### 通知設定
+
+            1. 古い一覧
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n');
+        let first_section = render_section(&plan, "docs", initial_body, &privacy, &created)
+            .unwrap()
+            .unwrap();
         let first_body = replace_managed_section(initial_body, &first_section).unwrap();
-        let second_section =
-            render_section(&plan, "docs", &first_body, &privacy, &created).unwrap();
+        let second_section = render_section(&plan, "docs", &first_body, &privacy, &created)
+            .unwrap()
+            .unwrap();
         let second_body = replace_managed_section(&first_body, &second_section).unwrap();
         let expected = indoc! {"
             Existing English body
 
             <!-- pr-series:start -->
-            ### 通知設定
+            ### Pull requests
 
             1. Add preference tables (not created yet)
             2. **Document the settings** (this PR)
@@ -640,7 +904,7 @@ mod tests {
     }
 
     #[test]
-    fn appends_the_section_when_no_markers_exist() {
+    fn leaves_body_unchanged_when_no_markers_exist() {
         let section = indoc! {"
             <!-- pr-series:start -->
             ### New series
@@ -652,16 +916,128 @@ mod tests {
 
         assert_eq!(
             replace_managed_section("Existing text", section).unwrap(),
-            indoc! {"
-                Existing text
+            "Existing text",
+        );
+    }
 
-                <!-- pr-series:start -->
-                ### New series
+    #[rstest::rstest]
+    #[case::between_paragraphs(
+        indoc! {"
+            Before
 
-                1. Add the sample feature
-                <!-- pr-series:end -->
-            "}
-            .trim_end_matches('\n'),
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+
+            After
+        "}.trim_end_matches('\n'),
+        indoc! {"
+            Before
+
+            After
+        "}.trim_end_matches('\n'),
+    )]
+    #[case::at_start(
+        indoc! {"
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+
+            After
+        "}.trim_end_matches('\n'),
+        "After",
+    )]
+    #[case::at_end(
+        indoc! {"
+            Before
+
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+        "}.trim_end_matches('\n'),
+        "Before",
+    )]
+    #[case::only_section(
+        indoc! {"
+            <!-- pr-series:start -->
+            Old section
+            <!-- pr-series:end -->
+        "}.trim_end_matches('\n'),
+        "",
+    )]
+    #[case::between_paragraphs_crlf(
+        concat!(
+            "Before",
+            "\r\n",
+            "\r\n",
+            "<!-- pr-series:start -->",
+            "\r\n",
+            "Old section",
+            "\r\n",
+            "<!-- pr-series:end -->",
+            "\r\n",
+            "\r\n",
+            "After",
+        ),
+        concat!("Before", "\r\n", "\r\n", "After"),
+    )]
+    #[case::no_section("Before", "Before")]
+    fn removes_managed_section_and_adjacent_blank_lines(
+        #[case] body: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(remove_managed_section(body).unwrap(), expected);
+    }
+
+    #[rstest::rstest]
+    #[case::blank_line_between_markers("", false)]
+    #[case::whitespace_only_between_markers(" ", false)]
+    #[case::crlf_body_with_blank_line_between_markers("", true)]
+    fn copies_existing_section_into_whitespace_only_placeholder(
+        #[case] section_content: &str,
+        #[case] use_crlf: bool,
+    ) {
+        let existing_body = indoc! {"
+            Existing body
+
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let submitted_body = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            __empty_section_content__
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .replace("__empty_section_content__", section_content)
+        .trim_end_matches('\n')
+        .to_string();
+        let expected = indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            ### Existing overview
+            <!-- pr-series:end -->
+            More updated body
+        "}
+        .trim_end_matches('\n')
+        .to_string();
+        let (existing_body, submitted_body, expected) = if use_crlf {
+            (
+                existing_body.replace('\n', "\r\n"),
+                submitted_body.replace('\n', "\r\n"),
+                expected.replace('\n', "\r\n"),
+            )
+        } else {
+            (existing_body, submitted_body, expected)
+        };
+
+        assert_eq!(
+            preserve_managed_section(&existing_body, &submitted_body).unwrap(),
+            expected,
         );
     }
 
@@ -690,7 +1066,7 @@ mod tests {
         "}).trim_end_matches('\n')),
     )]
     #[case::existing_without_section("Existing body", "Updated body", Ok("Updated body"))]
-    #[case::existing_section_is_carried_forward(
+    #[case::submitted_body_without_markers_does_not_carry_existing_section(
         (indoc! {"
             Existing body
 
@@ -699,11 +1075,40 @@ mod tests {
             <!-- pr-series:end -->
         "}).trim_end_matches('\n'),
         "Updated body",
-        Ok((indoc! {"
-            Updated body
+        Ok("Updated body"),
+    )]
+    #[case::empty_submitted_section_uses_existing_content_at_placeholder(
+        (indoc! {"
+            Existing body
 
             <!-- pr-series:start -->
             Existing diagram
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        (indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+            More updated body
+        "}).trim_end_matches('\n'),
+        Ok((indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            Existing diagram
+            <!-- pr-series:end -->
+            More updated body
+        "}).trim_end_matches('\n')),
+    )]
+    #[case::empty_submitted_section_without_existing_section_stays_empty(
+        "Existing body",
+        (indoc! {"
+            Updated body
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "}).trim_end_matches('\n'),
+        Ok((indoc! {"
+            Updated body
+            <!-- pr-series:start -->
             <!-- pr-series:end -->
         "}).trim_end_matches('\n')),
     )]
@@ -713,7 +1118,7 @@ mod tests {
             <!-- pr-series:start -->
         "}).trim_end_matches('\n'),
         "Updated body",
-        Err("PR series markers must occur exactly once"),
+        Ok("Updated body"),
     )]
     #[case::submitted_partial_marker(
         (indoc! {"

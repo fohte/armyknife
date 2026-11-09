@@ -42,7 +42,6 @@ use self::progress_refresh::{
 };
 use self::session_key::handle_key_event;
 use self::session_preview::PreviewError;
-use crate::shared::command;
 #[cfg(test)]
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -427,12 +426,7 @@ fn run_app(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
 /// failed `tq` fetch (silently ignored -- see `AppEvent::TaskUrlFetched`),
 /// a failure here is unexpected and surfaced as an error banner.
 fn open_url(app: &mut App, url: &str) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    if let Err(e) = command::new(opener).arg(url).spawn() {
+    if let Err(e) = super::browser::open_url(url) {
         app.set_error(format!("Failed to open URL: {e}"));
     }
 }

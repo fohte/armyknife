@@ -13,7 +13,7 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: 'true'
       RUSTC_WRAPPER: 'sccache'
@@ -59,7 +59,33 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.11
+          version: 2026.9.14
+
+      # corepack creates the pnpm executable inside mise's node install bin
+      # directory; reshim so the mise shims dir (which is on PATH) picks it up.
+      - run: |
+          corepack enable
+          mise reshim
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: |
+          store_path=$(pnpm store path)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('agent-watch-web/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install pnpm dependencies (agent-watch-web)
+        run: cd "agent-watch-web" && pnpm install --frozen-lockfile
+
+      - name: Check peer dependencies (agent-watch-web)
+        run: cd "agent-watch-web" && pnpm peers check
 
       - run: cargo fetch
 
@@ -71,9 +97,6 @@ jobs:
           # the 60 req/h unauthenticated limit shared per IP and fails on CI.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: lefthook run pre-commit --all-files
-
-      - name: Regenerate config schema
-        run: cargo run -p config-schema-gen -- docs/config-schema.json
 
       # Formatters configured with `stage_fixed: true` run `git add` after formatting,
       # which stages the changes.
@@ -95,10 +118,12 @@ jobs:
         if: steps.lefthook.outcome == 'failure'
         run: exit 1
 
-  unit-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+      - name: Regenerate config schema
+        run: cargo run -p config-schema-gen -- docs/config-schema.json
 
+  unit-test-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       SCCACHE_GHA_ENABLED: 'true'
       RUSTC_WRAPPER: 'sccache'
@@ -115,16 +140,13 @@ jobs:
 
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          version: 2026.9.11
+          version: 2026.9.14
 
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
         with:
           tool: cargo-llvm-cov
 
-      # Install llvm-tools-preview before srt sandbox.
-      # cargo-llvm-cov auto-installs this component on first run, but that
-      # would fail inside the read-only sandbox.
       - name: Install llvm-tools-preview
         run: rustup component add llvm-tools-preview
 
@@ -178,3 +200,118 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: lcov.info
           fail_ci_if_error: false
+
+  unit-test-agent-watch-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.14
+
+      # corepack creates the pnpm executable inside mise's node install bin
+      # directory; reshim so the mise shims dir (which is on PATH) picks it up.
+      - run: |
+          corepack enable
+          mise reshim
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: |
+          store_path=$(pnpm store path)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('agent-watch-web/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - run: cd "agent-watch-web" && pnpm install --frozen-lockfile
+
+      - name: Get Playwright version
+        id: playwright-version
+        working-directory: agent-watch-web
+        run: echo "version=$(pnpm exec playwright --version | cut -d' ' -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
+      - name: Install Playwright chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: agent-watch-web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: agent-watch-web
+        run: pnpm exec playwright install-deps chromium
+
+      - name: Run tests
+        working-directory: agent-watch-web
+        run: pnpm run test
+
+      - name: Build app
+        working-directory: agent-watch-web
+        run: pnpm run build
+
+  # Fixed name for branch protection: per-package job names are dynamic, and
+  # knip has no `needs`, so this gate (skip == success) stands in for both.
+  unit-test:
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    needs:
+      - unit-test-run
+      - unit-test-agent-watch-web
+      - knip
+    if: failure()
+    steps:
+      - run: exit 1
+
+  knip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.14
+
+      # corepack creates the pnpm executable inside mise's node install bin
+      # directory; reshim so the mise shims dir (which is on PATH) picks it up.
+      - run: |
+          corepack enable
+          mise reshim
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: |
+          store_path=$(pnpm store path)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('agent-watch-web/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install pnpm dependencies (agent-watch-web)
+        run: cd "agent-watch-web" && pnpm install --frozen-lockfile
+
+      - name: Run knip (agent-watch-web)
+        run: cd "agent-watch-web" && pnpm exec knip
+
+      - name: Run knip in production mode (agent-watch-web)
+        run: cd "agent-watch-web" && pnpm exec knip --production

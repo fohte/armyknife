@@ -13,13 +13,16 @@ use anyhow::Result;
 use clap::Args;
 
 use super::wake;
+use crate::commands::agent::bg;
 use crate::commands::agent::claude_messaging;
 use crate::commands::agent::claude_registry;
 use crate::commands::agent::codex_steer;
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
+use crate::infra::notification::{self, Notification};
 use crate::shared::env_var::EnvVars;
+use crate::shared::log::short_run_id;
 use crate::shared::sanitize::strip_angle_brackets;
 
 const MAX_SESSION_ID_SUGGESTIONS: usize = 3;
@@ -55,30 +58,97 @@ pub enum Delivery {
 }
 
 pub fn run(args: &NotifyArgs) -> Result<()> {
-    run_with(args, super::resolve_parent_session, notify)
+    let span = tracing::info_span!("agent.peer.notify", run_id = %short_run_id());
+    let _enter = span.enter();
+    let output = run_with(
+        args,
+        super::resolve_parent_session,
+        notify,
+        bg::save_undelivered,
+        alert_user,
+    )?;
+    if let Some(output) = output {
+        println!("{output}");
+    }
+    Ok(())
 }
 
 fn run_with(
     args: &NotifyArgs,
     resolve_parent: impl FnOnce() -> Result<Session>,
     deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
-) -> Result<()> {
+    save: impl FnOnce(&str, &str) -> Result<()>,
+    alert_user: impl FnOnce(&str, &str),
+) -> Result<Option<String>> {
     let session_id =
         resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
     let (from, from_engine_hint) = match resolve_sender() {
         Some((id, engine_hint)) => (Some(id), engine_hint),
         None => (None, None),
     };
-    let delivery = deliver(
+    let error = match deliver(
         &session_id,
         &args.message,
         from.as_deref(),
         from_engine_hint,
-    )?;
-    if let Some(output) = delivery_output(&session_id, &delivery) {
-        println!("{output}");
+    ) {
+        Ok(delivery) => return Ok(delivery_output(&session_id, &delivery)),
+        Err(error) if is_permanent_failure(&error) => return Err(error),
+        Err(error) => error,
+    };
+
+    // Redelivery sends the saved text as is, so it must already name the sender.
+    let content = build_content(
+        &args.message,
+        from.as_deref(),
+        sender_engine(from.as_deref(), from_engine_hint),
+    );
+    if let Err(save_error) = save(&session_id, &content) {
+        let failure = format!(
+            "Failed to deliver to session {session_id}: {error:#}. Saving the message for a retry also failed: {save_error:#}"
+        );
+        tracing::warn!(
+            event = "agent.peer.notify.save_failed",
+            session = %session_id,
+            error = %failure,
+        );
+        alert_user(&session_id, &failure);
+        anyhow::bail!(failure);
     }
-    Ok(())
+    tracing::warn!(
+        event = "agent.peer.notify.saved_for_retry",
+        session = %session_id,
+        error = %format!("{error:#}"),
+    );
+    Ok(Some(format!(
+        "Failed to deliver to session {session_id}: {error:#}. Saved the message; `a agent sweep` retries it for 24 hours."
+    )))
+}
+
+/// These failures stay the same on every retry, so the sender has to see them.
+fn is_permanent_failure(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<CcError>(),
+        Some(
+            CcError::SelfNotify(_)
+                | CcError::InvalidSessionId(_)
+                | CcError::SessionNotFound(_)
+                | CcError::SessionEnded(_)
+                | CcError::NoMessagingSocket(_)
+                | CcError::NoTmuxInfo(_)
+        )
+    )
+}
+
+fn alert_user(session_id: &str, failure: &str) {
+    let notification = Notification::new("Peer message not delivered", failure);
+    if let Err(error) = notification::send(&notification) {
+        tracing::warn!(
+            event = "agent.peer.notify.alert_failed",
+            session = %session_id,
+            error = %error,
+        );
+    }
 }
 
 fn resolve_target_session_id(
@@ -157,7 +227,6 @@ fn ensure_not_self_notify(session_id: &str, from: Option<&str>) -> Result<()> {
 }
 
 fn session_not_found_error(session_id: &str) -> anyhow::Error {
-    let error = CcError::SessionNotFound(session_id.to_string());
     let suggestions = match store::list_sessions() {
         Ok(sessions) => similar_session_ids(session_id, &sessions),
         // Suggestions are best effort; keep the original lookup error if listing fails.
@@ -165,7 +234,7 @@ fn session_not_found_error(session_id: &str) -> anyhow::Error {
     };
 
     if suggestions.is_empty() {
-        return error.into();
+        return CcError::SessionNotFound(session_id.to_string()).into();
     }
 
     let suggestions = suggestions
@@ -173,11 +242,12 @@ fn session_not_found_error(session_id: &str) -> anyhow::Error {
         .map(|suggestion| format!("- {suggestion}"))
         .collect::<Vec<_>>()
         .join("\n");
-    anyhow::anyhow!(indoc::formatdoc! {"
-        {error}
+    CcError::SessionNotFound(indoc::formatdoc! {"
+        {session_id}
         Did you mean:
         {suggestions}"
     })
+    .into()
 }
 
 #[derive(Debug)]
@@ -300,13 +370,7 @@ pub fn notify(
         NotifyReadiness::Ready => {}
     }
 
-    // Best-effort: `from` not resolving to a tracked session (unknown ID,
-    // lookup error) just means the engine falls back to `from_engine_hint`
-    // (or is omitted), not a reason to fail the whole notification.
-    let from_engine = from
-        .and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine))
-        .or(from_engine_hint);
-    let content = build_content(message, from, from_engine);
+    let content = build_content(message, from, sender_engine(from, from_engine_hint));
 
     match session.engine {
         Engine::Claude => {
@@ -344,6 +408,14 @@ fn send_to_claude(session_id: &str, content: &str) -> Result<()> {
         .messaging_socket_path
         .ok_or_else(|| CcError::NoMessagingSocket(session_id.to_string()))?;
     claude_messaging::send_message(&socket_path, connection.pid, content)
+}
+
+/// Best-effort: `from` not resolving to a tracked session (unknown ID, lookup
+/// error) just means the engine falls back to `hint` (or is omitted), not a
+/// reason to fail the whole notification.
+fn sender_engine(from: Option<&str>, hint: Option<Engine>) -> Option<Engine> {
+    from.and_then(|f| store::load_session(f).ok().flatten().map(|s| s.engine))
+        .or(hint)
 }
 
 /// Wraps `message` in a `<peer-message>` envelope naming `from` (and its
@@ -459,7 +531,7 @@ mod tests {
         session_store: &TestSessionStore,
         session_id: &str,
         sessions: &[(&str, SessionStatus, Engine)],
-    ) -> String {
+    ) -> (String, bool) {
         for (id, status, engine) in sessions {
             store::save_session_to(
                 &session_store.sessions_dir,
@@ -471,9 +543,9 @@ mod tests {
         temp_env::with_vars(
             [("XDG_CACHE_HOME", Some(session_store.cache_home.as_str()))],
             || {
-                notify(session_id, "hello", None, None)
-                    .expect_err("untracked session should be rejected")
-                    .to_string()
+                let error = notify(session_id, "hello", None, None)
+                    .expect_err("untracked session should be rejected");
+                (error.to_string(), is_permanent_failure(&error))
             },
         )
     }
@@ -616,6 +688,8 @@ mod tests {
                         ));
                         Ok(Delivery::Sent)
                     },
+                    |_, _| Ok(()),
+                    |_, _| {},
                 )
             },
         );
@@ -623,7 +697,7 @@ mod tests {
         assert_eq!(
             (result.map_err(|error| error.to_string()), deliveries),
             (
-                Ok(()),
+                Ok(None),
                 vec![(
                     "parent-session".to_string(),
                     "hello".to_string(),
@@ -632,6 +706,115 @@ mod tests {
                 )],
             ),
         );
+    }
+
+    const ENVELOPED_HELLO: &str = indoc::indoc! {"
+        <peer-message>
+        - From session_id: fixture-sender
+        - Sender engine: codex
+
+        hello
+        </peer-message>"};
+
+    type DeliveryFailureOutcome = (
+        std::result::Result<Option<String>, String>,
+        Vec<(String, String)>,
+        Vec<(String, String)>,
+    );
+
+    fn run_with_delivery_result(
+        delivery: Result<Delivery>,
+        save_result: Result<()>,
+    ) -> DeliveryFailureOutcome {
+        let cache_dir = tempfile::tempdir().expect("cache directory should be created");
+        let cache_home = cache_dir.path().to_string_lossy().to_string();
+        let args = NotifyArgs {
+            session_id: Some("fixture-target".to_string()),
+            parent: false,
+            message: "hello".to_string(),
+        };
+        let mut saved = Vec::new();
+        let mut alerts = Vec::new();
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home.as_str())),
+                ("ARMYKNIFE_SESSION_ID", None::<&str>),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", Some("fixture-sender")),
+            ],
+            || {
+                run_with(
+                    &args,
+                    || anyhow::bail!("the target is explicit"),
+                    |_, _, _, _| delivery,
+                    |target, content| {
+                        saved.push((target.to_string(), content.to_string()));
+                        save_result
+                    },
+                    |target, failure| alerts.push((target.to_string(), failure.to_string())),
+                )
+            },
+        );
+
+        (result.map_err(|error| error.to_string()), saved, alerts)
+    }
+
+    #[test]
+    fn retryable_failure_saves_the_enveloped_message_and_succeeds() {
+        let actual = run_with_delivery_result(Err(anyhow::anyhow!("fixture failure")), Ok(()));
+
+        assert_eq!(
+            actual,
+            (
+                Ok(Some(
+                    "Failed to deliver to session fixture-target: fixture failure. Saved the message; `a agent sweep` retries it for 24 hours."
+                        .to_string()
+                )),
+                vec![("fixture-target".to_string(), ENVELOPED_HELLO.to_string())],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
+    fn save_failure_reports_both_causes_and_alerts_the_user() {
+        let actual = run_with_delivery_result(
+            Err(anyhow::anyhow!("fixture failure")),
+            Err(anyhow::anyhow!("fixture disk full")),
+        );
+
+        let failure = "Failed to deliver to session fixture-target: fixture failure. Saving the message for a retry also failed: fixture disk full".to_string();
+        assert_eq!(
+            actual,
+            (
+                Err(failure.clone()),
+                vec![("fixture-target".to_string(), ENVELOPED_HELLO.to_string())],
+                vec![("fixture-target".to_string(), failure)],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::self_notify(CcError::SelfNotify("fixture".to_string()))]
+    #[case::invalid_id(CcError::InvalidSessionId("fixture".to_string()))]
+    #[case::not_found(CcError::SessionNotFound("fixture".to_string()))]
+    #[case::ended(CcError::SessionEnded("fixture".to_string()))]
+    #[case::no_socket(CcError::NoMessagingSocket("fixture".to_string()))]
+    #[case::no_tmux(CcError::NoTmuxInfo("fixture".to_string()))]
+    fn permanent_failure_stays_an_error_without_saving(#[case] error: CcError) {
+        let expected = error.to_string();
+
+        let actual = run_with_delivery_result(Err(error.into()), Ok(()));
+
+        assert_eq!(actual, (Err(expected), Vec::new(), Vec::new()));
+    }
+
+    #[test]
+    fn successful_delivery_saves_nothing() {
+        let actual = run_with_delivery_result(Ok(Delivery::Sent), Ok(()));
+
+        assert_eq!(actual, (Ok(None), Vec::new(), Vec::new()));
     }
 
     #[rstest]
@@ -774,7 +957,7 @@ mod tests {
     ) {
         assert_eq!(
             missing_session_error(&session_store, session_id, sessions),
-            expected,
+            (expected.to_string(), true),
         );
     }
 

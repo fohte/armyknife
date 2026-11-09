@@ -267,6 +267,8 @@ Manage PR body drafts with human-in-the-loop review.
 | `--draft`      | Create as draft PR                                                               |
 | `--no-review`  | Skip approval verification (requires vibe mode and an allowed target repository) |
 
+When the branch passed to `--base` is the head branch of an open PR in the same repository, `submit` creates a stack containing that PR and the new PR if the base PR is unstacked, or adds the new PR if the base PR is at the top of its stack. A base PR in the middle of a stack leaves the new PR unstacked and prints a warning. Stack API failures do not fail submission; the warning includes a manual `gh api` command.
+
 #### `a ai pr-series`
 
 Register a task's PR split plan and synchronize its ordered overview into linked PR bodies.
@@ -274,14 +276,19 @@ Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
-When updating an existing PR, `submit` keeps its `pr-series` section if the draft does not include one.
+When updating an existing PR, `submit` uses the draft's `pr-series` section when it contains content. If the draft includes an empty marker pair, `submit` fills it with the existing section's content at that position. A draft without markers does not inherit the existing section. To choose the section's position, put an empty marker pair in the draft:
+
+```md
+<!-- pr-series:start -->
+<!-- pr-series:end -->
+```
 
 ```sh
 a ai pr-series set <task-id> --file plan.json
 a ai pr-series sync <task-id>
 ```
 
-`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the series name and purpose, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. An optional `steps` array groups PR IDs in execution order. Each step must contain at least one PR, every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not. The `purpose` field remains required for compatibility with existing plan files, but is not included in the synchronized section.
+`set` validates the plan and tq checklist leaf IDs, then stores it in armyknife's per-user state so every worktree on the same machine can use it. The JSON file contains the required `name` and `purpose` fields, and a `pullRequests` array with each PR's `id`, one-line `summary`, `dependsOn` IDs, `repository` (`owner/repo`), and `tqLeafId`. Both fields remain required, but neither is displayed in the synchronized section. Its heading is `Pull requests`, or `PR 一覧` when the PR body is written in Japanese. An optional `steps` array groups PR IDs in execution order. Each step must contain at least one PR, every PR must appear in exactly one step, and each dependency must be in an earlier step. A step with multiple PRs requires a one-line `summary`; a one-PR step does not.
 
 ```json
 {
@@ -326,7 +333,7 @@ For example, if `schema` is already created and `settings` is the current PR, th
 
 ```text
 <!-- pr-series:start -->
-### Notification preferences
+### Pull requests
 
 1. acme/notify-api#12
 2. Add validation and the settings page
@@ -335,7 +342,7 @@ For example, if `schema` is already created and `settings` is the current PR, th
 <!-- pr-series:end -->
 ```
 
-`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. The managed section contains the series heading and overview, not the plan purpose. `sync` adds the section if missing, leaves titles and the rest of each body unchanged, and can be rerun after partial failures. Public PR bodies omit PRs from private repositories.
+`sync` finds linked PRs through the tq checklist and updates only the section between `<!-- pr-series:start -->` and `<!-- pr-series:end -->`. It renders steps as an ordered list. A step with multiple visible PRs has its summary followed by a nested unordered list; a step with one visible PR is rendered as that PR's ordered-list item, and its step summary is not displayed. Plans without `steps` remain supported and render each PR in plan order. Created PRs appear as GitHub references, while the current and not-yet-created PRs appear with their summaries. `sync` replaces the section at its marked position when at least two PRs are visible. Bodies without markers remain unchanged and are reported as skipped. If at most one PR remains visible after private repositories are filtered from public PR bodies, `sync` omits the section and removes an existing section with its markers. It leaves titles and the rest of each body unchanged, and can be rerun after partial failures.
 
 #### `a ai review`
 
@@ -398,6 +405,12 @@ each changed file. Directories without an issue snapshot keep legacy issue-field
 detection and body/title timestamp conflict checks. Directories without a
 comment snapshot keep legacy two-way comment detection and timestamp conflict
 checks until the next pull saves one.
+
+`pull` compares local issue fields and existing comments against their saved
+snapshots when available, so remote-only updates do not block refreshes.
+Directories without snapshots keep legacy comparisons against remote values.
+Local edits and deletions stop a pull unless `--force` is used. New `new_*.md`
+comment files are preserved without blocking pull.
 
 | Option           | Description                                                                                                                                                           |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -519,7 +532,7 @@ a gh pr-review reply review <pr-number> [options]
 
 #### `a gh pr-merge`
 
-Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting for required checks to finish successfully. The merge is aborted if checks fail or the head commit changes. After the merge command succeeds, the command closes the matching local head-branch worktree and its agent session using the same safety checks as `a agent close`; cleanup failures are reported without changing the merge result. Cleanup is skipped unless exactly one worktree for the head repository and branch can be identified, or when the target session is the caller's current agent session. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
+Safely squash-merge an open pull request with no merge conflicts after running the optional `pre-pr-merge` hook and waiting for required checks to finish successfully. The merge is aborted if checks fail or the head commit changes. For stacked pull requests, only the bottom PR can be merged while any lower PR remains unmerged. The command waits up to five minutes for GitHub's asynchronous merge result. If a pending request times out, targets another head, or its head cannot be verified, an unstacked PR whose base branch does not require a merge queue is synchronously merged with the confirmed head SHA. Stacked PRs and PRs targeting merge-queue branches return an error with the pending request UUID. For these PRs, retrying a timed-out request waits on the same request, while retries fail immediately if its target head differs, its head SHA is unavailable, or GitHub returns a mismatched UUID. A PR already merged on retry, after the required-check wait, or during fallback checks is treated as successful. If a PR was already merged before the command starts, the command reports success without closing a worktree because the branch may have been reused. Enqueued PRs are reported as unmerged and their worktrees stay open. After a confirmed merge, the command closes the matching local head-branch worktree and its agent session using the same safety checks as `a agent close`; cleanup failures are reported without changing the merge result. Cleanup is skipped unless exactly one worktree for the head repository and branch can be identified, when the target session is the caller's current agent session, or when any of the caller's processes has its working directory inside the worktree. Those processes are the caller and its ancestors, plus every process in the panes of the caller's tmux window, which includes background jobs the calling agent started. The check stops cleanup from killing the caller's tmux window and background jobs, and cleanup is also skipped when the process table or the panes of the caller's tmux window cannot be read. Inside an agent session, merging requires vibe mode and an allowed target repository. Outside an agent session, repository vibe settings do not restrict the command.
 
 ```sh
 a gh pr-merge <pr-number> [options]
@@ -553,6 +566,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `peer parent`                                              |         | List the session that delegated to this one, if any (JSON)                                  |
 | `peer children`                                            |         | List the sessions this one delegated to (JSON)                                              |
 | `peer adopt <session_id> [--force]`                        |         | Adopt an existing session as a direct child                                                 |
+| `peer detach <session_id>`                                 |         | Detach a direct child so it has no parent                                                   |
 | `peer list [-R <repo>]`                                    |         | List tracked sessions, with their SendMessage names (JSON)                                  |
 | `peer me`                                                  |         | Print the session running in the caller's own tmux pane (JSON)                              |
 | `peer wake <session_id>`                                   |         | Resume a paused peer session; print its SendMessage name (Claude only)                      |
@@ -595,7 +609,7 @@ fi
 
 A session also enables the marker when its main-thread user prompt starts with `/enable-vibe-coding` in Claude Code or `$enable-vibe-coding` in Codex.
 
-Run `a agent vibe on` in a tracked session to enable the marker. A new descendant automatically receives inheritance eligibility when `a agent new` runs while its caller's effective vibe is enabled; this records eligibility without copying the caller's explicit `on` state. `a agent vibe grant <session-id>` remains available for existing descendants, including sessions launched before an ancestor was enabled or after adoption. Inheritance remains active only while a recorded ancestor's session record still has vibe enabled. If armyknife removes that ancestor record during session cleanup, the descendant no longer inherits the marker. `a agent vibe off` clears only the calling session's explicit marker; descendants lose inherited status when the enabling ancestor turns it off.
+Run `a agent vibe on` in a tracked session to enable the marker. A new descendant automatically receives inheritance eligibility when `a agent new` runs while its caller's effective vibe is enabled; this records eligibility without copying the caller's explicit `on` state. `a agent vibe grant <session-id>` remains available for existing descendants, including sessions launched before an ancestor was enabled or after adoption. Inheritance remains active only while a recorded ancestor's session record still has vibe enabled. Session cleanup keeps a vibe-enabled ancestor record past its retention period while a descendant with an inheritance marker remains recorded. `a agent vibe off` clears only the calling session's explicit marker; descendants lose inherited status when the enabling ancestor turns it off.
 
 When a Claude Code `Stop` hook cannot infer why the agent stopped and no status is set, `agent.status_inference_prompt` starts a detached worker that forks the session and fills the status without spending another turn. The result is stored only after its kind and note pass validation and only if no status has been set and no new turn has started. Fork failures, timeouts, and invalid output are logged and leave the status unset. The fork is non-persistent; it keeps tool definitions available while a global ask rule and `dontAsk` reject tool requests, and disables all hooks.
 
@@ -646,7 +660,7 @@ Fully merged batches start collapsed. `j/k` selects planned PR rows as well as e
 
 The session list shows a single TASKS tree of sessions. Each root is a session without a displayed parent, and descendants appear at their full depth beneath the nearest displayed parent. The root badge counts all displayed descendants. Every child session appears in TASKS, including sessions that cannot start their own children. Each TASKS row shows a mark: `✓` done, `◐` needs user attention, `✗` failed, `●` working, and `◷` waiting on something else (another session, CI, a background command); stops without a known reason keep the plain status glyph. User-action reasons such as `crit`, `body`, `merge`, `ask`, and `allow` appear as red labels on the corresponding row; the waiting note is not shown. Roots that contain a user-action session come first, then the most recently active. Session state and titles update immediately. While navigating or scrolling the list, or editing a search, existing rows keep their order; two seconds after the last list interaction, the latest order is applied once. New sessions are appended under their parent. When rows disappear or stop matching a filter, the selection and its screen position are preserved where possible.
 
-`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If delivery fails, the worker saves the message under `agent-bg/undelivered/` in the armyknife cache directory, which defaults to `~/.cache/armyknife/` and uses `$XDG_CACHE_HOME/armyknife/` when set; a later `SessionStart(resume)` retries delivery for up to 30 seconds at one-second intervals. Messages remain saved if all attempts fail and are retried on the next resume. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
+`a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If delivery fails, the worker saves the message under `agent-bg/undelivered/` in the armyknife cache directory, which defaults to `~/.cache/armyknife/` and uses `$XDG_CACHE_HOME/armyknife/` when set. If saving also fails, the worker retries both every minute for up to 24 hours. `a agent sweep` retries messages saved within the last 24 hours on each run, waking the session if it is paused, and a later `SessionStart(resume)` retries every saved message. Each retry lasts up to 30 seconds at one-second intervals, and messages remain saved if all attempts fail. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
 For Claude Code background Bash commands, add this entry alongside the existing `PostToolUse` hook in your Claude Code settings:
 
@@ -697,7 +711,7 @@ The completion message has this form:
 
 `a agent codex [codex args...]` connects to the shared Codex app-server before launching Codex, then records the new thread ID in the current tmux pane's `@armyknife-last-agent-session-id` option. This lets `a agent resume` find the session after Codex exits. Outside tmux, or when the app-server is unavailable, it launches Codex without pane binding. Concurrent launches in the same directory are serialized; a launch that cannot acquire the lock within one minute exits with an error.
 
-`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. Closing a session in a linked worktree also removes that worktree and its branch only when no other listed session uses it. Another session counts as using it when its cwd is inside the worktree and its tmux pane is alive or cannot be confirmed dead, including sessions without pane info. If another session uses it, only the target session is closed and the worktree is kept, even with `--force`. This rule also applies to `--child` targets. A worktree target closes all tracked sessions in that worktree that are eligible for close. A `--child` worktree target with no matching tracked session is rejected because its parent relationship cannot be verified. It validates every candidate before shutting down the first session; if a validation fails, no session is shut down and the worktree remains. A session on the caller's current pane is not shut down. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; every matching session must be a direct child of the calling session, as listed by `a agent peer children`. `--force` does not bypass this check.
+`a agent close [target] [--child] [--force] [--skip-hooks]` (alias: `a ag c`) accepts a session ID, worktree name (branch name), or worktree path. With no target, it closes the session in the current pane; if the pane has no tracked session, it uses the current linked worktree. A session record's `cwd` is set when the record is created (usually where the session was started) and does not change when the session changes directories. Closing a session in a linked worktree also removes that worktree and its branch only when no other listed session uses it. Another session counts as using it when its recorded cwd is inside the worktree and its tmux pane is alive or cannot be confirmed dead, including sessions without pane info. If another session uses it, only the target session is closed and the worktree is kept, even with `--force`. This rule also applies to `--child` targets. A worktree target closes all tracked sessions in that worktree that are eligible for close. A `--child` worktree target with no matching tracked session is rejected because its parent relationship cannot be verified. It validates every candidate before shutting down the first session; if a validation fails, no session is shut down and the worktree remains. A session on the caller's current pane is not shut down. `--child` requires a target and must be run from a tracked Claude Code or Codex session identified by `ARMYKNIFE_SESSION_ID` or `CODEX_SESSION_ID`; every matching session must be a direct child of the calling session, as listed by `a agent peer children`. `--force` does not bypass this check.
 
 The command sends Ctrl+D and waits up to five seconds for the agent to exit, then sends SIGTERM if needed. It removes the pane after confirming the agent has exited. Unless `--force` is passed, it refuses sessions that are running, waiting for input, have pending tasks, or contain an unsent draft. If a live agent process is found but the pane cannot be parsed to check for a draft, close protects the session while the elapsed time since `session.updated_at` is within the configured auto-pause timeout; it proceeds when that time has elapsed. When closing a worktree, sessions without tmux information receive the same running, waiting-for-input, pending-task, and recent-activity checks unless they are paused or `--force` is passed. For a running Codex session, it checks the latest app-server turn first and allows closing after an interrupted turn when no permission request is pending. An active turn, a pending permission request, or an unavailable app-server keeps the session protected. If no agent process is found, it allows closing only for sessions marked ended or paused unless `--force` is passed. Even with `--force`, it refuses when the pane is no longer bound to that session. For worktree cleanup, `--force` also skips the unmerged-branch confirmation, and `--skip-hooks` skips the `pre-worktree-delete` and `post-worktree-delete` hooks. An already-removed pane is treated as closed.
 
@@ -880,7 +894,7 @@ Both engines delay permission notifications by about one second because another 
 
 Claude Code's `SendMessage`/`ListAgents` tools address other sessions by an opaque `name` that Claude Code assigns internally and exposes nowhere else except `~/.claude/sessions/<pid>.json`. When several sessions share a working directory (e.g. many delegated `a agent new` sessions in the same worktree), the names in `ListAgents` are indistinguishable from the outside. `a agent peer` resolves the right name by joining armyknife's own session tracking (`ancestor_session_ids`, populated whenever `a agent new` resolves a parent session) against that registry file, so a session doesn't have to guess which `ListAgents` row is its parent or child.
 
-`a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's working directory), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, work_type, agent_status, pane_id, engine}`. `work_type` is the recorded skill name, or `null` when unset; callers can use it to select sessions by work type. `agent_status` is `{kind, note}` when set and omitted otherwise; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
+`a agent peer parent`, `a agent peer children`, `a agent peer list [-R <repo>]` (filter by a substring of the session's recorded cwd, which is set when the record is created and does not change when the session changes directories), and `a agent peer me` all print a JSON array of `{name, session_id, cwd, label, status, work_type, agent_status, pane_id, engine}`. `work_type` is the recorded skill name, or `null` when unset; callers can use it to select sessions by work type. `agent_status` is `{kind, note}` when set and omitted otherwise; `name` is `null` when Claude Code's registry has no matching entry, and `pane_id` is `null` when the session wasn't started inside tmux. `engine` is `"claude"` or `"codex"` (see `--engine` on `new` above), letting a caller juggling several peers tell which CLI a session belongs to before deciding how to reach it. `parent` and `children` are filtered subsets of `list`: `parent` has zero entries when this session has no tracked parent, `children` has zero entries when nothing was delegated to it.
 
 ```console
 $ a agent peer parent
@@ -898,6 +912,13 @@ $ a agent peer adopt session-x
 $ a agent peer children | jq -r '.[].session_id'
 session-x
 $ a agent peer adopt session-y --force
+```
+
+Run `a agent peer detach <session_id>` from a tracked Claude Code or Codex session to release one of its direct children. The command clears the target's `ancestor_session_ids`, so the target's `peer parent` becomes empty and the caller's `peer children` no longer lists it; messages a child sends to its parent, such as vibe draft notifications, stop reaching the caller. It prints nothing on success. It refuses a missing target and any session that is not a direct child of the caller. Detaching also clears the target's inherited vibe marker. Descendants of the target keep their recorded ancestor chains.
+
+```console
+$ a agent peer detach session-x
+$ a agent peer children | jq -r '.[].session_id'
 ```
 
 `a agent peer me` resolves the session running in the caller's own tmux pane -- via the pane's `@armyknife-last-agent-session-id` user option (see above), the same mechanism `a agent resume` uses, not `ARMYKNIFE_SESSION_ID` -- so it works from a human-typed shell command in the target session's own pane (e.g. bash mode: `!a agent peer me`), which doesn't carry that env var. It's how a human names a session that has no parent/child relationship to point at: run it in the pane they're looking at, then pass `session_id`/`pane_id` to whatever needs to address that session. It fails with a distinct error for each of: running outside tmux (`$TMUX_PANE` unset), the pane having no recorded session ID, and a recorded session ID that's no longer tracked (e.g. garbage-collected by `a agent sweep`).
@@ -921,7 +942,9 @@ myproject-7e
 
 When the requested session ID is not tracked, the error may include up to three close, non-ended session IDs. These are suggestions only: `notify` never changes the recipient or sends to a suggested session automatically. If no close candidate is found, it keeps the plain `Session not found` error.
 
-For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If `turn/start` is explicitly rejected with `thread not found: <session_id>`, `notify` resumes the stored thread and retries the same message once. It returns a non-zero error when delivery is rejected or cannot be confirmed, and never registers a fallback queue item. A `Paused` Codex target is resumed before delivery is attempted.
+For a Codex target (see `engine` above), direct delivery requires the persistent Codex app-server for the target's `$CODEX_HOME` (default: `~/.codex`). It injects the message into an active turn immediately or starts a new turn when the thread is idle. The command prints which case applied, based on armyknife's tracked session status. If `turn/start` is explicitly rejected with `thread not found: <session_id>`, `notify` resumes the stored thread and retries the same message once. It never adds a fallback item to Codex's own queue. A `Paused` Codex target is resumed before delivery is attempted.
+
+Delivery failures that a retry could fix, such as a missing registry entry or a rejected or unconfirmed Codex delivery, do not fail the command. It saves the message under `agent-bg/undelivered/`, prints the cause, and exits 0. `a agent sweep` retries the message for 24 hours and a later `SessionStart(resume)` retries it after that, so a target that received an unconfirmed message can receive it twice. If saving also fails, the command exits non-zero with both causes and sends a desktop notification.
 
 `notify` identifies the sender automatically: it tries `ARMYKNIFE_SESSION_ID` (set by the Claude Code `session-start` hook), then `CLAUDE_CODE_SESSION_ID`, then `CODEX_SESSION_ID` (the ambient variables each CLI exports, which cover Codex sessions and Claude Code sessions whose hooks aren't registered), and wraps the message in a `<peer-message>` envelope naming whichever one resolves, since the underlying `SendMessage` protocol carries no sender field of its own -- without it, a session juggling several peers can't tell which one a message came from. When the resolved sender is a tracked session, the envelope also names its `engine` (`claude`/`codex`, see `peer parent`/`children`/`list`/`me` above), so the recipient knows whether to expect a `SendMessage`-capable reply. When it isn't tracked, a sender resolved via `CLAUDE_CODE_SESSION_ID`/`CODEX_SESSION_ID` still gets an `engine` guessed from that variable; one resolved via `ARMYKNIFE_SESSION_ID` has no such hint, so the line is omitted instead. When nothing resolves (e.g. `a agent close` calling `notify` directly, with no session in the loop), the message is delivered unwrapped.
 
@@ -951,7 +974,7 @@ Sessions that stay in the `stopped` state for longer than the configured timeout
 
 Sweep also checks the latest app-server turn for each running Codex session. It marks failed turns as `failed` and interrupted turns as `stopped`, or `waiting` when a permission request is pending. If the app-server cannot be reached, that session is skipped for the current pass.
 
-`a agent sweep` scans every stored session record once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
+`a agent sweep` scans every stored session record once. On the first shutdown request for a Codex session with a recorded tmux pane, it sends Ctrl+D so Codex can restore the terminal, then falls back to SIGTERM if the process remains alive. Codex sessions without a pane and Claude Code sessions receive SIGTERM directly. Later sweeps re-send SIGTERM while the process remains alive; the status stays `stopped` until exit is confirmed. A Claude Code session with an active [Remote Control](https://code.claude.com/docs/en/remote-control) connection is never signaled, so it stays reachable from claude.ai and the mobile app; once the connection closes, it is paused like any other idle session. If sweep cannot read the connection state, it skips the session for that pass. Run sweep periodically via a launchd agent so idle sessions eventually get paused even while no hook is firing.
 
 Each pass also checks `stopped` and `paused` sessions with linked worktrees. When the worktree branch has a merged pull request and no background task is pending, sweep closes the session through the regular `a agent close` path, which removes the worktree and notifies its delegator. Open pull requests, closed unmerged pull requests, and sessions without linked worktrees remain untouched. A successful automatic close sends a desktop notification with the PR number and title. If `magick` (ImageMagick) is installed, the notification uses a git-merge icon downloaded from Octicons and cached under `~/.cache/armyknife`; download or conversion failures leave the notification without an icon.
 
@@ -1067,9 +1090,57 @@ armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resu
 
 Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
 
+### `a agent watch-web`
+
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; the UI is not implemented yet. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+
+- `GET /api/sessions/{id}/actions`
+- `POST /api/sessions/{id}/messages` with `{"content":"..."}`
+- `POST /api/sessions/{id}/answer` with `{"choice":1}`
+- `POST /api/sessions/{id}/permission/approve`
+- `POST /api/sessions/{id}/permission/reject`
+- `POST /api/sessions/{id}/interrupt`
+- `POST /api/sessions/{id}/focus`
+- `POST /api/sessions/{id}/read`
+- `POST /api/sessions/{id}/archive`
+
+For example, send a message with:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/messages \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"content":"Hello"}'
+```
+
+Answer a question with:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"choice":1}'
+```
+
+```sh
+cd agent-watch-web
+pnpm install --frozen-lockfile
+pnpm run build
+cd ..
+cargo build
+```
+
+To access the server from another device in your tailnet, keep `a agent watch-web` running and run this in another terminal:
+
+```sh
+tailscale serve 4317
+```
+
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
+
 ### `a agent clean`
 
-Delete merged or closed worktrees in the current repository. Pass `--all` to scan repositories under `agent.worktree.repos_root`.
+Delete merged or closed worktrees in the current repository. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column shows `DELETE` for worktrees the confirmation will remove and `KEEP` for the rest. To remove a single worktree, use `a agent close <worktree>`.
 
 When `a agent close`, `a agent clean`, or the TUI clean view's background cleanup removes a worktree whose branch's PR was merged, and that worktree hosted a delegated Claude Code session (`a agent new --worktree` from another session), it sends the configured `agent.merge_notification` template to the delegator session via `a agent peer notify` so a delegator blocked on "wait for this PR to merge" can continue. No notification is sent when the key is unset; see [Configuration](#configuration). Best-effort: notification failures (delegator already ended, no messaging socket, etc.) don't affect the cleanup.
 
@@ -1084,6 +1155,7 @@ Options:
 | `-n, --dry-run` | Show what would be deleted without actually deleting                              |
 | `--all`         | Clean worktrees across all repositories under `agent.worktree.repos_root`         |
 | `--force`       | Delete even worktrees that currently host an active agent session (default: keep) |
+| `-y, --yes`     | Delete without asking for confirmation                                            |
 
 Worktrees with an active agent session (not paused or ended, with pending
 background tasks, or with an unsent composer draft) are kept by default

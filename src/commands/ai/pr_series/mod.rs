@@ -36,6 +36,7 @@ pub(super) fn synchronized_body_for_test(
         repository_privacy,
         created_pull_requests,
     )
+    .map(|synchronized_body| synchronized_body.unwrap_or_else(|| body.to_string()))
 }
 
 use clap::Subcommand;

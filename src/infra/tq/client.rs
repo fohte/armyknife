@@ -20,6 +20,18 @@ mod checklist;
 pub use checklist::{TqChecklist, TqChecklistItem, TqGithubLink};
 
 const SESSION_LIST_ARGS: &[&str] = &["session", "list", "--limit", "unlimited"];
+const TASK_LIST_ARGS: &[&str] = &[
+    "task",
+    "list",
+    "--context",
+    "all",
+    "--status",
+    "all",
+    "--limit",
+    "unlimited",
+    "--sort-by",
+    "priority",
+];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
 /// Claude Code's provider identifier in tq's agent-session schema. Always
@@ -94,6 +106,17 @@ pub struct TqTaskDetails {
     pub github_links: Vec<TqGithubLink>,
 }
 
+/// Task fields used by the agent watch session list.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TqTaskSummary {
+    pub id: String,
+    pub number: u32,
+    pub title: String,
+    #[serde(default)]
+    pub priority: Option<i32>,
+}
+
 pub struct TqClient;
 
 impl TqClient {
@@ -112,6 +135,25 @@ impl TqClient {
         let ids: Vec<String> = session_ids.iter().cloned().collect();
         let args = build_session_list_args(&ids);
         let join_result = tokio::task::spawn_blocking(move || run_session_list(&ids)).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                &args,
+                format!("task panicked: {e}"),
+                None,
+            )),
+        }
+    }
+
+    /// Lists details for the specified task IDs, including their priorities.
+    pub async fn list_tasks(&self, task_ids: &HashSet<String>) -> Result<Vec<TqTaskSummary>> {
+        if task_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids = task_ids.iter().cloned().collect::<Vec<_>>();
+        let args = build_task_list_args(&ids);
+        let join_result = tokio::task::spawn_blocking(move || run_task_list(&ids)).await;
         match join_result {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
@@ -202,6 +244,37 @@ fn build_session_list_args(session_ids: &[String]) -> Vec<String> {
         args.push(id.clone());
     }
     args
+}
+
+fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
+    let mut args: Vec<String> = TASK_LIST_ARGS.iter().map(|s| s.to_string()).collect();
+    args.push("--ids".to_string());
+    args.push(task_ids.join(","));
+    args
+}
+
+fn run_task_list(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
+    let args = build_task_list_args(task_ids);
+    let mut command = ExternalTool::Tq.command();
+    command.args(&args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            &args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    parse_task_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_task_list(stdout: &str) -> Result<Vec<TqTaskSummary>> {
+    Ok(serde_json::from_str(stdout)?)
 }
 
 /// Runs `tq task url <task_id>` to completion and returns its trimmed
@@ -300,6 +373,34 @@ mod tests {
                     session_id: "session-2".to_string(),
                     parent_session_id: None,
                     tasks: vec![],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_task_priorities_without_requiring_tq_process() {
+        let json = indoc! {r#"
+            [
+              { "id": "task-one", "number": 1, "title": "First task", "priority": 0 },
+              { "id": "task-two", "number": 2, "title": "Second task" }
+            ]
+        "#};
+
+        assert_eq!(
+            parse_task_list(json).unwrap(),
+            vec![
+                TqTaskSummary {
+                    id: "task-one".to_string(),
+                    number: 1,
+                    title: "First task".to_string(),
+                    priority: Some(0),
+                },
+                TqTaskSummary {
+                    id: "task-two".to_string(),
+                    number: 2,
+                    title: "Second task".to_string(),
+                    priority: None,
                 },
             ]
         );
@@ -484,6 +585,27 @@ mod tests {
     )]
     fn build_session_list_args_cases(#[case] session_ids: &[String], #[case] expected: Vec<&str>) {
         assert_eq!(build_session_list_args(session_ids), expected);
+    }
+
+    #[test]
+    fn build_task_list_args_uses_all_statuses_unlimited_and_tq_priority_order() {
+        assert_eq!(
+            build_task_list_args(&["task-one".to_string(), "task-two".to_string()]),
+            vec![
+                "task",
+                "list",
+                "--context",
+                "all",
+                "--status",
+                "all",
+                "--limit",
+                "unlimited",
+                "--sort-by",
+                "priority",
+                "--ids",
+                "task-one,task-two"
+            ]
+        );
     }
 
     #[test]

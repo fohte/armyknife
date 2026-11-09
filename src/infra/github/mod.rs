@@ -8,7 +8,9 @@ pub(crate) mod error;
 #[cfg(test)]
 pub(crate) mod mock;
 mod pr;
+mod pr_merge;
 mod pr_number;
+mod pr_stack;
 mod repo;
 
 pub use client::GitHubClient;
@@ -16,8 +18,10 @@ pub use error::GitHubError;
 #[cfg(test)]
 pub use mock::{GitHubMockServer, RemoteComment, RemoteTimelineEvent};
 pub use pr::{
-    BranchPrQuery, CreatePrParams, PrBodyClient, PrCiState, PrClient, PrInfo, PrProgressInfo,
-    PrState, UpdatePrBodyParams, UpdatePrParams,
+    BranchPrQuery, CreatePrParams, CreatedPullRequest, PrBodyClient, PrCiState, PrClient, PrInfo,
+    PrProgressInfo, PrState, UpdatePrBodyParams, UpdatePrParams,
 };
+pub use pr_merge::{AsyncMergeFallback, AsyncMergeResult, MergeResult};
 pub use pr_number::PrNumberQuery;
+pub use pr_stack::{PrStackClient, PullRequestStack, PullRequestStackEntry};
 pub use repo::RepoClient;

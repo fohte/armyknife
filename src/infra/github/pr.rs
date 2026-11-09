@@ -36,6 +36,13 @@ pub struct PrInfo {
     pub url: String,
 }
 
+/// Information returned when GitHub creates a pull request.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedPullRequest {
+    pub number: u64,
+    pub url: String,
+}
+
 /// Aggregated check status for a pull request's latest commit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrCiState {
@@ -88,14 +95,22 @@ impl BranchPrQuery {
 
 /// Trait for pull request operations.
 pub trait PrClient: Send + Sync {
-    /// Create a pull request and return its URL.
-    async fn create_pull_request(&self, params: CreatePrParams) -> Result<String>;
+    /// Create a pull request and return its number and URL.
+    async fn create_pull_request(&self, params: CreatePrParams) -> Result<CreatedPullRequest>;
 
     /// Update a pull request's title and body, return its URL.
     async fn update_pull_request(&self, params: UpdatePrParams) -> Result<String>;
 
     /// Get PR state for a branch. Returns None if no PR exists.
     async fn get_pr_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<PrInfo>>;
+
+    /// Get an open PR for a branch. Returns None if no open PR exists.
+    async fn get_open_pr_for_branch(
         &self,
         owner: &str,
         repo: &str,
@@ -121,10 +136,21 @@ struct PrResponse {
     html_url: Option<String>,
     merged_at: Option<String>,
     body: Option<String>,
+    head: Option<PrHeadResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrHeadResponse {
+    repo: Option<PrHeadRepoResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+struct PrHeadRepoResponse {
+    full_name: String,
 }
 
 impl PrClient for GitHubClient {
-    async fn create_pull_request(&self, params: CreatePrParams) -> Result<String> {
+    async fn create_pull_request(&self, params: CreatePrParams) -> Result<CreatedPullRequest> {
         // If base is not specified, resolve it via the GitHub API (see find_base_branch).
         let base = match &params.base {
             Some(b) => b.clone(),
@@ -145,7 +171,12 @@ impl PrClient for GitHubClient {
         let route = format!("/repos/{}/{}/pulls", params.owner, params.repo);
         let pr: PrResponse = self.rest_post(&route, &payload).await?;
 
-        pr.html_url.ok_or_else(|| GitHubError::MissingPrUrl.into())
+        let url = pr.html_url.ok_or(GitHubError::MissingPrUrl)?;
+
+        Ok(CreatedPullRequest {
+            number: pr.number,
+            url,
+        })
     }
 
     async fn update_pull_request(&self, params: UpdatePrParams) -> Result<String> {
@@ -179,24 +210,50 @@ impl PrClient for GitHubClient {
             return Ok(None);
         };
 
-        let state = if pr.merged_at.is_some() {
-            PrState::Merged
-        } else {
-            match pr.state.as_deref() {
-                Some("open") => PrState::Open,
-                Some("closed") => PrState::Closed,
-                _ => PrState::Closed,
-            }
-        };
+        Ok(Some(pr_info_from_response(pr)))
+    }
 
-        let url = pr.html_url.unwrap_or_default();
+    async fn get_open_pr_for_branch(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<Option<PrInfo>> {
+        let route = format!("/repos/{owner}/{repo}/pulls");
+        let head = format!("{owner}:{branch}");
+        let pulls: Vec<PrResponse> = self
+            .rest_get_with_query(&route, &[("head", &head), ("state", "open")])
+            .await?;
 
-        Ok(Some(PrInfo {
-            number: pr.number,
-            title: pr.title.unwrap_or_default(),
-            state,
-            url,
-        }))
+        let expected_repository = format!("{owner}/{repo}");
+        Ok(pulls
+            .into_iter()
+            .find(|pr| {
+                pr.head
+                    .as_ref()
+                    .and_then(|head| head.repo.as_ref())
+                    .is_some_and(|repo| repo.full_name.eq_ignore_ascii_case(&expected_repository))
+            })
+            .map(pr_info_from_response))
+    }
+}
+
+fn pr_info_from_response(pr: PrResponse) -> PrInfo {
+    let state = if pr.merged_at.is_some() {
+        PrState::Merged
+    } else {
+        match pr.state.as_deref() {
+            Some("open") => PrState::Open,
+            Some("closed") => PrState::Closed,
+            _ => PrState::Closed,
+        }
+    };
+
+    PrInfo {
+        number: pr.number,
+        title: pr.title.unwrap_or_default(),
+        state,
+        url: pr.html_url.unwrap_or_default(),
     }
 }
 

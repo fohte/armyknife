@@ -125,6 +125,8 @@ Stop hook (parent process):
 | `agent.bg_run.registry_read_failed`          | The background-task registry could not be read; the session was treated as pending                                                                                              |
 | `agent.sweep.github_client_unavailable`      | The GitHub client could not be initialized; merged-session cleanup was skipped                                                                                                  |
 | `agent.sweep.pull_requests_fetch_failed`     | The batched pull request lookup failed; merged-session cleanup was skipped                                                                                                      |
+| `agent.sweep.remote_control_check_failed`    | The Claude Code session registry could not be read or parsed; the session was treated as having a Remote Control connection                                                     |
+| `agent.sweep.remote_control_active`          | The timeout elapsed, but the live Claude Code process has a Remote Control connection; it was not signaled                                                                      |
 | `agent.sweep.signaled`                       | Live pid resolved; shutdown requested, status may stay Stopped                                                                                                                  |
 | `agent.sweep.dry_run_signal`                 | Would have signaled if not in `--dry-run`                                                                                                                                       |
 | `agent.sweep.paused`                         | Process exit confirmed; status changed to Paused                                                                                                                                |
@@ -142,7 +144,18 @@ Stop hook (parent process):
 | `agent.sweep.ctrl_d_timeout`                 | Codex remained alive after Ctrl+D; falling back to SIGTERM                                                                                                                      |
 | `agent.sweep.ctrl_d_failed`                  | Sending Ctrl+D through tmux failed; falling back to SIGTERM                                                                                                                     |
 | `agent.sweep.sigterm_failed`                 | SIGTERM to the resolved pid failed (non-ESRCH)                                                                                                                                  |
-| `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / …)                                                                                          |
+| `agent.sweep.redelivery_started`             | A detached redelivery started for a session with a recent undelivered notification; with `dry_run=true` it was only counted                                                     |
+| `agent.sweep.redelivery_scan_failed`         | A session's undelivered notifications could not be read; the session was skipped and remaining sessions were processed                                                          |
+| `agent.sweep.redelivery_failed`              | The undelivered notification pass failed; the summary reports zero redeliveries started                                                                                         |
+| `agent.sweep.summary`                        | End-of-pass counters (`scanned` / `paused` / `codex_failed` / `codex_interrupted` / `redelivery_started` / …)                                                                   |
+
+### `agent peer notify`
+
+| event                               | meaning                                                                                            |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `agent.peer.notify.saved_for_retry` | Delivery failed in a way a retry could fix; the message was saved for redelivery                   |
+| `agent.peer.notify.save_failed`     | Delivery failed and the message could not be saved; the command exits non-zero and alerts the user |
+| `agent.peer.notify.alert_failed`    | The desktop notification about an unsaved message could not be sent                                |
 
 ### `agent composer`
 

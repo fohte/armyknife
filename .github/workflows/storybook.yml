@@ -1,0 +1,110 @@
+name: Storybook
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+concurrency:
+  group: storybook-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  deployments: write
+  pull-requests: write
+
+jobs:
+  detect-changes-agent-watch-web:
+    runs-on: ubuntu-slim
+    timeout-minutes: 30
+    outputs:
+      changed: ${{ steps.changes.outputs.any_modified }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
+
+      - name: Check for changes
+        uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
+        id: changes
+        with:
+          files: |
+            agent-watch-web/**
+            .github/workflows/storybook.yml
+
+  deploy-agent-watch-web:
+    needs: detect-changes-agent-watch-web
+    if: needs.detect-changes-agent-watch-web.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUDFLARE_API_TOKEN_AVAILABLE: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          version: 2026.9.14
+
+      # corepack creates the pnpm executable inside mise's node install bin
+      # directory; reshim so the mise shims dir (which is on PATH) picks it up.
+      - run: |
+          corepack enable
+          mise reshim
+
+      - name: Get pnpm store directory
+        id: pnpm-store
+        run: |
+          store_path=$(pnpm store path)
+          echo "path=$store_path" >> "$GITHUB_OUTPUT"
+
+      - name: Cache pnpm store
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ${{ steps.pnpm-store.outputs.path }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('agent-watch-web/pnpm-lock.yaml') }}
+          restore-keys: ${{ runner.os }}-pnpm-store-
+
+      - name: Install pnpm dependencies
+        run: cd "agent-watch-web" && pnpm install --frozen-lockfile
+
+      - name: Build Storybook
+        run: cd "agent-watch-web" && pnpm run storybook:build
+
+      - name: Create Cloudflare Pages project if not exists
+        if: env.CLOUDFLARE_API_TOKEN_AVAILABLE == 'true'
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: agent-watch-web
+          packageManager: pnpm
+          command: pages project create armyknife-agent-watch-web-storybook --production-branch=main
+        continue-on-error: true
+
+      - name: Deploy to Cloudflare Pages
+        id: deploy
+        if: env.CLOUDFLARE_API_TOKEN_AVAILABLE == 'true'
+        uses: cloudflare/wrangler-action@ebbaa1584979971c8614a24965b4405ff95890e0 # v4.0.0
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: agent-watch-web
+          packageManager: pnpm
+          command: pages deploy storybook-static --project-name=armyknife-agent-watch-web-storybook --branch=${{ github.head_ref || 'main' }} --commit-dirty=true
+
+      - name: Comment preview URL on PR
+        if: >-
+          env.CLOUDFLARE_API_TOKEN_AVAILABLE == 'true' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
+        with:
+          header: storybook-preview-agent-watch-web
+          message: |
+            ## Storybook Preview (agent-watch-web)
+
+            ${{ steps.deploy.outputs.pages-deployment-alias-url }}
