@@ -133,7 +133,7 @@ fn user_turn<'a>(session: &'a Session, agent_config: &AgentConfig) -> Option<Use
     })
 }
 
-fn is_ask_user_question(session: &Session) -> bool {
+pub(crate) fn is_ask_user_question(session: &Session) -> bool {
     session
         .current_tool
         .as_deref()

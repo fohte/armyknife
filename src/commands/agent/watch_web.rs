@@ -1,3 +1,4 @@
+mod actions;
 mod assets;
 mod security;
 
@@ -37,7 +38,9 @@ fn app() -> Router {
 }
 
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
-    let api = Router::new().fallback(api_not_found);
+    let api = Router::new()
+        .merge(actions::router())
+        .fallback(api_not_found);
 
     Router::new()
         .nest("/api", api)
@@ -141,6 +144,15 @@ mod tests {
         Some("text/plain; charset=utf-8"),
         "API route not found"
     )]
+    #[case::action_route_rejects_missing_origin(
+        "POST",
+        "/api/sessions/not-found/focus",
+        "localhost",
+        None,
+        StatusCode::FORBIDDEN,
+        None,
+        ""
+    )]
     #[tokio::test]
     async fn request_security_is_applied_by_the_router(
         #[case] method: &str,
@@ -164,6 +176,25 @@ mod tests {
                 expected_body.to_owned(),
             )
         );
+    }
+
+    #[tokio::test]
+    async fn matching_origin_reaches_the_action_route() {
+        let response = app()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/sessions/not-found/answer")
+                    .header(HOST, "localhost")
+                    .header(ORIGIN, "http://localhost")
+                    .header(CONTENT_TYPE, "application/json")
+                    .body(Body::from("{}"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     fn request(method: &str, uri: &str, host: &str, origin: Option<&str>) -> Request<Body> {

@@ -411,20 +411,17 @@ fn ensure_pane_session<R: CloseRuntime>(
 }
 
 fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) -> Result<()> {
-    if matches!(
-        effective_status,
-        SessionStatus::Running | SessionStatus::WaitingInput
-    ) {
-        bail!(
-            "Agent session `{}` is running or waiting for input; pass --force to close it",
-            session.session_id
-        );
-    }
-    if session.has_pending_bg_tasks() {
-        bail!(
-            "Agent session `{}` has pending background or agent tasks; pass --force to close it",
-            session.session_id
-        );
+    if session.has_active_work(effective_status) {
+        match effective_status {
+            SessionStatus::Running | SessionStatus::WaitingInput => bail!(
+                "Agent session `{}` is running or waiting for input; pass --force to close it",
+                session.session_id
+            ),
+            _ => bail!(
+                "Agent session `{}` has pending background or agent tasks; pass --force to close it",
+                session.session_id
+            ),
+        }
     }
     Ok(())
 }

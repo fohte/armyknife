@@ -18,6 +18,11 @@ impl Session {
         !self.pending_bg_task_ids.is_empty() || !self.pending_agent_task_ids.is_empty()
     }
 
+    pub(crate) fn has_active_work(&self, status: SessionStatus) -> bool {
+        matches!(status, SessionStatus::Running | SessionStatus::WaitingInput)
+            || self.has_pending_bg_tasks()
+    }
+
     /// True if any agent (main thread or subagent) in this session is
     /// currently blocked on a permission prompt. See
     /// `pending_permission_agent_ids` for what forces this to clear.
