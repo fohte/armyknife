@@ -5,7 +5,7 @@ allowBuilds:
   unrs-resolver: true
   # required by cloudflare/wrangler-action's internal `pnpm add wrangler` step (Storybook deploy)
   workerd: true
-  # no-op unless package.json sets "msw.workerDirectory", which we don't use
+  # required when package.json sets "msw.workerDirectory"
   msw: true
 
 # Dodge short-lived supply-chain attacks (e.g. shai-hulud, tinycolor) by

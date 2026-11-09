@@ -14,12 +14,7 @@ export default config(
     ignores: ['dist/**', 'public/mockServiceWorker.js'],
   },
   {
-    // vite.config.ts/vitest.config.ts are loaded through Vite's own
-    // esbuild-based config loader, which doesn't resolve the package.json
-    // "imports" field, unlike the Rollup pipeline that bundles the app
-    // itself. .storybook/vitest.setup.ts imports its sibling
-    // .storybook/preview.ts by relative path because that file lives outside
-    // src/, the only directory the "imports" field maps.
+    // Vite's config loader and files outside src/ cannot resolve package.json imports aliases.
     files: ['.storybook/vitest.setup.ts', 'vite.config.ts', 'vitest.config.ts'],
     rules: { 'no-restricted-imports': 'off' },
   },
