@@ -16,6 +16,7 @@ use super::super::claude_registry;
 use super::super::codex_steer;
 use super::super::store;
 use super::super::types::{Engine, Session, TmuxInfo};
+use super::super::user_turn::is_ask_user_question;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
@@ -73,18 +74,20 @@ impl ActionRuntime for LiveActionRuntime {
     }
 
     fn send_keys(&self, tmux_info: &TmuxInfo, keys: &[&str]) -> Result<()> {
-        for key in keys {
-            crate::infra::tmux::send_keys_for_socket(
-                tmux_info.socket_path.as_deref(),
-                &tmux_info.pane_id,
-                key,
-            )?;
-        }
-        Ok(())
+        crate::infra::tmux::send_keys_sequence_for_socket(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+            keys,
+        )
+        .map_err(anyhow::Error::from)
     }
 
     fn focus(&self, tmux_info: &TmuxInfo) -> Result<()> {
-        crate::infra::tmux::focus_pane(&tmux_info.pane_id).map_err(anyhow::Error::from)
+        crate::infra::tmux::focus_pane_for_socket(
+            tmux_info.socket_path.as_deref(),
+            &tmux_info.pane_id,
+        )
+        .map_err(anyhow::Error::from)
     }
 }
 
@@ -203,9 +206,6 @@ async fn answer_question(
     Json(request): Json<AnswerRequest>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if !(1..=9).contains(&request.choice) {
-        return Err(ApiError::bad_request("choice must be between 1 and 9"));
-    }
     if !is_ask_user_question(&session) {
         return Err(ApiError::conflict(
             "session is not waiting for a question answer",
@@ -328,13 +328,6 @@ impl Success {
     }
 }
 
-fn is_ask_user_question(session: &Session) -> bool {
-    session
-        .current_tool
-        .as_deref()
-        .is_some_and(|tool| tool == "AskUserQuestion" || tool.starts_with("AskUserQuestion("))
-}
-
 fn require_tmux(session: &Session) -> Result<&TmuxInfo, ApiError> {
     session
         .tmux_info
@@ -411,6 +404,8 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, Response, StatusCode};
+    use chrono::TimeZone;
+    use rstest::{fixture, rstest};
     use serde_json::Value;
     use tempfile::TempDir;
     use tower::ServiceExt;
@@ -437,6 +432,7 @@ mod tests {
             self.calls.lock().unwrap().push(json!({
                 "kind": "keys",
                 "paneId": tmux_info.pane_id,
+                "socketPath": tmux_info.socket_path,
                 "keys": keys,
             }));
             Ok(())
@@ -446,17 +442,42 @@ mod tests {
             self.calls.lock().unwrap().push(json!({
                 "kind": "focus",
                 "paneId": tmux_info.pane_id,
+                "socketPath": tmux_info.socket_path,
             }));
             Ok(())
         }
     }
 
-    fn test_router(temp_dir: &TempDir, runtime: Arc<FakeRuntime>) -> Router {
-        let sessions_dir = temp_dir.path().join("sessions");
-        router_with_state(ActionState {
-            sessions_dir: Some(sessions_dir),
-            runtime,
-        })
+    struct ActionContext {
+        temp_dir: TempDir,
+        runtime: Arc<FakeRuntime>,
+    }
+
+    impl ActionContext {
+        fn router(&self) -> Router {
+            router_with_state(ActionState {
+                sessions_dir: Some(self.temp_dir.path().join("sessions")),
+                runtime: self.runtime.clone(),
+            })
+        }
+
+        fn save_session(&self, session: &Session) {
+            store::save_session_to(&self.temp_dir.path().join("sessions"), session).unwrap();
+        }
+
+        fn load_session(&self, session_id: &str) -> Session {
+            store::load_session_from(&self.temp_dir.path().join("sessions"), session_id)
+                .unwrap()
+                .unwrap()
+        }
+    }
+
+    #[fixture]
+    fn action_context() -> ActionContext {
+        ActionContext {
+            temp_dir: TempDir::new().unwrap(),
+            runtime: Arc::new(FakeRuntime::default()),
+        }
     }
 
     fn session(session_id: &str) -> Session {
@@ -474,7 +495,7 @@ mod tests {
                 window_name: "fixture".to_string(),
                 window_index: 0,
                 pane_id: "%4".to_string(),
-                socket_path: None,
+                socket_path: Some("/tmp/example-tmux.sock".to_string()),
             }),
             status: SessionStatus::WaitingInput,
             agent_status: None,
@@ -503,13 +524,13 @@ mod tests {
         }
     }
 
-    async fn response_snapshot(response: Response<Body>, calls: &Mutex<Vec<Value>>) -> Value {
+    async fn response_snapshot(response: Response<Body>, context: &ActionContext) -> Value {
         let status = response.status().as_u16();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         json!({
             "status": status,
             "body": serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
-            "calls": calls.lock().unwrap().clone(),
+            "calls": context.runtime.calls.lock().unwrap().clone(),
         })
     }
 
@@ -530,15 +551,80 @@ mod tests {
             .unwrap()
     }
 
+    fn normalize_session(mut session: Session) -> Value {
+        let timestamp = Utc.timestamp_opt(1, 0).single().unwrap();
+        if session.read_at.is_some() {
+            session.read_at = Some(timestamp);
+        }
+        if session.archived_at.is_some() {
+            session.archived_at = Some(timestamp);
+        }
+        serde_json::to_value(session).unwrap()
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn answer_question_sends_only_the_bounded_server_key() {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+    async fn send_message_forwards_nonempty_content_unchanged(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "  continue the investigation  " }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "  continue the investigation  ",
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn send_message_rejects_whitespace_without_calling_runtime(
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "  \n " }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": "message must not be empty" },
+                "calls": [],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn answer_question_sends_only_the_bounded_server_key(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
+        action_context.save_session(&session);
 
-        let response = test_router(&temp_dir, runtime.clone())
+        let response = action_context
+            .router()
             .oneshot(post(
                 "/sessions/sample-session/answer",
                 json!({ "choice": 2 }),
@@ -547,33 +633,38 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response, &runtime.calls).await,
+            response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::OK.as_u16(),
                 "body": { "ok": true },
-                "calls": [{ "kind": "keys", "paneId": "%4", "keys": ["2", "Enter"] }],
+                "calls": [{
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["2", "Enter"],
+                }],
             }),
         );
     }
 
-    #[rstest::rstest]
+    #[rstest]
     #[case::approve(true, ["1", "Enter"])]
     #[case::reject(false, ["3", "Enter"])]
     #[tokio::test]
     async fn permission_actions_send_fixed_keys(
         #[case] approved: bool,
         #[case] expected_keys: [&str; 2],
+        action_context: ActionContext,
     ) {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
         let mut session = session("sample-session");
         session
             .pending_permission_agent_ids
             .insert("main".to_string());
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
+        action_context.save_session(&session);
         let action = if approved { "approve" } else { "reject" };
 
-        let response = test_router(&temp_dir, runtime.clone())
+        let response = action_context
+            .router()
             .oneshot(post_empty(&format!(
                 "/sessions/sample-session/permission/{action}"
             )))
@@ -581,27 +672,34 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response, &runtime.calls).await,
+            response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::OK.as_u16(),
                 "body": { "ok": true },
-                "calls": [{ "kind": "keys", "paneId": "%4", "keys": expected_keys }],
+                "calls": [{
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": expected_keys,
+                }],
             }),
         );
     }
 
-    #[rstest::rstest]
+    #[rstest]
     #[case::zero(0)]
     #[case::above_supported_choices(10)]
     #[tokio::test]
-    async fn answer_question_rejects_out_of_range_choices(#[case] choice: u8) {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+    async fn answer_question_rejects_out_of_range_choices(
+        #[case] choice: u8,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
+        action_context.save_session(&session);
 
-        let response = test_router(&temp_dir, runtime.clone())
+        let response = action_context
+            .router()
             .oneshot(post(
                 "/sessions/sample-session/answer",
                 json!({ "choice": choice }),
@@ -610,7 +708,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response, &runtime.calls).await,
+            response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::BAD_REQUEST.as_u16(),
                 "body": { "error": "choice must be between 1 and 9" },
@@ -619,17 +717,18 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn codex_permission_capability_is_disabled_and_approval_is_rejected() {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+    async fn codex_permission_capability_is_disabled_and_approval_is_rejected(
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
         session.engine = Engine::Codex;
         session
             .pending_permission_agent_ids
             .insert("main".to_string());
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
-        let app = test_router(&temp_dir, runtime.clone());
+        action_context.save_session(&session);
+        let app = action_context.router();
 
         let capabilities = app
             .clone()
@@ -651,8 +750,8 @@ mod tests {
 
         assert_eq!(
             (
-                response_snapshot(capabilities, &runtime.calls).await,
-                response_snapshot(approval, &runtime.calls).await,
+                response_snapshot(capabilities, &action_context).await,
+                response_snapshot(approval, &action_context).await,
             ),
             (
                 json!({
@@ -674,14 +773,16 @@ mod tests {
         );
     }
 
-    #[rstest::rstest]
+    #[rstest]
     #[case::not_registered("not-stored")]
     #[case::invalid_id("bad..id")]
     #[tokio::test]
-    async fn unknown_session_is_not_found_without_calling_runtime(#[case] id: &str) {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
-        let response = test_router(&temp_dir, runtime.clone())
+    async fn unknown_session_is_not_found_without_calling_runtime(
+        #[case] id: &str,
+        action_context: ActionContext,
+    ) {
+        let response = action_context
+            .router()
             .oneshot(post(
                 &format!("/sessions/{id}/messages"),
                 json!({ "content": "hello" }),
@@ -690,7 +791,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response, &runtime.calls).await,
+            response_snapshot(response, &action_context).await,
             json!({
                 "status": StatusCode::NOT_FOUND.as_u16(),
                 "body": { "error": "session not found" },
@@ -699,42 +800,96 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn mark_read_persists_read_at_for_a_stopped_session() {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+    async fn mark_read_persists_read_at_for_a_stopped_session(action_context: ActionContext) {
         let mut session = session("sample-session");
         session.status = SessionStatus::Stopped;
         session.tmux_info = None;
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
+        action_context.save_session(&session);
 
-        let response = test_router(&temp_dir, runtime.clone())
+        let response = action_context
+            .router()
             .oneshot(post_empty("/sessions/sample-session/read"))
             .await
             .unwrap();
-        let stored = store::load_session_from(&temp_dir.path().join("sessions"), "sample-session")
-            .unwrap()
-            .unwrap();
+        let stored = action_context.load_session("sample-session");
+        let mut expected = session;
+        expected.read_at = Some(Utc::now());
 
         assert_eq!(
-            (
-                response_snapshot(response, &runtime.calls).await,
-                stored.read_at.is_some(),
-            ),
-            (
-                json!({ "status": StatusCode::OK.as_u16(), "body": { "ok": true }, "calls": [] }),
-                true,
-            ),
+            json!({
+                "response": response_snapshot(response, &action_context).await,
+                "session": normalize_session(stored),
+            }),
+            json!({
+                "response": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                },
+                "session": normalize_session(expected),
+            }),
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn archive_hides_the_session_from_later_actions_lookups() {
-        let temp_dir = TempDir::new().unwrap();
-        let runtime = Arc::new(FakeRuntime::default());
+    async fn interrupt_sends_escape_to_the_session_pane(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["Escape"],
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn focus_uses_the_session_pane_and_recorded_socket(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/focus"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "focus",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn archive_hides_the_session_from_later_actions_lookups(action_context: ActionContext) {
         let session = session("sample-session");
-        store::save_session_to(&temp_dir.path().join("sessions"), &session).unwrap();
-        let app = test_router(&temp_dir, runtime.clone());
+        action_context.save_session(&session);
+        let app = action_context.router();
 
         let archived = app
             .clone()
@@ -750,20 +905,20 @@ mod tests {
             )
             .await
             .unwrap();
-        let stored = store::load_session_from(&temp_dir.path().join("sessions"), "sample-session")
-            .unwrap()
-            .unwrap();
-
         assert_eq!(
             (
-                response_snapshot(archived, &runtime.calls).await,
-                response_snapshot(lookup, &runtime.calls).await,
-                stored.archived_at.is_some(),
+                response_snapshot(archived, &action_context).await,
+                response_snapshot(lookup, &action_context).await,
+                normalize_session(action_context.load_session("sample-session")),
             ),
             (
                 json!({ "status": StatusCode::OK.as_u16(), "body": { "ok": true }, "calls": [] }),
                 json!({ "status": StatusCode::NOT_FOUND.as_u16(), "body": { "error": "session not found" }, "calls": [] }),
-                true,
+                normalize_session({
+                    let mut expected = session;
+                    expected.archived_at = Some(Utc::now());
+                    expected
+                }),
             ),
         );
     }

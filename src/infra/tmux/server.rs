@@ -214,7 +214,50 @@ pub fn capture_pane_with_escapes_for_socket(
 
 /// Sends keys to a pane on its recorded server.
 pub fn send_keys_for_socket(socket_path: Option<&str>, pane_id: &str, keys: &str) -> Result<()> {
-    run_tmux_for_socket(socket_path, &["send-keys", "-t", pane_id, keys])
+    send_keys_sequence_for_socket(socket_path, pane_id, &[keys])
+}
+
+/// Sends a sequence of tmux keys in one command so concurrent actions cannot interleave it.
+pub fn send_keys_sequence_for_socket(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    keys: &[&str],
+) -> Result<()> {
+    let mut args = vec!["send-keys", "-t", pane_id];
+    args.extend_from_slice(keys);
+    run_tmux_for_socket(socket_path, &args)
+}
+
+/// Focuses a pane on its recorded tmux server.
+pub fn focus_pane_for_socket(socket_path: Option<&str>, pane_id: &str) -> Result<()> {
+    let Some(socket_path) = socket_path else {
+        return super::focus_pane(pane_id);
+    };
+
+    if super::current_socket_path().ok().flatten().as_deref() == Some(socket_path) {
+        return super::focus_pane(pane_id);
+    }
+
+    let clients_output = run_tmux_output_for_socket(
+        Some(socket_path),
+        &["list-clients", "-F", "#{client_activity} #{client_tty}"],
+    )?;
+    if let Some(client_tty) = clients_output
+        .lines()
+        .filter_map(|line| {
+            let (activity, tty) = line.split_once(' ')?;
+            Some((activity.parse::<u64>().ok()?, tty))
+        })
+        .max_by_key(|(activity, _)| *activity)
+        .map(|(_, tty)| tty)
+    {
+        run_tmux_for_socket(
+            Some(socket_path),
+            &["switch-client", "-c", client_tty, "-t", pane_id],
+        )
+    } else {
+        run_tmux_for_socket(Some(socket_path), &["select-pane", "-t", pane_id])
+    }
 }
 
 /// Kills a pane on its recorded server.
