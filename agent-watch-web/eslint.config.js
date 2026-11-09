@@ -14,7 +14,7 @@ export default config(
     ignores: ['dist/**', 'public/mockServiceWorker.js'],
   },
   {
-    // Vite's config loader and files outside src/ cannot resolve package.json imports aliases.
+    // Vite's config loader cannot resolve package aliases; Storybook setup imports its sibling preview relatively.
     files: ['.storybook/vitest.setup.ts', 'vite.config.ts', 'vitest.config.ts'],
     rules: { 'no-restricted-imports': 'off' },
   },
