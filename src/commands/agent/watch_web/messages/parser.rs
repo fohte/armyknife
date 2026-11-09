@@ -4,7 +4,9 @@ pub(super) mod codex;
 use std::collections::BTreeSet;
 use std::io::BufRead;
 
-use super::ChatItem;
+use super::{ChatItem, ParentSession};
+
+const PEER_MESSAGE_HEADER_SEPARATOR: &str = concat!("\n", "\n");
 
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
@@ -29,6 +31,33 @@ pub(super) fn for_each_jsonl_record(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{ChatItem, ToolSummary};
+
+    #[rstest]
+    #[case::singular(1, "1 action")]
+    #[case::plural(2, "2 actions")]
+    fn action_count_uses_the_matching_noun(#[case] count: usize, #[case] expected: &str) {
+        let mut summary = ToolSummary::default();
+        for _ in 0..count {
+            summary.record("Read", None);
+        }
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummary {
+                summary: expected.to_string(),
+            }]
+        );
+    }
+}
+
 #[derive(Default)]
 pub(super) struct ToolSummary {
     actions: usize,
@@ -51,7 +80,7 @@ impl ToolSummary {
         self.actions += 1;
         if matches!(
             name,
-            "apply_patch" | "write_file" | "edit_file" | "fileChange"
+            "apply_patch" | "write_file" | "edit_file" | "FileChange" | "fileChange"
         ) && let Some(detail) = detail
         {
             if let Some(path) = detail
@@ -77,8 +106,13 @@ impl ToolSummary {
         if self.actions == 0 {
             return;
         }
+        let action = if self.actions == 1 {
+            "action"
+        } else {
+            "actions"
+        };
         let summary = if self.edited_files.is_empty() {
-            format!("{} actions", self.actions)
+            format!("{} {action}", self.actions)
         } else {
             let noun = if self.edited_files.len() == 1 {
                 "file"
@@ -86,7 +120,7 @@ impl ToolSummary {
                 "files"
             };
             format!(
-                "{} actions · {} {noun} edited",
+                "{} {action} · {} {noun} edited",
                 self.actions,
                 self.edited_files.len()
             )
@@ -100,17 +134,46 @@ pub(super) fn append_text(
     items: &mut Vec<ChatItem>,
     text: String,
     is_user: bool,
-    from: Option<&str>,
+    parent: Option<&ParentSession>,
 ) {
     if text.trim().is_empty() {
         return;
     }
     if is_user {
-        items.push(ChatItem::User {
-            text,
-            from: from.map(str::to_owned),
-        });
+        // A child session can receive direct input as well as peer messages.
+        let (text, from) = if let Some((sender_id, body)) = peer_message_parts(&text) {
+            (
+                body.to_owned(),
+                parent
+                    .filter(|parent| parent.session_id == sender_id)
+                    .map(|parent| parent.title.clone()),
+            )
+        } else {
+            (text, None)
+        };
+        if text.trim().is_empty() {
+            return;
+        }
+        items.push(ChatItem::User { text, from });
     } else {
         items.push(ChatItem::Assistant { text });
     }
+}
+
+fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
+    let envelope = message
+        .strip_prefix("<peer-message>\n")?
+        .strip_suffix("\n</peer-message>")?;
+    let (header, body) = envelope.split_once(PEER_MESSAGE_HEADER_SEPARATOR)?;
+    let mut header_lines = header.lines();
+    let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
+    if sender_id.is_empty()
+        || header_lines
+            .next()
+            .is_some_and(|line| !line.starts_with("- Sender engine: "))
+        || header_lines.next().is_some()
+    {
+        return None;
+    }
+    Some((sender_id, body))
 }

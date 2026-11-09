@@ -69,7 +69,7 @@ fn load_messages_with(
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
     };
-    let from = parent_title(&session, &mut load_session)?;
+    let parent = parent_session(&session, &mut load_session)?;
     let pending_permission = session.has_pending_permission_requests();
     let pending_tool = pending_permission
         .then_some(session.current_tool.as_deref())
@@ -77,7 +77,7 @@ fn load_messages_with(
     let mut messages = session
         .transcript_path
         .as_deref()
-        .map(|path| parse_session_transcript(path, session.engine, from.as_deref(), pending_tool))
+        .map(|path| parse_session_transcript(path, session.engine, parent.as_ref(), pending_tool))
         .transpose()?
         .unwrap_or_default();
 
@@ -101,43 +101,45 @@ fn load_messages_with(
     Ok(Some(messages))
 }
 
-fn parent_title(
+fn parent_session(
     session: &Session,
     load_session: &mut impl FnMut(&str) -> Result<Option<Session>>,
-) -> Result<Option<String>> {
+) -> Result<Option<ParentSession>> {
     let Some(parent_id) = session.ancestor_session_ids.last() else {
         return Ok(None);
     };
     let Some(parent) = load_session(parent_id)? else {
         return Ok(None);
     };
-    Ok(Some(
-        parent
-            .label
-            .or_else(|| claude_sessions::get_session_title(&parent.cwd, &parent.session_id))
-            .or_else(|| {
-                parent
-                    .cwd
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(str::to_owned)
-            })
-            .unwrap_or_else(|| "parent session".to_string()),
-    ))
+    let title = parent
+        .label
+        .or_else(|| claude_sessions::get_session_title(&parent.cwd, &parent.session_id))
+        .or_else(|| {
+            parent
+                .cwd
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+        })
+        .unwrap_or_else(|| "parent session".to_string());
+    Ok(Some(ParentSession {
+        session_id: parent.session_id,
+        title,
+    }))
 }
 
 fn parse_session_transcript(
     path: &Path,
     engine: Engine,
-    from: Option<&str>,
+    parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
 ) -> Result<Vec<ChatItem>> {
     let Some(reader) = open_transcript(path, engine == Engine::Codex)? else {
         return Ok(Vec::new());
     };
     match engine {
-        Engine::Claude => Ok(parser::claude::parse(reader, from, pending_tool)?),
-        Engine::Codex => Ok(parser::codex::parse(reader, from)?),
+        Engine::Claude => Ok(parser::claude::parse(reader, parent, pending_tool)?),
+        Engine::Codex => Ok(parser::codex::parse(reader, parent)?),
     }
 }
 
@@ -204,6 +206,11 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+}
+
+struct ParentSession {
+    session_id: String,
+    title: String,
 }
 
 #[cfg(test)]
