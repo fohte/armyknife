@@ -1088,7 +1088,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; the UI is not implemented yet. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary, including an Inbox that groups sessions by whether they need action, are in progress, or are done. The Inbox reloads session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `GET /api/sessions/{id}/actions`
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
