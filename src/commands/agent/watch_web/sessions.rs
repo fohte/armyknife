@@ -1,7 +1,10 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::time::Duration;
 
 use axum::Json;
 use axum::Router;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::routing::get;
 use chrono::{DateTime, Utc};
@@ -9,12 +12,17 @@ use serde::Serialize;
 
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
+use crate::commands::agent::tq_session_tasks::{
+    SessionTask as LinkedSessionTask, build_task_by_session, fetch_session_tasks_with_parents,
+};
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::git::{github_owner_and_repo, open_repo_at};
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo, PrState};
-use crate::infra::tq::{TqClient, TqTask, TqTaskStatus, TqTaskSummary};
+use crate::infra::tq::{TqClient, TqTaskSummary};
 use crate::shared::config::{self, AgentConfig};
+
+const EXTERNAL_ENRICHMENT_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -91,40 +99,110 @@ struct SessionSnapshot {
     agent_config: AgentConfig,
 }
 
-struct TaskLink {
-    id: String,
-    number: u32,
-    title: String,
+type TaskLink = LinkedSessionTask;
+
+trait SessionSource: Clone + Send + Sync + 'static {
+    fn load_snapshot(&self) -> impl Future<Output = anyhow::Result<SessionSnapshot>> + Send;
+
+    fn fetch_task_links(
+        &self,
+        sessions: &[Session],
+    ) -> impl Future<Output = HashMap<String, TaskLink>> + Send;
+
+    fn fetch_task_priorities(
+        &self,
+        task_links: &HashMap<String, TaskLink>,
+    ) -> impl Future<Output = HashMap<String, Option<i32>>> + Send;
+
+    fn fetch_pull_requests(
+        &self,
+        sessions: &[Session],
+    ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
+
+    fn now(&self) -> DateTime<Utc>;
+}
+
+#[derive(Clone)]
+struct LiveSessionSource;
+
+impl SessionSource for LiveSessionSource {
+    async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+        tokio::task::spawn_blocking(load_snapshot).await?
+    }
+
+    async fn fetch_task_links(&self, sessions: &[Session]) -> HashMap<String, TaskLink> {
+        fetch_task_links(sessions).await
+    }
+
+    async fn fetch_task_priorities(
+        &self,
+        task_links: &HashMap<String, TaskLink>,
+    ) -> HashMap<String, Option<i32>> {
+        fetch_task_priorities(task_links).await
+    }
+
+    async fn fetch_pull_requests(&self, sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
+        fetch_pull_requests(sessions).await
+    }
+
+    fn now(&self) -> DateTime<Utc> {
+        Utc::now()
+    }
 }
 
 pub(super) fn router() -> Router {
-    Router::new().route("/sessions", get(list_sessions))
+    router_with_source(LiveSessionSource)
 }
 
-async fn list_sessions() -> Result<Json<SessionsResponse>, StatusCode> {
-    let snapshot = tokio::task::spawn_blocking(load_snapshot)
+fn router_with_source<S: SessionSource>(source: S) -> Router {
+    Router::new()
+        .route("/sessions", get(list_sessions::<S>))
+        .with_state(source)
+}
+
+async fn list_sessions<S: SessionSource>(
+    State(source): State<S>,
+) -> Result<Json<SessionsResponse>, StatusCode> {
+    let snapshot = source
+        .load_snapshot()
         .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-    let task_links = fetch_task_links(&snapshot.sessions).await;
-    let task_priorities = fetch_task_priorities(&task_links).await;
-    let pull_requests = fetch_pull_requests(&snapshot.sessions).await;
+    let task_enrichment = async {
+        let task_links = source.fetch_task_links(&snapshot.sessions).await;
+        let task_priorities = source.fetch_task_priorities(&task_links).await;
+        (task_links, task_priorities)
+    };
+    let (task_enrichment, pull_requests) = tokio::join!(
+        tokio::time::timeout(EXTERNAL_ENRICHMENT_TIMEOUT, task_enrichment),
+        tokio::time::timeout(
+            EXTERNAL_ENRICHMENT_TIMEOUT,
+            source.fetch_pull_requests(&snapshot.sessions),
+        )
+    );
+    let (task_links, task_priorities) = task_enrichment.unwrap_or_else(|_| {
+        tracing::warn!("Timed out fetching optional tq session metadata for agent watch");
+        (HashMap::new(), HashMap::new())
+    });
+    let pull_requests = pull_requests.unwrap_or_else(|_| {
+        tracing::warn!("Timed out fetching optional GitHub pull request metadata for agent watch");
+        HashMap::new()
+    });
     let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
-    let now = Utc::now();
+    let now = source.now();
 
     let mut sessions = snapshot
         .sessions
         .iter()
         .map(|session| {
             let task = task_links.get(&session.session_id).map(|task| TqTaskView {
-                id: task.id.clone(),
-                number: task.number,
-                title: task.title.clone(),
-                priority: task_priorities.get(&task.id).copied().flatten(),
+                id: task.task_id.clone(),
+                number: task.task_number,
+                title: task.task_title.clone(),
+                priority: task_priorities.get(&task.task_id).copied().flatten(),
             });
             let parent = session
                 .ancestor_session_ids
@@ -226,107 +304,36 @@ async fn fetch_task_links(sessions: &[Session]) -> HashMap<String, TaskLink> {
     let Some(client) = detected_tq_client().await else {
         return HashMap::new();
     };
-    let Ok(mut tq_sessions) = client.list_session_tasks(&session_ids).await else {
-        return HashMap::new();
+    let tq_sessions = match fetch_session_tasks_with_parents(&client, &session_ids).await {
+        Ok(sessions) => sessions,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to fetch agent watch tq session links");
+            return HashMap::new();
+        }
     };
 
-    let local_ids = session_ids;
-    let returned_ids = tq_sessions
-        .iter()
-        .map(|session| session.session_id.clone())
-        .collect::<HashSet<_>>();
-    let missing_parent_ids = tq_sessions
-        .iter()
-        .filter(|session| local_ids.contains(&session.session_id))
-        .filter_map(|session| session.parent_session_id.clone())
-        .filter(|parent_id| !returned_ids.contains(parent_id))
-        .collect::<HashSet<_>>();
-    if !missing_parent_ids.is_empty()
-        && let Ok(parent_sessions) = client.list_session_tasks(&missing_parent_ids).await
-    {
-        tq_sessions.extend(
-            parent_sessions
-                .into_iter()
-                .filter(|session| missing_parent_ids.contains(&session.session_id)),
-        );
-    }
-
-    let inherited_task_ids = tq_sessions
-        .iter()
-        .filter(|session| local_ids.contains(&session.session_id))
-        .filter_map(|session| session.parent_session_id.as_ref())
-        .filter_map(|parent_id| {
-            tq_sessions
-                .iter()
-                .find(|item| &item.session_id == parent_id)
-        })
-        .map(|parent| {
-            (
-                parent.session_id.clone(),
-                parent
-                    .tasks
-                    .iter()
-                    .map(|task| task.id.clone())
-                    .collect::<HashSet<_>>(),
-            )
-        })
-        .collect::<HashMap<_, _>>();
-
-    tq_sessions
-        .into_iter()
-        .filter(|session| local_ids.contains(&session.session_id))
-        .filter_map(|session| {
-            let inherited_ids = session
-                .parent_session_id
-                .as_deref()
-                .and_then(|parent_id| inherited_task_ids.get(parent_id));
-            let task = session
-                .tasks
-                .into_iter()
-                .min_by(|left, right| compare_tq_tasks(left, right, inherited_ids));
-            task.map(|task| {
-                (
-                    session.session_id,
-                    TaskLink {
-                        id: task.id,
-                        number: task.number,
-                        title: crate::commands::agent::claude_sessions::normalize_title(
-                            &task.title,
-                        ),
-                    },
-                )
-            })
-        })
-        .collect()
-}
-
-fn compare_tq_tasks(
-    left: &TqTask,
-    right: &TqTask,
-    inherited_ids: Option<&HashSet<String>>,
-) -> std::cmp::Ordering {
-    let inherited_order = inherited_ids.map_or(std::cmp::Ordering::Equal, |ids| {
-        ids.contains(&left.id).cmp(&ids.contains(&right.id))
-    });
-    inherited_order
-        .then_with(|| {
-            (left.status == TqTaskStatus::Completed).cmp(&(right.status == TqTaskStatus::Completed))
-        })
-        .then_with(|| right.linked_at.cmp(&left.linked_at))
+    build_task_by_session(tq_sessions, &session_ids)
 }
 
 async fn fetch_task_priorities(
     task_links: &HashMap<String, TaskLink>,
 ) -> HashMap<String, Option<i32>> {
+    if task_links.is_empty() {
+        return HashMap::new();
+    }
     let task_ids = task_links
         .values()
-        .map(|task| task.id.clone())
+        .map(|task| task.task_id.clone())
         .collect::<HashSet<_>>();
     let Some(client) = detected_tq_client().await else {
         return HashMap::new();
     };
-    let Ok(tasks) = client.list_tasks(&task_ids).await else {
-        return HashMap::new();
+    let tasks = match client.list_tasks(&task_ids).await {
+        Ok(tasks) => tasks,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to fetch agent watch tq task priorities");
+            return HashMap::new();
+        }
     };
 
     tasks
@@ -336,10 +343,13 @@ async fn fetch_task_priorities(
 }
 
 async fn detected_tq_client() -> Option<TqClient> {
-    tokio::task::spawn_blocking(TqClient::detect)
-        .await
-        .ok()
-        .flatten()
+    match tokio::task::spawn_blocking(TqClient::detect).await {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to detect tq for agent watch");
+            None
+        }
+    }
 }
 
 async fn fetch_pull_requests(sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
@@ -363,11 +373,23 @@ async fn fetch_pull_requests(sessions: &[Session]) -> HashMap<String, Option<PrI
     if queries.is_empty() {
         return HashMap::new();
     }
-    let Ok(Ok(client)) = tokio::task::spawn_blocking(GitHubClient::get).await else {
-        return HashMap::new();
+    let client = match tokio::task::spawn_blocking(GitHubClient::get).await {
+        Ok(Ok(client)) => client,
+        Ok(Err(error)) => {
+            tracing::warn!(%error, "Failed to initialize GitHub client for agent watch");
+            return HashMap::new();
+        }
+        Err(error) => {
+            tracing::warn!(%error, "GitHub client initialization task failed for agent watch");
+            return HashMap::new();
+        }
     };
-    let Ok(prs) = client.get_prs_for_branches_batch(&queries).await else {
-        return HashMap::new();
+    let prs = match client.get_prs_for_branches_batch(&queries).await {
+        Ok(prs) => prs,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to fetch agent watch pull requests");
+            return HashMap::new();
+        }
     };
 
     query_by_session
@@ -413,18 +435,23 @@ fn kind_for(session: &Session, turn: Option<UserTurnKind>) -> Option<SessionKind
         UserTurnKind::AgentStatus => {
             let status = session.agent_status.as_ref()?;
             let content = format!("{} {}", status.kind, status.note).to_ascii_lowercase();
-            if content.contains('?')
-                || content.contains("question")
-                || content.contains("ask")
-                || content.contains("answer")
-            {
+            let has_word = |cues: &[&str]| {
+                content
+                    .split(|character: char| !character.is_ascii_alphanumeric())
+                    .any(|word| cues.contains(&word))
+            };
+            if content.contains('?') || has_word(&["question", "ask", "asked", "answer", "reply"]) {
                 Some(SessionKind::Question)
-            } else if content.contains("review")
-                || content.contains("crit")
-                || content.contains("body")
-                || content.contains("approve")
-                || content.contains("proposal")
-            {
+            } else if has_word(&[
+                "review",
+                "reviews",
+                "reviewing",
+                "crit",
+                "body",
+                "approve",
+                "approval",
+                "proposal",
+            ]) {
                 Some(SessionKind::Review)
             } else {
                 Some(SessionKind::Stopped)
@@ -460,9 +487,13 @@ fn sort_session_views(sessions: &mut [SessionView]) {
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, TmuxInfo};
+    use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use axum::body::{Body, to_bytes};
+    use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
     use rstest::rstest;
     use std::path::PathBuf;
+    use tower::ServiceExt;
 
     fn session(status: SessionStatus) -> Session {
         Session {
@@ -530,6 +561,153 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct TestSessionSource {
+        revision: i64,
+        sessions: Vec<Session>,
+        title_by_id: HashMap<String, String>,
+        repo_by_id: HashMap<String, String>,
+        task_links: HashMap<String, TaskLink>,
+        task_priorities: HashMap<String, Option<i32>>,
+        pull_requests: HashMap<String, Option<PrInfo>>,
+        now: DateTime<Utc>,
+    }
+
+    impl SessionSource for TestSessionSource {
+        async fn load_snapshot(&self) -> anyhow::Result<SessionSnapshot> {
+            Ok(SessionSnapshot {
+                revision: self.revision,
+                sessions: self.sessions.clone(),
+                title_by_id: self.title_by_id.clone(),
+                repo_by_id: self.repo_by_id.clone(),
+                agent_config: AgentConfig::default(),
+            })
+        }
+
+        async fn fetch_task_links(&self, _sessions: &[Session]) -> HashMap<String, TaskLink> {
+            self.task_links.clone()
+        }
+
+        async fn fetch_task_priorities(
+            &self,
+            _task_links: &HashMap<String, TaskLink>,
+        ) -> HashMap<String, Option<i32>> {
+            self.task_priorities.clone()
+        }
+
+        async fn fetch_pull_requests(
+            &self,
+            _sessions: &[Session],
+        ) -> HashMap<String, Option<PrInfo>> {
+            self.pull_requests.clone()
+        }
+
+        fn now(&self) -> DateTime<Utc> {
+            self.now
+        }
+    }
+
+    fn test_source() -> TestSessionSource {
+        let mut session = session(SessionStatus::Stopped);
+        session.session_id = "child-session".to_string();
+        session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
+        session.last_message = Some("last message".to_string());
+        session.ancestor_session_ids = vec!["parent-session".to_string()];
+        session.pr_context = Some(crate::commands::agent::types::SessionPrContext {
+            owner: "example-org".to_string(),
+            repo: "example-repo".to_string(),
+            branch: "feature-example".to_string(),
+            checklist_item_id: None,
+        });
+
+        TestSessionSource {
+            revision: 7,
+            sessions: vec![session],
+            title_by_id: HashMap::from([
+                ("child-session".to_string(), "child title".to_string()),
+                ("parent-session".to_string(), "parent title".to_string()),
+            ]),
+            repo_by_id: HashMap::from([(
+                "child-session".to_string(),
+                "example-org/example-repo".to_string(),
+            )]),
+            task_links: HashMap::from([(
+                "child-session".to_string(),
+                LinkedSessionTask {
+                    task_id: "task-id".to_string(),
+                    task_number: 17,
+                    task_title: "task title".to_string(),
+                    parent_task_id: None,
+                    is_closed: false,
+                },
+            )]),
+            task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
+            pull_requests: HashMap::from([(
+                "child-session".to_string(),
+                Some(PrInfo {
+                    number: 42,
+                    title: "example pull request".to_string(),
+                    state: PrState::Open,
+                    url: "https://example.com/pull/42".to_string(),
+                }),
+            )]),
+            now: Utc.timestamp_opt(1_100, 0).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn sessions_route_returns_the_complete_inbox_response() {
+        let response = Router::new()
+            .nest("/api", router_with_source(test_source()))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+
+        assert_eq!(
+            (status, value),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "revision": 7,
+                    "sessions": [{
+                        "id": "child-session",
+                        "engine": "claude",
+                        "category": "needs_action",
+                        "kind": "Stopped",
+                        "title": "child title",
+                        "preview": "last message",
+                        "updatedAt": "1970-01-01T00:16:40Z",
+                        "elapsedSeconds": 100,
+                        "unread": true,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1
+                        },
+                        "repo": "example-org/example-repo",
+                        "parent": {
+                            "id": "parent-session",
+                            "title": "parent title"
+                        },
+                        "pullRequest": {
+                            "number": 42,
+                            "state": "Open"
+                        }
+                    }]
+                }),
+            ),
+        );
+    }
+
     #[rstest]
     #[case::waiting_tool(UserTurnKind::Ask, Some(SessionKind::Question))]
     #[case::permission(UserTurnKind::Allow, Some(SessionKind::Approve))]
@@ -551,6 +729,7 @@ mod tests {
     #[case::agent_question("ask_user", "", SessionKind::Question)]
     #[case::note_question("needs_attention", "Which option?", SessionKind::Question)]
     #[case::agent_review("needs_review", "", SessionKind::Review)]
+    #[case::task_in_review_note("needs_review", "Review the task plan", SessionKind::Review)]
     #[case::agent_stopped("waiting_for_external", "", SessionKind::Stopped)]
     fn maps_agent_status_to_web_kind(
         #[case] status_kind: &str,
@@ -612,6 +791,36 @@ mod tests {
         #[case] expected: SessionCategory,
     ) {
         assert_eq!(category_for(&session(status), turn), expected);
+    }
+
+    #[rstest]
+    #[case::configured_waiting("waiting_for_external", AgentStatusState::Waiting)]
+    #[case::configured_done("work_finished", AgentStatusState::Done)]
+    fn stopped_agent_statuses_remain_in_needs_action(
+        #[case] status_kind: &str,
+        #[case] state: AgentStatusState,
+    ) {
+        let mut session = session(SessionStatus::Stopped);
+        session.agent_status = Some(AgentStatus {
+            kind: status_kind.to_string(),
+            note: "waiting for a task result".to_string(),
+        });
+        let mut agent_config = AgentConfig::default();
+        agent_config
+            .statuses
+            .insert(status_kind.to_string(), AgentStatusConfig { state });
+        let turn = user_turns([&session], &agent_config)
+            .first()
+            .map(|turn| turn.kind);
+
+        assert_eq!(
+            (turn, category_for(&session, turn), kind_for(&session, turn)),
+            (
+                None,
+                SessionCategory::NeedsAction,
+                Some(SessionKind::Stopped)
+            ),
+        );
     }
 
     #[rstest]

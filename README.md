@@ -1088,7 +1088,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; session views and API endpoints are not implemented yet. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; `GET /api/sessions` returns session metadata and `GET /api/events` streams session-store revision updates, while the UI is not implemented yet. If the SPA has not been built, the page shows the build instructions; build it with:
 
 ```sh
 cd agent-watch-web

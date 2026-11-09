@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use serde::{Deserialize, Serialize};
-
 use crate::commands::agent::types::Session;
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::shared::config::AgentConfig;
 
 mod task_tree;
 
+pub(super) use crate::commands::agent::tq_session_tasks::SessionTask;
 pub(super) use task_tree::task_mark;
 
 /// One row in the session list's selection/render order.
@@ -120,24 +119,6 @@ impl<'a> SessionRow<'a> {
             SessionRow::SectionHeader(_) => None,
         }
     }
-}
-
-/// A tq task linked to a session, as needed for rendering the task-number
-/// column and for the cursor-relative task-kinship check
-/// (see [`is_related_task`]). `parent_task_id` is `None` both when the task
-/// genuinely has no parent and when the running `tq` binary is too old to
-/// report `parentId` at all -- either way, kinship degrades to "same task
-/// only" rather than being treated as an error.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub(super) struct SessionTask {
-    pub task_id: String,
-    pub task_number: u32,
-    pub task_title: String,
-    pub parent_task_id: Option<String>,
-    /// Whether the linked tq task is closed. `false` both when the task is
-    /// genuinely open and when the running `tq` binary is too old to report
-    /// task status at all -- either way, the task number renders as open.
-    pub is_closed: bool,
 }
 
 /// Builds the TASKS session tree.
