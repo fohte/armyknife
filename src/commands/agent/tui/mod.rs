@@ -1667,6 +1667,76 @@ mod tests {
     }
 
     #[test]
+    fn tab_keeps_a_checklist_matched_worker_visible_and_selected() {
+        let mut app = inline_progress_test_app();
+        app.progress_inline_source_id = None;
+        app.progress_session_id = Some("session-1".to_string());
+        app.progress_fetch_states
+            .insert("session-1".to_string(), ProgressFetchState::Ready);
+        app.task_by_session
+            .insert("session-1".to_string(), test_task("task-worker"));
+        let rows = app.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        drop(rows);
+        let row_heights = vec![1; row_keys.len()];
+        app.update_rendered_rows(&row_keys, &row_heights, row_heights.len());
+        select_inline_progress_row(&mut app, &SessionRowKey::Task("session-1".to_string()));
+
+        handle_key_event(&mut app, key(KeyCode::Tab));
+
+        let rows = app.build_display_rows();
+        let row_keys = rows.iter().map(|row| row.row_key()).collect::<Vec<_>>();
+        assert_eq!(
+            (
+                row_keys,
+                app.selected_row_key().cloned(),
+                app.selected_session_id(),
+            ),
+            (
+                vec![
+                    None,
+                    Some(SessionRowKey::Task("session-0".to_string())),
+                    Some(SessionRowKey::Progress {
+                        source_session_id: "session-1".to_string(),
+                        selection_key: ProgressSelectionKey::Implementation,
+                        session_id: None,
+                    }),
+                    Some(SessionRowKey::Progress {
+                        source_session_id: "session-1".to_string(),
+                        selection_key: ProgressSelectionKey::Batch("batch-a".to_string()),
+                        session_id: None,
+                    }),
+                    Some(SessionRowKey::Progress {
+                        source_session_id: "session-1".to_string(),
+                        selection_key: ProgressSelectionKey::ChecklistItem {
+                            batch_id: "batch-a".to_string(),
+                            item_id: "item-a".to_string(),
+                        },
+                        session_id: Some("session-1".to_string()),
+                    }),
+                    Some(SessionRowKey::Progress {
+                        source_session_id: "session-1".to_string(),
+                        selection_key: ProgressSelectionKey::ChecklistItem {
+                            batch_id: "batch-a".to_string(),
+                            item_id: "item-b".to_string(),
+                        },
+                        session_id: None,
+                    }),
+                ],
+                Some(SessionRowKey::Progress {
+                    source_session_id: "session-1".to_string(),
+                    selection_key: ProgressSelectionKey::ChecklistItem {
+                        batch_id: "batch-a".to_string(),
+                        item_id: "item-a".to_string(),
+                    },
+                    session_id: Some("session-1".to_string()),
+                }),
+                Some("session-1"),
+            ),
+        );
+    }
+
+    #[test]
     fn moving_between_task_roots_does_not_reproject_the_open_plan() {
         let mut app = create_test_app_with_sessions(4);
         app.sessions[1].ancestor_session_ids = vec!["session-0".to_string()];

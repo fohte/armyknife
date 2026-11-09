@@ -36,7 +36,19 @@ pub(in crate::commands::agent::tui) fn project_inline_progress_rows<'a>(
         .filter(|row| matches!(row, SessionRow::Session(_) | SessionRow::SectionHeader(_)))
         .collect::<Vec<_>>();
 
-    let Some(source_placement) = find_source_placement(&task_rows, source_session_id) else {
+    let source_placement = find_source_placement(&task_rows, source_session_id).or_else(|| {
+        if !matched_session_ids.contains(source_session_id) {
+            return None;
+        }
+        let source = entries.get(source_session_id)?;
+        source
+            .session
+            .ancestor_session_ids
+            .iter()
+            .rev()
+            .find_map(|ancestor_id| find_source_placement(&task_rows, ancestor_id))
+    });
+    let Some(source_placement) = source_placement else {
         return task_rows;
     };
     let inline_rows = build_inline_progress_rows(
