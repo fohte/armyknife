@@ -172,6 +172,10 @@
   color: #fbbf24;
 }
 
+.needs-action-section .section-heading .section-count {
+  color: #fbbf24;
+}
+
 .in-progress-section .section-heading .section-count {
   color: #60a5fa;
 }
