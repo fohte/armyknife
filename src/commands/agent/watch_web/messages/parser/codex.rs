@@ -44,9 +44,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let input =
                         parse_tool_input(payload.get("input").or_else(|| payload.get("arguments")));
                     tools.record_codex(name, input.as_ref());
-                    if let Some("custom_tool_call" | "function_call") = item_type
-                        && let Some(call_id) = payload.get("call_id").and_then(Value::as_str)
-                    {
+                    if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
                         pending_tool_calls.push(call_id.to_owned());
                     }
                 }
