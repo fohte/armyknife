@@ -1,4 +1,5 @@
 mod assets;
+mod messages;
 mod security;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -37,7 +38,9 @@ fn app() -> Router {
 }
 
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
-    let api = Router::new().fallback(api_not_found);
+    let api = Router::new()
+        .merge(messages::routes())
+        .fallback(api_not_found);
 
     Router::new()
         .nest("/api", api)
