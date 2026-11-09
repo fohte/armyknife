@@ -65,6 +65,14 @@ Worktrees are discovered in the background and their PR statuses are fetched asy
 
 Pressing `y` confirms the partition: the watch process generates a `run_id` and spawns `a agent clean-detached --run-id <id>` as a **fully detached child** (`setsid`, stdio routed to `/dev/null`) so closing `agent watch` does not abort the cleanup. The child journals each event (`agent.clean.start` / `agent.clean.ok` / `agent.clean.err` / `agent.clean.done`) into the shared rotating tracing log at `~/.cache/armyknife/logs/armyknife.log.YYYY-MM-DD` under a `run_id` span. While `agent watch` is alive, it tails today's log file every 500 ms, filters lines by `run_id`, and renders `Cleaning... (i/N) <path>` (with `(N error)` when any failure has been observed) in the bottom bar; on completion it shows `Cleaned X, failed Y` until the next key press.
 
+## `agent watch-web`
+
+`a agent watch-web` starts an Axum server on `127.0.0.1:4317` and opens the local URL in the default browser. The server embeds `agent-watch-web/dist` at compile time; when the directory is absent, the build script embeds an empty directory and the server returns instructions to build the SPA. Release builds create the SPA before compiling the Rust binary, so each release target contains the assets.
+
+The request middleware accepts only `localhost`, `127.0.0.1`, and `*.ts.net` Host values. It also requires the Origin authority to match Host for methods other than GET and HEAD. The `/api` nested router has its own 404 fallback so unimplemented API paths never receive the SPA. All other unmatched paths return `index.html` for client-side routing.
+
+For tailnet access, `tailscale serve 4317` proxies to the loopback listener. This keeps the HTTP server bound to localhost while making it available through Tailscale Serve.
+
 ## Internal Subcommands
 
 Subcommands marked with `#[command(hide = true)]` are not user-facing entry points; they exist as spawn targets for other commands and are listed here for discoverability.
