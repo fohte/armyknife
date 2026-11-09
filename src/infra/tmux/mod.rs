@@ -35,10 +35,11 @@ pub use pane_info::{get_pane_info_by_pane_id, get_window_pane_pids};
 pub(crate) use server::PaneLiveness;
 pub use server::{
     capture_pane_for_socket, capture_pane_with_escapes_for_socket, current_socket_path,
-    get_pane_current_command_for_socket, get_pane_option_for_socket, get_pane_pid_for_socket,
-    is_pane_alive_for_socket, kill_pane_for_socket, list_all_pane_ids_for_socket,
-    respawn_pane_for_socket, send_keys_for_socket, send_sigterm_to_pane_for_socket,
-    set_pane_option_for_socket,
+    focus_pane_for_socket, get_pane_current_command_for_socket, get_pane_option_for_socket,
+    get_pane_pid_for_socket, is_pane_alive_for_socket, kill_pane_for_socket,
+    list_all_pane_ids_for_socket, respawn_pane_for_socket, send_keys_for_socket,
+    send_keys_if_pane_command_matches_for_socket, send_keys_sequence_for_socket,
+    send_sigterm_to_pane_for_socket, set_pane_option_for_socket,
 };
 
 #[derive(Error, Debug)]

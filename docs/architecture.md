@@ -67,7 +67,7 @@ Pressing `y` confirms the partition: the watch process generates a `run_id` and 
 
 ## `agent watch-web`
 
-`a agent watch-web` starts an Axum server on `127.0.0.1:4317` and opens the local URL in the default browser. The SPA is an initial scaffold; `GET /api/sessions/{id}/messages` returns conversation items for registered sessions, while session views and other API endpoints are not implemented yet. The server embeds `agent-watch-web/dist` at compile time; when the directory is absent, the build script embeds an empty directory and the server returns instructions to build the SPA. Release builds create the SPA before compiling the Rust binary, so each release target contains the assets.
+`a agent watch-web` starts an Axum server on `127.0.0.1:4317` and opens the local URL in the default browser. The SPA is an initial scaffold with no session views yet; the backend exposes session action endpoints under `/api/sessions/{id}` and `GET /api/sessions/{id}/messages` for conversation items. The server embeds `agent-watch-web/dist` at compile time; when the directory is absent, the build script embeds an empty directory and the server returns instructions to build the SPA. Release builds create the SPA before compiling the Rust binary, so each release target contains the assets.
 
 The request middleware accepts only `localhost`, `127.0.0.1`, and `*.ts.net` Host values. It also requires the Origin authority to match Host for methods other than GET and HEAD. The `/api` nested router has its own 404 fallback so unimplemented API paths never receive the SPA. All other unmatched paths return `index.html` for client-side routing.
 

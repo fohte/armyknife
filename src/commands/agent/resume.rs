@@ -314,7 +314,7 @@ fn current_pane_id() -> Result<String> {
 /// Programs a `Paused` session's pane may be sitting at for its respawn to
 /// be safe. Anything else means a foreground program is running that a
 /// blind `respawn-pane -k` would kill.
-const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
+pub(crate) const SHELL_COMMANDS: &[&str] = &["zsh", "bash", "fish", "sh", "dash"];
 
 /// Failure modes of [`respawn_paused_session`]. Both the TUI's resume key
 /// and `a agent peer wake` render these as user-facing messages.
