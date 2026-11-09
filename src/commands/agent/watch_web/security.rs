@@ -63,6 +63,10 @@ mod tests {
     #[case::loopback("127.0.0.1:4317", true)]
     #[case::tailscale_host("device.example.ts.net", true)]
     #[case::userinfo_host("user@localhost", false)]
+    #[case::evil_ts_net("evil-ts.net", false)]
+    #[case::localhost_with_evil_suffix("localhost.evil.com", false)]
+    #[case::tailscale_host_with_evil_suffix("foo.ts.net.evil.com", false)]
+    #[case::bare_tailscale_suffix(".ts.net", false)]
     #[case::tailscale_suffix_is_not_a_host("example.ts.net.attacker.invalid", false)]
     #[case::remote_ip("192.0.2.10:4317", false)]
     #[case::missing_host("", false)]
@@ -94,6 +98,7 @@ mod tests {
     #[case::different_port("localhost:4317", "http://localhost:4318", false)]
     #[case::origin_with_path("localhost:4317", "http://localhost:4317/path", false)]
     #[case::relative_origin("localhost:4317", "//localhost:4317", false)]
+    #[case::null_origin("localhost:4317", "null", false)]
     #[case::missing_origin("localhost:4317", "", false)]
     fn writes_require_an_origin_matching_host(
         #[case] host: &str,

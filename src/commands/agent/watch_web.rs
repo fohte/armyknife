@@ -7,7 +7,9 @@ use anyhow::Result;
 use axum::Router;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use axum::routing::any;
 use clap::Args;
+use include_dir::Dir;
 use tokio::net::TcpListener;
 
 use super::browser;
@@ -31,11 +33,18 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
 }
 
 fn app() -> Router {
+    app_with_assets(&assets::DIST)
+}
+
+fn app_with_assets(dist: &'static Dir<'static>) -> Router {
     let api = Router::new().fallback(api_not_found);
 
     Router::new()
         .nest("/api", api)
-        .fallback(assets::serve)
+        .route("/api/", any(api_not_found))
+        .fallback(move |request: axum::extract::Request| async move {
+            assets::serve_from(request.uri(), dist)
+        })
         .layer(axum::middleware::from_fn(security::validate_request))
 }
 
@@ -46,33 +55,126 @@ async fn api_not_found() -> impl IntoResponse {
 #[cfg(test)]
 mod tests {
     use axum::body::{Body, to_bytes};
-    use axum::http::header::{CONTENT_TYPE, HOST};
+    use axum::http::header::{CONTENT_TYPE, HOST, ORIGIN};
     use axum::http::{Request, Response, StatusCode};
+    use include_dir::{Dir, include_dir};
+    use rstest::rstest;
     use tower::ServiceExt;
 
-    use super::app;
+    use super::{app, app_with_assets};
 
+    static TEST_DIST: Dir<'static> =
+        include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
+
+    #[rstest]
+    #[case::api_root(
+        "/api",
+        StatusCode::NOT_FOUND,
+        Some("text/plain; charset=utf-8"),
+        "API route not found"
+    )]
+    #[case::api_trailing_slash(
+        "/api/",
+        StatusCode::NOT_FOUND,
+        Some("text/plain; charset=utf-8"),
+        "API route not found"
+    )]
+    #[case::unknown_api_path(
+        "/api/unimplemented",
+        StatusCode::NOT_FOUND,
+        Some("text/plain; charset=utf-8"),
+        "API route not found"
+    )]
+    #[case::api_prefix_lookalike(
+        "/apifoo",
+        StatusCode::OK,
+        Some("text/html"),
+        "<main>fixture</main>\n"
+    )]
     #[tokio::test]
-    async fn unknown_api_routes_return_not_found_instead_of_the_spa() {
-        let response = app()
-            .oneshot(
-                Request::builder()
-                    .uri("/api/unimplemented")
-                    .header(HOST, "localhost")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+    async fn only_api_paths_use_the_api_fallback(
+        #[case] uri: &str,
+        #[case] expected_status: StatusCode,
+        #[case] expected_content_type: Option<&str>,
+        #[case] expected_body: &str,
+    ) {
+        let response = app_with_assets(&TEST_DIST)
+            .oneshot(request("GET", uri, "localhost", None))
             .await
             .unwrap();
 
         assert_eq!(
             response_snapshot(response).await,
             (
-                StatusCode::NOT_FOUND,
-                Some("text/plain; charset=utf-8".to_owned()),
-                "API route not found".to_owned(),
+                expected_status,
+                expected_content_type.map(str::to_owned),
+                expected_body.to_owned(),
             )
         );
+    }
+
+    #[rstest]
+    #[case::untrusted_host_get(
+        "GET",
+        "/",
+        "localhost.evil.com",
+        None,
+        StatusCode::FORBIDDEN,
+        None,
+        ""
+    )]
+    #[case::post_without_origin(
+        "POST",
+        "/api/x",
+        "localhost",
+        None,
+        StatusCode::FORBIDDEN,
+        None,
+        ""
+    )]
+    #[case::matching_origin_reaches_api_router(
+        "POST",
+        "/api/x",
+        "localhost",
+        Some("http://localhost"),
+        StatusCode::NOT_FOUND,
+        Some("text/plain; charset=utf-8"),
+        "API route not found"
+    )]
+    #[tokio::test]
+    async fn request_security_is_applied_by_the_router(
+        #[case] method: &str,
+        #[case] uri: &str,
+        #[case] host: &str,
+        #[case] origin: Option<&str>,
+        #[case] expected_status: StatusCode,
+        #[case] expected_content_type: Option<&str>,
+        #[case] expected_body: &str,
+    ) {
+        let response = app()
+            .oneshot(request(method, uri, host, origin))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                expected_status,
+                expected_content_type.map(str::to_owned),
+                expected_body.to_owned(),
+            )
+        );
+    }
+
+    fn request(method: &str, uri: &str, host: &str, origin: Option<&str>) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(HOST, host);
+        if let Some(origin) = origin {
+            builder = builder.header(ORIGIN, origin);
+        }
+        builder.body(Body::empty()).unwrap()
     }
 
     async fn response_snapshot(response: Response<Body>) -> (StatusCode, Option<String>, String) {

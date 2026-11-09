@@ -656,26 +656,6 @@ In the checklist view, unstarted entries without a child session or PR link appe
 
 The session list shows a single TASKS tree of sessions. Each root is a session without a displayed parent, and descendants appear at their full depth beneath the nearest displayed parent. The root badge counts all displayed descendants. Every child session appears in TASKS, including sessions that cannot start their own children. Each TASKS row shows a mark: `✓` done, `◐` needs user attention, `✗` failed, `●` working, and `◷` waiting on something else (another session, CI, a background command); stops without a known reason keep the plain status glyph. User-action reasons such as `crit`, `body`, `merge`, `ask`, and `allow` appear as red labels on the corresponding row; the waiting note is not shown. Roots that contain a user-action session come first, then the most recently active. Session state and titles update immediately. While navigating or scrolling the list, or editing a search, existing rows keep their order; two seconds after the last list interaction, the latest order is applied once. New sessions are appended under their parent. When rows disappear or stop matching a filter, the selection and its screen position are preserved where possible.
 
-## `agent watch-web`
-
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; session views and API endpoints are not implemented yet. If the SPA has not been built, the page shows the build instructions; build it with:
-
-```sh
-cd agent-watch-web
-pnpm install --frozen-lockfile
-pnpm run build
-cd ..
-cargo build
-```
-
-To access the server from another device in your tailnet, keep `a agent watch-web` running and run this in another terminal:
-
-```sh
-tailscale serve 4317
-```
-
-Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
-
 `a agent bg run -- <cmd> [args...]` returns immediately and runs the command in a detached worker. It stores stdout and stderr in separate files and prints their paths. On completion, it sends this session a `<background-task-complete>` message with the command, exit code, and output paths. If delivery fails, the worker saves the message under `agent-bg/undelivered/` in the armyknife cache directory, which defaults to `~/.cache/armyknife/` and uses `$XDG_CACHE_HOME/armyknife/` when set. If saving also fails, the worker retries both every minute for up to 24 hours. `a agent sweep` retries messages saved within the last 24 hours on each run, waking the session if it is paused, and a later `SessionStart(resume)` retries every saved message. Each retry lasts up to 30 seconds at one-second intervals, and messages remain saved if all attempts fail. If the command exceeds `agent.bg_task_reminder.timeout`, the worker sends the configured reminder once unless the command matches `excluded_commands`. While the worker is active and the main loop is stopped, `a agent list` and tmux window status show `◎ background`, or `◐ waiting` while a crit review is linked or a Human-in-the-Loop review is waiting for approval; the `a agent watch` TASKS tree shows the background case as `◷`. Stop notifications and auto-compaction are suppressed, and `a agent sweep` leaves the session alone. `a agent clean` also preserves its worktree unless `--force` is set.
 
 For Claude Code background Bash commands, add this entry alongside the existing `PostToolUse` hook in your Claude Code settings:
@@ -1105,6 +1085,26 @@ armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resu
 - `off`: Disable all logging
 
 Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
+
+### `a agent watch-web`
+
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; session views and API endpoints are not implemented yet. If the SPA has not been built, the page shows the build instructions; build it with:
+
+```sh
+cd agent-watch-web
+pnpm install --frozen-lockfile
+pnpm run build
+cd ..
+cargo build
+```
+
+To access the server from another device in your tailnet, keep `a agent watch-web` running and run this in another terminal:
+
+```sh
+tailscale serve 4317
+```
+
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
 
 ### `a agent clean`
 

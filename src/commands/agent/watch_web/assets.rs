@@ -1,19 +1,14 @@
 use axum::body::Body;
-use axum::extract::Request;
 use axum::http::header::CONTENT_TYPE;
 use axum::http::{Response, StatusCode, Uri};
 use axum::response::IntoResponse;
 use include_dir::{Dir, include_dir};
 
-static DIST: Dir<'_> = include_dir!("$AGENT_WATCH_WEB_ASSETS");
+pub(super) static DIST: Dir<'static> = include_dir!("$AGENT_WATCH_WEB_ASSETS");
 
 const BUILD_INSTRUCTIONS: &str = "The Agent Watch Web UI has not been built. Run `cd agent-watch-web && pnpm install --frozen-lockfile && pnpm run build`, then rebuild armyknife.";
 
-pub(super) async fn serve(request: Request) -> Response<Body> {
-    serve_from(request.uri(), &DIST)
-}
-
-fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Body> {
+pub(super) fn serve_from(uri: &Uri, dist: &'static Dir<'static>) -> Response<Body> {
     if dist.get_file("index.html").is_none() {
         return (StatusCode::SERVICE_UNAVAILABLE, BUILD_INSTRUCTIONS).into_response();
     }
@@ -94,7 +89,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("text/css".to_owned()),
-                b"main{}\n".to_vec(),
+                include_bytes!("test_assets/assets/app.css").to_vec(),
             )
         );
     }
