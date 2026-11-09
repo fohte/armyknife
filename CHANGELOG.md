@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.521](https://github.com/fohte/armyknife/compare/v0.1.520...v0.1.521) (2026-11-09)
+
+
+### Features
+
+* **agent-watch-web:** add the Inbox view ([#1395](https://github.com/fohte/armyknife/issues/1395)) ([479ab55](https://github.com/fohte/armyknife/commit/479ab551c16e0ac0831c5017c94287f3724aaa18))
+
 ## [0.1.520](https://github.com/fohte/armyknife/compare/v0.1.519...v0.1.520) (2026-11-09)
 
 
