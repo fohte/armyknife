@@ -9,7 +9,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
     from: Option<&str>,
     pending_tool: Option<&str>,
-) -> Vec<ChatItem> {
+) -> std::io::Result<Vec<ChatItem>> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut pending_permission = None;
@@ -63,13 +63,13 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             }
             _ => {}
         }
-    });
+    })?;
 
     tools.flush_into(&mut items);
     if let Some((tool, description)) = pending_permission {
         items.push(ChatItem::Permission { tool, description });
     }
-    items
+    Ok(items)
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
@@ -155,7 +155,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some("fixture-parent-title"), None),
+            parse(Cursor::new(transcript), Some("fixture-parent-title"), None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Review the notification flow.".to_string(),
@@ -190,7 +190,8 @@ mod tests {
                 Cursor::new(transcript),
                 None,
                 Some("Bash(cargo test -p sample)")
-            ),
+            )
+            .unwrap(),
             vec![ChatItem::Permission {
                 tool: "Bash".to_string(),
                 description: "Bash: cargo test -p sample".to_string(),

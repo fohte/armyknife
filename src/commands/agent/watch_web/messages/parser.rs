@@ -9,13 +9,14 @@ use super::ChatItem;
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
     mut visit: impl FnMut(serde_json::Value),
-) {
+) -> std::io::Result<()> {
     let mut reader = reader;
     let mut line = Vec::new();
     loop {
         line.clear();
         match reader.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => break,
+            Ok(0) => break,
+            Err(error) => return Err(error),
             Ok(_) => {}
         }
         let Ok(line) = std::str::from_utf8(&line) else {
@@ -25,6 +26,7 @@ pub(super) fn for_each_jsonl_record(
             visit(record);
         }
     }
+    Ok(())
 }
 
 #[derive(Default)]

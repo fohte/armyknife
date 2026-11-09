@@ -14,6 +14,8 @@ use include_dir::Dir;
 use tokio::net::TcpListener;
 
 use super::browser;
+use crate::commands::agent::store;
+use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct WatchWebArgs {}
@@ -38,8 +40,15 @@ fn app() -> Router {
 }
 
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
+    app_with_assets_and_loader(dist, store::load_session)
+}
+
+fn app_with_assets_and_loader(
+    dist: &'static Dir<'static>,
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+) -> Router {
     let api = Router::new()
-        .merge(messages::routes())
+        .merge(messages::routes_with(load_session))
         .fallback(api_not_found);
 
     Router::new()
@@ -64,7 +73,8 @@ mod tests {
     use rstest::rstest;
     use tower::ServiceExt;
 
-    use super::{app, app_with_assets};
+    use super::{app, app_with_assets, app_with_assets_and_loader};
+    use crate::commands::agent::types::Session;
 
     static TEST_DIST: Dir<'static> =
         include_dir!("$CARGO_MANIFEST_DIR/src/commands/agent/watch_web/test_assets");
@@ -156,6 +166,53 @@ mod tests {
     ) {
         let response = app()
             .oneshot(request(method, uri, host, origin))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                expected_status,
+                expected_content_type.map(str::to_owned),
+                expected_body.to_owned(),
+            )
+        );
+    }
+
+    #[rstest]
+    #[case::known_session(
+        "/api/sessions/fixture-session/messages",
+        StatusCode::OK,
+        Some("application/json"),
+        "[]"
+    )]
+    #[case::unknown_session(
+        "/api/sessions/unregistered-session/messages",
+        StatusCode::NOT_FOUND,
+        None,
+        ""
+    )]
+    #[tokio::test]
+    async fn messages_route_returns_session_messages_or_not_found(
+        #[case] uri: &str,
+        #[case] expected_status: StatusCode,
+        #[case] expected_content_type: Option<&str>,
+        #[case] expected_body: &str,
+    ) {
+        let session: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap();
+        let router = app_with_assets_and_loader(&TEST_DIST, move |session_id| {
+            Ok((session_id == "fixture-session").then(|| session.clone()))
+        });
+        let response = router
+            .oneshot(request("GET", uri, "localhost", None))
             .await
             .unwrap();
 

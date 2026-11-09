@@ -8,7 +8,7 @@ use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record};
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
     from: Option<&str>,
-) -> Vec<ChatItem> {
+) -> std::io::Result<Vec<ChatItem>> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
 
@@ -72,10 +72,10 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 _ => {}
             }
         }
-    });
+    })?;
 
     tools.flush_into(&mut items);
-    items
+    Ok(items)
 }
 
 fn content_text(content: Option<&Value>) -> String {
@@ -131,7 +131,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some("fixture-parent-title")),
+            parse(Cursor::new(transcript), Some("fixture-parent-title")).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Summarize these settings.".to_string(),

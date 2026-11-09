@@ -1,11 +1,13 @@
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Path as AxumPath;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
@@ -13,17 +15,29 @@ use axum::routing::get;
 use serde::Serialize;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, Session};
 
 mod parser;
 
-pub(super) fn routes() -> Router {
-    Router::new().route("/sessions/{id}/messages", get(get_messages))
+type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
+
+pub(super) fn routes_with(
+    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
+) -> Router {
+    Router::new()
+        .route("/sessions/{id}/messages", get(get_messages))
+        .with_state(Arc::new(load_session) as SessionLoader)
 }
 
-async fn get_messages(AxumPath(session_id): AxumPath<String>) -> Response {
-    match tokio::task::spawn_blocking(move || load_messages(&session_id)).await {
+async fn get_messages(
+    State(load_session): State<SessionLoader>,
+    AxumPath(session_id): AxumPath<String>,
+) -> Response {
+    match tokio::task::spawn_blocking(move || {
+        load_messages_with(&session_id, |id| load_session(id))
+    })
+    .await
+    {
         Ok(Ok(Some(messages))) => match serde_json::to_vec(&messages) {
             Ok(body) => (
                 StatusCode::OK,
@@ -46,10 +60,6 @@ async fn get_messages(AxumPath(session_id): AxumPath<String>) -> Response {
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
-}
-
-fn load_messages(session_id: &str) -> Result<Option<Vec<ChatItem>>> {
-    load_messages_with(session_id, store::load_session)
 }
 
 fn load_messages_with(
@@ -125,10 +135,10 @@ fn parse_session_transcript(
     let Some(reader) = open_transcript(path, engine == Engine::Codex)? else {
         return Ok(Vec::new());
     };
-    Ok(match engine {
-        Engine::Claude => parser::claude::parse(reader, from, pending_tool),
-        Engine::Codex => parser::codex::parse(reader, from),
-    })
+    match engine {
+        Engine::Claude => Ok(parser::claude::parse(reader, from, pending_tool)?),
+        Engine::Codex => Ok(parser::codex::parse(reader, from)?),
+    }
 }
 
 fn open_transcript(path: &Path, allow_compressed: bool) -> Result<Option<Box<dyn BufRead + Send>>> {
@@ -198,13 +208,49 @@ enum ChatItem {
 
 #[cfg(test)]
 mod tests {
-    use super::load_messages_with;
+    use std::collections::BTreeSet;
+
+    use serde_json::json;
+
+    use super::{ChatItem, load_messages_with};
+    use crate::commands::agent::types::Session;
+
+    fn stored_session() -> Session {
+        serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .unwrap()
+    }
 
     #[test]
     fn missing_store_entry_has_no_messages_result() {
         assert_eq!(
             load_messages_with("fixture-unregistered-session", |_| Ok(None)).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn pending_permission_without_transcript_uses_the_stored_request_details() {
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from(["main".to_string()]);
+        session.current_tool = Some("Bash(cargo test -p sample)".to_string());
+        session.last_message = Some("Run the package tests".to_string());
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::Permission {
+                tool: "Bash(cargo test -p sample)".to_string(),
+                description: "Run the package tests".to_string(),
+            }])
         );
     }
 }
