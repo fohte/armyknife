@@ -326,6 +326,37 @@ it('selects the first remaining row when an update removes the selected one', ()
   })
 })
 
+it('does not scroll when an update keeps the selected row', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+  scrollIntoView.mockClear()
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-a', 'Updated first session'),
+      session('session-b', 'Updated second session'),
+    ],
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
+  })
+
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Updated first session',
+    scrollOptions: [],
+  })
+})
+
 it('advances elapsed time for all rows with one shared timer', async () => {
   vi.useFakeTimers()
   vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))

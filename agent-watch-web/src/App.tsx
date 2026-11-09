@@ -91,7 +91,7 @@ export function App() {
         '[data-session-row][aria-current="true"]',
       )
       ?.scrollIntoView({ block: 'nearest' })
-  }, [orderedSessions, selectedId, showAllInProgress, view])
+  }, [selectedId, showAllInProgress, view])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
