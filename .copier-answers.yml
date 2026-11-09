@@ -1,16 +1,21 @@
 # Changes here will be overwritten by Copier
-_commit: v0.11.7
+_commit: v0.11.13
 _src_path: https://github.com/fohte/generic-boilerplate
 auto_merge_release_pr: true
 binary_name: armyknife
 description: Personal CLI toolkit written in Rust
 is_public: true
+pr_title_check: true
 project_name: armyknife
 release_binary: true
 release_type: rust
 repo_id: '1125337446'
 repo_language: en
-subpackages: []
+subpackages:
+-   name: agent-watch-web
+    release: false
+    spa: true
+    type: node
 type: rust
 use_coverage: true
 use_release_please: true

@@ -1,0 +1,16 @@
+allowBuilds:
+  # required by vitest's transformer
+  esbuild: true
+  # required by @fohte/eslint-config -> eslint-plugin-import-x for module resolution
+  unrs-resolver: true
+  # required by cloudflare/wrangler-action's internal `pnpm add wrangler` step (Storybook deploy)
+  workerd: true
+  # no-op unless package.json sets "msw.workerDirectory", which we don't use
+  msw: true
+
+# Dodge short-lived supply-chain attacks (e.g. shai-hulud, tinycolor) by
+# holding off freshly published versions. Unit is minutes; 10080 = 7 days.
+minimumReleaseAge: 10080
+# First-party scopes: publisher account is trusted, so skip the release-age delay.
+minimumReleaseAgeExclude:
+  - '@fohte/*'
