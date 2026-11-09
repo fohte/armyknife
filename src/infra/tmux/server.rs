@@ -235,6 +235,22 @@ pub fn send_keys_if_pane_command_matches_for_socket(
     expected_current_command: &str,
     keys: &[&str],
 ) -> Result<bool> {
+    send_keys_if_pane_command_matches_with(
+        socket_path,
+        pane_id,
+        expected_current_command,
+        keys,
+        |socket_path, args| run_tmux_output_for_socket(socket_path, &args),
+    )
+}
+
+fn send_keys_if_pane_command_matches_with(
+    socket_path: Option<&str>,
+    pane_id: &str,
+    expected_current_command: &str,
+    keys: &[&str],
+    run_command: impl FnOnce(Option<&str>, Vec<String>) -> Result<String>,
+) -> Result<bool> {
     if !is_safe_pane_id(pane_id)
         || !is_safe_tmux_word(expected_current_command)
         || keys.is_empty()
@@ -248,18 +264,16 @@ pub fn send_keys_if_pane_command_matches_for_socket(
     let condition = format!("#{{==:#{{pane_current_command}},{expected_current_command}}}");
     let send_command = format!("send-keys -t {pane_id} {}", keys.join(" "));
     let reject_command = "display-message -p '__ARMYKNIFE_PANE_COMMAND_CHANGED__'";
-    let output = run_tmux_output_for_socket(
-        socket_path,
-        &[
-            "if-shell",
-            "-F",
-            "-t",
-            pane_id,
-            &condition,
-            &send_command,
-            reject_command,
-        ],
-    )?;
+    let args = vec![
+        "if-shell".to_owned(),
+        "-F".to_owned(),
+        "-t".to_owned(),
+        pane_id.to_owned(),
+        condition,
+        send_command,
+        reject_command.to_owned(),
+    ];
+    let output = run_command(socket_path, args)?;
 
     Ok(output.trim() != "__ARMYKNIFE_PANE_COMMAND_CHANGED__")
 }
@@ -365,6 +379,65 @@ mod tests {
         assert_eq!(
             socket_selector_args(socket_path),
             expected.into_iter().map(OsString::from).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn guarded_key_sender_runs_fixed_keys_through_the_pane_check() {
+        let mut invocation = None;
+        let result = send_keys_if_pane_command_matches_with(
+            Some("/tmp/armyknife-test/private.sock"),
+            "%47",
+            "claude",
+            &["Down", "Enter", "Escape"],
+            |socket_path, args| {
+                invocation = Some((socket_path.map(str::to_owned), args));
+                Ok(String::new())
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, invocation),
+            (
+                Ok(true),
+                Some((
+                    Some("/tmp/armyknife-test/private.sock".to_owned()),
+                    vec![
+                        "if-shell".to_owned(),
+                        "-F".to_owned(),
+                        "-t".to_owned(),
+                        "%47".to_owned(),
+                        "#{==:#{pane_current_command},claude}".to_owned(),
+                        "send-keys -t %47 Down Enter Escape".to_owned(),
+                        "display-message -p '__ARMYKNIFE_PANE_COMMAND_CHANGED__'".to_owned(),
+                    ],
+                )),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::numeric_key(vec!["1"])]
+    #[case::untrusted_key(vec!["Enter; display-message injected"])]
+    fn guarded_key_sender_rejects_unlisted_keys_before_running_tmux(#[case] keys: Vec<&str>) {
+        let mut invoked = false;
+        let result = send_keys_if_pane_command_matches_with(
+            Some("/tmp/armyknife-test/private.sock"),
+            "%47",
+            "claude",
+            &keys,
+            |_, _| {
+                invoked = true;
+                Ok(String::new())
+            },
+        )
+        .map(|_| "sent")
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (result, invoked),
+            (Err("invalid pane command key sequence".to_owned()), false),
         );
     }
 
