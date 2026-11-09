@@ -258,19 +258,12 @@ async fn answer_question(
         ));
     }
     let tmux_info = require_tmux(&session)?;
-    let key = match request.choice {
-        1 => "1",
-        2 => "2",
-        3 => "3",
-        4 => "4",
-        5 => "5",
-        6 => "6",
-        7 => "7",
-        8 => "8",
-        9 => "9",
-        _ => return Err(ApiError::bad_request("choice must be between 1 and 9")),
-    };
-    send_keys(state.runtime, &session, tmux_info, vec![key, "Enter"]).await?;
+    if !(1..=9).contains(&request.choice) {
+        return Err(ApiError::bad_request("choice must be between 1 and 9"));
+    }
+    let mut keys = vec!["Down"; usize::from(request.choice - 1)];
+    keys.push("Enter");
+    send_keys(state.runtime, &session, tmux_info, keys).await?;
     Ok(Json(Success::new()))
 }
 
@@ -301,7 +294,7 @@ async fn resolve_permission_action(
     }
     let tmux_info = require_tmux(&session)?;
     let keys = if approved {
-        vec!["1", "Enter"]
+        vec!["Enter"]
     } else {
         vec!["Escape"]
     };
@@ -373,8 +366,8 @@ async fn archive(
 }
 
 fn is_active_session(session: &Session) -> bool {
-    session.has_active_work(session.status)
-        || (session.status != SessionStatus::Ended && session.has_pending_permission_requests())
+    session.status != SessionStatus::Ended
+        && (session.has_active_work(session.status) || session.has_pending_permission_requests())
 }
 
 #[derive(Serialize)]
@@ -751,8 +744,15 @@ mod tests {
     }
 
     #[rstest]
+    #[case::first_choice(1, vec!["Enter"])]
+    #[case::second_choice(2, vec!["Down", "Enter"])]
+    #[case::third_choice(3, vec!["Down", "Down", "Enter"])]
     #[tokio::test]
-    async fn answer_question_sends_only_the_bounded_server_key(action_context: ActionContext) {
+    async fn answer_question_sends_bounded_navigation_keys(
+        #[case] choice: u8,
+        #[case] expected_keys: Vec<&str>,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
         session.current_tool = Some("AskUserQuestion".to_string());
         action_context.save_session(&session);
@@ -761,7 +761,7 @@ mod tests {
             .router()
             .oneshot(post(
                 "/sessions/sample-session/answer",
-                json!({ "choice": 2 }),
+                json!({ "choice": choice }),
             ))
             .await
             .unwrap();
@@ -780,21 +780,21 @@ mod tests {
                     "paneId": "%4",
                     "engine": "claude",
                     "currentCommand": "claude",
-                    "keys": ["2", "Enter"],
+                    "keys": &expected_keys,
                     "paneHasAgentProcess": true,
                     "paneCommandMatches": true,
                 }, {
                     "kind": "keys",
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
-                    "keys": ["2", "Enter"],
+                    "keys": &expected_keys,
                 }],
             }),
         );
     }
 
     #[rstest]
-    #[case::approve(true, vec!["1", "Enter"])]
+    #[case::approve(true, vec!["Enter"])]
     #[case::reject(false, vec!["Escape"])]
     #[tokio::test]
     async fn permission_actions_send_fixed_keys(
@@ -1079,10 +1079,19 @@ mod tests {
     }
 
     #[rstest]
+    #[case::stopped(SessionStatus::Stopped, false)]
+    #[case::ended_with_pending_task(SessionStatus::Ended, true)]
     #[tokio::test]
-    async fn archive_hides_the_session_from_later_actions_lookups(action_context: ActionContext) {
+    async fn archive_hides_the_session_from_later_actions_lookups(
+        #[case] status: SessionStatus,
+        #[case] pending_task: bool,
+        action_context: ActionContext,
+    ) {
         let mut session = session("sample-session");
-        session.status = SessionStatus::Stopped;
+        session.status = status;
+        if pending_task {
+            session.pending_bg_task_ids.insert("task".to_string());
+        }
         action_context.save_session(&session);
         let app = action_context.router();
 
@@ -1144,7 +1153,7 @@ mod tests {
                 (
                     "/sessions/sample-session/answer",
                     json!({ "choice": 1 }),
-                    vec!["1", "Enter"],
+                    vec!["Enter"],
                 )
             }
             "permission" => {
@@ -1154,7 +1163,7 @@ mod tests {
                 (
                     "/sessions/sample-session/permission/approve",
                     json!({}),
-                    vec!["1", "Enter"],
+                    vec!["Enter"],
                 )
             }
             "interrupt" => (

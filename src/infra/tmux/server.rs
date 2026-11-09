@@ -278,8 +278,7 @@ fn is_safe_tmux_word(value: &str) -> bool {
 }
 
 fn is_safe_key(key: &str) -> bool {
-    matches!(key, "Enter" | "Escape")
-        || (key.len() == 1 && matches!(key.as_bytes()[0], b'1'..=b'9'))
+    matches!(key, "Down" | "Enter" | "Escape")
 }
 
 /// Focuses a pane on its recorded tmux server.
