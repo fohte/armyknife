@@ -1,3 +1,5 @@
+import { Button } from '@fohte/ui/button'
+
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
 
@@ -105,14 +107,15 @@ export function InboxView({
           onSelect,
         })}
         {hiddenInProgressCount > 0 ? (
-          <button
-            className="show-more-button"
+          <Button
+            className="show-more-button cursor-pointer"
             type="button"
+            variant="plain"
             aria-expanded={showAllInProgress}
             onClick={onShowMore}
           >
             {hiddenInProgressCount} more ▸
-          </button>
+          </Button>
         ) : null}
         {renderSessionSection({
           title: 'Done',

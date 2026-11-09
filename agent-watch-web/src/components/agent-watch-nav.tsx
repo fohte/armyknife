@@ -1,3 +1,6 @@
+import { Button } from '@fohte/ui/button'
+import { Chip } from '@fohte/ui/chip'
+
 import { cn } from '#lib/utils'
 
 type View = 'inbox' | 'board'
@@ -22,11 +25,12 @@ export function AgentWatchNav({
         <span className="brand-name">agent watch</span>
       </div>
       <div className="view-switch" role="group" aria-label="Views">
-        <button
+        <Button
           type="button"
           aria-pressed={activeView === 'inbox'}
+          variant="plain"
           className={cn(
-            'view-switch-button',
+            'view-switch-button cursor-pointer',
             activeView === 'inbox' && 'is-active',
           )}
           onClick={() => {
@@ -34,13 +38,16 @@ export function AgentWatchNav({
           }}
         >
           <span>Inbox</span>
-          <span className="view-count">{needsActionCount}</span>
-        </button>
-        <button
+          <Chip data-view-count="" tone="strong">
+            {needsActionCount}
+          </Chip>
+        </Button>
+        <Button
           type="button"
           aria-pressed={activeView === 'board'}
+          variant="plain"
           className={cn(
-            'view-switch-button',
+            'view-switch-button cursor-pointer',
             activeView === 'board' && 'is-active',
           )}
           onClick={() => {
@@ -48,7 +55,7 @@ export function AgentWatchNav({
           }}
         >
           Board
-        </button>
+        </Button>
       </div>
     </nav>
   )

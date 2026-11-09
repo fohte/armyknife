@@ -1,3 +1,5 @@
+import { err, errAsync, ok, ResultAsync } from 'neverthrow'
+
 import type { Session, SessionsResponse } from '#types'
 
 type SessionEventSource = {
@@ -61,6 +63,28 @@ function isSessionsResponse(value: unknown): value is SessionsResponse {
   )
 }
 
+function toSessionFeedError(error: unknown) {
+  return error instanceof Error
+    ? error
+    : new Error('Session request failed', { cause: error })
+}
+
+function fetchSessions(
+  fetcher: typeof fetch,
+): ResultAsync<SessionsResponse, Error> {
+  return ResultAsync.fromPromise(fetcher('/api/sessions'), toSessionFeedError)
+    .andThen((response): ResultAsync<unknown, Error> =>
+      response.ok
+        ? ResultAsync.fromPromise(response.json(), toSessionFeedError)
+        : errAsync(new Error('Session request failed')),
+    )
+    .andThen((body) =>
+      isSessionsResponse(body)
+        ? ok(body)
+        : err(new Error('Session response is invalid')),
+    )
+}
+
 export function startSessionFeed(
   onSessions: (response: SessionsResponse) => void,
   onError: (message: string | null) => void,
@@ -115,28 +139,21 @@ export function startSessionFeed(
   const runRefresh = () => {
     refreshQueued = false
 
-    void Promise.resolve()
-      .then(() => fetcher('/api/sessions'))
-      .then((response) =>
-        response.ok
-          ? response.json()
-          : Promise.reject(new Error('Session request failed')),
-      )
-      .then((body: unknown) => {
-        if (!isSessionsResponse(body)) {
+    void fetchSessions(fetcher)
+      .match(
+        (body) => {
+          if (active) {
+            onSessions(body)
+            requestError = false
+            clearRequestRetry()
+            reportStatus()
+          }
+        },
+        () => {
           reportRequestError()
-          return
-        }
-
-        if (active) {
-          onSessions(body)
-          requestError = false
-          clearRequestRetry()
-          reportStatus()
-        }
-      })
-      .catch(reportRequestError)
-      .finally(() => {
+        },
+      )
+      .then(() => {
         if (!active) {
           requestPending = false
         } else if (refreshQueued) {

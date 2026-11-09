@@ -10,6 +10,8 @@ type View = 'inbox' | 'board'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
+  const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [view, setView] = useState<View>('inbox')
   const [showAllInProgress, setShowAllInProgress] = useState(false)
@@ -24,10 +26,22 @@ export function App() {
     ],
     [sessions],
   )
+  const elapsedOffsetSeconds = Math.floor(
+    Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
+  )
+  const sessionsWithElapsedTime = useMemo(
+    () =>
+      sessions.map((session) => ({
+        ...session,
+        elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
+      })),
+    [elapsedOffsetSeconds, sessions],
+  )
 
   useEffect(
     () =>
       startSessionFeed((response) => {
+        const receivedAt = Date.now()
         setSessions(
           response.sessions.filter(
             (session) =>
@@ -36,10 +50,21 @@ export function App() {
               session.category === 'done',
           ),
         )
+        setSessionsReceivedAt(receivedAt)
+        setNowMs(receivedAt)
         setLoaded(true)
       }, setError),
     [],
   )
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now())
+    }, 1_000)
+    return () => {
+      window.clearInterval(interval)
+    }
+  }, [])
 
   useEffect(() => {
     if (!orderedSessions.some((session) => session.id === selectedId)) {
@@ -55,6 +80,14 @@ export function App() {
       setShowAllInProgress(true)
     }
   }, [orderedSessions, selectedId])
+
+  useEffect(() => {
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-session-row][aria-current="true"]',
+      )
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [orderedSessions, selectedId, showAllInProgress])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -74,7 +107,7 @@ export function App() {
       if (action?.type === 'view') {
         event.preventDefault()
         setView(action.view)
-      } else if (action?.type === 'move') {
+      } else if (action?.type === 'move' && view === 'inbox') {
         event.preventDefault()
         setSelectedId((current) =>
           moveSelection(orderedSessions, current, action.key),
@@ -86,7 +119,7 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [orderedSessions])
+  }, [orderedSessions, view])
 
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
@@ -105,7 +138,7 @@ export function App() {
             error={error}
             loaded={loaded}
             selectedId={selectedId}
-            sessions={sessions}
+            sessions={sessionsWithElapsedTime}
             showAllInProgress={showAllInProgress}
             onShowMore={() => {
               setShowAllInProgress(true)

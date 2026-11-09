@@ -1,3 +1,6 @@
+import { Button } from '@fohte/ui/button'
+import { Chip } from '@fohte/ui/chip'
+
 import { cn } from '#lib/utils'
 import type { Session } from '#types'
 
@@ -60,13 +63,15 @@ export function SessionRow({ session, selected, onSelect }: SessionRowProps) {
 
   return (
     <li className="session-list-item">
-      <button
+      <Button
         type="button"
+        variant="plain"
         className={cn(
-          'session-row',
+          'session-row cursor-pointer',
           `category-${session.category}`,
           selected && 'is-selected',
         )}
+        data-session-row=""
         aria-current={selected ? 'true' : undefined}
         onClick={() => {
           onSelect(session.id)
@@ -84,9 +89,13 @@ export function SessionRow({ session, selected, onSelect }: SessionRowProps) {
           </span>
           {session.category === 'needs_action' ? (
             <span className="session-preview">
-              <span className={`session-kind kind-${kind.toLowerCase()}`}>
+              <Chip
+                data-session-kind={kind.toLowerCase()}
+                size="sm"
+                tone="strong"
+              >
                 {kind}
-              </span>
+              </Chip>
               {session.preview !== null && session.preview.length > 0 ? (
                 <span> · {session.preview}</span>
               ) : null}
@@ -97,7 +106,7 @@ export function SessionRow({ session, selected, onSelect }: SessionRowProps) {
             <span className="session-repo">{session.repo || '—'}</span>
           </span>
         </span>
-      </button>
+      </Button>
     </li>
   )
 }
