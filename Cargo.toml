@@ -10,6 +10,7 @@ strip = "symbols"
 name = "armyknife"
 version = "0.1.516"
 edition = "2024"
+build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]
 description = "Personal CLI toolkit written in Rust"
 repository = "https://github.com/fohte/armyknife"
@@ -30,6 +31,7 @@ schema-gen = ["dep:schemars"]
 
 [dependencies]
 anyhow = "=1.0.104"
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
 base64 = "=0.23.1"
 chrono = { version = "=0.4.45", features = ["serde"] }
 clap = { version = "=4.6.6", features = ["derive"] }
@@ -59,6 +61,8 @@ toml_edit = "=0.25.15"
 thiserror = "=2.0.21"
 unicode-width = "=0.2.2"
 indicatif = "=0.18.6"
+include_dir = "=0.7.4"
+mime_guess = "=2.0.5"
 ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
 crossterm = "=0.29.0"
 notify = "=8.2.0"
@@ -71,6 +75,7 @@ uuid = { version = "=1.23.5", features = ["v4"] }
 [dev-dependencies]
 rstest = "=0.26.1"
 temp-env = "=0.3.6"
+tower = { version = "=0.5.3", features = ["util"] }
 wiremock = "=0.6.5"
 
 [lints.clippy]

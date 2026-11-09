@@ -1086,6 +1086,26 @@ armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resu
 
 Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/armyknife/cc/logs/` (Linux).
 
+### `a agent watch-web`
+
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary. The SPA is an initial scaffold; session views and API endpoints are not implemented yet. If the SPA has not been built, the page shows the build instructions; build it with:
+
+```sh
+cd agent-watch-web
+pnpm install --frozen-lockfile
+pnpm run build
+cd ..
+cargo build
+```
+
+To access the server from another device in your tailnet, keep `a agent watch-web` running and run this in another terminal:
+
+```sh
+tailscale serve 4317
+```
+
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
+
 ### `a agent clean`
 
 Delete merged or closed worktrees in the current repository. Pass `--all` to scan repositories under `agent.worktree.repos_root`. The `ACTION` column shows `DELETE` for worktrees the confirmation will remove and `KEEP` for the rest. To remove a single worktree, use `a agent close <worktree>`.
