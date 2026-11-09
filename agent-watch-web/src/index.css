@@ -1,0 +1,26 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+@import '@fohte/ui/tokens.css';
+@import '@fontsource-variable/jetbrains-mono';
+@import '@fontsource-variable/noto-sans-jp/wght.css';
+
+@source '../node_modules/@fohte/ui/src';
+
+@theme static {
+  --font-sans: 'Noto Sans JP Variable', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', monospace;
+  --font-code: 'JetBrains Mono Variable', monospace;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}

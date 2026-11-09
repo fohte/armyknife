@@ -61,10 +61,16 @@ pre-commit:
           esac
         done
 
-    ast-grep:
-      glob: '*.rs'
-      run: ast-grep scan {staged_files}
+    # Non-workspace multi-package monorepo: each subpackage has its own
+    # eslint.config.js and dependencies, so lint per package from its root.
+    eslint-agent-watch-web:
+      glob: '*.{js,ts,jsx,tsx,mjs,cjs}'
+      root: 'agent-watch-web/'
+      run: pnpm exec eslint {staged_files}
 
+    ast-grep:
+      glob: '*.{js,ts,jsx,tsx,mjs,cjs,mts,cts,rs}'
+      run: ast-grep scan {staged_files}
     # Using glob instead of file_types because text/x-rust is not supported
     # by the mimetype library used by lefthook.
     # See: https://github.com/gabriel-vasile/mimetype/blob/master/supported_mimes.md
