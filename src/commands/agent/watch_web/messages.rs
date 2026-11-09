@@ -217,9 +217,13 @@ struct ParentSession {
 mod tests {
     use std::collections::BTreeSet;
 
+    use axum::body::{Body, to_bytes};
+    use axum::http::Request;
+    use axum::http::header::CONTENT_TYPE;
     use serde_json::json;
+    use tower::ServiceExt;
 
-    use super::{ChatItem, load_messages_with};
+    use super::{ChatItem, load_messages_with, routes_with};
     use crate::commands::agent::types::Session;
 
     fn stored_session() -> Session {
@@ -258,6 +262,71 @@ mod tests {
                 tool: "Bash(cargo test -p sample)".to_string(),
                 description: "Run the package tests".to_string(),
             }])
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_message_route_attributes_only_the_stored_parent() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let record = json!({
+            "type": "user",
+            "message": {
+                "content": concat!(
+                    "<peer-message>", "\n",
+                    "- From session_id: fixture-parent-id", "\n", "\n",
+                    "Synthetic peer request.", "\n",
+                    "</peer-message>",
+                ),
+            },
+        });
+        std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let mut child = stored_session();
+        child.session_id = "fixture-child-id".to_string();
+        child.ancestor_session_ids = vec!["fixture-parent-id".to_string()];
+        child.transcript_path = Some(transcript_path);
+        let mut parent = stored_session();
+        parent.session_id = "fixture-parent-id".to_string();
+        parent.label = Some("Fixture parent".to_string());
+
+        let router = routes_with(move |id| {
+            Ok(match id {
+                "fixture-child-id" => Some(child.clone()),
+                "fixture-parent-id" => Some(parent.clone()),
+                _ => None,
+            })
+        });
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-child-id/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (status, content_type, body),
+            (
+                axum::http::StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}]"#
+                    .to_string(),
+            )
         );
     }
 }
