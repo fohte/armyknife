@@ -1825,7 +1825,7 @@ mod tests {
                 expected_row_keys,
                 Some(SessionRowKey::Task(source_session_id.to_string())),
                 Some(source_session_id),
-                Some(source_session_id.to_string()),
+                None,
             ),
         );
     }

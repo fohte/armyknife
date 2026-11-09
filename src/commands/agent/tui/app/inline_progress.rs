@@ -3,7 +3,7 @@ use crate::commands::agent::tui::progress::{
     CurrentPrStage, ProgressFetchState, ProgressOpenTarget, ProgressRow, ProgressSelectionKey,
     current_pr_stage, open_pr_url_target,
 };
-use crate::commands::agent::tui::session_rows::SessionRowKey;
+use crate::commands::agent::tui::session_rows::{SessionRow, SessionRowKey};
 
 impl App {
     pub(in crate::commands::agent::tui) fn selected_row_key(&self) -> Option<&SessionRowKey> {
@@ -124,7 +124,16 @@ impl App {
             self.progress_inline_source_id.as_deref() == Some(source_session_id.as_str());
         if !is_open_for_source {
             let anchor = self.selection_anchor();
+            let previous_source_id = self.progress_inline_source_id.clone();
             self.progress_inline_source_id = Some(source_session_id);
+            if !self
+                .build_display_rows()
+                .iter()
+                .any(|row| matches!(row, SessionRow::InlineProgress(_)))
+            {
+                self.progress_inline_source_id = previous_source_id;
+                return;
+            }
             self.restore_selection(anchor);
             return;
         }
