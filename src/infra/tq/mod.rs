@@ -8,6 +8,6 @@ mod error;
 
 pub use client::{
     SessionTasks, TqChecklist, TqChecklistItem, TqClient, TqGithubLink, TqTask, TqTaskDetails,
-    TqTaskStatus,
+    TqTaskStatus, TqTaskSummary,
 };
 pub use error::{Result, TqError};
