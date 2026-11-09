@@ -82,12 +82,16 @@ export function App() {
   }, [orderedSessions, selectedId])
 
   useEffect(() => {
+    if (view !== 'inbox') {
+      return
+    }
+
     document
       .querySelector<HTMLButtonElement>(
         '[data-session-row][aria-current="true"]',
       )
       ?.scrollIntoView({ block: 'nearest' })
-  }, [orderedSessions, selectedId, showAllInProgress])
+  }, [orderedSessions, selectedId, showAllInProgress, view])
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

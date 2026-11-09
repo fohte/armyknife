@@ -205,6 +205,7 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 })
 
 it('does not move the hidden Inbox selection while Board is active', () => {
+  const scrollIntoView = vi.spyOn(HTMLElement.prototype, 'scrollIntoView')
   renderApp()
   publishSessions({
     revision: 1,
@@ -213,6 +214,7 @@ it('does not move the hidden Inbox selection while Board is active', () => {
       session('session-b', 'Second session'),
     ],
   })
+  scrollIntoView.mockClear()
 
   const boardButton = container.querySelector<HTMLButtonElement>(
     '.view-switch-button[aria-pressed="false"]',
@@ -239,6 +241,7 @@ it('does not move the hidden Inbox selection while Board is active', () => {
     defaultPrevented: event?.defaultPrevented,
     viewAfterReturn: readActiveView(),
     selectedTitle: readSelectedTitle(),
+    scrollOptions: scrollIntoView.mock.calls.map(([options]) => options),
   })
 
   expect(snapshot()).toEqual({
@@ -246,6 +249,42 @@ it('does not move the hidden Inbox selection while Board is active', () => {
     defaultPrevented: false,
     viewAfterReturn: 'Inbox',
     selectedTitle: 'First session',
+    scrollOptions: [{ block: 'nearest' }],
+  })
+})
+
+it('shows additional in-progress rows when Show more is clicked', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First working session', 'in_progress'),
+      session('session-b', 'Second working session', 'in_progress'),
+      session('session-c', 'Third working session', 'in_progress'),
+    ],
+  })
+
+  const showMoreButton =
+    container.querySelector<HTMLButtonElement>('.show-more-button')
+  const expandedBeforeClick = showMoreButton?.getAttribute('aria-expanded')
+  act(() => {
+    showMoreButton?.click()
+  })
+
+  const snapshot = () => ({
+    expandedBeforeClick,
+    titlesAfterClick: readSessionTitles(),
+    showMoreAfterClick: container.querySelector('.show-more-button') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    expandedBeforeClick: 'false',
+    titlesAfterClick: [
+      'First working session',
+      'Second working session',
+      'Third working session',
+    ],
+    showMoreAfterClick: false,
   })
 })
 
@@ -309,9 +348,32 @@ it('advances elapsed time for all rows with one shared timer', async () => {
     await vi.advanceTimersByTimeAsync(1_000)
   })
 
+  const afterFirstTick = Array.from(
+    container.querySelectorAll<HTMLElement>('.session-age'),
+    (element) => element.textContent,
+  )
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-a', 'First session', 'needs_action', 9),
+      session('session-b', 'Working session', 'in_progress', 31),
+    ],
+  })
+  const afterUpdate = Array.from(
+    container.querySelectorAll<HTMLElement>('.session-age'),
+    (element) => element.textContent,
+  )
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
   const snapshot = () => ({
     before,
-    after: Array.from(
+    afterFirstTick,
+    afterUpdate,
+    afterSecondTick: Array.from(
       container.querySelectorAll<HTMLElement>('.session-age'),
       (element) => element.textContent,
     ),
@@ -320,7 +382,9 @@ it('advances elapsed time for all rows with one shared timer', async () => {
 
   expect(snapshot()).toEqual({
     before: ['8s', 'Working · 30s'],
-    after: ['9s', 'Working · 31s'],
+    afterFirstTick: ['9s', 'Working · 31s'],
+    afterUpdate: ['9s', 'Working · 31s'],
+    afterSecondTick: ['10s', 'Working · 32s'],
     intervalCount: 1,
   })
 })
