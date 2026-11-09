@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record};
+use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record, peer_message_item};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
@@ -28,13 +28,26 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                             tools.record(&tool_use.name, tool_use.input.as_ref());
                         }
                     }
-                    if is_harness_user_record(&record, message) {
+                    let Some(origin) = user_origin(&record, message) else {
                         return;
-                    }
+                    };
                     let text = user_text(message);
                     if !text.is_empty() {
-                        tools.flush_into(&mut items);
-                        append_text(&mut items, text, true, parent);
+                        if origin == UserOrigin::Peer {
+                            let Some(item) = peer_message_item(&text, parent) else {
+                                return;
+                            };
+                            tools.flush_into(&mut items);
+                            items.push(item);
+                        } else {
+                            tools.flush_into(&mut items);
+                            append_text(
+                                &mut items,
+                                slash_command_text(&text).unwrap_or(text),
+                                true,
+                                parent,
+                            );
+                        }
                     }
                 }
             }
@@ -111,24 +124,72 @@ fn tool_result_ids(message: &Value) -> Vec<String> {
         .collect()
 }
 
-fn is_harness_user_record(record: &Value, message: &Value) -> bool {
-    ["isMeta", "isSidechain", "isCompactSummary"]
-        .into_iter()
-        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
-        || record.get("sourceToolAssistantUUID").is_some()
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum UserOrigin {
+    Human,
+    Peer,
+    Legacy,
+}
+
+fn user_origin(record: &Value, message: &Value) -> Option<UserOrigin> {
+    if record.get("sourceToolAssistantUUID").is_some()
         || record
             .get("toolUseResult")
             .is_some_and(|result| !result.is_null())
+    {
+        return None;
+    }
+
+    if let Some(origin) = record.get("origin").filter(|origin| !origin.is_null()) {
+        return match origin.get("kind").and_then(Value::as_str) {
+            Some("human") => Some(UserOrigin::Human),
+            Some("peer") => Some(UserOrigin::Peer),
+            _ => None,
+        };
+    }
+
+    (!is_legacy_harness_user_record(record, message)).then_some(UserOrigin::Legacy)
+}
+
+fn is_legacy_harness_user_record(record: &Value, message: &Value) -> bool {
+    let text = user_text(message);
+    ["isMeta", "isSidechain", "isCompactSummary"]
+        .into_iter()
+        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
+        || (text.trim_start().starts_with("<command-message>") && !text.contains("<command-name>"))
         || [
-            "<command-name>",
-            "<command-args>",
-            "<command-message>",
             "<task-notification>",
             "<local-command-stdout>",
             "<local-command-caveat>",
         ]
         .into_iter()
-        .any(|prefix| user_text(message).trim_start().starts_with(prefix))
+        .any(|prefix| text.trim_start().starts_with(prefix))
+}
+
+fn slash_command_text(text: &str) -> Option<String> {
+    let command = text
+        .split_once("<command-name>")?
+        .1
+        .split_once("</command-name>")?
+        .0
+        .trim();
+    if command.is_empty() {
+        return None;
+    }
+    let command = if command.starts_with('/') {
+        command.to_owned()
+    } else {
+        format!("/{command}")
+    };
+    let args = text
+        .split_once("<command-args>")
+        .and_then(|(_, value)| value.split_once("</command-args>"))
+        .map_or("", |(args, _)| args.trim());
+    Some(if args.is_empty() {
+        command
+    } else {
+        format!("{command} {args}")
+    })
 }
 
 fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
@@ -310,7 +371,7 @@ mod tests {
             {"type":"user","message":{"content":"<task-notification>synthetic notification</task-notification>"}}
             {"type":"user","message":{"content":"<local-command-stdout>synthetic output</local-command-stdout>"}}
             {"type":"user","message":{"content":"<local-command-caveat>synthetic caveat</local-command-caveat>"}}
-            {"type":"user","message":{"content":"<command-name>/inspect</command-name>\n<command-args>fixture-argument</command-args>\n<command-message>synthetic prompt</command-message>"}}
+            {"type":"user","origin":{"kind":"human"},"message":{"content":"<command-message>synthetic prompt</command-message>\n<command-name>/inspect</command-name>\n<command-args>fixture-argument</command-args>"}}
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read","name":"Edit","input":{"file_path":"fixture/notes.txt"}}]}}
             {"type":"user","sourceToolAssistantUUID":"fixture-assistant-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read","content":"synthetic result"}]}}
             {"type":"user","message":{"content":"A visible user message."}}
@@ -319,6 +380,10 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None, None).unwrap(),
             vec![
+                ChatItem::User {
+                    text: "/inspect fixture-argument".to_string(),
+                    from: None,
+                },
                 ChatItem::ToolSummary {
                     summary: "1 action · 1 file edited".to_string(),
                 },
@@ -327,6 +392,27 @@ mod tests {
                     from: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn peer_origin_uses_the_message_header_even_when_meta() {
+        let transcript = indoc! {r#"
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n- Sender engine: fixture-engine\n\nSynthetic peer request.\n</peer-message>"}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-other-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-other-id\n\nSynthetic unrelated request.\n</peer-message>"}}
+            {"type":"user","origin":{"kind":"task-notification"},"message":{"content":"Synthetic task notification."}}
+        "#};
+        let parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "fixture-parent-title".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            vec![ChatItem::User {
+                text: "Synthetic peer request.".to_string(),
+                from: Some("fixture-parent-title".to_string()),
+            }]
         );
     }
 }

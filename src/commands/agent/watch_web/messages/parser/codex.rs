@@ -58,7 +58,11 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     }
                 }
                 Some("fileChange") => {
-                    tools.record_codex("edit_file", Some(payload));
+                    if pending_tool_calls.is_empty() {
+                        tools.record_codex("edit_file", Some(payload));
+                    } else {
+                        tools.record_codex_files("edit_file", Some(payload));
+                    }
                 }
                 _ => {}
             }
@@ -84,10 +88,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 }
                 Some("FileChange") | Some("McpToolCall") | Some("fileChange")
                 | Some("mcpToolCall") => {
-                    tools.record_codex(
-                        item.get("type").and_then(Value::as_str).unwrap_or_default(),
-                        Some(item),
-                    );
+                    let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
+                    if pending_tool_calls.is_empty() {
+                        tools.record_codex(item_type, Some(item));
+                    } else {
+                        tools.record_codex_files(item_type, Some(item));
+                    }
                 }
                 _ => {}
             }
@@ -152,7 +158,7 @@ mod tests {
             {"type":"session_meta","payload":{"id":"fixture-session"}}
             {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Synthetic AGENTS instructions."}]}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"Summarize these settings."}]}}}
-            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"apply_patch","input":"{\"file_path\":\"fixture/settings.toml\"}"}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":"printf 'fictional command output'"}}
             {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The settings now use the shared parser."}]}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"The settings now use the shared parser."}]}}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"<peer-message>\n- From session_id: fixture-parent-id\n\nPlease keep the summary brief.\n</peer-message>"}]}}}
@@ -173,7 +179,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "1 action · 1 file edited".to_string(),
+                    summary: "1 action".to_string(),
                 },
                 ChatItem::Assistant {
                     text: "The settings now use the shared parser.".to_string(),
@@ -203,7 +209,7 @@ mod tests {
     #[test]
     fn does_not_count_command_execution_again_for_an_open_custom_tool_call() {
         let transcript = indoc! {r#"
-            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call-id","name":"run_command","input":"{}"}}
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call-id","name":"exec","input":"printf 'fictional command output'"}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"fixture-command-id","command":"echo fixture","cwd":"/fixture/project","duration":1,"exit_code":0,"status":"completed"}}}
             {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call-id","output":"fixture output"}}
         "#};
@@ -212,6 +218,36 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn counts_file_changes_once_and_uses_object_keys_for_edited_files() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call-id","name":"exec","input":"printf 'fictional command output'"}}
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","changes":{"src/fixture-one.rs":{"type":"update","content":"fictional change content"},"src/fixture-two.rs":{"type":"update","unified_diff":"fictional diff","move_path":null}}}}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call-id","output":"fictional output"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "1 action · 2 files edited".to_string(),
+            }]
+        );
+    }
+
+    #[test]
+    fn counts_file_changes_outside_a_custom_tool_call_as_an_action() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","changes":{"src/fixture.rs":{"type":"update","unified_diff":"fictional diff","move_path":null}}}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "1 action · 1 file edited".to_string(),
             }]
         );
     }

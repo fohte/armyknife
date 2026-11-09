@@ -31,33 +31,6 @@ pub(super) fn for_each_jsonl_record(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use rstest::rstest;
-
-    use super::{ChatItem, ToolSummary};
-
-    #[rstest]
-    #[case::singular(1, "1 action")]
-    #[case::plural(2, "2 actions")]
-    fn action_count_uses_the_matching_noun(#[case] count: usize, #[case] expected: &str) {
-        let mut summary = ToolSummary::default();
-        for _ in 0..count {
-            summary.record("Read", None);
-        }
-        let mut items = Vec::new();
-
-        summary.flush_into(&mut items);
-
-        assert_eq!(
-            items,
-            vec![ChatItem::ToolSummary {
-                summary: expected.to_string(),
-            }]
-        );
-    }
-}
-
 #[derive(Default)]
 pub(super) struct ToolSummary {
     actions: usize,
@@ -78,6 +51,10 @@ impl ToolSummary {
 
     pub(super) fn record_codex(&mut self, name: &str, detail: Option<&serde_json::Value>) {
         self.actions += 1;
+        self.record_codex_files(name, detail);
+    }
+
+    pub(super) fn record_codex_files(&mut self, name: &str, detail: Option<&serde_json::Value>) {
         if matches!(
             name,
             "apply_patch" | "write_file" | "edit_file" | "FileChange" | "fileChange"
@@ -90,14 +67,22 @@ impl ToolSummary {
             {
                 self.edited_files.insert(path.to_owned());
             }
-            if let Some(changes) = detail.get("changes").and_then(serde_json::Value::as_array) {
-                self.edited_files
-                    .extend(changes.iter().filter_map(|change| {
-                        change
-                            .get("path")
-                            .and_then(serde_json::Value::as_str)
-                            .map(str::to_owned)
-                    }));
+            if let Some(changes) = detail.get("changes") {
+                match changes {
+                    serde_json::Value::Object(changes) => {
+                        self.edited_files.extend(changes.keys().cloned());
+                    }
+                    serde_json::Value::Array(changes) => {
+                        self.edited_files
+                            .extend(changes.iter().filter_map(|change| {
+                                change
+                                    .get("path")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_owned)
+                            }));
+                    }
+                    _ => {}
+                }
             }
         }
     }
@@ -160,10 +145,23 @@ pub(super) fn append_text(
     }
 }
 
+pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -> Option<ChatItem> {
+    let (sender_id, body) = peer_message_parts(message)?;
+    let parent = parent.filter(|parent| parent.session_id == sender_id)?;
+    if body.trim().is_empty() {
+        return None;
+    }
+    Some(ChatItem::User {
+        text: body.to_owned(),
+        from: Some(parent.title.clone()),
+    })
+}
+
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    let envelope = message
-        .strip_prefix("<peer-message>\n")?
-        .strip_suffix("\n</peer-message>")?;
+    let (_, envelope) = message.split_once("<peer-message>")?;
+    let (envelope, _) = envelope.split_once("</peer-message>")?;
+    let envelope = envelope.strip_prefix('\n').unwrap_or(envelope);
+    let envelope = envelope.strip_suffix('\n').unwrap_or(envelope);
     let (header, body) = envelope.split_once(PEER_MESSAGE_HEADER_SEPARATOR)?;
     let mut header_lines = header.lines();
     let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
@@ -176,4 +174,31 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((sender_id, body))
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::{ChatItem, ToolSummary};
+
+    #[rstest]
+    #[case::singular(1, "1 action")]
+    #[case::plural(2, "2 actions")]
+    fn action_count_uses_the_matching_noun(#[case] count: usize, #[case] expected: &str) {
+        let mut summary = ToolSummary::default();
+        for _ in 0..count {
+            summary.record("Read", None);
+        }
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummary {
+                summary: expected.to_string(),
+            }]
+        );
+    }
 }
