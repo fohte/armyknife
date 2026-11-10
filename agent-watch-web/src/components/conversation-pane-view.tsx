@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
+import { ResizableColumns } from '#components/resizable-columns'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -480,17 +481,20 @@ export function ConversationPaneView({
     </section>
   )
 
+  const closeCrit = () => {
+    setOpenCritUrl(null)
+  }
+  if (!critOpen || isMobile) return conversationPane
+
   return (
-    <>
-      {conversationPane}
-      {critOpen && !isMobile ? (
-        <CritPane
-          url={critUrl}
-          onClose={() => {
-            setOpenCritUrl(null)
-          }}
-        />
-      ) : null}
-    </>
+    <ResizableColumns
+      first={conversationPane}
+      second={<CritPane url={critUrl} onClose={closeCrit} />}
+      storageKey="agent-watch:conversation-width"
+      firstSize={560}
+      firstMinSize={240}
+      secondMinSize={300}
+      label="Resize conversation and crit"
+    />
   )
 }

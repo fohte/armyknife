@@ -23,3 +23,10 @@ type Story = StoryObj<typeof meta>
 export const TheCritReviewPaneIsOpen: Story = {
   name: 'The crit review pane is open',
 }
+
+export const CritReviewFillsTheScreen: Story = {
+  name: 'The crit review fills the screen',
+  args: {
+    defaultFullscreen: true,
+  },
+}

@@ -540,6 +540,10 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
       ?.click()
   })
   const desktopIframeCount = container.querySelectorAll('iframe').length
+  const desktopResizers = Array.from(
+    container.querySelectorAll<HTMLElement>('[role="separator"]'),
+    (separator) => separator.getAttribute('aria-label'),
+  )
   act(() => {
     setMobileViewport(true)
   })
@@ -549,13 +553,20 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     iframeCount: container.querySelectorAll('iframe').length,
     critButtonCount: container.querySelectorAll('.conversation-crit-toggle')
       .length,
+    resizerCount: container.querySelectorAll('[role="separator"]').length,
     desktopIframeCount,
+    desktopResizers,
   })
   expect(snapshot()).toEqual({
     guidance: 'Open this session on your Mac to review it in crit.',
     iframeCount: 0,
     critButtonCount: 0,
+    resizerCount: 0,
     desktopIframeCount: 1,
+    desktopResizers: [
+      'Resize session list and conversation',
+      'Resize conversation and crit',
+    ],
   })
 })
 

@@ -6,6 +6,7 @@ import { BoardView } from '#components/board-view'
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
+import { ResizableColumns } from '#components/resizable-columns'
 import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
@@ -375,6 +376,56 @@ export function App() {
     setSelectedId,
     setConversationOpen: setMobileConversationOpen,
   })
+  const inboxView = (
+    <InboxView
+      error={error}
+      loaded={loaded}
+      selectedId={selectedId}
+      sessions={sessionsWithElapsedTime}
+      showAllInProgress={showAllInProgress}
+      onShowMore={() => {
+        setShowAllInProgress(true)
+      }}
+      onSelect={openConversation}
+      laterExpanded={laterExpanded}
+      onToggleLater={() => {
+        setLaterExpanded((expanded) => !expanded)
+      }}
+      onLater={openLater}
+      onToggleToday={toggleToday}
+      todaySessions={todaySessions}
+      onSelectToday={openTodaySession}
+      isMobile={isMobile}
+      inProgressExpanded={inProgressExpanded}
+      onToggleInProgress={() => {
+        setInProgressExpanded((expanded) => !expanded)
+      }}
+      doneExpanded={doneExpanded}
+      onToggleDone={() => {
+        setDoneExpanded((expanded) => !expanded)
+      }}
+    />
+  )
+  const conversationPane =
+    selectedSession && (!isMobile || showMobileConversation) ? (
+      <ConversationPane
+        key={selectedSession.id}
+        session={selectedSession}
+        refreshKey={sessionsRevision}
+        isMobile={isMobile}
+        onBack={() => {
+          setMobileConversationOpen(false)
+        }}
+        onLater={() => {
+          openLater(selectedSession.id)
+        }}
+        onSelectSession={(id) => {
+          if (orderedSessions.some((session) => session.id === id)) {
+            setSelectedId(id)
+          }
+        }}
+      />
+    ) : null
 
   return (
     <div
@@ -398,55 +449,22 @@ export function App() {
       ) : null}
       <main className="agent-watch-main">
         {view === 'inbox' ? (
-          <>
-            <InboxView
-              error={error}
-              loaded={loaded}
-              selectedId={selectedId}
-              sessions={sessionsWithElapsedTime}
-              showAllInProgress={showAllInProgress}
-              onShowMore={() => {
-                setShowAllInProgress(true)
-              }}
-              onSelect={openConversation}
-              laterExpanded={laterExpanded}
-              onToggleLater={() => {
-                setLaterExpanded((expanded) => !expanded)
-              }}
-              onLater={openLater}
-              onToggleToday={toggleToday}
-              todaySessions={todaySessions}
-              onSelectToday={openTodaySession}
-              isMobile={isMobile}
-              inProgressExpanded={inProgressExpanded}
-              onToggleInProgress={() => {
-                setInProgressExpanded((expanded) => !expanded)
-              }}
-              doneExpanded={doneExpanded}
-              onToggleDone={() => {
-                setDoneExpanded((expanded) => !expanded)
-              }}
+          isMobile ? (
+            <>
+              {inboxView}
+              {conversationPane}
+            </>
+          ) : (
+            <ResizableColumns
+              first={inboxView}
+              second={conversationPane}
+              storageKey="agent-watch:inbox-width"
+              firstSize={460}
+              firstMinSize={200}
+              secondMinSize={300}
+              label="Resize session list and conversation"
             />
-            {selectedSession && (!isMobile || showMobileConversation) ? (
-              <ConversationPane
-                key={selectedSession.id}
-                session={selectedSession}
-                refreshKey={sessionsRevision}
-                isMobile={isMobile}
-                onBack={() => {
-                  setMobileConversationOpen(false)
-                }}
-                onLater={() => {
-                  openLater(selectedSession.id)
-                }}
-                onSelectSession={(id) => {
-                  if (orderedSessions.some((session) => session.id === id)) {
-                    setSelectedId(id)
-                  }
-                }}
-              />
-            ) : null}
-          </>
+          )
         ) : (
           <BoardView
             error={error}

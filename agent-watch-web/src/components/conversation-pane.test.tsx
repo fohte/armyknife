@@ -348,7 +348,9 @@ it('opens and closes a crit review beside a waiting conversation', () => {
       container.querySelector<HTMLIFrameElement>('.crit-pane iframe'),
     ).getAttribute('src'),
     closeLabel: requireElement(
-      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+      container.querySelector<HTMLButtonElement>(
+        '.crit-pane button[aria-label="Close crit"]',
+      ),
     ).getAttribute('aria-label'),
   }
 
@@ -372,7 +374,9 @@ it('opens and closes a crit review beside a waiting conversation', () => {
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+      container.querySelector<HTMLButtonElement>(
+        '.crit-pane button[aria-label="Close crit"]',
+      ),
     ).click()
   })
   const closedState = {
