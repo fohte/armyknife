@@ -157,3 +157,41 @@ it('opens the highlighted session in its terminal from the actions submenu', asy
 
   expect(onOpenInTerminal.mock.calls).toEqual([['session-alerts']])
 })
+
+it('copies the session ID from the actions submenu with Enter', async () => {
+  const writeText = vi
+    .fn<(text: string) => Promise<void>>()
+    .mockResolvedValue(undefined)
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  renderPalette()
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    clipboardCalls: writeText.mock.calls,
+    activeActionLabel: container.querySelector(
+      '[data-palette-action-active="true"] button',
+    )?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    clipboardCalls: [['session-alerts']],
+    activeActionLabel: 'Copied',
+  })
+})
+
+it('hides terminal action when the session has no terminal capability', () => {
+  const unavailableSession = { ...session, canOpenInTerminal: false }
+  renderPalette({
+    initialActionItemId: unavailableSession.id,
+    sessions: [unavailableSession],
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="menuitem"]')).map(
+      (item) => item.textContent,
+    ),
+  ).toEqual(['Open session', 'Later', 'Copy session ID'])
+})

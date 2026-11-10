@@ -263,7 +263,7 @@ export function CommandPalette({
               setActiveActionIndex((index) => Math.max(0, index - 1))
               return
             }
-            if (event.key === 'Enter' && action?.id !== 'copy') {
+            if (event.key === 'Enter') {
               event.preventDefault()
               activateAction(action)
               return
