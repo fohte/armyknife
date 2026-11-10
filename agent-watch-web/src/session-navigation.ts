@@ -1,14 +1,20 @@
 import type { Session } from '#types'
 
+export type SessionView = 'inbox' | 'board'
+
 export type SessionShortcutAction =
-  { type: 'move'; key: 'j' | 'k' } | { type: 'view'; view: 'board' } | null
+  { type: 'move'; key: 'j' | 'k' } | { type: 'view'; view: SessionView } | null
 
 export function getSessionShortcutAction(
   key: string,
   shiftKey: boolean,
+  currentView: SessionView,
 ): SessionShortcutAction {
   if (shiftKey && key.toLowerCase() === 'b') {
-    return { type: 'view', view: 'board' }
+    return {
+      type: 'view',
+      view: currentView === 'inbox' ? 'board' : 'inbox',
+    }
   }
 
   if (!shiftKey && (key === 'j' || key === 'k')) {

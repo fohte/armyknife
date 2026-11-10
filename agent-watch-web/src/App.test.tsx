@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { App } from '#App'
 import type { Session, SessionsResponse } from '#types'
@@ -26,6 +27,9 @@ function session(
   title: string,
   category: Session['category'] = 'needs_action',
   elapsedSeconds = 8,
+  project = 'service refresh',
+  parent: Session['parent'] = null,
+  ancestorSessionIds = parent === null ? [] : [parent.id],
 ): Session {
   return {
     id,
@@ -37,9 +41,223 @@ function session(
     unread: false,
     task: null,
     repo: 'example/service',
+    project,
+    parent,
+    ancestorSessionIds,
     pullRequest: null,
   }
 }
+
+function projectSessions(): Session[] {
+  return [
+    session('session-pm', 'Project manager', 'in_progress', 30),
+    session(
+      'session-worker',
+      'Handle an alert',
+      'needs_action',
+      8,
+      'service refresh',
+      {
+        id: 'session-owner',
+        title: 'Project owner',
+      },
+      ['session-pm', 'session-owner'],
+    ),
+  ]
+}
+
+const openSessionCases = [
+  {
+    target: 'Board card',
+    selector: '[aria-label="Open in Inbox: Handle an alert"]',
+    expectedTitle: 'Handle an alert',
+    activation: 'click',
+  },
+  {
+    target: 'Board card',
+    selector: '[aria-label="Open in Inbox: Handle an alert"]',
+    expectedTitle: 'Handle an alert',
+    activation: 'keyboard',
+  },
+  {
+    target: 'project PM row',
+    selector: '[aria-label="Open service refresh PM session in Inbox"]',
+    expectedTitle: 'Project manager',
+    activation: 'click',
+  },
+  {
+    target: 'project PM row',
+    selector: '[aria-label="Open service refresh PM session in Inbox"]',
+    expectedTitle: 'Project manager',
+    activation: 'keyboard',
+  },
+] as const
+
+it('keeps the Board updated from the session feed while it is active', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session', 'needs_action', 8, 'alpha'),
+      session('session-quiet', 'Quiet session', 'done', 30, 'quiet project'),
+    ],
+  })
+
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  const projectsBeforeUpdate = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+    (element) => element.getAttribute('aria-label'),
+  )
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-a', 'Updated session', 'in_progress', 10, 'alpha'),
+      session('session-b', 'New session', 'needs_action', 20, 'beta'),
+    ],
+  })
+
+  const snapshot = () => ({
+    projectsBeforeUpdate,
+    projectsAfterUpdate: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (element) => element.getAttribute('aria-label'),
+    ),
+    updatedCardTitles: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-card-title'),
+      (element) => element.textContent,
+    ),
+    activeView: readActiveView(),
+  })
+
+  expect(snapshot()).toEqual({
+    projectsBeforeUpdate: ['alpha'],
+    projectsAfterUpdate: ['beta', 'alpha'],
+    updatedCardTitles: ['New session', 'Updated session'],
+    activeView: 'Board',
+  })
+})
+
+it('hides quiet projects by default and lets the filter reveal them', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-active', 'Waiting session', 'needs_action', 8, 'active'),
+      session('session-quiet', 'Finished session', 'done', 30, 'quiet'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+
+  const visibleBeforeToggle = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+    (element) => element.getAttribute('aria-label'),
+  )
+  const quietToggle = container.querySelector<HTMLInputElement>(
+    '.board-quiet-toggle input',
+  )
+  act(() => {
+    quietToggle?.click()
+  })
+
+  const snapshot = () => ({
+    visibleBeforeToggle,
+    visibleAfterToggle: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (element) => element.getAttribute('aria-label'),
+    ),
+    toggleChecked: quietToggle?.checked,
+    label: container.querySelector('.board-quiet-toggle')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleBeforeToggle: ['active'],
+    visibleAfterToggle: ['active', 'quiet'],
+    toggleChecked: false,
+    label: 'Hide quiet projects (1)',
+  })
+})
+
+it('toggles between the Board and Inbox with shifted B', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'Sample session')],
+  })
+
+  const views: string[] = []
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  views.push(readActiveView())
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  views.push(readActiveView())
+
+  expect(views).toEqual(['Board', 'Inbox'])
+})
+
+it.each(openSessionCases)(
+  'opens $target in Inbox with $activation activation',
+  async ({ selector, expectedTitle, activation }) => {
+    renderApp()
+    publishSessions({ revision: 1, sessions: projectSessions() })
+    act(() => {
+      dispatchKey(window, 'B', { shiftKey: true })
+    })
+
+    const target = container.querySelector<HTMLButtonElement>(selector)
+    if (activation === 'click') {
+      act(() => {
+        target?.click()
+      })
+    } else {
+      target?.focus()
+      await act(async () => {
+        await userEvent.keyboard('{Enter}')
+      })
+    }
+
+    const snapshot = () => ({
+      activeView: readActiveView(),
+      selectedTitle: readSelectedTitle(),
+    })
+
+    expect(snapshot()).toEqual({
+      activeView: 'Inbox',
+      selectedTitle: expectedTitle,
+    })
+  },
+)
+
+it('disables a PM row when its project has no PM session', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-alone', 'Unmanaged session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+
+  const pmButton = container.querySelector<HTMLButtonElement>('.pm-project')
+  const disabled = pmButton?.disabled
+  act(() => {
+    pmButton?.click()
+  })
+
+  const snapshot = () => ({ disabled, activeView: readActiveView() })
+
+  expect(snapshot()).toEqual({
+    disabled: true,
+    activeView: 'Board',
+  })
+})
 
 function readSelectedTitle() {
   return (
