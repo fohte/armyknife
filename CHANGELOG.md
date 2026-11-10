@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.561](https://github.com/fohte/armyknife/compare/v0.1.560...v0.1.561) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add a session status panel ([#1479](https://github.com/fohte/armyknife/issues/1479)) ([fb3db9c](https://github.com/fohte/armyknife/commit/fb3db9cd84642831feea6cd10336d6e889cf9cd4))
+
 ## [0.1.560](https://github.com/fohte/armyknife/compare/v0.1.559...v0.1.560) (2026-11-10)
 
 
