@@ -283,6 +283,82 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
+it('opens and closes a crit review beside a waiting conversation', () => {
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      category: 'needs_action',
+      kind: 'Review',
+      critUrl: 'http://127.0.0.1:5000/review/sample',
+    },
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
+    ).click()
+  })
+  const openState = {
+    expanded: requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
+    ).getAttribute('aria-expanded'),
+    frameSource: requireElement(
+      container.querySelector<HTMLIFrameElement>('.crit-pane iframe'),
+    ).getAttribute('src'),
+    closeLabel: requireElement(
+      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+    ).getAttribute('aria-label'),
+  }
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+    ).click()
+  })
+  const closedState = {
+    expanded: requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
+    ).getAttribute('aria-expanded'),
+    pane: container.querySelector('.crit-pane'),
+  }
+
+  const snapshot = () => ({ openState, closedState })
+  expect(snapshot()).toEqual({
+    openState: {
+      expanded: 'true',
+      frameSource: 'http://127.0.0.1:5000/review/sample',
+      closeLabel: 'Close crit',
+    },
+    closedState: {
+      expanded: 'false',
+      pane: null,
+    },
+  })
+})
+
+it('does not offer crit for sessions without a waiting crit URL', () => {
+  renderView(vi.fn(() => Promise.resolve(true)))
+  const noUrl = container.querySelector('.conversation-crit-toggle')
+
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      category: 'done',
+      kind: 'Review',
+      critUrl: 'http://127.0.0.1:5000/review/sample',
+    },
+  )
+  const notWaiting = container.querySelector('.conversation-crit-toggle')
+
+  const snapshot = () => ({ noUrl, notWaiting })
+  expect(snapshot()).toEqual({
+    noUrl: null,
+    notWaiting: null,
+  })
+})
+
 it('directs Codex questions and permissions to the terminal', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   const codexActions: SessionActions = {

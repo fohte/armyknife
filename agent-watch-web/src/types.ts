@@ -41,6 +41,7 @@ export type Session = {
   parent: ParentSession | null
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
+  critUrl?: string | null
 }
 
 export type ChatItem =

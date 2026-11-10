@@ -2,6 +2,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { CritPane } from '#components/crit-pane'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -31,6 +32,7 @@ export function ConversationPaneView({
 }: ConversationPaneViewProps) {
   const [draft, setDraft] = useState('')
   const [sendPending, setSendPending] = useState(false)
+  const [critOpen, setCritOpen] = useState(false)
   const sendingRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
@@ -40,6 +42,11 @@ export function ConversationPaneView({
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isSending = sending || sendPending
+  const critUrl =
+    session.category === 'needs_action' && session.kind === 'Review'
+      ? session.critUrl
+      : null
+  const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
 
   const sendMessage = () => {
     if (
@@ -160,7 +167,7 @@ export function ConversationPaneView({
     }
   }
 
-  return (
+  const conversationPane = (
     <section
       className="conversation-pane"
       aria-label={`Conversation with ${session.title}`}
@@ -205,6 +212,19 @@ export function ConversationPaneView({
           <h1>{session.title || 'Untitled session'}</h1>
         </div>
         <div className="conversation-header-actions">
+          {hasCritUrl ? (
+            <Button
+              className="conversation-crit-toggle"
+              type="button"
+              variant="plain"
+              aria-expanded={critOpen}
+              onClick={() => {
+                setCritOpen((open) => !open)
+              }}
+            >
+              {critOpen ? 'Hide crit' : 'Open crit'}
+            </Button>
+          ) : null}
           {session.pullRequest ? (
             <a
               className="conversation-pr-link"
@@ -390,5 +410,19 @@ export function ConversationPaneView({
         </div>
       </form>
     </section>
+  )
+
+  return (
+    <>
+      {conversationPane}
+      {critOpen && hasCritUrl ? (
+        <CritPane
+          url={critUrl}
+          onClose={() => {
+            setCritOpen(false)
+          }}
+        />
+      ) : null}
+    </>
   )
 }
