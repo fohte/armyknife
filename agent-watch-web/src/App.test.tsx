@@ -61,6 +61,7 @@ function session(
     id,
     workType,
     category,
+    isPaused: false,
     kind: category === 'needs_action' ? 'Question' : null,
     title,
     preview: null,

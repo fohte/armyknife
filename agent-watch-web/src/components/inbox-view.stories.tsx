@@ -7,6 +7,7 @@ const sessions: Session[] = [
   {
     id: 'sample-later',
     category: 'later',
+    isPaused: false,
     categoryWhenNotLater: 'needs_action',
     kind: 'Question',
     title: 'Review the service retry policy',
@@ -24,6 +25,7 @@ const sessions: Session[] = [
   {
     id: 'sample-question',
     category: 'needs_action',
+    isPaused: false,
     kind: 'Question',
     title: 'Update retry handling',
     preview: 'Should retries stop after three attempts?',
@@ -44,6 +46,7 @@ const sessions: Session[] = [
   {
     id: 'sample-work',
     category: 'in_progress',
+    isPaused: false,
     kind: null,
     title: 'Add request metrics',
     preview: null,
@@ -59,6 +62,7 @@ const sessions: Session[] = [
   {
     id: 'sample-work-secondary',
     category: 'in_progress',
+    isPaused: false,
     kind: null,
     title: 'Trace request latency',
     preview: null,
@@ -74,6 +78,7 @@ const sessions: Session[] = [
   {
     id: 'sample-work-hidden',
     category: 'in_progress',
+    isPaused: false,
     kind: null,
     title: 'Measure cache behavior',
     preview: null,
@@ -89,6 +94,7 @@ const sessions: Session[] = [
   {
     id: 'sample-done',
     category: 'done',
+    isPaused: false,
     kind: null,
     title: 'Document request limits',
     preview: null,

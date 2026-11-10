@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { renderConversationCritColumns } from '#components/resizable-columns'
+import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import type { ChatItem, Session, SessionActions } from '#types'
 
@@ -208,7 +209,10 @@ export function ConversationPaneView({
                 {session.task ? <span aria-hidden="true"> · </span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
-              <h1>{session.title || 'Untitled session'}</h1>
+              <SessionHeading
+                title={session.title}
+                isPaused={session.isPaused}
+              />
             </div>
             <Button
               className="mobile-conversation-later cursor-pointer"
@@ -257,7 +261,10 @@ export function ConversationPaneView({
                   </a>
                 ) : null}
               </div>
-              <h1>{session.title || 'Untitled session'}</h1>
+              <SessionHeading
+                title={session.title}
+                isPaused={session.isPaused}
+              />
             </div>
             <div className="conversation-header-actions">
               {hasCritUrl ? (

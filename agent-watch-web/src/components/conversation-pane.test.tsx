@@ -9,6 +9,7 @@ import type { ChatItem, Session, SessionActions } from '#types'
 const session: Session = {
   id: 'sample-session',
   category: 'needs_action',
+  isPaused: false,
   kind: 'Question',
   title: 'Choose a retry policy',
   preview: null,
@@ -407,6 +408,53 @@ it('opens and closes a crit review beside a waiting conversation', () => {
       expanded: 'false',
       pane: null,
     },
+  })
+})
+
+it('shows the paused state in the conversation header', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'done', kind: null, isPaused: true },
+    undefined,
+    [],
+    null,
+  )
+
+  const snapshot = () => ({
+    title: container.querySelector('.conversation-header h1')?.textContent,
+    paused: container.querySelector('.conversation-header [data-slot="chip"]')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    title: 'Choose a retry policy',
+    paused: 'Paused',
+  })
+})
+
+it('shows the paused state in the mobile conversation header', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'done', kind: null, isPaused: true },
+    undefined,
+    [],
+    null,
+    true,
+  )
+
+  const snapshot = () => ({
+    mobile: container
+      .querySelector('.conversation-pane')
+      ?.getAttribute('data-mobile'),
+    title: container.querySelector('.mobile-conversation-heading h1')
+      ?.textContent,
+    paused: container.querySelector(
+      '.mobile-conversation-heading [data-slot="chip"]',
+    )?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    mobile: 'true',
+    title: 'Choose a retry policy',
+    paused: 'Paused',
   })
 })
 

@@ -250,6 +250,13 @@
   white-space: nowrap;
 }
 
+.board-done-paused-session {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}
+
 .board-message {
   margin: 20px 16px;
   color: #8b8b94;

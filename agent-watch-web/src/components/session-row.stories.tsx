@@ -6,6 +6,7 @@ import type { Session } from '#types'
 const session: Session = {
   id: 'example-session',
   category: 'needs_action',
+  isPaused: false,
   kind: 'Question',
   title: 'Update retry handling',
   preview: 'Should retries stop after three attempts?',
@@ -139,6 +140,19 @@ export const WorkIsDone: Story = {
       unread: false,
       pullRequest: { number: 2049, state: 'Merged' },
       elapsedSeconds: 3600,
+    },
+  },
+}
+
+export const SessionIsPaused: Story = {
+  name: 'A paused session stays in Done and shows its paused state',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      isPaused: true,
+      unread: false,
     },
   },
 }

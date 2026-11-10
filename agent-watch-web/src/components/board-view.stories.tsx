@@ -8,6 +8,7 @@ const sessions: Session[] = [
   {
     id: 'session-question',
     category: 'needs_action',
+    isPaused: false,
     kind: 'Question',
     title: 'Review the updated API contract',
     preview: 'Can the response include a project name?',
@@ -28,6 +29,7 @@ const sessions: Session[] = [
   {
     id: 'session-working',
     category: 'in_progress',
+    isPaused: false,
     kind: null,
     title: 'Add request metrics',
     preview: null,
@@ -43,6 +45,7 @@ const sessions: Session[] = [
   {
     id: 'session-done',
     category: 'done',
+    isPaused: false,
     kind: null,
     title: 'Document request limits',
     preview: null,
@@ -58,6 +61,7 @@ const sessions: Session[] = [
   {
     id: 'session-quiet',
     category: 'done',
+    isPaused: false,
     kind: null,
     title: 'Record deployment notes',
     preview: null,
@@ -98,6 +102,31 @@ type Story = StoryObj<typeof meta>
 
 export const BoardShowsActiveProjectsFirst: Story = {
   name: 'The board puts projects that need attention first',
+}
+
+export const BoardShowsPausedSessions: Story = {
+  name: 'The Done group identifies paused sessions',
+  args: {
+    projects: buildBoardProjects([
+      ...sessions,
+      {
+        id: 'session-paused',
+        category: 'done',
+        isPaused: true,
+        kind: null,
+        title: 'Prepare the next deployment window',
+        preview: null,
+        elapsedSeconds: 240,
+        unread: false,
+        task: null,
+        repo: 'example/service',
+        project: 'service refresh',
+        ancestorSessionIds: [],
+        parent: null,
+        pullRequest: null,
+      },
+    ]),
+  },
 }
 
 export const BoardShowsQuietProjects: Story = {

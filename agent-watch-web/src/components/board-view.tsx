@@ -4,6 +4,7 @@ import { Button } from '@fohte/ui/button'
 import { useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
+import { SessionPausedBadge } from '#components/session-paused-badge'
 
 type BoardViewProps = {
   projects: readonly BoardProject[]
@@ -83,6 +84,7 @@ function ProjectCard({
       }}
     >
       <div className="board-card-heading">
+        <SessionPausedBadge isPaused={session.isPaused} />
         <span>{cardKind(session)}</span>
         <time>{formatElapsedTime(session.elapsedSeconds)}</time>
       </div>
@@ -125,6 +127,9 @@ function ProjectColumn({
         }
 
         if (category === 'done') {
+          const pausedSessions = sessions.filter((session) => session.isPaused)
+          const otherDoneCount = sessions.length - pausedSessions.length
+
           return (
             <section
               key={category}
@@ -136,10 +141,29 @@ function ProjectColumn({
                 <span>{sessions.length}</span>
               </h3>
               <p className="board-done-summary">
-                {sessions[0]?.title ?? ''}
-                {sessions.length > 1
-                  ? ` and ${String(sessions.length - 1)} more`
-                  : ''}
+                {pausedSessions.length > 0 ? (
+                  <>
+                    {pausedSessions.map((session) => (
+                      <span
+                        className="board-done-paused-session"
+                        key={session.id}
+                      >
+                        <SessionPausedBadge isPaused />
+                        <span>{session.title}</span>
+                      </span>
+                    ))}
+                    {otherDoneCount > 0
+                      ? ` · ${String(otherDoneCount)} other done`
+                      : ''}
+                  </>
+                ) : (
+                  <>
+                    {sessions[0]?.title ?? ''}
+                    {sessions.length > 1
+                      ? ` and ${String(sessions.length - 1)} more`
+                      : ''}
+                  </>
+                )}
               </p>
             </section>
           )
