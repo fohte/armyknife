@@ -297,6 +297,20 @@
   font-size: 16px;
 }
 
+.mobile-conversation-session-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.mobile-conversation-session-actions .conversation-copy-session-id {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
 .mobile-conversation-back {
   width: 44px;
   padding: 0;
