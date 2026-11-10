@@ -6,11 +6,12 @@ import { Filter } from 'lucide-react'
 import {
   formatInboxFilterQuery,
   INBOX_FILTER_FIELDS,
-  parseInboxFilterQuery,
+  type InboxFilter,
+  type InboxFilterKey,
 } from '#inbox-filter'
 
 type InboxFilterBarProps = {
-  filterQuery: string
+  filters: readonly InboxFilter[]
   matchingNeedsActionCount: number
   totalNeedsActionCount: number
   onFilterQueryChange: (query: string) => void
@@ -23,7 +24,7 @@ type InboxFilterBarProps = {
 }
 
 export function InboxFilterBar({
-  filterQuery,
+  filters,
   matchingNeedsActionCount,
   totalNeedsActionCount,
   onFilterQueryChange,
@@ -34,8 +35,7 @@ export function InboxFilterBar({
   onSaveViewNameChange,
   onSaveView,
 }: InboxFilterBarProps) {
-  const filters = parseInboxFilterQuery(filterQuery)
-  const removeFilter = (key: (typeof INBOX_FILTER_FIELDS)[number]['key']) => {
+  const removeFilter = (key: InboxFilterKey) => {
     onFilterQueryChange(
       formatInboxFilterQuery(filters.filter((filter) => filter.key !== key)),
     )

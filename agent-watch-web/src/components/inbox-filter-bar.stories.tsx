@@ -5,7 +5,7 @@ import { InboxFilterBar } from '#components/inbox-filter-bar'
 const meta = {
   component: InboxFilterBar,
   args: {
-    filterQuery: '',
+    filters: [],
     matchingNeedsActionCount: 3,
     totalNeedsActionCount: 3,
     onFilterQueryChange: () => undefined,
@@ -33,7 +33,10 @@ export const NoFiltersAreActive: Story = {
 export const FiltersCanBeSaved: Story = {
   name: 'The filter bar shows matching counts and a save action',
   args: {
-    filterQuery: 'project:sample-project kind:question,review',
+    filters: [
+      { key: 'project', values: ['sample-project'] },
+      { key: 'kind', values: ['question', 'review'] },
+    ],
     matchingNeedsActionCount: 2,
     totalNeedsActionCount: 5,
   },
@@ -42,7 +45,10 @@ export const FiltersCanBeSaved: Story = {
 export const AViewNameIsBeingEntered: Story = {
   name: 'The filter bar shows the field for a saved view name',
   args: {
-    filterQuery: 'project:sample-project kind:question,review',
+    filters: [
+      { key: 'project', values: ['sample-project'] },
+      { key: 'kind', values: ['question', 'review'] },
+    ],
     matchingNeedsActionCount: 2,
     totalNeedsActionCount: 5,
     saveViewOpen: true,

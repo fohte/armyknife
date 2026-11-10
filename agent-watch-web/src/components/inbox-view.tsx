@@ -218,7 +218,7 @@ export function InboxView({
         <span className="sort-description">Sorted by tq priority</span>
       </header>
       <InboxFilterBar
-        filterQuery={filterQuery}
+        filters={filters}
         matchingNeedsActionCount={needsAction.length}
         totalNeedsActionCount={allNeedsActionCount}
         onFilterQueryChange={setFilterQuery}
