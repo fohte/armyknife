@@ -20,7 +20,9 @@ mod archive;
 mod database;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
-pub(crate) use database::{SessionLock, SessionStoreChanges, WakeLock, serialize_session};
+pub(crate) use database::{
+    SessionLock, SessionStoreChanges, WakeLock, WatchWebSessionState, serialize_session,
+};
 
 /// Threshold in seconds for sort stability.
 /// Sessions updated within this window are sorted by created_at instead,
@@ -147,6 +149,10 @@ pub(crate) fn update_session_in(
 /// Rewrites an existing session so file watchers observe derived status changes.
 pub(crate) fn touch_session(session_id: &str) -> Result<()> {
     database::touch_session(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn touch_session_in(sessions_dir: &Path, session_id: &str) -> Result<()> {
+    database::touch_session(sessions_dir, session_id)
 }
 
 /// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
@@ -337,6 +343,55 @@ pub(crate) fn session_store_revision() -> Result<i64> {
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn watch_web_session_states_from(
+    sessions_dir: &Path,
+) -> Result<Vec<WatchWebSessionState>> {
+    database::watch_web_session_states(sessions_dir)
+}
+
+pub(crate) fn set_watch_web_later(
+    session_id: &str,
+    later_until: Option<DateTime<Utc>>,
+    activity_snapshot: DateTime<Utc>,
+    until_activity: bool,
+) -> Result<()> {
+    database::set_watch_web_later(
+        &sessions_dir()?,
+        session_id,
+        later_until,
+        activity_snapshot,
+        until_activity,
+    )
+}
+
+pub(crate) fn set_watch_web_later_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    later_until: Option<DateTime<Utc>>,
+    activity_snapshot: DateTime<Utc>,
+    until_activity: bool,
+) -> Result<()> {
+    database::set_watch_web_later(
+        sessions_dir,
+        session_id,
+        later_until,
+        activity_snapshot,
+        until_activity,
+    )
+}
+
+pub(crate) fn set_watch_web_today(session_id: &str, is_today: bool) -> Result<()> {
+    database::set_watch_web_today(&sessions_dir()?, session_id, is_today)
+}
+
+pub(crate) fn set_watch_web_today_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    is_today: bool,
+) -> Result<()> {
+    database::set_watch_web_today(sessions_dir, session_id, is_today)
 }
 
 pub(crate) fn session_changes_since(

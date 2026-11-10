@@ -1,4 +1,5 @@
-type SessionCategory = 'needs_action' | 'in_progress' | 'done' | (string & {})
+type SessionCategory =
+  'needs_action' | 'later' | 'in_progress' | 'done' | (string & {})
 
 type SessionKind =
   | 'Question'
@@ -24,6 +25,7 @@ type PullRequest = {
 export type Session = {
   id: string
   category: SessionCategory
+  categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
   preview: string | null
@@ -32,6 +34,8 @@ export type Session = {
   task: SessionTask | null
   repo: string
   pullRequest: PullRequest | null
+  laterUntil?: string | null
+  isToday?: boolean
 }
 
 export type SessionsResponse = {

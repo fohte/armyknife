@@ -4,6 +4,7 @@ mod events;
 mod messages;
 mod security;
 mod session_enrichment;
+mod session_state;
 mod sessions;
 
 use std::net::{Ipv4Addr, SocketAddr};
@@ -75,6 +76,7 @@ fn app_with_assets_and_loader(
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
         .merge(actions::router())
+        .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates))
         .merge(messages::routes_with(load_session))
@@ -214,6 +216,33 @@ mod tests {
                 expected_content_type.map(str::to_owned),
                 expected_body.to_owned(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn later_post_requires_a_matching_origin_and_missing_session_is_not_found() {
+        let make_request = |origin: Option<&str>| {
+            let mut builder = Request::builder()
+                .method("POST")
+                .uri("/api/sessions/nonexistent-session/today")
+                .header(HOST, "localhost")
+                .header(CONTENT_TYPE, "application/json");
+            if let Some(origin) = origin {
+                builder = builder.header(ORIGIN, origin);
+            }
+            builder.body(Body::from(r#"{"isToday":true}"#)).unwrap()
+        };
+
+        let app = app();
+        let rejected = app.clone().oneshot(make_request(None)).await.unwrap();
+        let missing = app
+            .oneshot(make_request(Some("http://localhost")))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (rejected.status(), missing.status()),
+            (StatusCode::FORBIDDEN, StatusCode::NOT_FOUND),
         );
     }
 

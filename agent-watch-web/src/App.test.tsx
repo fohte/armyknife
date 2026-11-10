@@ -163,6 +163,81 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
+it('opens Later with L and selects a preset with its number key', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(new Response(null, { status: 204 }))
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'L')
+    await Promise.resolve()
+  })
+  const menuItems = Array.from(
+    container.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    (item) => item.textContent,
+  )
+  await act(async () => {
+    dispatchKey(window, '3')
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({ menuItems, request: fetchMock.mock.calls[0] })
+
+  expect(snapshot()).toEqual({
+    menuItems: [
+      'In 1 hour1h1',
+      'This evening19:002',
+      'Tomorrow9:003',
+      'Next weekMon 11:004',
+      'Until it changesnext activity5',
+    ],
+    request: [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"tomorrow"}',
+      },
+    ],
+  })
+})
+
+it('saves a TODAY star from the session row', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockResolvedValue(new Response(null, { status: 204 }))
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  const todayButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add to TODAY"]',
+  )
+  await act(async () => {
+    todayButton?.click()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => fetchMock.mock.calls[0]
+  expect(snapshot()).toEqual([
+    '/api/sessions/session-a/today',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"isToday":true}',
+    },
+  ])
+})
+
 it('ignores shortcuts from input fields and events with modifiers', () => {
   renderApp()
   publishSessions({

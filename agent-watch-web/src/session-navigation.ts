@@ -1,7 +1,13 @@
 import type { Session } from '#types'
 
 export type SessionShortcutAction =
-  { type: 'move'; key: 'j' | 'k' } | { type: 'view'; view: 'board' } | null
+  | { type: 'move'; key: 'j' | 'k' }
+  | { type: 'view'; view: 'board' }
+  | { type: 'later' }
+  | null
+
+export type LaterPreset =
+  'one_hour' | 'this_evening' | 'tomorrow' | 'next_week' | 'until_it_changes'
 
 export function getSessionShortcutAction(
   key: string,
@@ -11,11 +17,26 @@ export function getSessionShortcutAction(
     return { type: 'view', view: 'board' }
   }
 
+  if (key === 'L' || (shiftKey && key.toLowerCase() === 'l')) {
+    return { type: 'later' }
+  }
+
   if (!shiftKey && (key === 'j' || key === 'k')) {
     return { type: 'move', key }
   }
 
   return null
+}
+
+export function getLaterPresetShortcut(key: string): LaterPreset | null {
+  const presets: Record<string, LaterPreset> = {
+    '1': 'one_hour',
+    '2': 'this_evening',
+    '3': 'tomorrow',
+    '4': 'next_week',
+    '5': 'until_it_changes',
+  }
+  return presets[key] ?? null
 }
 
 export function moveSelection(

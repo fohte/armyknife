@@ -1,6 +1,10 @@
 import { expect, it } from 'vitest'
 
-import { getSessionShortcutAction, moveSelection } from '#session-navigation'
+import {
+  getLaterPresetShortcut,
+  getSessionShortcutAction,
+  moveSelection,
+} from '#session-navigation'
 import type { Session } from '#types'
 
 function session(id: string): Session {
@@ -45,6 +49,8 @@ it('maps shifted B to Board and unshifted j and k to row movement', () => {
     getSessionShortcutAction('B', true),
     getSessionShortcutAction('j', false),
     getSessionShortcutAction('k', false),
+    getSessionShortcutAction('L', false),
+    getSessionShortcutAction('L', true),
     getSessionShortcutAction('l', false),
   ]
 
@@ -52,6 +58,19 @@ it('maps shifted B to Board and unshifted j and k to row movement', () => {
     { type: 'view', view: 'board' },
     { type: 'move', key: 'j' },
     { type: 'move', key: 'k' },
+    { type: 'later' },
+    { type: 'later' },
+    null,
+  ])
+})
+
+it('maps menu number keys to the five Later presets', () => {
+  expect(['1', '2', '3', '4', '5', '6'].map(getLaterPresetShortcut)).toEqual([
+    'one_hour',
+    'this_evening',
+    'tomorrow',
+    'next_week',
+    'until_it_changes',
     null,
   ])
 })

@@ -25,6 +25,7 @@ use crate::shared::config::{self, AgentConfig};
 #[serde(rename_all = "snake_case")]
 enum SessionCategory {
     NeedsAction,
+    Later,
     InProgress,
     Done,
 }
@@ -71,6 +72,7 @@ struct SessionView {
     id: String,
     engine: Engine,
     category: SessionCategory,
+    category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
     preview: Option<String>,
@@ -81,6 +83,8 @@ struct SessionView {
     repo: String,
     parent: Option<ParentSessionView>,
     pull_request: Option<PullRequestView>,
+    later_until: Option<DateTime<Utc>>,
+    is_today: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -93,6 +97,7 @@ struct SessionsResponse {
 struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
+    web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     agent_config: AgentConfig,
@@ -166,6 +171,11 @@ async fn list_sessions<S: SessionSource>(
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
     let now = source.now();
+    let state_by_id = snapshot
+        .web_states
+        .into_iter()
+        .map(|state| (state.session_id.clone(), state))
+        .collect::<HashMap<_, _>>();
 
     let mut sessions = snapshot
         .sessions
@@ -200,17 +210,16 @@ async fn list_sessions<S: SessionSource>(
                     state: info.state.clone(),
                 });
 
+            let turn = turn_kinds.get(session.session_id.as_str()).copied();
+            let category_when_not_later = category_for(session, turn);
+            let state = state_by_id.get(&session.session_id);
+            let category = category_for_with_later(session, turn, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
-                category: category_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
-                kind: kind_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
+                category,
+                category_when_not_later,
+                kind: kind_for(session, turn),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
@@ -231,6 +240,8 @@ async fn list_sessions<S: SessionSource>(
                     .unwrap_or_default(),
                 parent,
                 pull_request,
+                later_until: state.and_then(|state| state.later_until),
+                is_today: state.is_some_and(|state| state.is_today),
             }
         })
         .collect::<Vec<_>>();
@@ -258,6 +269,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     Ok(SessionSnapshot {
         revision,
         sessions,
+        web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
         agent_config: config::load_config_or_default().agent,
@@ -290,6 +302,28 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
         SessionCategory::InProgress
     } else {
         SessionCategory::Done
+    }
+}
+
+fn category_for_with_later(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> SessionCategory {
+    let still_unchanged = state.is_some_and(|state| {
+        state
+            .activity_snapshot
+            .is_none_or(|snapshot| session.updated_at <= snapshot)
+    });
+    let later_is_active = still_unchanged
+        && state.is_some_and(|state| {
+            state.until_activity || state.later_until.is_some_and(|deadline| now < deadline)
+        });
+    if later_is_active {
+        SessionCategory::Later
+    } else {
+        category_for(session, turn)
     }
 }
 
@@ -422,6 +456,7 @@ mod tests {
             id: id.to_string(),
             engine: Engine::Claude,
             category,
+            category_when_not_later: category,
             kind: None,
             title: id.to_string(),
             preview: None,
@@ -438,6 +473,8 @@ mod tests {
             repo: String::new(),
             parent: None,
             pull_request: None,
+            later_until: None,
+            is_today: false,
         }
     }
 
@@ -459,6 +496,7 @@ mod tests {
             Ok(SessionSnapshot {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
+                web_states: Vec::new(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 agent_config: AgentConfig::default(),
@@ -560,6 +598,7 @@ mod tests {
                         "id": "child-session",
                         "engine": "claude",
                         "category": "needs_action",
+                        "categoryWhenNotLater": "needs_action",
                         "kind": "Stopped",
                         "title": "child title",
                         "preview": "last message",
@@ -580,7 +619,9 @@ mod tests {
                         "pullRequest": {
                             "number": 42,
                             "state": "Open"
-                        }
+                        },
+                        "laterUntil": null,
+                        "isToday": false
                     }]
                 }),
             ),
@@ -670,6 +711,47 @@ mod tests {
         #[case] expected: SessionCategory,
     ) {
         assert_eq!(category_for(&session(status), turn), expected);
+    }
+
+    #[test]
+    fn later_expires_at_its_deadline_or_after_session_activity() {
+        let now = Utc.timestamp_opt(10_000, 0).unwrap();
+        let mut session = session(SessionStatus::Stopped);
+        session.updated_at = now;
+        let timed_later = store::WatchWebSessionState {
+            session_id: session.session_id.clone(),
+            later_until: Some(now + chrono::Duration::hours(1)),
+            activity_snapshot: Some(now),
+            until_activity: false,
+            is_today: false,
+        };
+        let until_activity = store::WatchWebSessionState {
+            later_until: None,
+            until_activity: true,
+            ..timed_later.clone()
+        };
+        let mut changed_session = session.clone();
+        changed_session.updated_at += chrono::Duration::seconds(1);
+
+        assert_eq!(
+            (
+                category_for_with_later(&session, None, Some(&timed_later), now),
+                category_for_with_later(
+                    &session,
+                    None,
+                    Some(&timed_later),
+                    now + chrono::Duration::hours(1),
+                ),
+                category_for_with_later(&session, None, Some(&until_activity), now),
+                category_for_with_later(&changed_session, None, Some(&until_activity), now),
+            ),
+            (
+                SessionCategory::Later,
+                SessionCategory::NeedsAction,
+                SessionCategory::Later,
+                SessionCategory::NeedsAction,
+            ),
+        );
     }
 
     #[rstest]

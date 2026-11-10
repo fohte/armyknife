@@ -6,6 +6,7 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rusqlite_migration::{M, Migrations};
 
@@ -17,8 +18,9 @@ mod wake;
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-static MIGRATION_ENTRIES: [M<'static>; 1] = [M::up(
-    "CREATE TABLE sessions (
+static MIGRATION_ENTRIES: [M<'static>; 2] = [
+    M::up(
+        "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
             data TEXT NOT NULL,
             rev INTEGER NOT NULL
@@ -28,7 +30,17 @@ static MIGRATION_ENTRIES: [M<'static>; 1] = [M::up(
             value TEXT NOT NULL
         );
         INSERT INTO session_store_meta (key, value) VALUES ('revision', '0');",
-)];
+    ),
+    M::up(
+        "CREATE TABLE watch_web_session_state (
+        session_id TEXT PRIMARY KEY,
+        later_until TEXT,
+        activity_snapshot TEXT,
+        until_activity INTEGER NOT NULL DEFAULT 0,
+        is_today INTEGER NOT NULL DEFAULT 0
+    );",
+    ),
+];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::from_slice(&MIGRATION_ENTRIES));
@@ -38,6 +50,15 @@ pub(crate) struct SessionStoreChanges {
     pub(crate) changed_sessions: Vec<Session>,
     pub(crate) existing_session_ids: HashSet<String>,
     pub(crate) revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WatchWebSessionState {
+    pub(crate) session_id: String,
+    pub(crate) later_until: Option<DateTime<Utc>>,
+    pub(crate) activity_snapshot: Option<DateTime<Utc>>,
+    pub(crate) until_activity: bool,
+    pub(crate) is_today: bool,
 }
 
 /// Holds the database write transaction across a session read-modify-write.
@@ -246,6 +267,88 @@ pub(crate) fn all_sessions(sessions_dir: &Path) -> Result<Vec<Session>> {
     Ok(sessions)
 }
 
+pub(crate) fn watch_web_session_states(sessions_dir: &Path) -> Result<Vec<WatchWebSessionState>> {
+    if !sessions_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let connection = open_connection(sessions_dir)?;
+    let mut statement = connection.prepare(
+        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today
+         FROM watch_web_session_state",
+    )?;
+    let rows = statement.query_map([], |row| {
+        let later_until: Option<String> = row.get(1)?;
+        let activity_snapshot: Option<String> = row.get(2)?;
+        Ok((
+            row.get::<_, String>(0)?,
+            later_until,
+            activity_snapshot,
+            row.get::<_, bool>(3)?,
+            row.get::<_, bool>(4)?,
+        ))
+    })?;
+    rows.map(|row| {
+        let (session_id, later_until, activity_snapshot, until_activity, is_today) = row?;
+        Ok(WatchWebSessionState {
+            session_id,
+            later_until: later_until
+                .map(|value| {
+                    DateTime::parse_from_rfc3339(&value).map(|value| value.with_timezone(&Utc))
+                })
+                .transpose()?,
+            activity_snapshot: activity_snapshot
+                .map(|value| {
+                    DateTime::parse_from_rfc3339(&value).map(|value| value.with_timezone(&Utc))
+                })
+                .transpose()?,
+            until_activity,
+            is_today,
+        })
+    })
+    .collect()
+}
+
+pub(crate) fn set_watch_web_later(
+    sessions_dir: &Path,
+    session_id: &str,
+    later_until: Option<DateTime<Utc>>,
+    activity_snapshot: DateTime<Utc>,
+    until_activity: bool,
+) -> Result<()> {
+    let connection = open_connection(sessions_dir)?;
+    connection.execute(
+        "INSERT INTO watch_web_session_state
+            (session_id, later_until, activity_snapshot, until_activity)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(session_id) DO UPDATE SET
+            later_until = excluded.later_until,
+            activity_snapshot = excluded.activity_snapshot,
+            until_activity = excluded.until_activity",
+        params![
+            session_id,
+            later_until.map(|value| value.to_rfc3339()),
+            activity_snapshot.to_rfc3339(),
+            until_activity,
+        ],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn set_watch_web_today(
+    sessions_dir: &Path,
+    session_id: &str,
+    is_today: bool,
+) -> Result<()> {
+    let connection = open_connection(sessions_dir)?;
+    connection.execute(
+        "INSERT INTO watch_web_session_state (session_id, is_today)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET is_today = excluded.is_today",
+        params![session_id, is_today],
+    )?;
+    Ok(())
+}
+
 pub(crate) fn session_store_revision(sessions_dir: &Path) -> Result<i64> {
     let connection = open_connection(sessions_dir)?;
     read_revision(&connection)
@@ -388,6 +491,10 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
     let changed = connection.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
     if changed > 0 {
+        connection.execute(
+            "DELETE FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+        )?;
         increment_revision(connection)?;
     }
     Ok(changed > 0)
@@ -402,4 +509,58 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
         return Err(CcError::InvalidSessionId(session_id.to_string()).into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn adds_watch_web_state_without_changing_existing_session_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("sessions.db");
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    session_id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    rev INTEGER NOT NULL
+                );
+                CREATE TABLE session_store_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT INTO session_store_meta (key, value) VALUES ('revision', '7');
+                INSERT INTO sessions (session_id, data, rev)
+                    VALUES ('legacy-session', 'preserved-data', 7);
+                PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let connection = open_connection(temp.path()).unwrap();
+        let preserved: (String, i64, i64) = connection
+            .query_row(
+                "SELECT data, rev, (SELECT CAST(value AS INTEGER)
+                 FROM session_store_meta WHERE key = 'revision')
+                 FROM sessions WHERE session_id = 'legacy-session'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let state_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'watch_web_session_state')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            (preserved, state_table_exists),
+            (("preserved-data".to_string(), 7, 7), true),
+        );
+    }
 }
