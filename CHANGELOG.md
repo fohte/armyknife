@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.542](https://github.com/fohte/armyknife/compare/v0.1.541...v0.1.542) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** save named Inbox views ([#1437](https://github.com/fohte/armyknife/issues/1437)) ([f4c7a4b](https://github.com/fohte/armyknife/commit/f4c7a4b71fa6ebb1f1de2bfc99acc7909e526cd6))
+
 ## [0.1.541](https://github.com/fohte/armyknife/compare/v0.1.540...v0.1.541) (2026-11-10)
 
 
