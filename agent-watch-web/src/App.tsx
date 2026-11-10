@@ -463,6 +463,7 @@ export function App() {
               firstMinSize={200}
               secondMinSize={300}
               label="Resize session list and conversation"
+              fillFirstPaneWhenAlone={false}
             />
           )
         ) : (

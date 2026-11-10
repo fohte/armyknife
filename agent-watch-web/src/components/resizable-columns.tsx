@@ -1,5 +1,6 @@
 import '#components/resizable-columns.css'
 
+import { Result } from 'neverthrow'
 import {
   type KeyboardEvent,
   type PointerEvent,
@@ -9,6 +10,8 @@ import {
   useState,
 } from 'react'
 
+const separatorSize = 8
+
 type ResizableColumnsProps = {
   first: ReactNode
   second: ReactNode
@@ -17,12 +20,40 @@ type ResizableColumnsProps = {
   firstMinSize: number
   secondMinSize: number
   label: string
+  fillFirstPaneWhenAlone?: boolean
 }
 
 function readStoredSize(storageKey: string | null, fallback: number) {
   if (storageKey === null) return fallback
-  const storedSize = Number(window.localStorage.getItem(storageKey))
+  const storedValue = Result.fromThrowable(
+    () => window.localStorage.getItem(storageKey),
+    () => null,
+  )()
+  if (storedValue.isErr() || storedValue.value === null) return fallback
+  const storedSize = Number(storedValue.value)
   return Number.isFinite(storedSize) && storedSize > 0 ? storedSize : fallback
+}
+
+function saveStoredSize(storageKey: string | null, size: number) {
+  if (storageKey === null) return
+  Result.fromThrowable(
+    () => {
+      window.localStorage.setItem(storageKey, String(Math.round(size)))
+    },
+    () => undefined,
+  )().match(
+    () => undefined,
+    () => undefined,
+  )
+}
+
+function getMaximumFirstSize(
+  containerWidth: number,
+  firstMinSize: number,
+  secondMinSize: number,
+) {
+  if (containerWidth === 0) return undefined
+  return Math.max(firstMinSize, containerWidth - secondMinSize - separatorSize)
 }
 
 export function ResizableColumns({
@@ -33,14 +64,18 @@ export function ResizableColumns({
   firstMinSize,
   secondMinSize,
   label,
+  fillFirstPaneWhenAlone = true,
 }: ResizableColumnsProps) {
+  const hasSecond = second !== null
   const containerRef = useRef<HTMLDivElement>(null)
+  const secondPaneRef = useRef<HTMLDivElement>(null)
   const dragStartRef = useRef<{
     pointerId: number
     x: number
     size: number
   } | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
+  const [secondPaneVisible, setSecondPaneVisible] = useState(hasSecond)
   const [firstSize, setFirstSize] = useState(() =>
     readStoredSize(storageKey, initialFirstSize),
   )
@@ -52,12 +87,23 @@ export function ResizableColumns({
     const fitToContainer = () => {
       const containerWidth = container.getBoundingClientRect().width
       if (containerWidth === 0) return
+      const secondPaneVisible =
+        hasSecond &&
+        secondPaneRef.current !== null &&
+        window.getComputedStyle(secondPaneRef.current).display !== 'none'
+      setSecondPaneVisible(secondPaneVisible)
       setContainerWidth(containerWidth)
-      const maxSize = Math.max(firstMinSize, containerWidth - secondMinSize - 8)
+      const maxSize = secondPaneVisible
+        ? getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize)
+        : undefined
       setFirstSize((currentSize) => {
-        const nextSize = Math.min(maxSize, Math.max(firstMinSize, currentSize))
-        if (nextSize !== currentSize && storageKey !== null) {
-          window.localStorage.setItem(storageKey, String(Math.round(nextSize)))
+        const minClampedSize = Math.max(firstMinSize, currentSize)
+        const nextSize =
+          maxSize === undefined
+            ? minClampedSize
+            : Math.min(maxSize, minClampedSize)
+        if (nextSize !== currentSize) {
+          saveStoredSize(storageKey, nextSize)
         }
         return nextSize
       })
@@ -65,34 +111,34 @@ export function ResizableColumns({
 
     const observer = new ResizeObserver(fitToContainer)
     observer.observe(container)
+    if (secondPaneRef.current !== null) {
+      observer.observe(secondPaneRef.current)
+    }
     fitToContainer()
     return () => {
       observer.disconnect()
     }
-  }, [firstMinSize, secondMinSize, storageKey])
+  }, [firstMinSize, hasSecond, secondMinSize, storageKey])
 
   const clampSize = (size: number) => {
     const containerWidth =
       containerRef.current?.getBoundingClientRect().width ?? 0
-    const maxSize =
-      containerWidth > 0
-        ? Math.max(firstMinSize, containerWidth - secondMinSize - 8)
-        : Number.POSITIVE_INFINITY
+    const maxSize = secondPaneVisible
+      ? (getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize) ??
+        Number.POSITIVE_INFINITY)
+      : Number.POSITIVE_INFINITY
     return Math.min(maxSize, Math.max(firstMinSize, size))
   }
 
   const updateSize = (size: number) => {
     const nextSize = clampSize(size)
     setFirstSize(nextSize)
-    if (storageKey !== null) {
-      window.localStorage.setItem(storageKey, String(Math.round(nextSize)))
-    }
+    saveStoredSize(storageKey, nextSize)
   }
 
-  const maxSize =
-    containerWidth === 0
-      ? undefined
-      : Math.max(firstMinSize, containerWidth - secondMinSize - 8)
+  const maxSize = secondPaneVisible
+    ? getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize)
+    : undefined
 
   const onSeparatorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 40 : 10
@@ -137,12 +183,12 @@ export function ResizableColumns({
   return (
     <div className="resizable-columns" ref={containerRef}>
       <div
-        className="resizable-columns-pane resizable-columns-first-pane"
+        className={`resizable-columns-pane resizable-columns-first-pane${!hasSecond && fillFirstPaneWhenAlone ? ' is-alone' : ''}`}
         style={{ flexBasis: `${String(firstSize)}px` }}
       >
         {first}
       </div>
-      {second === null ? null : (
+      {!hasSecond ? null : (
         <>
           <div
             aria-label={label}
@@ -161,7 +207,10 @@ export function ResizableColumns({
             role="separator"
             tabIndex={0}
           />
-          <div className="resizable-columns-pane resizable-columns-second-pane">
+          <div
+            className="resizable-columns-pane resizable-columns-second-pane"
+            ref={secondPaneRef}
+          >
             {second}
           </div>
         </>

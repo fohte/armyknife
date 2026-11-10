@@ -7,8 +7,12 @@ import { ResizableColumns } from '#components/resizable-columns'
 let container: HTMLDivElement
 let root: Root | null = null
 
-function renderColumns(storageKey: string | null = 'test:columns') {
+function renderColumns(
+  storageKey: string | null = 'test:columns',
+  containerWidth = 900,
+) {
   root = createRoot(container)
+  container.style.width = `${String(containerWidth)}px`
   act(() => {
     root?.render(
       <ResizableColumns
@@ -109,5 +113,62 @@ it('stores the width after pointer dragging', () => {
     width: '450px',
     value: '450',
     saved: '450',
+  })
+})
+
+it('clamps a restored width to keep the second pane visible', () => {
+  window.localStorage.setItem('test:columns', '600')
+  renderColumns('test:columns', 800)
+
+  const separator =
+    container.querySelector<HTMLDivElement>('[role="separator"]')
+  const snapshot = () => ({
+    width: container.querySelector<HTMLDivElement>(
+      '.resizable-columns-first-pane',
+    )?.style.flexBasis,
+    value: separator?.getAttribute('aria-valuenow'),
+    maximum: separator?.getAttribute('aria-valuemax'),
+    saved: window.localStorage.getItem('test:columns'),
+  })
+
+  expect(snapshot()).toEqual({
+    width: '472px',
+    value: '472',
+    maximum: '472',
+    saved: '472',
+  })
+})
+
+it('keeps resizing when browser storage is unavailable', () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new DOMException('Storage is unavailable')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new DOMException('Storage is unavailable')
+  })
+  renderColumns()
+
+  const separator =
+    container.querySelector<HTMLDivElement>('[role="separator"]')
+  act(() => {
+    separator?.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const snapshot = () => ({
+    width: container.querySelector<HTMLDivElement>(
+      '.resizable-columns-first-pane',
+    )?.style.flexBasis,
+    value: separator?.getAttribute('aria-valuenow'),
+  })
+
+  expect(snapshot()).toEqual({
+    width: '410px',
+    value: '410',
   })
 })

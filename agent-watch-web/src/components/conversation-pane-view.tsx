@@ -484,12 +484,12 @@ export function ConversationPaneView({
   const closeCrit = () => {
     setOpenCritUrl(null)
   }
-  if (!critOpen || isMobile) return conversationPane
+  if (isMobile) return conversationPane
 
   return (
     <ResizableColumns
       first={conversationPane}
-      second={<CritPane url={critUrl} onClose={closeCrit} />}
+      second={critOpen ? <CritPane url={critUrl} onClose={closeCrit} /> : null}
       storageKey="agent-watch:conversation-width"
       firstSize={560}
       firstMinSize={240}
