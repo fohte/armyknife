@@ -23,6 +23,10 @@
   border-right: 0;
 }
 
+.story-mobile-layout .story-session-list {
+  width: 100%;
+}
+
 .agent-watch-shell[data-layout='mobile'][data-mobile-screen='conversation']
   .inbox-view {
   display: none;

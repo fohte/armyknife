@@ -188,3 +188,43 @@ export const InboxFitsAnIPhone: Story = {
     ),
   ],
 }
+
+export const IPhoneInboxShowsExpandedProgress: Story = {
+  name: 'The iPhone inbox shows expanded active sessions',
+  args: {
+    isMobile: true,
+    laterExpanded: false,
+    inProgressExpanded: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxShowsCompletedSessions: Story = {
+  name: 'The iPhone inbox shows expanded completed sessions',
+  args: {
+    isMobile: true,
+    laterExpanded: false,
+    doneExpanded: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}

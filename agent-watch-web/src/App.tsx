@@ -84,6 +84,10 @@ export function App() {
       }),
     [elapsedOffsetSeconds, sessions],
   )
+  const todaySessions = useMemo(
+    () => sessionsWithElapsedTime.filter((session) => session.isToday === true),
+    [sessionsWithElapsedTime],
+  )
   const orderedSessions = useMemo(
     () => [
       ...sessionsWithElapsedTime.filter(
@@ -385,6 +389,16 @@ export function App() {
     setSelectedId(sessionId)
     setMobileConversationOpen(true)
   }
+  const openTodaySession = (sessionId: string) => {
+    if (
+      sessionsWithElapsedTime.some(
+        (session) => session.id === sessionId && session.category === 'later',
+      )
+    ) {
+      setLaterExpanded(true)
+    }
+    openConversation(sessionId)
+  }
 
   return (
     <div
@@ -396,15 +410,12 @@ export function App() {
         <AgentWatchNav
           activeView={view}
           needsActionCount={needsActionCount}
-          todaySessions={sessionsWithElapsedTime.filter(
-            (session) => session.isToday === true,
-          )}
+          todaySessions={todaySessions}
           pmProjects={pmProjects}
           onViewChange={setView}
           onSelectToday={(id) => {
             setView('inbox')
-            setSelectedId(id)
-            setMobileConversationOpen(true)
+            openTodaySession(id)
           }}
           onSelectSession={openSessionInInbox}
         />
@@ -428,10 +439,8 @@ export function App() {
               }}
               onLater={openLater}
               onToggleToday={toggleToday}
-              todaySessions={sessionsWithElapsedTime.filter(
-                (session) => session.isToday === true,
-              )}
-              onSelectToday={openConversation}
+              todaySessions={todaySessions}
+              onSelectToday={openTodaySession}
               isMobile={isMobile}
               inProgressExpanded={inProgressExpanded}
               onToggleInProgress={() => {

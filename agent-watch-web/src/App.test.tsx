@@ -479,10 +479,16 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     ],
   })
   act(() => {
-    setMobileViewport(true)
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
   })
   act(() => {
-    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    container
+      .querySelector<HTMLButtonElement>('.conversation-crit-toggle')
+      ?.click()
+  })
+  const desktopIframeCount = container.querySelectorAll('iframe').length
+  act(() => {
+    setMobileViewport(true)
   })
 
   const snapshot = () => ({
@@ -490,11 +496,85 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     iframeCount: container.querySelectorAll('iframe').length,
     critButtonCount: container.querySelectorAll('.conversation-crit-toggle')
       .length,
+    desktopIframeCount,
   })
   expect(snapshot()).toEqual({
     guidance: 'Open this session on your desktop to review it in crit.',
     iframeCount: 0,
     critButtonCount: 0,
+    desktopIframeCount: 1,
+  })
+})
+
+it('opens a Later session from its mobile TODAY chip', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-today-later', 'Wait for the build', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        isToday: true,
+      },
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.mobile-today-chip')?.click()
+  })
+
+  const snapshot = () => ({
+    mobileScreen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    title: container.querySelector('.conversation-pane h1')?.textContent,
+    laterExpanded: container
+      .querySelector('.later-collapsed-row')
+      ?.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    mobileScreen: 'conversation',
+    title: 'Wait for the build',
+    laterExpanded: 'true',
+  })
+})
+
+it('opens Later for the session shown in a mobile conversation', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-mobile', 'Reply to the question')],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    menuTitle: container.querySelector('.later-menu-title')?.textContent,
+    menuLabel: container
+      .querySelector('.later-menu')
+      ?.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    menuTitle: 'Later: Reply to the question',
+    menuLabel: 'Later: Reply to the question',
   })
 })
 
