@@ -423,6 +423,12 @@
   color: #18181b;
 }
 
+.permission-action-status {
+  margin-top: 10px !important;
+  color: var(--muted-foreground-strong);
+  font-size: 12px !important;
+}
+
 .conversation-error {
   width: min(712px, calc(100% - 32px));
   margin: 0 auto 8px;
