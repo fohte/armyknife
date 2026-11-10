@@ -1,9 +1,19 @@
 import '#components/later-today.css'
+import '#components/inbox-filter.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
+import { Filter } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
 
+import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { SessionRow } from '#components/session-row'
+import {
+  filterInboxSessions,
+  INBOX_FILTER_FIELDS,
+  type InboxFilterKey,
+  parseInboxFilterQuery,
+} from '#inbox-filter'
 import type { Session } from '#types'
 
 type InboxViewProps = {
@@ -25,6 +35,10 @@ type InboxViewProps = {
   onToggleInProgress: () => void
   doneExpanded: boolean
   onToggleDone: () => void
+  filterQuery?: string
+  onFilterQueryChange?: (query: string) => void
+  filterDialogOpen?: boolean
+  onFilterDialogOpenChange?: (open: boolean) => void
 }
 
 function renderSessionSection({
@@ -92,15 +106,89 @@ export function InboxView({
   onToggleInProgress,
   doneExpanded,
   onToggleDone,
+  filterQuery: controlledFilterQuery,
+  onFilterQueryChange,
+  filterDialogOpen: controlledFilterDialogOpen,
+  onFilterDialogOpenChange,
 }: InboxViewProps) {
-  const needsAction = sessions.filter(
+  const [localFilterQuery, setLocalFilterQuery] = useState('')
+  const [localDialogOpen, setLocalDialogOpen] = useState(false)
+  const [draftQuery, setDraftQuery] = useState(controlledFilterQuery ?? '')
+  const filterQuery = controlledFilterQuery ?? localFilterQuery
+  const filterDialogOpen = controlledFilterDialogOpen ?? localDialogOpen
+  const filters = parseInboxFilterQuery(filterQuery)
+  const filteredSessions = filterInboxSessions(sessions, filters)
+  const allNeedsActionCount = sessions.filter(
+    (session) => session.category === 'needs_action',
+  ).length
+  const needsAction = filteredSessions.filter(
     (session) => session.category === 'needs_action',
   )
-  const inProgress = sessions.filter(
+  const inProgress = filteredSessions.filter(
     (session) => session.category === 'in_progress',
   )
-  const done = sessions.filter((session) => session.category === 'done')
-  const later = sessions.filter((session) => session.category === 'later')
+  const done = filteredSessions.filter((session) => session.category === 'done')
+  const later = filteredSessions.filter(
+    (session) => session.category === 'later',
+  )
+  const setFilterQuery = useCallback(
+    (query: string) => {
+      if (onFilterQueryChange !== undefined) {
+        onFilterQueryChange(query)
+      } else {
+        setLocalFilterQuery(query)
+      }
+    },
+    [onFilterQueryChange],
+  )
+  const setFilterDialogOpen = useCallback(
+    (open: boolean) => {
+      if (onFilterDialogOpenChange !== undefined) {
+        onFilterDialogOpenChange(open)
+      } else {
+        setLocalDialogOpen(open)
+      }
+    },
+    [onFilterDialogOpenChange],
+  )
+  const openFilterDialog = useCallback(() => {
+    setDraftQuery(filterQuery)
+    setFilterDialogOpen(true)
+  }, [filterQuery, setFilterDialogOpen])
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== '/' || event.defaultPrevented) return
+      const target = event.target
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target instanceof HTMLInputElement ||
+          target instanceof HTMLTextAreaElement ||
+          target instanceof HTMLSelectElement)
+      ) {
+        return
+      }
+      if (!filterDialogOpen) {
+        event.preventDefault()
+        openFilterDialog()
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [filterDialogOpen, openFilterDialog])
+
+  const removeFilter = (key: InboxFilterKey) => {
+    setFilterQuery(
+      filters
+        .filter((filter) => filter.key !== key)
+        .map((filter) => `${filter.key}:${filter.values.join(',')}`)
+        .join(' '),
+    )
+  }
   const visibleInProgress = isMobile
     ? inProgressExpanded
       ? inProgress
@@ -120,9 +208,73 @@ export function InboxView({
         <h1 id="inbox-title">Inbox</h1>
         <span className="sort-description">Sorted by tq priority</span>
       </header>
+      <div className="inbox-filter-bar">
+        {filters.length === 0 ? (
+          <Button
+            type="button"
+            variant="plain"
+            className="inbox-filter-open cursor-pointer"
+            onClick={openFilterDialog}
+          >
+            <Filter aria-hidden="true" size={14} />
+            <span>Filter by project, kind, tq task, repo</span>
+            <kbd>/</kbd>
+          </Button>
+        ) : (
+          <>
+            <div
+              aria-label="Active inbox filters"
+              className="inbox-filter-chips"
+            >
+              {filters.map((filter) => {
+                const field = INBOX_FILTER_FIELDS.find(
+                  (candidate) => candidate.key === filter.key,
+                )
+                const label = field?.label ?? filter.key
+                const values = filter.values
+                  .map((value) =>
+                    filter.key === 'task' && !value.startsWith('#')
+                      ? `#${value}`
+                      : value,
+                  )
+                  .join(', ')
+                return (
+                  <span key={filter.key} className="inbox-filter-chip">
+                    <span>
+                      {label} {values}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="plain"
+                      aria-label={`Remove ${label} filter`}
+                      className="inbox-filter-chip-remove"
+                      onClick={() => {
+                        removeFilter(filter.key)
+                      }}
+                    >
+                      ×
+                    </Button>
+                  </span>
+                )
+              })}
+            </div>
+            <Button
+              type="button"
+              variant="plain"
+              className="inbox-filter-add cursor-pointer"
+              onClick={openFilterDialog}
+            >
+              + Filter
+            </Button>
+            <span className="inbox-filter-result-count">
+              {needsAction.length} of {allNeedsActionCount}
+            </span>
+          </>
+        )}
+      </div>
       <div className="mobile-today-strip" aria-label="TODAY sessions">
         <span className="mobile-today-label">TODAY</span>
-        {todaySessions.map((session) => (
+        {filterInboxSessions(todaySessions, filters).map((session) => (
           <Button
             key={session.id}
             type="button"
@@ -157,6 +309,9 @@ export function InboxView({
         ) : null}
         {loaded && sessions.length === 0 ? (
           <p className="load-message">No sessions to show.</p>
+        ) : null}
+        {loaded && sessions.length > 0 && filteredSessions.length === 0 ? (
+          <p className="load-message">No sessions match these filters.</p>
         ) : null}
         {renderSessionSection({
           title: 'Needs action',
@@ -275,6 +430,20 @@ export function InboxView({
           <kbd>⇧B</kbd> Board
         </span>
       </footer>
+      {filterDialogOpen ? (
+        <InboxFilterDialog
+          sessions={sessions}
+          query={draftQuery}
+          onQueryChange={setDraftQuery}
+          onApply={() => {
+            setFilterQuery(draftQuery)
+            setFilterDialogOpen(false)
+          }}
+          onClose={() => {
+            setFilterDialogOpen(false)
+          }}
+        />
+      ) : null}
     </section>
   )
 }

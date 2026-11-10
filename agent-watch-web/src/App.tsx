@@ -5,6 +5,7 @@ import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
+import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
@@ -41,6 +42,7 @@ export function App() {
     navigate,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
+  const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
@@ -94,12 +96,20 @@ export function App() {
     ],
     [sessionsWithElapsedTime],
   )
+  const filteredOrderedSessions = useMemo(
+    () =>
+      filterInboxSessions(
+        orderedSessions,
+        parseInboxFilterQuery(inboxFilterQuery),
+      ),
+    [inboxFilterQuery, orderedSessions],
+  )
   const navigableSessions = useMemo(
     () =>
-      orderedSessions.filter(
+      filteredOrderedSessions.filter(
         (session) => laterExpanded || session.category !== 'later',
       ),
-    [laterExpanded, orderedSessions],
+    [filteredOrderedSessions, laterExpanded],
   )
   const {
     openConversation,
@@ -304,7 +314,7 @@ export function App() {
     navigate,
   })
 
-  const needsActionCount = sessionsWithElapsedTime.filter(
+  const needsActionCount = filteredOrderedSessions.filter(
     (session) => session.category === 'needs_action',
   ).length
   const laterSession = sessionsWithElapsedTime.find(
@@ -344,6 +354,8 @@ export function App() {
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,
+    filterQuery: inboxFilterQuery,
+    onFilterQueryChange: setInboxFilterQuery,
     showAllInProgress,
     onShowMore: () => {
       setShowAllInProgress(true)

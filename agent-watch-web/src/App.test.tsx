@@ -1268,6 +1268,56 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
   })
 })
 
+it('limits keyboard navigation to sessions matching the Inbox filters', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value',
+    )?.set
+    if (input !== null && valueSetter !== undefined) {
+      Reflect.apply(valueSetter, input, ['project:worker'])
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      container
+        .querySelector('form.inbox-filter-search-row')
+        ?.dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true }),
+        )
+    }
+  })
+
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  expect(readSelectedTitle()).toEqual('Worker project session')
+})
+
 it('opens Later with L and selects a preset with its number key', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
