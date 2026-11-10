@@ -284,15 +284,13 @@ it('selects the parent session from its link', () => {
 })
 
 it('opens and closes a crit review beside a waiting conversation', () => {
-  renderView(
-    vi.fn(() => Promise.resolve(true)),
-    {
-      ...session,
-      category: 'needs_action',
-      kind: 'Review',
-      critUrl: 'http://127.0.0.1:5000/review/sample',
-    },
-  )
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, {
+    ...session,
+    category: 'needs_action',
+    kind: 'Review',
+    critUrl: 'http://127.0.0.1:5000/review/sample',
+  })
 
   act(() => {
     requireElement(
@@ -311,6 +309,24 @@ it('opens and closes a crit review beside a waiting conversation', () => {
     ).getAttribute('aria-label'),
   }
 
+  renderView(onAction, {
+    ...session,
+    category: 'needs_action',
+    kind: 'Review',
+    critUrl: 'http://127.0.0.1:5001/review/sample',
+  })
+  const changedUrlState = {
+    expanded: requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
+    ).getAttribute('aria-expanded'),
+    pane: container.querySelector('.crit-pane'),
+  }
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
+    ).click()
+  })
+
   act(() => {
     requireElement(
       container.querySelector<HTMLButtonElement>('.crit-pane button'),
@@ -323,12 +339,16 @@ it('opens and closes a crit review beside a waiting conversation', () => {
     pane: container.querySelector('.crit-pane'),
   }
 
-  const snapshot = () => ({ openState, closedState })
+  const snapshot = () => ({ openState, changedUrlState, closedState })
   expect(snapshot()).toEqual({
     openState: {
       expanded: 'true',
       frameSource: 'http://127.0.0.1:5000/review/sample',
       closeLabel: 'Close crit',
+    },
+    changedUrlState: {
+      expanded: 'false',
+      pane: null,
     },
     closedState: {
       expanded: 'false',
@@ -338,8 +358,16 @@ it('opens and closes a crit review beside a waiting conversation', () => {
 })
 
 it('does not offer crit for sessions without a waiting crit URL', () => {
-  renderView(vi.fn(() => Promise.resolve(true)))
-  const noUrl = container.querySelector('.conversation-crit-toggle')
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      category: 'needs_action',
+      kind: 'Review',
+      critUrl: null,
+    },
+  )
+  const missingUrl = container.querySelector('.conversation-crit-toggle')
 
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -352,9 +380,9 @@ it('does not offer crit for sessions without a waiting crit URL', () => {
   )
   const notWaiting = container.querySelector('.conversation-crit-toggle')
 
-  const snapshot = () => ({ noUrl, notWaiting })
+  const snapshot = () => ({ missingUrl, notWaiting })
   expect(snapshot()).toEqual({
-    noUrl: null,
+    missingUrl: null,
     notWaiting: null,
   })
 })

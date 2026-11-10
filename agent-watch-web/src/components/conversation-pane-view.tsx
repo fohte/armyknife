@@ -32,7 +32,7 @@ export function ConversationPaneView({
 }: ConversationPaneViewProps) {
   const [draft, setDraft] = useState('')
   const [sendPending, setSendPending] = useState(false)
-  const [critOpen, setCritOpen] = useState(false)
+  const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
@@ -47,6 +47,7 @@ export function ConversationPaneView({
       ? session.critUrl
       : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
+  const critOpen = hasCritUrl && openCritUrl === critUrl
 
   const sendMessage = () => {
     if (
@@ -219,7 +220,7 @@ export function ConversationPaneView({
               variant="plain"
               aria-expanded={critOpen}
               onClick={() => {
-                setCritOpen((open) => !open)
+                setOpenCritUrl(critOpen ? null : critUrl)
               }}
             >
               {critOpen ? 'Hide crit' : 'Open crit'}
@@ -415,11 +416,11 @@ export function ConversationPaneView({
   return (
     <>
       {conversationPane}
-      {critOpen && hasCritUrl ? (
+      {critOpen ? (
         <CritPane
           url={critUrl}
           onClose={() => {
-            setCritOpen(false)
+            setOpenCritUrl(null)
           }}
         />
       ) : null}

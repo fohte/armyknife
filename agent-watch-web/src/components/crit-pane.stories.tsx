@@ -20,6 +20,6 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const TheCritReviewIsOpenBesideTheConversation: Story = {
-  name: 'The crit review is open beside the conversation',
+export const TheCritReviewPaneIsOpen: Story = {
+  name: 'The crit review pane is open',
 }
