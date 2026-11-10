@@ -1722,7 +1722,7 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
-it('shows the operation error returned by the server', async () => {
+it('shows operation errors for approval and rejection', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1751,6 +1751,9 @@ it('shows the operation error returned by the server', async () => {
     .mockResolvedValueOnce(
       jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
     )
+    .mockResolvedValueOnce(
+      jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
+    )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -1770,34 +1773,40 @@ it('shows the operation error returned by the server', async () => {
     await Promise.resolve()
     await Promise.resolve()
   })
+  const permissionButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>('.permission-actions button')
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.permission-actions button'),
-    ).click()
+    requireElement(permissionButtons().item(0)).click()
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    requireElement(permissionButtons().item(1)).click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
-  const actionRequest = fetcher.mock.calls[2]?.[0]
-  const actionRequestUrl =
-    typeof actionRequest === 'string'
-      ? actionRequest
-      : actionRequest instanceof URL
-        ? actionRequest.href
-        : actionRequest?.url
+  const actionRequestUrls = fetcher.mock.calls
+    .slice(2)
+    .map(([request]) =>
+      typeof request === 'string'
+        ? request
+        : request instanceof URL
+          ? request.href
+          : request.url,
+    )
   const actual = JSON.stringify([
     container.querySelector('[role="alert"]')?.textContent,
-    actionRequestUrl,
+    actionRequestUrls,
   ])
   const expected = JSON.stringify([
     'session pane is idle or unavailable',
-    '/api/sessions/sample-session/permission/approve',
+    [
+      '/api/sessions/sample-session/permission/approve',
+      '/api/sessions/sample-session/permission/reject',
+    ],
   ])
   expect(actual).toBe(expected)
 })
