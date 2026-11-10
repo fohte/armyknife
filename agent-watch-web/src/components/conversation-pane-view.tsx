@@ -5,6 +5,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
+import { QuestionCard } from '#components/question-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
@@ -358,73 +359,30 @@ export function ConversationPaneView({
               />
             )
           if (message.type === 'question') {
-            const selectedChoice = message.choices.includes(
-              message.answer ?? '',
-            )
-              ? message.answer
-              : null
             const canAnswer =
               index === activeQuestionIndex &&
               message.answer === null &&
               actionsReady &&
               actions?.answerQuestion === true
             return (
-              <article
-                className="chat-question-card"
+              <QuestionCard
                 key={`question-${String(index)}`}
-              >
-                <h2>Question</h2>
-                <MarkdownMessage className="chat-question-text">
-                  {message.question}
-                </MarkdownMessage>
-                {session.engine === 'Codex' &&
-                actions !== null &&
-                !actions.answerQuestion
-                  ? renderTerminalFallback('Answer in terminal to continue.')
-                  : null}
-                <div className="chat-question-choices">
-                  {message.choices.map((choice, choiceIndex) => (
-                    <Button
-                      type="button"
-                      variant="plain"
-                      className={
-                        selectedChoice === choice
-                          ? 'is-selected'
-                          : message.answer !== null
-                            ? 'is-unselected'
-                            : undefined
-                      }
-                      aria-pressed={selectedChoice === choice}
-                      key={`${String(choiceIndex)}-${choice}`}
-                      disabled={!canAnswer}
-                      onClick={() => {
-                        void onAction('answer', { choice: choiceIndex + 1 })
-                      }}
-                    >
-                      {!isMobile ? <kbd>{choiceIndex + 1}</kbd> : null}
-                      <MarkdownMessage
-                        className="chat-question-choice-text"
-                        inline
-                      >
-                        {choice}
-                      </MarkdownMessage>
-                      {selectedChoice === choice ? (
-                        <span
-                          className="chat-question-choice-check"
-                          aria-hidden="true"
-                        >
-                          ✓
-                        </span>
-                      ) : null}
-                    </Button>
-                  ))}
-                </div>
-                {message.answer !== null && selectedChoice === null ? (
-                  <p className="chat-question-answer">
-                    Answer: {message.answer}
-                  </p>
-                ) : null}
-              </article>
+                question={message.question}
+                choices={message.choices}
+                answer={message.answer}
+                canAnswer={canAnswer}
+                isMobile={isMobile}
+                showTerminalFallback={
+                  session.engine === 'Codex' &&
+                  actions !== null &&
+                  !actions.answerQuestion
+                }
+                canOpenInTerminal={actions?.openInTerminal === true}
+                onAnswer={(choice) => {
+                  void onAction('answer', { choice })
+                }}
+                onOpenInTerminal={openInTerminal}
+              />
             )
           }
           return (

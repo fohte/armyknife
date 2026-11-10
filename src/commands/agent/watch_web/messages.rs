@@ -15,7 +15,8 @@ use axum::routing::get;
 use serde::Serialize;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::types::{Engine, Session};
+use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
+use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod parser;
 
@@ -70,8 +71,11 @@ fn load_messages_with(
         return Ok(None);
     };
     let parent = parent_session(&session, &mut load_session)?;
-    let pending_permission = session.has_pending_permission_requests();
-    let pending_tool = pending_permission
+    let main_permission_pending = session
+        .pending_permission_agent_ids
+        .contains(MAIN_THREAD_AGENT_KEY);
+    let main_permission_is_question = is_ask_user_question(&session);
+    let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
     let mut messages = session
@@ -81,8 +85,8 @@ fn load_messages_with(
         .transpose()?
         .unwrap_or_default();
 
-    if pending_permission
-        && session.current_tool.as_deref() != Some("AskUserQuestion")
+    if main_permission_pending
+        && !main_permission_is_question
         && !messages
             .iter()
             .any(|message| matches!(message, ChatItem::Permission { .. }))
@@ -96,6 +100,17 @@ fn load_messages_with(
                 .last_message
                 .clone()
                 .unwrap_or_else(|| "Waiting for permission".to_string()),
+        });
+    }
+
+    for agent_id in session
+        .pending_permission_agent_ids
+        .iter()
+        .filter(|agent_id| agent_id.as_str() != MAIN_THREAD_AGENT_KEY)
+    {
+        messages.push(ChatItem::Permission {
+            tool: format!("Subagent {agent_id}"),
+            description: "Waiting for permission approval.".to_string(),
         });
     }
 
@@ -226,6 +241,7 @@ struct ParentSession {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+    use std::path::PathBuf;
 
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
@@ -234,7 +250,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{ChatItem, load_messages_with, routes_with};
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
         serde_json::from_value(json!({
@@ -248,35 +264,7 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn missing_store_entry_has_no_messages_result() {
-        assert_eq!(
-            load_messages_with("fixture-unregistered-session", |_| Ok(None)).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn pending_permission_without_transcript_uses_the_stored_request_details() {
-        let mut session = stored_session();
-        session.pending_permission_agent_ids = BTreeSet::from(["main".to_string()]);
-        session.current_tool = Some("Bash(cargo test -p sample)".to_string());
-        session.last_message = Some("Run the package tests".to_string());
-
-        assert_eq!(
-            load_messages_with("fixture-session", |id| {
-                Ok((id == "fixture-session").then(|| session.clone()))
-            })
-            .unwrap(),
-            Some(vec![ChatItem::Permission {
-                tool: "Bash(cargo test -p sample)".to_string(),
-                description: "Run the package tests".to_string(),
-            }])
-        );
-    }
-
-    #[test]
-    fn pending_question_does_not_create_a_permission_card() {
+    fn pending_question_transcript() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let record = json!({
@@ -296,9 +284,42 @@ mod tests {
             },
         });
         std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+        (directory, transcript_path)
+    }
+
+    #[test]
+    fn missing_store_entry_has_no_messages_result() {
+        assert_eq!(
+            load_messages_with("fixture-unregistered-session", |_| Ok(None)).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn pending_permission_without_transcript_uses_the_stored_request_details() {
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
+        session.current_tool = Some("Bash(cargo test -p sample)".to_string());
+        session.last_message = Some("Run the package tests".to_string());
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::Permission {
+                tool: "Bash(cargo test -p sample)".to_string(),
+                description: "Run the package tests".to_string(),
+            }])
+        );
+    }
+
+    #[test]
+    fn pending_question_does_not_create_a_permission_card() {
+        let (_directory, transcript_path) = pending_question_transcript();
 
         let mut session = stored_session();
-        session.pending_permission_agent_ids = BTreeSet::from(["main".to_string()]);
+        session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
         session.current_tool = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
 
@@ -312,6 +333,37 @@ mod tests {
                 choices: vec!["Yes".to_string(), "No".to_string()],
                 answer: None,
             }])
+        );
+    }
+
+    #[test]
+    fn subagent_permission_does_not_reuse_main_question_details() {
+        let (_directory, transcript_path) = pending_question_transcript();
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from([
+            MAIN_THREAD_AGENT_KEY.to_string(),
+            "fixture-agent-id".to_string(),
+        ]);
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.last_message = Some("Should the summary be brief?".to_string());
+        session.transcript_path = Some(transcript_path);
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![
+                ChatItem::Question {
+                    question: "Should the summary be brief?".to_string(),
+                    choices: vec!["Yes".to_string(), "No".to_string()],
+                    answer: None,
+                },
+                ChatItem::Permission {
+                    tool: "Subagent fixture-agent-id".to_string(),
+                    description: "Waiting for permission approval.".to_string(),
+                },
+            ])
         );
     }
 

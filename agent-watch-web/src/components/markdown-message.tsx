@@ -89,6 +89,10 @@ const markdownComponents: Components = {
 const inlineMarkdownComponents: Components = {
   ...markdownComponents,
   p: ({ children }) => <span>{children}</span>,
+  a: ({ node, href, children }) =>
+    node?.tagName === 'a' ? (
+      <span className="markdown-link-text">{href ?? children}</span>
+    ) : null,
 }
 
 export const MarkdownMessage = memo(function MarkdownMessage({
