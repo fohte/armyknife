@@ -10,11 +10,12 @@ type SessionKind =
   | 'Stopped'
   | (string & {})
 
-type SessionTask = {
+export type SessionTask = {
   id: string
   number: number
   title: string
   priority: number | null
+  isClosed?: boolean
 }
 
 type PullRequest = {
@@ -40,6 +41,7 @@ export type Session = {
   elapsedSeconds: number
   unread: boolean
   task: SessionTask | null
+  tasks?: SessionTask[]
   repo: string
   project: string
   parent: ParentSession | null
@@ -52,11 +54,16 @@ export type Session = {
 
 export type SessionLinkTarget = Pick<
   Session,
-  'id' | 'title' | 'project' | 'category' | 'isPaused'
+  'id' | 'category' | 'isPaused' | 'task' | 'repo'
 >
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
+  | {
+      type: 'user_with_content'
+      content: UserContentPart[]
+      from?: string
+    }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool_summary'
@@ -71,6 +78,11 @@ export type ChatItem =
       answer: string | null
     }
   | { type: 'permission'; tool: string; description: string }
+
+export type UserContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: string; available: boolean }
+  | { type: 'file'; name: string }
 
 export type ToolOperation = {
   tool: string

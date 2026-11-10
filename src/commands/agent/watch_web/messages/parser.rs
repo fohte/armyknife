@@ -3,11 +3,14 @@ pub(super) mod codex;
 
 use std::collections::BTreeSet;
 use std::io::BufRead;
+use std::path::Path;
 
-use super::{ChatItem, ParentSession, ToolOperation};
+use super::{ChatItem, ParentSession, ToolOperation, UserContentPart};
 
 const PEER_MESSAGE_HEADER_SEPARATOR: &str = concat!("\n", "\n");
 const PEER_MESSAGE_END: &str = concat!("\n", "</peer-message>");
+const PEER_TRAILING_NOTICE_SEPARATOR: &str =
+    concat!("\n", "\n", "This came from another Claude session");
 
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
@@ -201,25 +204,22 @@ pub(super) fn append_text(
     is_user: bool,
     parent: Option<&ParentSession>,
 ) {
+    let image_directory = super::super::image_attachments::storage_directory().ok();
+    append_text_with_image_directory(items, text, is_user, parent, image_directory.as_deref());
+}
+
+fn append_text_with_image_directory(
+    items: &mut Vec<ChatItem>,
+    text: String,
+    is_user: bool,
+    parent: Option<&ParentSession>,
+    image_directory: Option<&Path>,
+) {
     if text.trim().is_empty() {
         return;
     }
     if is_user {
-        // A child session can receive direct input as well as peer messages.
-        let (text, from) = if let Some((sender_id, body)) = peer_message_parts(&text) {
-            (
-                body.to_owned(),
-                parent
-                    .filter(|parent| parent.session_id == sender_id)
-                    .map(|parent| parent.title.clone()),
-            )
-        } else {
-            (text, None)
-        };
-        if text.trim().is_empty() {
-            return;
-        }
-        items.push(ChatItem::User { text, from });
+        append_user_text_with_images(items, text, parent, Vec::new(), image_directory);
     } else {
         items.push(ChatItem::Assistant { text });
     }
@@ -239,40 +239,160 @@ pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -
 
 fn marked_peer_message_body<'a>(message: &'a str, marker: Option<&str>) -> Option<&'a str> {
     let marker = marker?;
-    let (_, body) = peer_message_parts(message)?;
-    crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
+    if let Some((_, body)) = peer_message_parts(message) {
+        return crate::commands::agent::watch_web_user_marker::strip_message(marker, body);
+    }
+
+    let marker_offset = message.match_indices(marker).find_map(|(offset, _)| {
+        let prefix = &message[..offset];
+        (offset == 0 || prefix.ends_with('\n')).then_some(offset)
+    })?;
+    let body = message[marker_offset + marker.len()..].strip_prefix('\n')?;
+    let body = body
+        .rsplit_once(PEER_TRAILING_NOTICE_SEPARATOR)
+        .map_or(body, |(body, _)| body);
+    Some(body)
 }
 
-pub(super) fn append_text_with_user_marker(
+fn append_text_with_user_marker_and_image_directory(
     items: &mut Vec<ChatItem>,
     text: String,
     parent: Option<&ParentSession>,
     marker: Option<&str>,
+    images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
 ) {
     if let Some(body) = marked_peer_message_body(&text, marker) {
-        if !body.trim().is_empty() {
-            items.push(ChatItem::User {
-                text: body.to_owned(),
-                from: None,
-            });
+        if !body.trim().is_empty() || !images.is_empty() {
+            items.push(user_item_with_image_directory(
+                body.to_owned(),
+                None,
+                images,
+                image_directory,
+            ));
         }
         return;
     }
-    append_text(items, text, true, parent);
+    append_user_text_with_images(items, text, parent, images, image_directory);
 }
 
-pub(super) fn peer_message_item_with_user_marker(
+fn peer_message_item_with_user_marker_and_image_directory(
     message: &str,
     parent: Option<&ParentSession>,
     marker: Option<&str>,
+    images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
 ) -> Option<ChatItem> {
     if let Some(body) = marked_peer_message_body(message, marker) {
-        return (!body.trim().is_empty()).then(|| ChatItem::User {
-            text: body.to_owned(),
-            from: None,
+        return (!body.trim().is_empty() || !images.is_empty()).then(|| {
+            user_item_with_image_directory(body.to_owned(), None, images, image_directory)
         });
     }
-    peer_message_item(message, parent)
+    let ChatItem::User { text, from } = peer_message_item(message, parent)? else {
+        return None;
+    };
+    Some(user_item_with_image_directory(
+        text,
+        from,
+        images,
+        image_directory,
+    ))
+}
+
+fn append_user_text_with_images(
+    items: &mut Vec<ChatItem>,
+    text: String,
+    parent: Option<&ParentSession>,
+    images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+) {
+    let (text, from) = if let Some((sender_id, body)) = peer_message_parts(&text) {
+        (
+            body.to_owned(),
+            parent
+                .filter(|parent| parent.session_id == sender_id)
+                .map(|parent| parent.title.clone()),
+        )
+    } else {
+        (text, None)
+    };
+    if !text.trim().is_empty() || !images.is_empty() {
+        items.push(user_item_with_image_directory(
+            text,
+            from,
+            images,
+            image_directory,
+        ));
+    }
+}
+
+fn user_item_with_image_directory(
+    mut text: String,
+    from: Option<String>,
+    mut images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+) -> ChatItem {
+    if let Some(directory) = image_directory
+        && let Some((visible_text, references)) =
+            super::super::image_attachments::extract_references(&text, directory)
+    {
+        text = visible_text;
+        images.extend(references.into_iter().map(|reference| match reference {
+            super::super::image_attachments::Reference::Image { source, available } => {
+                UserContentPart::Image { source, available }
+            }
+            super::super::image_attachments::Reference::File { name } => {
+                UserContentPart::File { name }
+            }
+        }));
+    }
+
+    if images.is_empty() {
+        return ChatItem::User { text, from };
+    }
+
+    let mut content = Vec::new();
+    let mut remaining_images = images.into_iter();
+    let mut cursor = 0;
+    while let Some((start, end)) = image_placeholder(&text[cursor..]) {
+        let Some(image) = remaining_images.next() else {
+            break;
+        };
+        let start = cursor + start;
+        let end = cursor + end;
+        if start > cursor {
+            content.push(UserContentPart::Text {
+                text: text[cursor..start].to_owned(),
+            });
+        }
+        content.push(image);
+        cursor = end;
+    }
+    if cursor < text.len() {
+        content.push(UserContentPart::Text {
+            text: text[cursor..].to_owned(),
+        });
+    }
+    content.extend(remaining_images);
+    ChatItem::UserWithContent { content, from }
+}
+
+fn image_placeholder(text: &str) -> Option<(usize, usize)> {
+    let mut search_from = 0;
+    while let Some(offset) = text[search_from..].find("[Image #") {
+        let start = search_from + offset;
+        let number_start = start + "[Image #".len();
+        let number_end = text[number_start..].find(']')? + number_start;
+        if !text[number_start..number_end].is_empty()
+            && text[number_start..number_end]
+                .chars()
+                .all(|character| character.is_ascii_digit())
+        {
+            return Some((start, number_end + 1));
+        }
+        search_from = start + "[Image #".len();
+    }
+    None
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
@@ -295,10 +415,27 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use indoc::formatdoc;
+    use rstest::{fixture, rstest};
 
-    use super::{ChatItem, ToolSummary, operation_target};
+    use super::{
+        ChatItem, ToolSummary, UserContentPart, append_text_with_image_directory,
+        append_text_with_user_marker_and_image_directory, marked_peer_message_body,
+        operation_target,
+    };
 
+    #[fixture]
+    fn saved_image_directory() -> tempfile::TempDir {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(
+            directory
+                .path()
+                .join("00000000-0000-4000-8000-000000000001.png"),
+            b"fixture image",
+        )
+        .unwrap();
+        directory
+    }
     #[rstest]
     #[case::singular(1, "1 action")]
     #[case::plural(2, "2 actions")]
@@ -322,6 +459,134 @@ mod tests {
                     })
                     .collect(),
             }]
+        );
+    }
+    #[rstest]
+    #[case::transcript_user(false)]
+    #[case::queued_user(true)]
+    fn extracts_saved_images_from_unmarked_user_paths(
+        saved_image_directory: tempfile::TempDir,
+        #[case] is_queued: bool,
+    ) {
+        let image_directory = saved_image_directory.path().canonicalize().unwrap();
+        let image_path = image_directory.join("00000000-0000-4000-8000-000000000001.png");
+        let text = formatdoc! {"
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+        ", image_path.display()};
+        let mut items = Vec::new();
+
+        if is_queued {
+            append_text_with_user_marker_and_image_directory(
+                &mut items,
+                text,
+                None,
+                None,
+                Vec::new(),
+                Some(&image_directory),
+            );
+        } else {
+            append_text_with_image_directory(&mut items, text, true, None, Some(&image_directory));
+        }
+
+        assert_eq!(
+            items,
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: "/api/images/00000000-0000-4000-8000-000000000001.png".to_string(),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn extracts_images_and_file_names_from_generic_user_paths() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000005_screenshot.png";
+        let file_name = "00000000-0000-4000-8000-000000000006_design-mock.html";
+        std::fs::write(image_directory.join(image_name), b"image bytes").unwrap();
+        std::fs::write(image_directory.join(file_name), b"<main>Mock</main>").unwrap();
+        let text = formatdoc! {"
+            Inspect the attachments.
+
+            Attached file(s):
+            - {}
+            - {}
+        ",
+            image_directory.join(image_name).display(),
+            image_directory.join(file_name).display(),
+        };
+        let mut items = Vec::new();
+
+        append_text_with_image_directory(&mut items, text, true, None, Some(&image_directory));
+
+        assert_eq!(
+            items,
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect the attachments.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                    UserContentPart::File {
+                        name: "design-mock.html".to_string(),
+                    },
+                ],
+                from: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn retains_the_attachment_listing_when_storage_directory_resolution_fails() {
+        let text = formatdoc! {"
+            Inspect this image.
+
+            Attached image(s):
+            - /unavailable/00000000-0000-4000-8000-000000000001.png
+        "};
+        let mut items = Vec::new();
+
+        append_text_with_image_directory(&mut items, text.clone(), true, None, None);
+
+        assert_eq!(items, vec![ChatItem::User { text, from: None }]);
+    }
+
+    #[test]
+    fn preserves_notice_text_quoted_by_the_user_before_the_transport_notice() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let notice = "This came from another Claude session — this fictional notice is retained.";
+        let message = formatdoc! {"
+            Another peer session sent a message:
+            {marker}
+            The user quoted this notice:
+
+            {notice}
+
+            {notice}"
+        };
+        let expected = formatdoc! {"
+            The user quoted this notice:
+
+            {notice}"
+        };
+
+        assert_eq!(
+            marked_peer_message_body(&message, Some(marker)),
+            Some(expected.as_str())
         );
     }
 

@@ -2,6 +2,7 @@ mod actions;
 mod assets;
 mod attachments;
 mod events;
+mod image_attachments;
 mod interrupted;
 mod messages;
 mod restart;
@@ -149,6 +150,7 @@ fn app_with_assets_and_loader_and_restart_signal(
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with(load_session, load_user_marker))
+        .merge(image_attachments::routes())
         .fallback(api_not_found);
 
     Router::new()

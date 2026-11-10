@@ -4,6 +4,7 @@ import { memo, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { SessionLink } from '#components/session-link'
 import type { SessionLinkTarget } from '#types'
 
 type MarkdownNode = {
@@ -167,50 +168,6 @@ type MarkdownMessageProps = {
   inline?: boolean
   onSelectSession?: (id: string) => void
   sessions?: readonly SessionLinkTarget[]
-}
-
-function sessionStatus(session: SessionLinkTarget) {
-  const categoryLabels: Record<string, string> = {
-    needs_action: 'Needs action',
-    later: 'Later',
-    in_progress: 'In progress',
-    done: 'Done',
-  }
-  const category = categoryLabels[session.category] ?? session.category
-  return session.isPaused ? `${category} (paused)` : category
-}
-
-function SessionLink({
-  children,
-  onSelectSession,
-  session,
-}: {
-  children: ReactNode
-  onSelectSession: ((id: string) => void) | undefined
-  session: SessionLinkTarget
-}) {
-  return (
-    <a
-      href={`?session=${encodeURIComponent(session.id)}`}
-      title={`${session.title}\n${session.project}\n${sessionStatus(session)}`}
-      onClick={(event) => {
-        if (
-          event.button !== 0 ||
-          event.metaKey ||
-          event.ctrlKey ||
-          event.shiftKey ||
-          event.altKey
-        ) {
-          return
-        }
-        if (onSelectSession === undefined) return
-        event.preventDefault()
-        onSelectSession(session.id)
-      }}
-    >
-      {children}
-    </a>
-  )
 }
 
 function createMarkdownComponents(

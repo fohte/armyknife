@@ -1091,9 +1091,10 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `GET /api/sessions/{id}/actions`
+- `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"choice":1}`
@@ -1106,12 +1107,19 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 
-Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, byte size, and base64-encoded data:
+Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. Supported image types keep their conversation previews:
 
 ```json
 {
   "content": "Inspect this file",
-  "attachments": [{ "name": "sample.txt", "size": 5, "data": "aGVsbG8=" }]
+  "attachments": [
+    {
+      "name": "sample.txt",
+      "mimeType": "text/plain",
+      "size": 5,
+      "data": "aGVsbG8="
+    }
+  ]
 }
 ```
 

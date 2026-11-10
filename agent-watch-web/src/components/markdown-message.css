@@ -106,6 +106,10 @@
   text-underline-offset: 2px;
 }
 
+.markdown-message a.session-link-trigger {
+  text-decoration-style: dotted;
+}
+
 .markdown-message table {
   width: max-content;
   max-width: 100%;

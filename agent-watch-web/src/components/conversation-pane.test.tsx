@@ -38,6 +38,18 @@ const question: ChatItem = {
   answer: null,
 }
 
+const permission: ChatItem = {
+  type: 'permission',
+  tool: 'Shell',
+  description: 'Run the formatter on changed files.',
+}
+
+const otherPermission: ChatItem = {
+  type: 'permission',
+  tool: 'Subagent sample-agent',
+  description: 'Waiting for permission approval.',
+}
+
 let container: HTMLDivElement
 let root: Root | null = null
 const originalExecCommand = Object.getOwnPropertyDescriptor(
@@ -79,6 +91,12 @@ function renderView(
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewSessions: readonly Session[] = [],
+  pendingPermissionAction?: {
+    action: 'approve' | 'reject'
+    status: 'sending' | 'sent'
+    tool: string
+    description: string
+  } | null,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -88,6 +106,7 @@ function renderView(
         sessions={viewSessions}
         messages={viewMessages}
         actions={viewActions}
+        pendingPermissionAction={pendingPermissionAction}
         loading={false}
         error={null}
         onAction={onAction}
@@ -153,6 +172,88 @@ afterEach(() => {
   } else {
     Object.defineProperty(navigator, 'clipboard', originalClipboard)
   }
+})
+
+it('shows pending and sent permission action feedback', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const renderPermission = (status: 'sending' | 'sent') => {
+    renderView(
+      onAction,
+      session,
+      undefined,
+      [permission, otherPermission],
+      actions,
+      false,
+      [],
+      {
+        action: 'approve',
+        status,
+        tool: 'Shell',
+        description: 'Run the formatter on changed files.',
+      },
+    )
+  }
+  renderPermission('sending')
+  const cards = () =>
+    Array.from(container.querySelectorAll('.chat-permission-card'))
+  const sending = {
+    cards: cards().map((card) => ({
+      labels: Array.from(card.querySelectorAll('button')).map(
+        (button) => button.textContent,
+      ),
+      disabled: Array.from(
+        card.querySelectorAll<HTMLButtonElement>('button'),
+      ).map((button) => button.disabled),
+      status: card.querySelector('[role="status"]')?.textContent ?? null,
+    })),
+  }
+
+  renderPermission('sent')
+
+  const snapshot = () => ({
+    sending,
+    sent: {
+      cards: cards().map((card) => ({
+        labels: Array.from(card.querySelectorAll('button')).map(
+          (button) => button.textContent,
+        ),
+        disabled: Array.from(
+          card.querySelectorAll<HTMLButtonElement>('button'),
+        ).map((button) => button.disabled),
+        status: card.querySelector('[role="status"]')?.textContent ?? null,
+      })),
+    },
+  })
+  expect(snapshot()).toEqual({
+    sending: {
+      cards: [
+        {
+          labels: ['Approving…', 'Reject'],
+          disabled: [true, true],
+          status: null,
+        },
+        {
+          labels: ['Approve', 'Reject'],
+          disabled: [false, false],
+          status: null,
+        },
+      ],
+    },
+    sent: {
+      cards: [
+        {
+          labels: ['Approve', 'Reject'],
+          disabled: [true, true],
+          status: 'Approval sent. Session is resuming…',
+        },
+        {
+          labels: ['Approve', 'Reject'],
+          disabled: [false, false],
+          status: null,
+        },
+      ],
+    },
+  })
 })
 
 it('copies the session ID from desktop and mobile headers', async () => {
@@ -677,7 +778,7 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
-it('links known session IDs in user and assistant messages', () => {
+it('links known session IDs in user, rich user, and assistant messages', () => {
   const linkedSession: Session = {
     ...session,
     id: '11111111-1111-4111-8111-111111111111',
@@ -692,6 +793,10 @@ it('links known session IDs in user and assistant messages', () => {
     onSelectSession,
     [
       { type: 'user', text: `Use ${linkedSession.id}` },
+      {
+        type: 'user_with_content',
+        content: [{ type: 'text', text: `Inspect ${linkedSession.id}` }],
+      },
       { type: 'assistant', text: `I found ${linkedSession.id}` },
     ],
     actions,
@@ -711,19 +816,70 @@ it('links known session IDs in user and assistant messages', () => {
   }
 
   const expected = {
-    messageClasses: ['chat-user-group', 'chat-assistant-message'],
-    linkTitles: [
-      'Inspect the retry path\nexample toolkit\nDone',
-      'Inspect the retry path\nexample toolkit\nDone',
+    messageClasses: [
+      'chat-user-group',
+      'chat-user-group',
+      'chat-assistant-message',
     ],
-    selectedIds: [linkedSession.id, linkedSession.id],
+    linkHrefs: [
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   const getActual = () => ({
     messageClasses: links.map((link) => link.closest('article')?.className),
-    linkTitles: links.map((link) => link.title),
+    linkHrefs: links.map((link) => link.getAttribute('href')),
     selectedIds: onSelectSession.mock.calls.map(([id]) => id),
   })
   expect(getActual()).toEqual(expected)
+})
+
+it('renders file attachments returned by the messages endpoint', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse([
+        {
+          type: 'user_with_content',
+          content: [
+            { type: 'text', text: 'Inspect this document.' },
+            { type: 'file', name: 'sample-layout.html' },
+          ],
+        },
+      ]),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.chat-user-message')?.textContent,
+    attachment: container.querySelector('.chat-user-file')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    message: 'Inspect this document.',
+    attachment: 'sample-layout.html',
+    alert: null,
+  })
 })
 
 it('shows elapsed time while the session is working without an active tool', () => {
@@ -1165,6 +1321,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
           attachments: [
             {
               name: 'clipboard.bin',
+              mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1229,6 +1386,7 @@ it('attaches dropped files through the composer and sends their data', async () 
           attachments: [
             {
               name: 'dropped.png',
+              mimeType: 'image/png',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1308,6 +1466,7 @@ it('clears pasted attachments after a successful send', async () => {
           attachments: [
             {
               name: 'clipboard.bin',
+              mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1487,6 +1646,7 @@ it('shows a server attachment validation error and retains the rejected attachme
       attachments: [
         {
           name: 'document.pdf',
+          mimeType: 'application/pdf',
           size: 12,
           data: 'bm90IGFuIGltYWdl',
         },
@@ -1798,7 +1958,10 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
-it('shows the operation error returned by the server', async () => {
+it.each([
+  { action: 'approve' as const, buttonIndex: 0 },
+  { action: 'reject' as const, buttonIndex: 1 },
+])('shows the $action error independently', async ({ action, buttonIndex }) => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1839,25 +2002,15 @@ it('shows the operation error returned by the server', async () => {
     )
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
+  const permissionButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>('.permission-actions button')
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.permission-actions button'),
-    ).click()
+    requireElement(permissionButtons().item(buttonIndex)).click()
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
   const actionRequest = fetcher.mock.calls[2]?.[0]
@@ -1867,16 +2020,198 @@ it('shows the operation error returned by the server', async () => {
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
+  const expected = JSON.stringify([
+    'session pane is idle or unavailable',
+    `/api/sessions/sample-session/permission/${action}`,
+    [
+      { label: 'Approve', disabled: false },
+      { label: 'Reject', disabled: false },
+    ],
+  ])
+  const buttonStates = Array.from(permissionButtons(), (button) => ({
+    label: button.textContent,
+    disabled: button.disabled,
+  }))
   const actual = JSON.stringify([
     container.querySelector('[role="alert"]')?.textContent,
     actionRequestUrl,
-  ])
-  const expected = JSON.stringify([
-    'session pane is idle or unavailable',
-    '/api/sessions/sample-session/permission/approve',
+    buttonStates,
   ])
   expect(actual).toBe(expected)
 })
+
+it.each([
+  {
+    action: 'approve' as const,
+    pendingLabel: 'Approving…',
+    sentMessage: 'Approval sent. Session is resuming…',
+  },
+  {
+    action: 'reject' as const,
+    pendingLabel: 'Rejecting…',
+    sentMessage: 'Rejection sent. Session is resuming…',
+  },
+])(
+  'keeps a successful permission $action pending until it resolves',
+  async ({ action, pendingLabel, sentMessage }) => {
+    const jsonResponse = (body: unknown) =>
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      })
+    let completeAction: ((response: Response) => void) | undefined
+    const completePendingAction = (response: Response) => {
+      const resolve = completeAction
+      if (resolve === undefined) {
+        throw new Error('Expected a pending action request')
+      }
+      resolve(response)
+    }
+    const unavailableActions: SessionActions = {
+      ...actions,
+      permission: { approve: false, reject: false },
+    }
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(actions))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            completeAction = resolve
+          }),
+      )
+      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(actions))
+      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(unavailableActions))
+      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(unavailableActions))
+    vi.stubGlobal('fetch', fetcher)
+    root = createRoot(container)
+    act(() => {
+      root?.render(
+        <ConversationPane
+          session={session}
+          refreshKey={0}
+          onSelectSession={() => undefined}
+        />,
+      )
+    })
+    await act(async () => {
+      for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    })
+
+    act(() => {
+      requireElement(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.permission-actions button',
+        )[action === 'approve' ? 0 : 1] ?? null,
+      ).click()
+    })
+    const duringRequest = {
+      labels: Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ).map((button) => button.textContent),
+      disabled: Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ).map((button) => button.disabled),
+    }
+
+    completePendingAction(new Response(null, { status: 204 }))
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+    const afterSuccess = {
+      labels: Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ).map((button) => button.textContent),
+      disabled: Array.from(
+        container.querySelectorAll<HTMLButtonElement>(
+          '.permission-actions button',
+        ),
+      ).map((button) => button.disabled),
+      status: container.querySelector('[role="status"]')?.textContent ?? null,
+    }
+    const actionRequest = fetcher.mock.calls[2]?.[0]
+    const actionRequestUrl =
+      typeof actionRequest === 'string'
+        ? actionRequest
+        : actionRequest instanceof URL
+          ? actionRequest.href
+          : actionRequest?.url
+
+    act(() => {
+      root?.render(
+        <ConversationPane
+          session={session}
+          refreshKey={1}
+          onSelectSession={() => undefined}
+        />,
+      )
+    })
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+    const afterCapabilityDisappears = {
+      permissionCard: container.querySelector('.chat-permission-card') !== null,
+      permissionButtons: container.querySelectorAll(
+        '.permission-actions button',
+      ).length,
+      status: container.querySelector('[role="status"]')?.textContent ?? null,
+    }
+
+    act(() => {
+      root?.render(
+        <ConversationPane
+          session={session}
+          refreshKey={2}
+          onSelectSession={() => undefined}
+        />,
+      )
+    })
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+
+    const snapshot = () => ({
+      duringRequest,
+      afterSuccess,
+      actionRequestUrl,
+      afterCapabilityDisappears,
+      afterCardDisappears: {
+        permissionCard: container.querySelector('.chat-permission-card'),
+        status: container.querySelector('[role="status"]')?.textContent ?? null,
+      },
+    })
+    expect(snapshot()).toEqual({
+      duringRequest: {
+        labels:
+          action === 'approve'
+            ? [pendingLabel, 'Reject']
+            : ['Approve', pendingLabel],
+        disabled: [true, true],
+      },
+      afterSuccess: {
+        labels: ['Approve', 'Reject'],
+        disabled: [true, true],
+        status: sentMessage,
+      },
+      actionRequestUrl: `/api/sessions/sample-session/permission/${action}`,
+      afterCapabilityDisappears: {
+        permissionCard: true,
+        permissionButtons: 0,
+        status: null,
+      },
+      afterCardDisappears: { permissionCard: null, status: null },
+    })
+  },
+)
 
 it('shows an HTTP status when the initial messages response has no body', async () => {
   const actionsResponse = new Response(

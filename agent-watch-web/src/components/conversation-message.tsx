@@ -1,9 +1,14 @@
-import { Button } from '@fohte/ui/button'
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import {
+  type PendingPermissionAction,
+  PermissionCard,
+  type PermissionRequestIdentity,
+} from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { ToolSummary } from '#components/tool-summary'
+import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
   Session,
@@ -18,13 +23,14 @@ type RenderConversationMessageOptions = {
   index: number
   isMobile: boolean
   message: ChatItem
+  pendingAction: PendingPermissionAction
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
-  renderTerminalFallback: (message: string) => ReactNode
   session: Session
   sessions: readonly SessionLinkTarget[]
 }
@@ -36,27 +42,21 @@ export function renderConversationMessage({
   index,
   isMobile,
   message,
+  pendingAction,
   onAction,
   onOpenInTerminal,
   onSelectSession,
-  renderTerminalFallback,
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
-  if (message.type === 'user') {
+  if (message.type === 'user' || message.type === 'user_with_content') {
     return (
-      <article className="chat-user-group" key={`user-${String(index)}`}>
-        {message.from != null && message.from !== '' ? (
-          <div className="chat-from">From {message.from}</div>
-        ) : null}
-        <MarkdownMessage
-          className="chat-user-message"
-          onSelectSession={onSelectSession}
-          sessions={sessions}
-        >
-          {message.text}
-        </MarkdownMessage>
-      </article>
+      <UserWithContent
+        key={`user-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
     )
   }
   if (message.type === 'assistant') {
@@ -117,40 +117,17 @@ export function renderConversationMessage({
     )
   }
   return (
-    <article
-      className="chat-permission-card"
+    <PermissionCard
       key={`permission-${String(index)}`}
-    >
-      <h2>Permission required</h2>
-      <p className="permission-tool">{message.tool}</p>
-      <p>{message.description}</p>
-      {actions?.permission != null &&
-      (actions.permission.approve || actions.permission.reject) ? (
-        <div className="permission-actions">
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.approve}
-            onClick={() => {
-              void onAction('permission/approve')
-            }}
-          >
-            Approve
-          </Button>
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.reject}
-            onClick={() => {
-              void onAction('permission/reject')
-            }}
-          >
-            Reject
-          </Button>
-        </div>
-      ) : session.engine === 'Codex' && actions !== null ? (
-        renderTerminalFallback('Review this permission in terminal.')
-      ) : null}
-    </article>
+      message={message}
+      actions={actions}
+      actionsReady={actionsReady}
+      pendingAction={pendingAction}
+      isCodex={session.engine === 'Codex'}
+      onAction={(action, permissionIdentity) => {
+        void onAction(action, undefined, permissionIdentity)
+      }}
+      onOpenInTerminal={onOpenInTerminal}
+    />
   )
 }

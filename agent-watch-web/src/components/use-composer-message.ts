@@ -46,9 +46,18 @@ async function encodeAttachment(file: File) {
   }
   return {
     name: file.name || 'Pasted file',
+    mimeType: file.type,
     size: file.size,
     data,
   }
+}
+
+async function encodeAttachments(attachments: readonly SelectedAttachment[]) {
+  const encoded = []
+  for (const { file } of attachments) {
+    encoded.push(await encodeAttachment(file))
+  }
+  return encoded
 }
 
 function attachmentLimitError(attachments: readonly SelectedAttachment[]) {
@@ -157,7 +166,7 @@ export function useComposerMessage({
       return
     }
     void ResultAsync.fromPromise(
-      Promise.all(sentAttachments.map(({ file }) => encodeAttachment(file))),
+      encodeAttachments(sentAttachments),
       toError,
     ).match(
       async (encodedAttachments) => {

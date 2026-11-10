@@ -21,6 +21,8 @@ static STORAGE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[serde(rename_all = "camelCase")]
 pub(super) struct Request {
     pub(super) name: String,
+    #[serde(default)]
+    pub(super) mime_type: Option<String>,
     pub(super) size: usize,
     pub(super) data: String,
 }
@@ -80,10 +82,14 @@ pub(super) fn validate(
             if bytes.len() != attachment.size {
                 return Err(ValidationError::InvalidData);
             }
-            Ok(Attachment {
-                name: attachment.name,
-                bytes,
-            })
+            let name = if let Some(extension) =
+                preview_extension(attachment.mime_type.as_deref(), &bytes)
+            {
+                ensure_image_extension(attachment.name, extension)
+            } else {
+                attachment.name
+            };
+            Ok(Attachment { name, bytes })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let legacy_images = legacy_images
@@ -91,6 +97,42 @@ pub(super) fn validate(
         .map(validate_legacy_image)
         .collect::<Result<Vec<_>, _>>()?;
     Ok(attachments.into_iter().chain(legacy_images).collect())
+}
+
+fn preview_extension(mime_type: Option<&str>, bytes: &[u8]) -> Option<&'static str> {
+    match mime_type? {
+        "image/png" if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) => Some("png"),
+        "image/jpeg" if bytes.starts_with(&[255, 216, 255]) => Some("jpg"),
+        "image/gif" if bytes.starts_with(b"GIF8") => Some("gif"),
+        "image/webp" if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => {
+            Some("webp")
+        }
+        _ => None,
+    }
+}
+
+fn ensure_image_extension(name: String, extension: &str) -> String {
+    let name = sanitize_filename(&name);
+    if image_extension_from_name(&name) == Some(extension) {
+        name
+    } else {
+        format!("{name}.{extension}")
+    }
+}
+
+fn image_extension_from_name(name: &str) -> Option<&'static str> {
+    match Path::new(name)
+        .extension()
+        .and_then(|extension| extension.to_str())?
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "png" => Some("png"),
+        "jpg" | "jpeg" => Some("jpg"),
+        "gif" => Some("gif"),
+        "webp" => Some("webp"),
+        _ => None,
+    }
 }
 
 fn validate_legacy_image(image: LegacyImageRequest) -> Result<Attachment, ValidationError> {
@@ -319,6 +361,8 @@ mod tests {
         Attachment, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request, ValidationError, validate,
     };
 
+    const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
     #[test]
     fn accepts_non_image_files_and_preserves_their_names() {
         let attachments =
@@ -334,13 +378,41 @@ mod tests {
     }
 
     #[rstest]
+    #[case::nameless_png("image/png", "Pasted file", PNG_SIGNATURE, "Pasted_file.png")]
+    #[case::jpeg_with_another_extension(
+        "image/jpeg",
+        "diagram.png",
+        b"\xff\xd8\xff",
+        "diagram.png.jpg"
+    )]
+    fn retains_previewable_image_types_in_saved_names(
+        #[case] mime_type: &str,
+        #[case] name: &str,
+        #[case] bytes: &[u8],
+        #[case] expected_name: &str,
+    ) {
+        let attachments =
+            validate(vec![request_with_mime_type(name, mime_type, bytes)], vec![]).unwrap();
+
+        assert_eq!(
+            attachments,
+            vec![Attachment {
+                name: expected_name.to_string(),
+                bytes: bytes.to_vec(),
+            }]
+        );
+    }
+
+    #[rstest]
     #[case::declared_size_over_limit(vec![Request {
         name: "large.bin".to_string(),
+        mime_type: None,
         size: MAX_ATTACHMENT_BYTES + 1,
         data: String::new(),
     }], ValidationError::TooLarge)]
     #[case::decoded_size_mismatch(vec![Request {
         name: "mismatch.bin".to_string(),
+        mime_type: None,
         size: 2,
         data: STANDARD.encode(b"x"),
     }], ValidationError::InvalidData)]
@@ -446,6 +518,16 @@ mod tests {
     fn request(name: &str, bytes: &[u8]) -> Request {
         Request {
             name: name.to_string(),
+            mime_type: None,
+            size: bytes.len(),
+            data: STANDARD.encode(bytes),
+        }
+    }
+
+    fn request_with_mime_type(name: &str, mime_type: &str, bytes: &[u8]) -> Request {
+        Request {
+            name: name.to_string(),
+            mime_type: Some(mime_type.to_string()),
             size: bytes.len(),
             data: STANDARD.encode(bytes),
         }

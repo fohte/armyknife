@@ -13,8 +13,13 @@ import { ConversationWorkingStatus } from '#components/conversation-working-stat
 import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MessageComposer } from '#components/message-composer'
+import type {
+  PendingPermissionAction,
+  PermissionRequestIdentity,
+} from '#components/permission-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
+import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
@@ -31,6 +36,7 @@ type ConversationPaneViewProps = {
   messages: readonly ChatItem[]
   actions: SessionActions | null
   actionsReady?: boolean
+  pendingPermissionAction?: PendingPermissionAction | undefined
   loading: boolean
   sending?: boolean
   error: string | null
@@ -38,6 +44,7 @@ type ConversationPaneViewProps = {
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
   isMobile?: boolean
@@ -52,12 +59,12 @@ function useSessionLinkTargets(
   // Elapsed-time updates replace session objects even when link details are unchanged.
   const targetsRef = useRef<readonly SessionLinkTarget[]>([])
   const nextTargets = sessions.map(
-    ({ id, title, project, category, isPaused }) => ({
+    ({ id, category, isPaused, task, repo }) => ({
       id,
-      title,
-      project,
       category,
       isPaused,
+      task,
+      repo,
     }),
   )
   const targetsAreUnchanged =
@@ -67,10 +74,12 @@ function useSessionLinkTargets(
       return (
         nextTarget !== undefined &&
         target.id === nextTarget.id &&
-        target.title === nextTarget.title &&
-        target.project === nextTarget.project &&
         target.category === nextTarget.category &&
-        target.isPaused === nextTarget.isPaused
+        target.isPaused === nextTarget.isPaused &&
+        target.task?.id === nextTarget.task?.id &&
+        target.task?.number === nextTarget.task?.number &&
+        target.task?.title === nextTarget.task?.title &&
+        target.repo === nextTarget.repo
       )
     })
 
@@ -84,6 +93,7 @@ export function ConversationPaneView({
   messages,
   actions,
   actionsReady = true,
+  pendingPermissionAction = null,
   loading,
   sending = false,
   error,
@@ -138,6 +148,8 @@ export function ConversationPaneView({
     isReview && session.category === 'needs_action' ? session.critUrl : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
+  const linkedTasks =
+    session.tasks ?? (session.task === null ? [] : [session.task])
 
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
@@ -174,17 +186,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  const renderTerminalFallback = (message: string) => (
-    <div className="conversation-terminal-fallback">
-      <span>{message}</span>
-      {actions?.openInTerminal === true ? (
-        <Button type="button" variant="plain" onClick={openInTerminal}>
-          Open in terminal
-        </Button>
-      ) : null}
-    </div>
-  )
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
@@ -280,15 +281,8 @@ export function ConversationPaneView({
             </Button>
             <div className="mobile-conversation-heading">
               <div className="mobile-conversation-context">
-                {session.task ? (
-                  <span>
-                    {session.task.priority != null
-                      ? `P${String(session.task.priority)} `
-                      : ''}
-                    #{session.task.number} {session.task.title}
-                  </span>
-                ) : null}
-                {session.task ? <span aria-hidden="true"> · </span> : null}
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                {session.task ? <span aria-hidden="true">·</span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
               <SessionHeading
@@ -310,19 +304,7 @@ export function ConversationPaneView({
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
-                {session.task ? (
-                  <a
-                    className="conversation-task-link"
-                    href={`https://tq.fohte.net/tasks/${encodeURIComponent(session.task.id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {session.task.priority != null ? (
-                      <span>P{session.task.priority}</span>
-                    ) : null}{' '}
-                    #{session.task.number} {session.task.title}
-                  </a>
-                ) : null}
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}
@@ -416,7 +398,7 @@ export function ConversationPaneView({
             onAction,
             onOpenInTerminal: openInTerminal,
             onSelectSession: selectLinkedSession,
-            renderTerminalFallback,
+            pendingAction: pendingPermissionAction,
             session,
             sessions: sessionLinkTargets,
           }),
