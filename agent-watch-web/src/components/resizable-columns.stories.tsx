@@ -1,6 +1,26 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
+import { AgentWatchNav } from '#components/agent-watch-nav'
 import { ResizableColumns } from '#components/resizable-columns'
+import type { Session } from '#types'
+
+const todaySession: Session = {
+  id: 'storybook-session',
+  category: 'needs_action',
+  isPaused: false,
+  kind: 'Review',
+  title: 'Review the example change',
+  preview: null,
+  elapsedSeconds: 30,
+  unread: false,
+  task: null,
+  repo: 'example/project',
+  project: 'sample project',
+  parent: null,
+  ancestorSessionIds: [],
+  pullRequest: null,
+  isToday: true,
+}
 
 const meta = {
   component: ResizableColumns,
@@ -27,4 +47,42 @@ type Story = StoryObj<typeof meta>
 
 export const TwoColumnsHaveAnAdjustableBoundary: Story = {
   name: 'The session list and conversation have an adjustable boundary',
+}
+
+export const NavigationHasAnAdjustableBoundary: Story = {
+  name: 'The navigation and main content have an adjustable boundary',
+  args: {
+    first: (
+      <AgentWatchNav
+        activeView="inbox"
+        needsActionCount={1}
+        todaySessions={[todaySession]}
+        workTypeNavGroups={[
+          {
+            label: 'PM',
+            projects: [
+              {
+                name: 'sample project',
+                status: 'Review',
+                needsActionCount: 1,
+                sessionId: todaySession.id,
+              },
+            ],
+          },
+        ]}
+        onViewChange={() => undefined}
+        onSelectToday={() => undefined}
+        onSelectSession={() => undefined}
+      />
+    ),
+    second: (
+      <main className="agent-watch-main">
+        <div style={{ padding: '16px' }}>Inbox and conversation panes</div>
+      </main>
+    ),
+    firstSize: 240,
+    firstMinSize: 160,
+    secondMinSize: 508,
+    label: 'Resize navigation and content',
+  },
 }
