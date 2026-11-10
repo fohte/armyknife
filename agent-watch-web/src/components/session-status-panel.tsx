@@ -1,5 +1,6 @@
 import '#components/session-status-panel.css'
 
+import { Button } from '@fohte/ui/button'
 import type { ReactNode } from 'react'
 
 export type SessionStatusPanelTab = {
@@ -13,12 +14,14 @@ type SessionStatusPanelProps = {
   tabs: readonly SessionStatusPanelTab[]
   activeTabId: string | null
   onTabChange: (id: string) => void
+  onClose: () => void
 }
 
 export function SessionStatusPanel({
   tabs,
   activeTabId,
   onTabChange,
+  onClose,
 }: SessionStatusPanelProps) {
   const visibleTabs = tabs.filter((tab) => tab.count > 0)
   const activeTab = visibleTabs.find((tab) => tab.id === activeTabId)
@@ -53,6 +56,17 @@ export function SessionStatusPanel({
             ) : null}
           </button>
         ))}
+        <Button
+          className="session-status-panel-close"
+          type="button"
+          variant="plain"
+          aria-label="Close session status panel"
+          onClick={() => {
+            onClose()
+          }}
+        >
+          ×
+        </Button>
       </div>
       {activeTab !== undefined ? (
         <div

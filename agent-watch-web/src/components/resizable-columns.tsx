@@ -16,6 +16,7 @@ type ResizableColumnsProps = {
   first: ReactNode
   second: ReactNode
   firstCollapsed?: boolean
+  overlaySecondPane?: boolean
   storageKey: string | null
   firstSize: number
   firstMinSize: number
@@ -60,6 +61,7 @@ export function ResizableColumns({
   first,
   second,
   firstCollapsed = false,
+  overlaySecondPane = false,
   storageKey,
   firstSize: initialFirstSize,
   firstMinSize,
@@ -175,6 +177,7 @@ export function ResizableColumns({
     <div
       className="resizable-columns"
       data-first-collapsed={firstCollapsed ? 'true' : undefined}
+      data-overlay-second-pane={overlaySecondPane ? 'true' : undefined}
       ref={containerRef}
     >
       <div

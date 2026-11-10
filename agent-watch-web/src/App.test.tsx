@@ -1343,6 +1343,8 @@ it('updates the crit frame when keyboard navigation selects another review', () 
 })
 
 it('auto-collapses the Inbox for the status panel unless manually overridden', () => {
+  container.style.width = '1000px'
+  container.style.height = '900px'
   renderApp()
   publishSessions({
     revision: 1,
@@ -1373,7 +1375,30 @@ it('auto-collapses the Inbox for the status panel unless manually overridden', (
   const manuallyExpanded = container.querySelector(
     '.resizable-columns[data-first-collapsed="true"]',
   )
-  act(() => panelToggle?.click())
+  const statusPanelSeparator = container.querySelector<HTMLDivElement>(
+    '[aria-label="Resize conversation and status panel"]',
+  )
+  const statusPanelLayout = statusPanelSeparator?.closest('.resizable-columns')
+  const statusPanelPane =
+    statusPanelLayout?.querySelector<HTMLDivElement>(
+      '.resizable-columns-second-pane',
+    ) ?? null
+  const statusPanelSeparatorDisplay =
+    statusPanelSeparator === null
+      ? null
+      : window.getComputedStyle(statusPanelSeparator).display
+  const statusPanelPanePosition =
+    statusPanelPane === null
+      ? null
+      : window.getComputedStyle(statusPanelPane).position
+  const statusPanelPaneWidth = statusPanelPane?.getBoundingClientRect().width
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Close session status panel"]',
+      )
+      ?.click()
+  })
 
   const snapshot = () => ({
     autoCollapsed: autoCollapsed !== null,
@@ -1382,12 +1407,18 @@ it('auto-collapses the Inbox for the status panel unless manually overridden', (
       container.querySelector(
         '.resizable-columns[data-first-collapsed="true"]',
       ) === null,
+    statusPanelSeparatorDisplay,
+    statusPanelPanePosition,
+    statusPanelPaneWidth,
     panelOpen: panelToggle?.getAttribute('aria-expanded'),
   })
   expect(snapshot()).toEqual({
     autoCollapsed: true,
     manuallyExpanded: true,
     staysExpandedAfterClose: true,
+    statusPanelSeparatorDisplay: 'none',
+    statusPanelPanePosition: 'absolute',
+    statusPanelPaneWidth: 300,
     panelOpen: 'false',
   })
 })

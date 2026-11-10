@@ -244,6 +244,7 @@ it('keeps the status panel visible on narrow desktop viewports', () => {
             ]}
             activeTabId="crit"
             onTabChange={() => undefined}
+            onClose={() => undefined}
           />
         }
         storageKey={null}

@@ -96,21 +96,25 @@ export function InboxConversationPanes({
           : (panelTabs[0]?.id ?? null)
       }
       onTabChange={setActivePanelTabId}
+      onClose={onCloseStatusPanel}
     />
   ) : null
   const conversationAndPanel =
     conversationPane === null ? null : statusPanel === null ? (
       conversationPane
     ) : (
-      <ResizableColumns
-        first={conversationPane}
-        second={statusPanel}
-        storageKey="agent-watch:conversation-width"
-        firstSize={560}
-        firstMinSize={240}
-        secondMinSize={300}
-        label="Resize conversation and status panel"
-      />
+      <div className="conversation-status-panel-container">
+        <ResizableColumns
+          first={conversationPane}
+          second={statusPanel}
+          overlaySecondPane
+          storageKey="agent-watch:conversation-width"
+          firstSize={560}
+          firstMinSize={240}
+          secondMinSize={300}
+          label="Resize conversation and status panel"
+        />
+      </div>
     )
 
   return (

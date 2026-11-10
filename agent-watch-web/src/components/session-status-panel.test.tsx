@@ -7,7 +7,11 @@ import { SessionStatusPanel } from '#components/session-status-panel'
 let container: HTMLDivElement
 let root: Root | null = null
 
-function renderPanel(activeTabId: string | null, onTabChange = vi.fn()) {
+function renderPanel(
+  activeTabId: string | null,
+  onTabChange = vi.fn(),
+  onClose = vi.fn(),
+) {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -18,6 +22,7 @@ function renderPanel(activeTabId: string | null, onTabChange = vi.fn()) {
         ]}
         activeTabId={activeTabId}
         onTabChange={onTabChange}
+        onClose={onClose}
       />,
     )
   })
@@ -61,4 +66,18 @@ it('reports the selected tab when a visible tab is clicked', () => {
   })
 
   expect(onTabChange.mock.calls).toEqual([['crit']])
+})
+
+it('closes the status panel from its tab bar', () => {
+  const onClose = vi.fn()
+  renderPanel('crit', undefined, onClose)
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Close session status panel"]',
+      )
+      ?.click()
+  })
+
+  expect(onClose.mock.calls).toEqual([[]])
 })

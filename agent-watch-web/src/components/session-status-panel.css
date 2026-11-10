@@ -37,6 +37,13 @@
   color: #fafafa;
 }
 
+.session-status-panel-close {
+  min-width: 28px;
+  margin-left: auto;
+  color: #d4d4d8;
+  font-size: 16px;
+}
+
 .session-status-panel-count {
   color: #8b8b94;
   font-family: var(--font-mono);

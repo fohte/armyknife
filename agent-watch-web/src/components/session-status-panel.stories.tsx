@@ -15,6 +15,7 @@ const meta = {
     ],
     activeTabId: 'crit',
     onTabChange: () => undefined,
+    onClose: () => undefined,
   },
   decorators: [
     (Story) => (
