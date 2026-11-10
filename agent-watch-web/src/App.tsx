@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
+import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
 import {
@@ -23,6 +24,7 @@ import type { Session } from '#types'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -146,6 +148,7 @@ export function App() {
               session.category === 'done',
           ),
         )
+        setSessionsRevision((revision) => revision + 1)
         setSessionsReceivedAt(receivedAt)
         setNowMs(receivedAt)
         setLoaded(true)
@@ -278,6 +281,9 @@ export function App() {
   const laterSession = sessionsWithElapsedTime.find(
     (session) => session.id === laterSessionId,
   )
+  const selectedSession = sessionsWithElapsedTime.find(
+    (session) => session.id === selectedId,
+  )
 
   const toggleToday = (id: string, isToday: boolean) => {
     void setSessionToday(id, isToday).match(
@@ -312,23 +318,37 @@ export function App() {
       />
       <main className="agent-watch-main">
         {view === 'inbox' ? (
-          <InboxView
-            error={error}
-            loaded={loaded}
-            selectedId={selectedId}
-            sessions={sessionsWithElapsedTime}
-            showAllInProgress={showAllInProgress}
-            onShowMore={() => {
-              setShowAllInProgress(true)
-            }}
-            onSelect={setSelectedId}
-            laterExpanded={laterExpanded}
-            onToggleLater={() => {
-              setLaterExpanded((expanded) => !expanded)
-            }}
-            onLater={openLater}
-            onToggleToday={toggleToday}
-          />
+          <>
+            <InboxView
+              error={error}
+              loaded={loaded}
+              selectedId={selectedId}
+              sessions={sessionsWithElapsedTime}
+              showAllInProgress={showAllInProgress}
+              onShowMore={() => {
+                setShowAllInProgress(true)
+              }}
+              onSelect={setSelectedId}
+              laterExpanded={laterExpanded}
+              onToggleLater={() => {
+                setLaterExpanded((expanded) => !expanded)
+              }}
+              onLater={openLater}
+              onToggleToday={toggleToday}
+            />
+            {selectedSession ? (
+              <ConversationPane
+                key={selectedSession.id}
+                session={selectedSession}
+                refreshKey={sessionsRevision}
+                onSelectSession={(id) => {
+                  if (orderedSessions.some((session) => session.id === id)) {
+                    setSelectedId(id)
+                  }
+                }}
+              />
+            ) : null}
+          </>
         ) : (
           <BoardView
             error={error}
