@@ -5,11 +5,12 @@ import { ToolSummary } from '#components/tool-summary'
 const meta = {
   component: ToolSummary,
   args: {
-    summary: '3 actions · 2 files edited',
+    summary: '4 actions · 2 files edited',
     operations: [
-      { tool: 'Read', target: 'src/commands/agent/watch.rs' },
-      { tool: 'exec', target: 'cargo test -p armyknife agent::watch' },
-      { tool: 'Edit', target: 'src/commands/agent/watch.rs' },
+      { tool: 'Read', target: 'src/sample.rs' },
+      { tool: 'exec', target: "printf '%s\\n' 'hello' | grep hello" },
+      { tool: 'Agent', target: 'Explore · Find fixture loaders' },
+      { tool: 'Edit', target: 'src/sample.rs' },
     ],
     open: true,
   },

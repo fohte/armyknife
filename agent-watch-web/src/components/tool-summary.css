@@ -54,3 +54,38 @@
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
+
+.chat-tool-command .hljs-comment,
+.chat-tool-command .hljs-quote {
+  color: #71717a;
+}
+
+.chat-tool-command .hljs-keyword,
+.chat-tool-command .hljs-meta,
+.chat-tool-command .hljs-selector-tag {
+  color: #c084fc;
+}
+
+.chat-tool-command .hljs-string,
+.chat-tool-command .hljs-regexp,
+.chat-tool-command .hljs-addition {
+  color: #a3e635;
+}
+
+.chat-tool-command .hljs-built_in,
+.chat-tool-command .hljs-literal,
+.chat-tool-command .hljs-type {
+  color: #67e8f9;
+}
+
+.chat-tool-command .hljs-number,
+.chat-tool-command .hljs-symbol,
+.chat-tool-command .hljs-bullet {
+  color: #fbbf24;
+}
+
+.chat-tool-command .hljs-variable,
+.chat-tool-command .hljs-template-variable,
+.chat-tool-command .hljs-attr {
+  color: #fda4af;
+}
