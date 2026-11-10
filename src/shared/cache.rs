@@ -31,9 +31,14 @@ fn is_in_temp_dir(path: &Path, temp_dir: &Path) -> bool {
         })
         .unwrap_or(temp_dir);
 
-    canonicalize_with_missing_suffix(path)
-        .zip(canonicalize_with_missing_suffix(temp_root))
-        .is_some_and(|(path, temp_root)| path.starts_with(temp_root))
+    let Some(path) = canonicalize_with_missing_suffix(path) else {
+        return false;
+    };
+
+    [temp_root, Path::new("/tmp")].into_iter().any(|temp_root| {
+        canonicalize_with_missing_suffix(temp_root)
+            .is_some_and(|temp_root| path.starts_with(temp_root))
+    })
 }
 
 #[cfg(test)]
@@ -123,6 +128,18 @@ mod tests {
         let cache_home = tempfile::tempdir().expect("temporary cache home should be created");
         let expected = Some(PathBuf::from(cache_home.path()).join("armyknife"));
         let cache_home_path = cache_home.path().to_str().expect("path should be UTF-8");
+
+        temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home_path))], || {
+            assert_eq!(base_dir(), expected);
+        });
+    }
+
+    #[test]
+    fn base_dir_uses_a_nonexistent_cache_home_under_the_temporary_directory() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let cache_home = temp_dir.path().join("nested").join("cache");
+        let expected = Some(cache_home.join("armyknife"));
+        let cache_home_path = cache_home.to_str().expect("path should be UTF-8");
 
         temp_env::with_vars([("XDG_CACHE_HOME", Some(cache_home_path))], || {
             assert_eq!(base_dir(), expected);
