@@ -307,6 +307,8 @@ mod tests {
     #[case::prompt_array(
         indoc! {r#"
             {"type":"user","message":{"content":"Before the queued prompt."}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-tool-id","name":"Read","input":{}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-id","content":"Synthetic result."}]}}
             {"type":"queue-operation","operation":"enqueue","content":"Show this prompt once."}
             {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"Show this prompt once."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"c3ludGhldGlj"}}]}}
             {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Show this prompt once."}
@@ -317,6 +319,8 @@ mod tests {
     #[case::prompt_string(
         indoc! {r#"
             {"type":"user","message":{"content":"Before the queued prompt."}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-tool-id","name":"Read","input":{}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-id","content":"Synthetic result."}]}}
             {"type":"queue-operation","operation":"enqueue","content":"Show this prompt once."}
             {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":"Show this prompt once."}}
             {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Show this prompt once."}
@@ -334,6 +338,10 @@ mod tests {
                 ChatItem::User {
                     text: "Before the queued prompt.".to_string(),
                     from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Read", None)],
                 },
                 ChatItem::User {
                     text: queued_text.to_string(),
