@@ -3,7 +3,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
-import { ResizableColumns } from '#components/resizable-columns'
+import { renderConversationCritColumns } from '#components/resizable-columns'
+import { ToolSummary } from '#components/tool-summary'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -338,12 +339,11 @@ export function ConversationPaneView({
             )
           if (message.type === 'tool_summary')
             return (
-              <details
-                className="chat-tool-summary"
+              <ToolSummary
                 key={`tool-${String(index)}`}
-              >
-                <summary>▸ {message.summary}</summary>
-              </details>
+                summary={message.summary}
+                operations={message.operations ?? []}
+              />
             )
           if (message.type === 'question') {
             const canAnswer =
@@ -486,15 +486,8 @@ export function ConversationPaneView({
   }
   if (isMobile) return conversationPane
 
-  return (
-    <ResizableColumns
-      first={conversationPane}
-      second={critOpen ? <CritPane url={critUrl} onClose={closeCrit} /> : null}
-      storageKey="agent-watch:conversation-width"
-      firstSize={560}
-      firstMinSize={240}
-      secondMinSize={300}
-      label="Resize conversation and crit"
-    />
+  return renderConversationCritColumns(
+    conversationPane,
+    critOpen ? <CritPane url={critUrl} onClose={closeCrit} /> : null,
   )
 }
