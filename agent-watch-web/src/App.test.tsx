@@ -1417,6 +1417,30 @@ it('opens the command palette with Ctrl-K while the inbox filter is focused', ()
   })
 })
 
+it('opens the command palette from the navigation shortcut', async () => {
+  renderApp()
+  const shortcut = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Jump to with Command K"]',
+  )
+  if (shortcut === null) throw new Error('Navigation shortcut was not rendered')
+
+  await act(async () => {
+    await userEvent.click(shortcut)
+  })
+
+  const snapshot = () => ({
+    dialogRole:
+      container.querySelector('[aria-label="Jump to"]')?.getAttribute('role') ??
+      null,
+    focusedInput: document.activeElement?.getAttribute('aria-label') ?? null,
+  })
+  expect(snapshot()).toEqual({
+    dialogRole: 'dialog',
+    focusedInput:
+      'Jump to a session, tq task or project, or type > for commands',
+  })
+})
+
 it('filters the Inbox from a task command in the palette', async () => {
   const taskSession = session('session-task', 'Review alert settings')
   taskSession.task = {
