@@ -52,19 +52,19 @@
   list-style-type: decimal;
 }
 
-.markdown-message ul ul {
+.markdown-message :is(ul, ol) ul {
   list-style-type: circle;
 }
 
-.markdown-message ol ol {
+.markdown-message :is(ul, ol) ol {
   list-style-type: lower-alpha;
 }
 
-.markdown-message ul ul ul {
+.markdown-message :is(ul, ol) :is(ul, ol) ul {
   list-style-type: square;
 }
 
-.markdown-message ol ol ol {
+.markdown-message :is(ul, ol) :is(ul, ol) ol {
   list-style-type: lower-roman;
 }
 

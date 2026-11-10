@@ -87,9 +87,13 @@ it('shows distinct markers for nested unordered and ordered lists', () => {
     root?.render(
       <MarkdownMessage>{`- First item
   - Nested item
+    - Third-level item
+  1. Nested numbered item
+     1. Third-level numbered item
 
 1. First step
-   1. Nested step`}</MarkdownMessage>,
+   - Nested unordered item
+     1. Third-level numbered item`}</MarkdownMessage>,
     )
   })
 
@@ -101,7 +105,11 @@ it('shows distinct markers for nested unordered and ordered lists', () => {
   expect(listMarkers).toEqual([
     ['UL', 'disc'],
     ['UL', 'circle'],
-    ['OL', 'decimal'],
+    ['UL', 'square'],
     ['OL', 'lower-alpha'],
+    ['OL', 'lower-roman'],
+    ['OL', 'decimal'],
+    ['UL', 'circle'],
+    ['OL', 'lower-roman'],
   ])
 })
