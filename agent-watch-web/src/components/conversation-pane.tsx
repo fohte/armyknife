@@ -150,6 +150,7 @@ function requestAction(
 
 type ConversationPaneProps = {
   session: Session
+  sessions?: readonly Session[]
   refreshKey: number
   onSelectSession: (id: string) => void
   isMobile?: boolean
@@ -159,6 +160,7 @@ type ConversationPaneProps = {
 
 export function ConversationPane({
   session,
+  sessions = [],
   refreshKey,
   onSelectSession,
   isMobile = false,
@@ -243,6 +245,7 @@ export function ConversationPane({
   return (
     <ConversationPaneView
       session={session}
+      sessions={sessions}
       messages={messages}
       backgroundTasks={backgroundTasks.map((task) => ({
         ...task,

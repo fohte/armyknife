@@ -83,12 +83,14 @@ function renderView(
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
+  viewSessions: readonly Session[] = [],
 ) {
   root ??= createRoot(container)
   act(() => {
     root?.render(
       <ConversationPaneView
         session={viewSession}
+        sessions={viewSessions}
         messages={viewMessages}
         backgroundTasks={viewBackgroundTasks}
         actions={viewActions}
@@ -665,7 +667,7 @@ it('does not use question shortcuts while typing', () => {
 
 it('selects the parent session from its link', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  const onSelectSession = vi.fn()
+  const onSelectSession = vi.fn<(id: string) => void>()
   renderView(
     onAction,
     { ...session, parent: { id: 'parent-session', title: 'Parent session' } },
@@ -679,6 +681,56 @@ it('selects the parent session from its link', () => {
   })
 
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
+})
+
+it('links known session IDs in user and assistant messages', () => {
+  const linkedSession: Session = {
+    ...session,
+    id: '11111111-1111-4111-8111-111111111111',
+    category: 'done',
+    title: 'Inspect the retry path',
+    project: 'example toolkit',
+  }
+  const onSelectSession = vi.fn<(id: string) => void>()
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    onSelectSession,
+    [
+      { type: 'user', text: `Use ${linkedSession.id}` },
+      { type: 'assistant', text: `I found ${linkedSession.id}` },
+    ],
+    actions,
+    false,
+    [],
+    [linkedSession],
+  )
+
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>(
+      '.chat-user-message a, .chat-assistant-message a',
+    ),
+  )
+  for (const link of links) {
+    act(() => {
+      link.click()
+    })
+  }
+
+  const expected = {
+    messageClasses: ['chat-user-group', 'chat-assistant-message'],
+    linkTitles: [
+      'Inspect the retry path\nexample toolkit\nDone',
+      'Inspect the retry path\nexample toolkit\nDone',
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id],
+  }
+  const getActual = () => ({
+    messageClasses: links.map((link) => link.closest('article')?.className),
+    linkTitles: links.map((link) => link.title),
+    selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  expect(getActual()).toEqual(expected)
 })
 
 it('shows elapsed time while the session is working without an active tool', () => {
