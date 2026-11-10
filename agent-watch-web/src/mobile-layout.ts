@@ -1,5 +1,6 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 
+import type { HistoryMode, SessionHistoryState } from '#session-history'
 import type { Session } from '#types'
 
 const mobileBreakpoint = '(max-width: 760px)'
@@ -89,4 +90,39 @@ export function useMobileNavigation({
   return {
     showConversation: isMobile && conversationOpen && selectedSessionExists,
   }
+}
+
+type SessionMobileNavigationOptions = Omit<
+  MobileNavigationOptions,
+  'setSelectedId' | 'setConversationOpen'
+> & {
+  navigate: (
+    update: (current: SessionHistoryState) => SessionHistoryState,
+    mode?: HistoryMode,
+  ) => void
+}
+
+export function useSessionMobileNavigation({
+  navigate,
+  ...options
+}: SessionMobileNavigationOptions) {
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      navigate((current) => ({ ...current, selectedId: id }), 'replace')
+    },
+    [navigate],
+  )
+  const setConversationOpen = useCallback(
+    (open: boolean) => {
+      navigate((current) => ({ ...current, conversationOpen: open }), 'replace')
+    },
+    [navigate],
+  )
+
+  return useMobileNavigation({
+    ...options,
+    selectedSessionExists: options.selectedSessionExists,
+    setSelectedId,
+    setConversationOpen,
+  })
 }

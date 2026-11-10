@@ -1318,6 +1318,148 @@ it('limits keyboard navigation to sessions matching the Inbox filters', () => {
   expect(readSelectedTitle()).toEqual('Worker project session')
 })
 
+it('opens the command palette with Ctrl-K while the inbox filter is focused', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'Review the retry policy')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null)
+    throw new Error('Inbox filter input was not rendered')
+
+  act(() => {
+    dispatchKey(filterInput, 'k', { ctrlKey: true })
+  })
+  const opened = container.querySelector('[aria-label="Jump to"]') !== null
+  const paletteInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (paletteInput === null) throw new Error('Palette input was not rendered')
+  act(() => {
+    dispatchKey(paletteInput, 'Escape')
+  })
+
+  const snapshot = () => ({
+    opened,
+    paletteClosed: container.querySelector('[aria-label="Jump to"]') === null,
+    filterStillOpen:
+      container.querySelector('[aria-label="Filter inbox"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    opened: true,
+    paletteClosed: true,
+    filterStillOpen: true,
+  })
+})
+
+it('filters the Inbox from a task command in the palette', async () => {
+  const taskSession = session('session-task', 'Review alert settings')
+  taskSession.task = {
+    id: 'task-alerts',
+    number: 42,
+    title: 'Improve notifications',
+    priority: 1,
+  }
+  renderApp()
+  publishSessions({ revision: 1, sessions: [taskSession] })
+  act(() => {
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Filter inbox by task #42')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    activeFilter: container.querySelector('[aria-label="Active inbox filters"]')
+      ?.textContent,
+    visibleSessions: readSessionTitles(),
+  })
+  expect(snapshot()).toEqual({
+    activeView: 'Inbox',
+    activeFilter: 'tq task #42×',
+    visibleSessions: ['Review alert settings'],
+  })
+})
+
+it('opens a session in the Inbox when selected from the palette on Board', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-palette', 'Distinctive review session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, 'Distinctive review session')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    view: readActiveView(),
+    title: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    view: 'Inbox',
+    title: 'Distinctive review session',
+  })
+})
+
+it('archives each done session from the palette command', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Archive all done')
+    await userEvent.keyboard('{Enter}')
+    await flushAsyncState()
+  })
+
+  const archivedUrls = fetchMock.mock.calls
+    .map(([request]) => requestUrl(request))
+    .filter((url) => url.endsWith('/archive'))
+  expect(archivedUrls).toEqual([
+    '/api/sessions/session-done-a/archive',
+    '/api/sessions/session-done-b/archive',
+  ])
+})
+
 it('opens Later with L and selects a preset with its number key', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()

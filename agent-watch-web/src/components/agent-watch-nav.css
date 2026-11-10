@@ -2,6 +2,18 @@
   margin-top: 22px;
 }
 
+.agent-watch-command-key {
+  margin-left: auto;
+  padding: 2px 5px;
+  border: 1px solid #303036;
+  border-radius: 4px;
+  background: #19191c;
+  color: #8b8b94;
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
 .work-type-nav h2 {
   height: 26px;
   margin: 0;
