@@ -328,6 +328,142 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
+it('shows elapsed time while the session is working without an active tool', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'in_progress', elapsedSeconds: 92 },
+    undefined,
+    [],
+  )
+
+  const snapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    message: container.querySelector('.conversation-status')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    workingStatus: 'Working · 1m 32s',
+    message: 'No messages yet.',
+  })
+})
+
+it('shows an active tool and hides it from the completed conversation', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'in_progress', elapsedSeconds: 92 },
+    undefined,
+    [
+      {
+        type: 'tool_summary',
+        summary: '1 action',
+      },
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo test --manifest-path fixture/Cargo.toml',
+      },
+    ],
+    actions,
+    true,
+  )
+
+  const snapshot = () => ({
+    workingStatus: Array.from(
+      requireElement(container.querySelector('.conversation-working-status'))
+        .children,
+    )
+      .slice(1)
+      .map((child) => child.textContent),
+    toolSummary:
+      container.querySelector('.chat-tool-summary')?.textContent ?? null,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  })
+
+  expect(snapshot()).toEqual({
+    workingStatus: [
+      'Working · 1m 32s',
+      'execcargo test --manifest-path fixture/Cargo.toml',
+    ],
+    toolSummary: '1 action',
+    inProgressItems: 0,
+  })
+})
+
+it('hides working status when the session is done', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'done', elapsedSeconds: 92 },
+    undefined,
+    [
+      {
+        type: 'tool_summary',
+        summary: '1 action',
+      },
+    ],
+  )
+
+  const snapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status'),
+    toolSummary: container.querySelector('.chat-tool-summary')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    workingStatus: null,
+    toolSummary: '1 action',
+  })
+})
+
+it('accepts the active tool returned by the messages endpoint', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse([
+        {
+          type: 'tool_in_progress',
+          tool: 'exec',
+          target: 'cargo test',
+        },
+      ]),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        message: false,
+        answerQuestion: false,
+        interrupt: false,
+        openInTerminal: false,
+      }),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, category: 'in_progress', elapsedSeconds: 30 }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        isMobile
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  expect(
+    Array.from(
+      requireElement(container.querySelector('.conversation-working-status'))
+        .children,
+    )
+      .slice(1)
+      .map((child) => child.textContent),
+  ).toEqual(['Working · 30s', 'execcargo test'])
+})
+
 it('opens and closes a crit review beside a waiting conversation', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, {

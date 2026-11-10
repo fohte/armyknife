@@ -31,6 +31,19 @@ type ConversationPaneViewProps = {
   onLater?: () => void
 }
 
+function formatElapsedTime(totalSeconds: number) {
+  if (totalSeconds < 60) return `${String(totalSeconds)}s`
+  const minutes = Math.floor(totalSeconds / 60)
+  if (minutes < 60) {
+    const seconds = totalSeconds % 60
+    return seconds === 0
+      ? `${String(minutes)}m`
+      : `${String(minutes)}m ${String(seconds)}s`
+  }
+  const hours = Math.floor(minutes / 60)
+  return `${String(hours)}h ${String(minutes % 60)}m`
+}
+
 export function ConversationPaneView({
   session,
   messages,
@@ -67,6 +80,12 @@ export function ConversationPaneView({
   const followLatestRef = useRef(true)
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
+  )
+  const activeTool = messages.findLast(
+    (message) => message.type === 'tool_in_progress',
+  )
+  const conversationMessages = messages.filter(
+    (message) => message.type !== 'tool_in_progress',
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
@@ -320,10 +339,10 @@ export function ConversationPaneView({
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
         ) : null}
-        {!loading && messages.length === 0 ? (
+        {!loading && conversationMessages.length === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {messages.map((message, index) => {
+        {conversationMessages.map((message, index) => {
           if (message.type === 'user') {
             return (
               <article
@@ -431,6 +450,23 @@ export function ConversationPaneView({
           )
         })}
       </div>
+
+      {session.category === 'in_progress' ? (
+        <div className="conversation-working-status" role="status">
+          <span className="conversation-working-dot" aria-hidden="true" />
+          <span>Working · {formatElapsedTime(session.elapsedSeconds)}</span>
+          {activeTool != null ? (
+            <span className="conversation-working-tool">
+              {activeTool.tool}
+              {activeTool.target != null && activeTool.target !== '' ? (
+                <span className="conversation-working-target">
+                  {activeTool.target}
+                </span>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       {(error ?? attachmentError) != null &&
       (error ?? attachmentError) !== '' ? (

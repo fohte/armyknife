@@ -199,6 +199,11 @@ enum ChatItem {
         summary: String,
         operations: Vec<ToolOperation>,
     },
+    ToolInProgress {
+        tool: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
     Question {
         question: String,
         choices: Vec<String>,
