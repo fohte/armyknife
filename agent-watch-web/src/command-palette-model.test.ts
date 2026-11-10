@@ -25,6 +25,7 @@ function session(
     unread: false,
     task,
     repo: 'example/service',
+    branch: `${id}-branch`,
     project,
     parent: null,
     ancestorSessionIds: [],
@@ -58,54 +59,45 @@ function memoryStorage(initial: Record<string, string> = {}): Storage {
 }
 
 it('builds default groups from needs-action, recent, and available commands', () => {
-  expect(
-    buildCommandPaletteGroups(sessions, '', 'all', ['session-b'], false),
-  ).toEqual([
-    {
-      heading: 'NEEDS ACTION',
-      items: [{ type: 'session', id: 'session-a', session: sessions[0] }],
-    },
-    {
-      heading: 'RECENT',
-      items: [{ type: 'session', id: 'session-b', session: sessions[1] }],
-    },
-    {
-      heading: 'COMMANDS',
-      items: [
-        {
-          type: 'command',
-          id: 'switch-board',
-          label: 'Switch to Board',
-          description: 'Show projects and sessions',
-        },
-        {
-          type: 'command',
-          id: 'switch-inbox',
-          label: 'Switch to Inbox',
-          description: 'Show the session inbox',
-        },
-        {
-          type: 'command',
-          id: 'archive-done',
-          label: 'Archive all done',
-          description: 'Archive every done session',
-        },
-        {
-          type: 'command',
-          id: 'filter-task:42',
-          label: 'Filter inbox by task #42',
-          description: 'Improve alerts',
-          taskNumber: 42,
-        },
-      ],
-    },
-  ])
+  expect(buildCommandPaletteGroups(sessions, '', 'all', ['session-b'])).toEqual(
+    [
+      {
+        heading: 'NEEDS ACTION',
+        items: [{ type: 'session', id: 'session-a', session: sessions[0] }],
+      },
+      {
+        heading: 'RECENT',
+        items: [{ type: 'session', id: 'session-b', session: sessions[1] }],
+      },
+      {
+        heading: 'COMMANDS',
+        items: [
+          {
+            type: 'command',
+            id: 'switch-board',
+            label: 'Switch to Board',
+            description: 'Show projects and sessions',
+          },
+          {
+            type: 'command',
+            id: 'switch-inbox',
+            label: 'Switch to Inbox',
+            description: 'Show the session inbox',
+          },
+          {
+            type: 'command',
+            id: 'archive-done',
+            label: 'Archive all done',
+            description: 'Archive every done session',
+          },
+        ],
+      },
+    ],
+  )
 })
 
 it('matches text and scopes task results from a leading prefix', () => {
-  expect(
-    buildCommandPaletteGroups(sessions, '#alert', 'all', [], false),
-  ).toEqual([
+  expect(buildCommandPaletteGroups(sessions, '#alert', 'all', [])).toEqual([
     {
       heading: 'TQ TASKS',
       items: [
@@ -121,9 +113,7 @@ it('matches text and scopes task results from a leading prefix', () => {
 })
 
 it('matches projects from an at-sign prefix', () => {
-  expect(
-    buildCommandPaletteGroups(sessions, '@alert', 'all', [], false),
-  ).toEqual([
+  expect(buildCommandPaletteGroups(sessions, '@alert', 'all', [])).toEqual([
     {
       heading: 'PROJECTS',
       items: [
@@ -134,6 +124,17 @@ it('matches projects from an at-sign prefix', () => {
           sessions: [sessions[0], sessions[1]],
         },
       ],
+    },
+  ])
+})
+
+it('matches sessions by branch name', () => {
+  expect(
+    buildCommandPaletteGroups(sessions, 'session-b-branch', 'all', []),
+  ).toEqual([
+    {
+      heading: 'SESSIONS',
+      items: [{ type: 'session', id: 'session-b', session: sessions[1] }],
     },
   ])
 })

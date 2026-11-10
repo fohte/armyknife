@@ -274,6 +274,53 @@
   white-space: nowrap;
 }
 
+.conversation-background-tasks {
+  position: relative;
+  margin-left: auto;
+  color: #d4d4d8;
+}
+
+.conversation-background-tasks summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.conversation-background-tasks ul {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 1;
+  display: grid;
+  min-width: 260px;
+  max-width: min(480px, 80vw);
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #18181b;
+  list-style: none;
+}
+
+.conversation-background-tasks li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+}
+
+.conversation-background-tasks li span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-background-tasks li span:last-child {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-strong);
+  font-family: var(--font-mono);
+}
+
 @keyframes conversation-working-pulse {
   50% {
     opacity: 0.35;

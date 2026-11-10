@@ -44,6 +44,8 @@ export type Session = {
   task: SessionTask | null
   tasks?: SessionTask[]
   repo: string
+  branch?: string | null
+  canOpenInTerminal?: boolean
   project: string
   parent: ParentSession | null
   ancestorSessionIds: string[]
@@ -101,6 +103,17 @@ export type UserContentPart =
 export type ToolOperation = {
   tool: string
   target?: string
+}
+
+export type BackgroundTask = {
+  id: string
+  description: string
+  elapsedSeconds: number
+}
+
+export type ConversationResponse = {
+  messages: ChatItem[]
+  backgroundTasks: BackgroundTask[]
 }
 
 export type SessionActions = {

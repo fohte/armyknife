@@ -396,3 +396,16 @@ export const AnActionFailureIsVisible: Story = {
     error: 'session pane is idle or unavailable',
   },
 }
+
+export const BackgroundTaskContinuesWhileTheSessionWaits: Story = {
+  name: 'A background task remains visible while the session waits',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'fixture-task-one',
+        description: 'Watch the build pipeline',
+        elapsedSeconds: 128,
+      },
+    ],
+  },
+}

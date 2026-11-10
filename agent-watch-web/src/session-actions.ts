@@ -44,6 +44,10 @@ export function archiveSession(sessionId: string) {
   return postSessionAction(sessionId, 'archive', {})
 }
 
+export function openSessionInTerminal(sessionId: string) {
+  return postSessionAction(sessionId, 'focus', {})
+}
+
 export function setSessionToday(sessionId: string, isToday: boolean) {
   return postSessionAction(sessionId, 'today', { isToday })
 }
