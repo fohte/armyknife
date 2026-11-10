@@ -2090,17 +2090,10 @@ it('shows Ctrl-K in the navigation on other platforms', () => {
   })
 })
 
-it('filters the Inbox from a task command in the palette', async () => {
+it('keeps Inbox filters out of the command palette', async () => {
   setPlatform('MacIntel')
-  const taskSession = session('session-task', 'Review alert settings')
-  taskSession.task = {
-    id: 'task-alerts',
-    number: 42,
-    title: 'Improve notifications',
-    priority: 1,
-  }
   renderApp()
-  publishSessions({ revision: 1, sessions: [taskSession] })
+  publishSessions({ revision: 1, sessions: [] })
   act(() => {
     dispatchKey(window, 'k', { metaKey: true })
   })
@@ -2110,21 +2103,12 @@ it('filters the Inbox from a task command in the palette', async () => {
   if (input === null) throw new Error('Palette input was not rendered')
 
   await act(async () => {
-    await userEvent.type(input, '>Filter inbox by task #42')
-    await userEvent.keyboard('{Enter}')
+    await userEvent.type(input, '>Filter inbox')
   })
 
-  const snapshot = () => ({
-    activeView: readActiveView(),
-    activeFilter: container.querySelector('[aria-label="Active inbox filters"]')
-      ?.textContent,
-    visibleSessions: readSessionTitles(),
-  })
-  expect(snapshot()).toEqual({
-    activeView: 'Inbox',
-    activeFilter: 'tq task #42×',
-    visibleSessions: ['Review alert settings'],
-  })
+  expect(
+    container.querySelector('.command-palette-empty')?.textContent,
+  ).toEqual('No results found')
 })
 
 it('opens a session in the Inbox when selected from the palette on Board', async () => {

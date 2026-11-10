@@ -25,6 +25,8 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/web-app',
+  branch: 'feature/notification-preferences',
+  canOpenInTerminal: true,
   project: 'notification refresh',
   parent: null,
   ancestorSessionIds: [],
@@ -40,9 +42,10 @@ function renderPalette(
       <CommandPalette
         sessions={[session]}
         recentSessionIds={[]}
-        inboxFilterQuery=""
         onClose={() => undefined}
         onOpenSession={() => undefined}
+        onLater={() => undefined}
+        onOpenInTerminal={() => undefined}
         onOpenProject={() => undefined}
         onRunCommand={() => undefined}
         {...props}
@@ -107,7 +110,7 @@ it('shows the primary task and the count of other linked tasks for a session', (
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
   ).toBe(
-    'P1 #42 Improve notifications +1 · notification refresh · example/web-app',
+    'P1 #42 Improve notifications +1 · feature/notification-preferences · notification refresh · example/web-app',
   )
 })
 
@@ -151,4 +154,144 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
       },
     ],
   ])
+})
+
+it('matches a session by branch name and shows its task and repository', () => {
+  renderPalette({ initialQuery: 'feature/notification-preferences' })
+
+  expect(container.querySelector('.command-palette-item')?.textContent).toEqual(
+    'Review notification settingsQuestionP1 #42 Improve notifications · feature/notification-preferences · notification refresh · example/web-appQuestion · 5m',
+  )
+})
+
+it.each([
+  ['omitted', undefined],
+  ['null', null],
+  ['blank', '   '],
+] as const)('omits the branch label for %s', (_, branch) => {
+  const sessionWithoutBranch: Session = { ...session }
+  if (branch === undefined) {
+    delete sessionWithoutBranch.branch
+  } else {
+    sessionWithoutBranch.branch = branch
+  }
+  renderPalette({ sessions: [sessionWithoutBranch] })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toEqual(
+    'P1 #42 Improve notifications · notification refresh · example/web-app',
+  )
+})
+
+it.each([
+  ['caret before the query end', 2, 2, 3],
+  ['a selection before the query end', 2, 6, 6],
+] as const)(
+  'keeps ArrowRight in the input for %s',
+  async (_, start, end, expectedCaret) => {
+    renderPalette({ initialQuery: 'notification' })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    input.setSelectionRange(start, end)
+
+    await act(async () => {
+      await userEvent.keyboard('{ArrowRight}')
+    })
+
+    const snapshot = () => ({
+      actionMenu: container.querySelector('[role="menu"]') !== null,
+      selectionEnd: input.selectionEnd,
+      selectionStart: input.selectionStart,
+    })
+
+    expect(snapshot()).toEqual({
+      actionMenu: false,
+      selectionEnd: expectedCaret,
+      selectionStart: expectedCaret,
+    })
+  },
+)
+
+it('opens the highlighted actions when the query caret is at the end', async () => {
+  renderPalette({ initialQuery: 'Review' })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  input.setSelectionRange(input.value.length, input.value.length)
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}')
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="menuitem"]')).map(
+      (item) => item.textContent,
+    ),
+  ).toEqual(['Open session', 'Later', 'Copy session ID', 'Open in terminal'])
+})
+
+it('opens the highlighted session actions with ArrowRight and runs Later', async () => {
+  const onLater = vi.fn<(id: string) => void>()
+  renderPalette({ onLater })
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{Enter}')
+  })
+
+  expect(onLater.mock.calls).toEqual([['session-alerts']])
+})
+
+it('opens the highlighted session in its terminal from the actions submenu', async () => {
+  const onOpenInTerminal = vi.fn<(id: string) => void>()
+  renderPalette({ onOpenInTerminal })
+
+  await act(async () => {
+    await userEvent.keyboard(
+      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
+    )
+  })
+
+  expect(onOpenInTerminal.mock.calls).toEqual([['session-alerts']])
+})
+
+it('copies the session ID from the actions submenu with Enter', async () => {
+  const writeText = vi
+    .fn<(text: string) => Promise<void>>()
+    .mockResolvedValue(undefined)
+  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  renderPalette()
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}')
+  })
+
+  const snapshot = () => ({
+    clipboardCalls: writeText.mock.calls,
+    activeActionLabel: container.querySelector(
+      '[data-palette-action-active="true"] button',
+    )?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    clipboardCalls: [['session-alerts']],
+    activeActionLabel: 'Copied',
+  })
+})
+
+it('hides terminal action when the session has no terminal capability', () => {
+  const unavailableSession = { ...session, canOpenInTerminal: false }
+  renderPalette({
+    initialActionItemId: unavailableSession.id,
+    sessions: [unavailableSession],
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="menuitem"]')).map(
+      (item) => item.textContent,
+    ),
+  ).toEqual(['Open session', 'Later', 'Copy session ID'])
 })

@@ -7,8 +7,7 @@ import {
   recordRecentSessionId,
 } from '#command-palette-model'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
-import { formatInboxFilterQuery, parseInboxFilterQuery } from '#inbox-filter'
-import { archiveSession } from '#session-actions'
+import { archiveSession, openSessionInTerminal } from '#session-actions'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
 import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
@@ -20,8 +19,6 @@ type Navigate = (
 
 type CommandPaletteControllerOptions = {
   sessions: readonly Session[]
-  inboxFilterQuery: string
-  setInboxFilterQuery: (query: string) => void
   navigate: Navigate
   setError: (error: string | null) => void
   setFocusedProjectName: (project: string | null) => void
@@ -35,8 +32,6 @@ type CommandPaletteControllerOptions = {
 
 export function useCommandPaletteController({
   sessions,
-  inboxFilterQuery,
-  setInboxFilterQuery,
   navigate,
   setError,
   setFocusedProjectName,
@@ -77,6 +72,19 @@ export function useCommandPaletteController({
   const openConversation = withRecentSession(openConversationAction)
   const openSessionInInbox = withRecentSession(openSessionInInboxAction)
   const openTodaySession = withRecentSession(openTodaySessionAction)
+  const focusSession = useCallback(
+    (id: string) => {
+      void openSessionInTerminal(id).match(
+        () => {
+          setError(null)
+        },
+        () => {
+          setError('Could not open the session in terminal.')
+        },
+      )
+    },
+    [setError],
+  )
   useEffect(() => {
     if (
       selectedId !== null &&
@@ -126,32 +134,11 @@ export function useCommandPaletteController({
           setError(failure)
           return
         }
-        case 'clear-inbox-filter':
-          setInboxFilterQuery('')
-          navigate((current) => ({ ...current, view: 'inbox' }))
-          return
         default:
-          if (command.taskNumber !== undefined) {
-            const filters = parseInboxFilterQuery(inboxFilterQuery).filter(
-              (filter) => filter.key !== 'task',
-            )
-            filters.push({
-              key: 'task',
-              values: [String(command.taskNumber)],
-            })
-            setInboxFilterQuery(formatInboxFilterQuery(filters))
-            navigate((current) => ({ ...current, view: 'inbox' }))
-          }
+          return
       }
     },
-    [
-      inboxFilterQuery,
-      navigate,
-      sessions,
-      setError,
-      setFocusedProjectName,
-      setInboxFilterQuery,
-    ],
+    [navigate, sessions, setError, setFocusedProjectName],
   )
 
   useEffect(() => {
@@ -175,6 +162,7 @@ export function useCommandPaletteController({
     openConversation,
     openSessionInInbox,
     openTodaySession,
+    focusSession,
     toggleToday,
     runCommand,
   }
