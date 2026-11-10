@@ -811,8 +811,8 @@ it('returns to the Inbox after submitting Later for a mobile conversation', asyn
     screen: container
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-mobile-screen'),
-    conversationTitle: container.querySelector('.conversation-pane h1')
-      ?.textContent,
+    conversationTitle:
+      container.querySelector('.conversation-pane h1')?.textContent ?? null,
     inboxSelection: readSelectedTitle(),
     laterRequest: fetchMock.mock.calls
       .filter(
@@ -862,8 +862,8 @@ it('returns to the Inbox when the mobile conversation disappears from the feed',
     screen: container
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-mobile-screen'),
-    conversationTitle: container.querySelector('.conversation-pane h1')
-      ?.textContent,
+    conversationTitle:
+      container.querySelector('.conversation-pane h1')?.textContent ?? null,
     inboxSelection: readSelectedTitle(),
   })
   expect(snapshot()).toEqual({

@@ -378,6 +378,7 @@
 }
 
 .conversation-pane[data-mobile='true'] .mobile-interrupt-button {
+  width: auto;
   min-height: 44px;
   padding: 0 12px;
   border: 1px solid #3f3f46;
