@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use rusqlite_migration::{M, Migrations};
+use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
@@ -70,10 +70,10 @@ pub(crate) fn open_connection(sessions_dir: &Path) -> Result<Connection> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     let user_version: i64 =
         connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
-    if user_version < MIGRATION_ENTRIES.len() as i64 {
-        MIGRATIONS
-            .to_latest(&mut connection)
-            .context("migrating session database")?;
+    if user_version < MIGRATION_ENTRIES.len() as i64
+        && let Err(error) = MIGRATIONS.to_latest(&mut connection)
+    {
+        accept_migration_error(&connection, error)?;
     }
 
     if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
@@ -409,6 +409,22 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn accept_migration_error(connection: &Connection, error: MigrationError) -> Result<()> {
+    let database_too_far_ahead = matches!(
+        &error,
+        MigrationError::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead)
+    );
+    if database_too_far_ahead {
+        let user_version: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if user_version > MIGRATION_ENTRIES.len() as i64 {
+            return Ok(());
+        }
+    }
+
+    Err(error).context("migrating session database")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,5 +486,27 @@ mod tests {
             (actual, actual_user_version),
             (expected, expected_user_version),
         );
+    }
+
+    #[rstest]
+    #[case::database_advanced_after_check(true, MIGRATION_ENTRIES.len() as i64 + 1)]
+    #[case::database_not_advanced(false, MIGRATION_ENTRIES.len() as i64 - 1)]
+    fn accepts_only_a_migration_error_for_a_newer_database(
+        #[case] has_newer_version: bool,
+        #[case] user_version: i64,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let database_path = temp_dir.path().join("sessions.db");
+        let connection =
+            Connection::open(database_path).expect("temporary session database should open");
+        connection
+            .pragma_update(None, "user_version", user_version)
+            .expect("database migration version should be set");
+        let error =
+            MigrationError::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead);
+
+        let result = accept_migration_error(&connection, error);
+
+        assert_eq!(result.is_ok(), has_newer_version);
     }
 }
