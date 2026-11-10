@@ -15,6 +15,7 @@ const separatorSize = 8
 type ResizableColumnsProps = {
   first: ReactNode
   second: ReactNode
+  firstCollapsed?: boolean
   storageKey: string | null
   firstSize: number
   firstMinSize: number
@@ -59,6 +60,7 @@ function getMaximumFirstSize(
 export function ResizableColumns({
   first,
   second,
+  firstCollapsed = false,
   storageKey,
   firstSize: initialFirstSize,
   firstMinSize,
@@ -171,7 +173,11 @@ export function ResizableColumns({
   }
 
   return (
-    <div className="resizable-columns" ref={containerRef}>
+    <div
+      className="resizable-columns"
+      data-first-collapsed={firstCollapsed ? 'true' : undefined}
+      ref={containerRef}
+    >
       <div
         className={`resizable-columns-pane resizable-columns-first-pane${!hasSecond && fillFirstPaneWhenAlone ? ' is-alone' : ''}`}
         style={{ flexBasis: `${String(firstSize)}px` }}

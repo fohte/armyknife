@@ -31,6 +31,8 @@ function renderNav(
         onSelectToday={() => undefined}
         onSelectSession={onSelectSession}
         onOpenPalette={() => undefined}
+        inboxCollapsed={false}
+        onToggleInbox={() => undefined}
       />,
     )
   })
@@ -178,4 +180,42 @@ it('hides the saved views section when no views are saved', () => {
   renderNav([])
 
   expect(container.querySelector('#saved-views-title')).toBeNull()
+})
+
+it('toggles the Inbox from the navigation and marks the collapsed state', () => {
+  const onToggleInbox = vi.fn<() => void>()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <AgentWatchNav
+        activeView="inbox"
+        needsActionCount={0}
+        savedViews={[]}
+        selectedSavedViewId={null}
+        workTypeNavGroups={[]}
+        onViewChange={() => undefined}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
+        todaySessions={[]}
+        onSelectToday={() => undefined}
+        onSelectSession={() => undefined}
+        onOpenPalette={() => undefined}
+        inboxCollapsed
+        onToggleInbox={onToggleInbox}
+      />,
+    )
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Show Inbox"]')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    pressed: container
+      .querySelector<HTMLButtonElement>('[aria-label="Show Inbox"]')
+      ?.getAttribute('aria-pressed'),
+    calls: onToggleInbox.mock.calls,
+  })
+  expect(snapshot()).toEqual({ pressed: 'true', calls: [[]] })
 })

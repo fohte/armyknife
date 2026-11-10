@@ -40,6 +40,11 @@
   flex: 1 1 auto;
 }
 
+.resizable-columns[data-first-collapsed='true'] > .resizable-columns-first-pane,
+.resizable-columns[data-first-collapsed='true'] > .resizable-columns-separator {
+  display: none;
+}
+
 .resizable-columns-second-pane {
   flex: 1 1 0;
 }

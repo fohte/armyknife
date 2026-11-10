@@ -49,6 +49,11 @@ export const TwoColumnsHaveAnAdjustableBoundary: Story = {
   name: 'The session list and conversation have an adjustable boundary',
 }
 
+export const FirstPaneIsCollapsed: Story = {
+  name: 'The first pane collapses while the second pane fills the space',
+  args: { firstCollapsed: true },
+}
+
 export const NavigationHasAnAdjustableBoundary: Story = {
   name: 'The navigation and main content have an adjustable boundary',
   args: {

@@ -80,6 +80,41 @@ it('restores the stored width and saves keyboard resizing', () => {
   })
 })
 
+it('marks the first pane as collapsed without removing the second pane', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ResizableColumns
+        first={<div>First pane</div>}
+        second={<div>Second pane</div>}
+        firstCollapsed
+        storageKey={null}
+        firstSize={400}
+        firstMinSize={240}
+        secondMinSize={320}
+        label="Resize first and second panes"
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    collapsed: container
+      .querySelector('.resizable-columns')
+      ?.getAttribute('data-first-collapsed'),
+    first: container.querySelector('.resizable-columns-first-pane')
+      ?.textContent,
+    second: container.querySelector('.resizable-columns-second-pane')
+      ?.textContent,
+    separatorCount: container.querySelectorAll('[role="separator"]').length,
+  })
+  expect(snapshot()).toEqual({
+    collapsed: 'true',
+    first: 'First pane',
+    second: 'Second pane',
+    separatorCount: 1,
+  })
+})
+
 it('stores the width after pointer dragging', () => {
   renderColumns('test:pointer')
   const separator =

@@ -3,7 +3,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter, X } from 'lucide-react'
+import { Filter, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import { cn } from '#lib/utils'
@@ -28,6 +28,8 @@ type AgentWatchNavProps = {
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
   onOpenPalette: () => void
+  inboxCollapsed?: boolean
+  onToggleInbox?: () => void
 }
 
 export function AgentWatchNav({
@@ -43,6 +45,8 @@ export function AgentWatchNav({
   onSelectToday,
   onSelectSession,
   onOpenPalette,
+  inboxCollapsed = false,
+  onToggleInbox = () => undefined,
 }: AgentWatchNavProps) {
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
@@ -58,6 +62,22 @@ export function AgentWatchNav({
           type="button"
         >
           ⌘K
+        </button>
+        <button
+          aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+          aria-pressed={inboxCollapsed}
+          className={`agent-watch-inbox-toggle${inboxCollapsed ? ' is-active' : ''}`}
+          onClick={() => {
+            onToggleInbox()
+          }}
+          title={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
+          type="button"
+        >
+          {inboxCollapsed ? (
+            <PanelLeftOpen aria-hidden="true" size={13} />
+          ) : (
+            <PanelLeftClose aria-hidden="true" size={13} />
+          )}
         </button>
       </div>
       <div className="view-switch" role="group" aria-label="Views">

@@ -133,6 +133,9 @@ type ConversationPaneProps = {
   refreshKey: number
   onSelectSession: (id: string) => void
   isMobile?: boolean
+  statusPanelOpen?: boolean
+  onToggleStatusPanel?: () => void
+  runningCount?: number
   onBack?: () => void
   onLater?: () => void
 }
@@ -143,6 +146,9 @@ export function ConversationPane({
   refreshKey,
   onSelectSession,
   isMobile = false,
+  statusPanelOpen = false,
+  onToggleStatusPanel = () => undefined,
+  runningCount = 0,
   onBack = () => undefined,
   onLater = () => undefined,
 }: ConversationPaneProps) {
@@ -225,6 +231,9 @@ export function ConversationPane({
       onAction={onAction}
       onSelectSession={onSelectSession}
       isMobile={isMobile}
+      statusPanelOpen={statusPanelOpen}
+      onToggleStatusPanel={onToggleStatusPanel}
+      runningCount={runningCount}
       onBack={onBack}
       onLater={onLater}
     />

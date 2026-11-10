@@ -1,19 +1,11 @@
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
-import { CritPane } from '#components/crit-pane'
 import { MessageComposer } from '#components/message-composer'
-import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
@@ -41,6 +33,9 @@ type ConversationPaneViewProps = {
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
   isMobile?: boolean
+  statusPanelOpen?: boolean
+  onToggleStatusPanel?: () => void
+  runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
@@ -91,6 +86,9 @@ export function ConversationPaneView({
   onAction,
   onSelectSession,
   isMobile = false,
+  statusPanelOpen = false,
+  onToggleStatusPanel = () => undefined,
+  runningCount = 0,
   fileDropActive = false,
   onBack,
   onLater,
@@ -111,7 +109,6 @@ export function ConversationPaneView({
     clearDraftIfUnchanged,
     onAction,
   })
-  const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
   const sessionLinkTargets = useSessionLinkTargets(sessions)
@@ -134,10 +131,6 @@ export function ConversationPaneView({
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
-  const critUrl =
-    isReview && session.category === 'needs_action' ? session.critUrl : null
-  const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
-  const critOpen = hasCritUrl && openCritUrl === critUrl
 
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
@@ -350,19 +343,20 @@ export function ConversationPaneView({
               />
             </div>
             <div className="conversation-header-actions">
-              {hasCritUrl ? (
-                <Button
-                  className="conversation-crit-toggle"
-                  type="button"
-                  variant="plain"
-                  aria-expanded={critOpen}
-                  onClick={() => {
-                    setOpenCritUrl(critOpen ? null : critUrl)
-                  }}
-                >
-                  {critOpen ? 'Hide crit' : 'Open crit'}
-                </Button>
-              ) : null}
+              <Button
+                className="conversation-status-panel-toggle"
+                type="button"
+                variant="plain"
+                aria-label="Toggle session status panel with Command Period"
+                aria-expanded={statusPanelOpen}
+                aria-controls="session-status-panel"
+                onClick={() => {
+                  onToggleStatusPanel()
+                }}
+              >
+                <span aria-hidden="true">◐</span>
+                {runningCount > 0 ? <span>{runningCount}</span> : null}
+              </Button>
               {session.pullRequest ? (
                 <a
                   className="conversation-pr-link"
@@ -465,13 +459,7 @@ export function ConversationPaneView({
     </section>
   )
 
-  const closeCrit = () => {
-    setOpenCritUrl(null)
-  }
   if (isMobile) return conversationPane
 
-  return renderConversationCritColumns(
-    conversationPane,
-    critOpen ? <CritPane url={critUrl} onClose={closeCrit} /> : null,
-  )
+  return conversationPane
 }

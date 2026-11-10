@@ -1251,7 +1251,7 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
   })
   act(() => {
     container
-      .querySelector<HTMLButtonElement>('.conversation-crit-toggle')
+      .querySelector<HTMLButtonElement>('.conversation-status-panel-toggle')
       ?.click()
   })
   const desktopIframeCount = container.querySelectorAll('iframe').length
@@ -1266,8 +1266,9 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
   const snapshot = () => ({
     guidance: container.querySelector('.mobile-review-note')?.textContent,
     iframeCount: container.querySelectorAll('iframe').length,
-    critButtonCount: container.querySelectorAll('.conversation-crit-toggle')
-      .length,
+    critButtonCount: container.querySelectorAll(
+      '.conversation-status-panel-toggle',
+    ).length,
     resizerCount: container.querySelectorAll('[role="separator"]').length,
     desktopIframeCount,
     desktopResizers,
@@ -1281,8 +1282,111 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     desktopResizers: [
       'Resize navigation and content',
       'Resize session list and conversation',
-      'Resize conversation and crit',
+      'Resize conversation and status panel',
     ],
+  })
+})
+
+it('auto-collapses the Inbox for the status panel unless manually overridden', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-review', 'Review the retry policy'),
+        kind: 'Review',
+        critUrl: 'https://example.test/review',
+      },
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+
+  const panelToggle = container.querySelector<HTMLButtonElement>(
+    '.conversation-status-panel-toggle',
+  )
+  act(() => panelToggle?.click())
+  const autoCollapsed = container.querySelector(
+    '.resizable-columns[data-first-collapsed="true"]',
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Show Inbox"]')
+      ?.click()
+  })
+  const manuallyExpanded = container.querySelector(
+    '.resizable-columns[data-first-collapsed="true"]',
+  )
+  act(() => panelToggle?.click())
+
+  const snapshot = () => ({
+    autoCollapsed: autoCollapsed !== null,
+    manuallyExpanded: manuallyExpanded === null,
+    staysExpandedAfterClose:
+      container.querySelector(
+        '.resizable-columns[data-first-collapsed="true"]',
+      ) === null,
+    panelOpen: panelToggle?.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    autoCollapsed: true,
+    manuallyExpanded: true,
+    staysExpandedAfterClose: true,
+    panelOpen: 'false',
+  })
+})
+
+it('toggles the Inbox and status panel by keyboard while keeping j and k navigation', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-review', 'Review the retry policy'),
+        kind: 'Review',
+        critUrl: 'https://example.test/review',
+      },
+      session('session-next', 'Next session'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+
+  let collapseEvent: KeyboardEvent | undefined
+  let moveEvent: KeyboardEvent | undefined
+  let panelEvent: KeyboardEvent | undefined
+  act(() => {
+    collapseEvent = dispatchKey(window, '[')
+    moveEvent = dispatchKey(window, 'j')
+  })
+  const afterMove = readSelectedTitle()
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+    panelEvent = dispatchKey(window, '.', { metaKey: true })
+  })
+
+  const snapshot = () => ({
+    afterMove,
+    inboxCollapsed:
+      container.querySelector(
+        '.resizable-columns[data-first-collapsed="true"]',
+      ) !== null,
+    panelOpen: container
+      .querySelector('.conversation-status-panel-toggle')
+      ?.getAttribute('aria-expanded'),
+    prevented: [
+      collapseEvent?.defaultPrevented,
+      moveEvent?.defaultPrevented,
+      panelEvent?.defaultPrevented,
+    ],
+  })
+  expect(snapshot()).toEqual({
+    afterMove: 'Next session',
+    inboxCollapsed: true,
+    panelOpen: 'true',
+    prevented: [true, true, true],
   })
 })
 
@@ -2770,6 +2874,8 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
     events.push(dispatchKey(textarea, 'j'))
     events.push(dispatchKey(select, 'j'))
     events.push(dispatchKey(editable, 'j'))
+    events.push(dispatchKey(input, '['))
+    events.push(dispatchKey(input, '.', { metaKey: true }))
     events.push(dispatchKey(window, 'j', { altKey: true }))
     events.push(dispatchKey(window, 'j', { ctrlKey: true }))
     events.push(dispatchKey(window, 'j', { metaKey: true }))
@@ -2783,7 +2889,18 @@ it('ignores shortcuts from input fields and events with modifiers', () => {
 
   expect(snapshot()).toEqual({
     selectedTitle: 'First session',
-    defaultPrevented: [false, false, false, false, false, false, false, false],
+    defaultPrevented: [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+    ],
   })
   input.remove()
   textarea.remove()
