@@ -19,12 +19,13 @@ mod web_state;
 pub(crate) use web_state::WatchWebSessionState;
 pub(super) use web_state::{
     clear_watch_web_later, set_watch_web_later, set_watch_web_today, watch_web_session_states,
+    watch_web_user_marker,
 };
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 2] = [
+static MIGRATION_ENTRIES: [M<'static>; 3] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -46,6 +47,7 @@ static MIGRATION_ENTRIES: [M<'static>; 2] = [
         is_today INTEGER NOT NULL DEFAULT 0
     );",
     ),
+    M::up("ALTER TABLE watch_web_session_state ADD COLUMN watch_web_user_marker TEXT;"),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
@@ -149,6 +151,17 @@ pub(crate) fn lock_session_for_wake(sessions_dir: &Path, session_id: &str) -> Re
 impl SessionLock {
     pub(crate) fn load(&self) -> Result<Option<Session>> {
         read_session_strict(&self.connection, &self.session_id)
+    }
+
+    pub(crate) fn ensure_watch_web_user_marker(&self) -> Result<String> {
+        self.ensure_transaction()?;
+        let marker = web_state::ensure_watch_web_user_marker_in_transaction(
+            &self.connection,
+            &self.session_id,
+        )?;
+        self.connection.execute_batch("COMMIT")?;
+        self.transaction_active.set(false);
+        Ok(marker)
     }
 
     pub(crate) fn save(&self, session: &Session) -> Result<()> {
