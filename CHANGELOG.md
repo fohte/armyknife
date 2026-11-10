@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.543](https://github.com/fohte/armyknife/compare/v0.1.542...v0.1.543) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add a command palette ([#1439](https://github.com/fohte/armyknife/issues/1439)) ([50197a4](https://github.com/fohte/armyknife/commit/50197a4d6d67d35c779a8f9fe1224ed2d18d09de))
+
 ## [0.1.542](https://github.com/fohte/armyknife/compare/v0.1.541...v0.1.542) (2026-11-10)
 
 
