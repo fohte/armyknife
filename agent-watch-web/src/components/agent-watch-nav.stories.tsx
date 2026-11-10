@@ -25,6 +25,11 @@ const meta = {
   component: AgentWatchNav,
   args: {
     activeView: 'inbox',
+    paletteShortcut: {
+      modifier: 'metaKey',
+      label: '⌘K',
+      ariaLabel: 'Command K',
+    },
     needsActionCount: 3,
     savedViews: [],
     selectedSavedViewId: null,

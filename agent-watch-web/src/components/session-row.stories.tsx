@@ -17,7 +17,17 @@ const session: Session = {
     number: 2048,
     title: 'Improve request reliability',
     priority: 1,
+    isClosed: false,
   },
+  tasks: [
+    {
+      id: 'example-task',
+      number: 2048,
+      title: 'Improve request reliability',
+      priority: 1,
+      isClosed: false,
+    },
+  ],
   repo: 'example/service',
   project: 'sample project',
   ancestorSessionIds: [],

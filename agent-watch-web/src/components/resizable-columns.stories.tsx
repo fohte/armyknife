@@ -60,6 +60,11 @@ export const NavigationHasAnAdjustableBoundary: Story = {
     first: (
       <AgentWatchNav
         activeView="inbox"
+        paletteShortcut={{
+          modifier: 'metaKey',
+          label: '⌘K',
+          ariaLabel: 'Command K',
+        }}
         needsActionCount={1}
         savedViews={[]}
         selectedSavedViewId={null}
