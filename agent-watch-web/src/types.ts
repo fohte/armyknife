@@ -52,7 +52,7 @@ export type Session = {
 
 export type SessionLinkTarget = Pick<
   Session,
-  'id' | 'title' | 'project' | 'category' | 'isPaused'
+  'id' | 'category' | 'isPaused' | 'task' | 'repo'
 >
 
 export type ChatItem =
