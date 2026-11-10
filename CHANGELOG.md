@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.529](https://github.com/fohte/armyknife/compare/v0.1.528...v0.1.529) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** configure work type nav ([#1411](https://github.com/fohte/armyknife/issues/1411)) ([bad232d](https://github.com/fohte/armyknife/commit/bad232d6a729d5625703267b1732cfa1254aec83))
+
 ## [0.1.528](https://github.com/fohte/armyknife/compare/v0.1.527...v0.1.528) (2026-11-10)
 
 
