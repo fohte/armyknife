@@ -360,33 +360,52 @@ pub fn notify(
     let session =
         store::load_session(session_id)?.ok_or_else(|| session_not_found_error(session_id))?;
 
+    notify_session(
+        session_id,
+        message,
+        from,
+        from_engine_hint,
+        &session,
+        wake::wake,
+        |session, content| match session.engine {
+            Engine::Claude => {
+                send_to_claude(&session.session_id, content)?;
+                Ok(Delivery::Sent)
+            }
+            Engine::Codex => send_to_codex(
+                &session.session_id,
+                content,
+                matches!(
+                    session.status,
+                    SessionStatus::Running | SessionStatus::WaitingInput
+                ),
+                codex_steer::send_message,
+            ),
+        },
+    )
+}
+
+fn notify_session(
+    session_id: &str,
+    message: &str,
+    from: Option<&str>,
+    from_engine_hint: Option<Engine>,
+    session: &Session,
+    wake_session: impl FnOnce(&str) -> Result<Option<String>>,
+    deliver: impl FnOnce(&Session, &str) -> Result<Delivery>,
+) -> Result<Delivery> {
     match notify_readiness(session.status) {
         NotifyReadiness::Refused => {
             return Err(CcError::SessionEnded(session_id.to_string()).into());
         }
         NotifyReadiness::NeedsWake => {
-            wake::wake(session_id)?;
+            wake_session(session_id)?;
         }
         NotifyReadiness::Ready => {}
     }
 
     let content = build_content(message, from, sender_engine(from, from_engine_hint));
-
-    match session.engine {
-        Engine::Claude => {
-            send_to_claude(session_id, &content)?;
-            Ok(Delivery::Sent)
-        }
-        Engine::Codex => send_to_codex(
-            session_id,
-            &content,
-            matches!(
-                session.status,
-                SessionStatus::Running | SessionStatus::WaitingInput
-            ),
-            codex_steer::send_message,
-        ),
-    }
+    deliver(session, &content)
 }
 
 fn send_to_codex<S>(session_id: &str, content: &str, was_active: bool, steer: S) -> Result<Delivery>
@@ -469,6 +488,7 @@ mod tests {
     use crate::commands::agent::types::TmuxInfo;
     use chrono::Utc;
     use rstest::{fixture, rstest};
+    use std::cell::RefCell;
     use std::path::PathBuf;
 
     struct TestSessionStore {
@@ -970,6 +990,53 @@ mod tests {
     #[case::ended(SessionStatus::Ended, NotifyReadiness::Refused)]
     fn notify_readiness_cases(#[case] status: SessionStatus, #[case] expected: NotifyReadiness) {
         assert_eq!(notify_readiness(status), expected);
+    }
+
+    #[rstest]
+    #[case::paused(
+        SessionStatus::Paused,
+        Ok(Delivery::Sent),
+        vec!["wake:target-session", "deliver:target-session:hello"],
+    )]
+    #[case::ended(
+        SessionStatus::Ended,
+        Err("Session 'target-session' has ended; refusing to notify (the user ended it intentionally)"),
+        vec![],
+    )]
+    fn notify_session_wakes_paused_sessions_before_delivery_and_refuses_ended_sessions(
+        #[case] status: SessionStatus,
+        #[case] expected_result: Result<Delivery, &str>,
+        #[case] expected_calls: Vec<&str>,
+    ) {
+        let session = suggestion_session("target-session", status, Engine::Claude);
+        let calls = RefCell::new(Vec::new());
+
+        let actual = notify_session(
+            &session.session_id,
+            "hello",
+            None,
+            None,
+            &session,
+            |session_id| {
+                calls.borrow_mut().push(format!("wake:{session_id}"));
+                Ok(None)
+            },
+            |session, content| {
+                calls
+                    .borrow_mut()
+                    .push(format!("deliver:{}:{content}", session.session_id));
+                Ok(Delivery::Sent)
+            },
+        )
+        .map_err(|error| error.to_string());
+
+        assert_eq!(
+            (actual, calls.into_inner()),
+            (
+                expected_result.map_err(str::to_string),
+                expected_calls.into_iter().map(str::to_string).collect(),
+            ),
+        );
     }
 
     #[rstest]
