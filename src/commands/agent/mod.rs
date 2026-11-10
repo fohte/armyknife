@@ -36,6 +36,7 @@ pub(crate) mod review_queue;
 mod session_init;
 mod session_pr_context;
 pub(crate) mod session_status;
+mod session_store_event;
 pub(crate) mod session_title;
 mod signal;
 mod status;
