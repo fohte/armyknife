@@ -12,6 +12,18 @@ export type BoardProject = {
   status: ProjectStatus
 }
 
+type WorkTypeNavProject = {
+  name: string
+  status: ProjectStatus
+  needsActionCount: number
+  sessionId: string
+}
+
+export type WorkTypeNavGroup = {
+  label: string
+  projects: WorkTypeNavProject[]
+}
+
 export function buildBoardProjects(
   sessions: readonly Session[],
 ): BoardProject[] {
@@ -58,18 +70,61 @@ export function buildBoardProjects(
   )
 }
 
-export function sortPmProjects(projects: readonly BoardProject[]) {
-  const statusOrder: Record<ProjectStatus, number> = {
-    Review: 0,
-    Working: 1,
-    Idle: 2,
+export function buildWorkTypeNavGroups(
+  sessions: readonly Session[],
+  workTypeNavLabels: Readonly<Record<string, string>>,
+): WorkTypeNavGroup[] {
+  const workTypesByLabel = new Map<string, Set<string>>()
+  for (const [workType, label] of Object.entries(workTypeNavLabels)) {
+    if (label.trim().length === 0) {
+      continue
+    }
+
+    const workTypes = workTypesByLabel.get(label) ?? new Set<string>()
+    workTypes.add(workType)
+    workTypesByLabel.set(label, workTypes)
   }
 
-  return [...projects].sort(
-    (left, right) =>
-      statusOrder[left.status] - statusOrder[right.status] ||
-      right.needsActionCount - left.needsActionCount ||
-      right.inProgressCount - left.inProgressCount ||
-      left.name.localeCompare(right.name, 'en'),
+  const projects = buildBoardProjects(sessions)
+  return Array.from(workTypesByLabel, ([label, workTypes]) => ({
+    label,
+    projects: projects.flatMap((project) => {
+      const matchingSessions = project.sessions
+        .filter(
+          (session) =>
+            session.workType !== null &&
+            session.workType !== undefined &&
+            workTypes.has(session.workType),
+        )
+        .sort(compareNavSessions)
+      const session = matchingSessions[0]
+
+      return session === undefined
+        ? []
+        : [
+            {
+              name: project.name,
+              status: project.status,
+              needsActionCount: project.needsActionCount,
+              sessionId: session.id,
+            },
+          ]
+    }),
+  })).sort((left, right) => left.label.localeCompare(right.label, 'en'))
+}
+
+function compareNavSessions(left: Session, right: Session) {
+  const categoryOrder: Record<string, number> = {
+    needs_action: 0,
+    in_progress: 1,
+    later: 2,
+    done: 3,
+  }
+
+  return (
+    (categoryOrder[left.category] ?? 4) -
+      (categoryOrder[right.category] ?? 4) ||
+    left.elapsedSeconds - right.elapsedSeconds ||
+    left.id.localeCompare(right.id, 'en')
   )
 }

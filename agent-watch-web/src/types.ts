@@ -30,6 +30,7 @@ type ParentSession = {
 export type Session = {
   id: string
   engine?: 'Claude' | 'Codex' | (string & {})
+  workType?: string | null
   category: SessionCategory
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
@@ -65,5 +66,6 @@ export type SessionActions = {
 
 export type SessionsResponse = {
   revision: number
+  workTypeNavLabels?: Record<string, string>
   sessions: Session[]
 }

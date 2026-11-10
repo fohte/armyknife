@@ -534,23 +534,23 @@ mod tests {
     fn test_build_session_rows_preserves_full_depth_for_all_child_sessions(
         agent_config: AgentConfig,
     ) {
-        let pm = running_session("pm", &[], 0);
-        let design = running_session("design", &["pm"], 3);
-        // The intermediate ancestor is gone, so this still nests under "pm".
-        let orphan = running_session("orphan", &["pm", "deleted_middle"], 1);
-        let grandchild = running_session("grandchild", &["pm", "design"], 2);
+        let root = running_session("root", &[], 0);
+        let design = running_session("design", &["root"], 3);
+        // The intermediate ancestor is gone, so this still nests under "root".
+        let orphan = running_session("orphan", &["root", "deleted_middle"], 1);
+        let grandchild = running_session("grandchild", &["root", "design"], 2);
         let great_grandchild =
-            running_session("great_grandchild", &["pm", "design", "grandchild"], 6);
-        let qa = running_session("qa", &["pm", "design"], 0);
-        let mut delegated = running_session("delegated", &["pm", "design"], 4);
+            running_session("great_grandchild", &["root", "design", "grandchild"], 6);
+        let qa = running_session("qa", &["root", "design"], 0);
+        let mut delegated = running_session("delegated", &["root", "design"], 4);
         delegated.child_launch = crate::commands::agent::types::ChildLaunchPermission::Deny;
         let delegated_child = with_agent_status(
-            running_session("delegated_child", &["pm", "design", "delegated"], 5),
+            running_session("delegated_child", &["root", "design", "delegated"], 5),
             "needs_attention",
         );
 
         let sessions: Vec<&Session> = vec![
-            &pm,
+            &root,
             &design,
             &orphan,
             &grandchild,
@@ -565,7 +565,7 @@ mod tests {
             describe(&rows),
             vec![
                 header("TASKS"),
-                root_row("pm", TaskMark::Working, 7, 1),
+                root_row("root", TaskMark::Working, 7, 1),
                 child_row("design", TaskMark::Working, false),
                 nested_row("delegated", TaskMark::Working, false, &[false]),
                 user_turn_nested_row(

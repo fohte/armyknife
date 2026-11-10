@@ -25,24 +25,33 @@ const meta = {
   args: {
     activeView: 'inbox',
     needsActionCount: 3,
-    pmProjects: [
+    workTypeNavGroups: [
       {
-        name: 'service refresh',
-        status: 'Review',
-        needsActionCount: 3,
-        sessionId: 'sample-pm-service',
+        label: 'Guides',
+        projects: [
+          {
+            name: 'sample project',
+            status: 'Review',
+            needsActionCount: 3,
+            sessionId: 'sample-guide-session',
+          },
+          {
+            name: 'telemetry playground',
+            status: 'Working',
+            needsActionCount: 0,
+            sessionId: 'sample-guide-session-2',
+          },
+          {
+            name: 'handbook preview',
+            status: 'Idle',
+            needsActionCount: 0,
+            sessionId: 'sample-guide-session-3',
+          },
+        ],
       },
       {
-        name: 'observability',
-        status: 'Working',
-        needsActionCount: 0,
-        sessionId: 'sample-pm-observability',
-      },
-      {
-        name: 'documentation',
-        status: 'Idle',
-        needsActionCount: 0,
-        sessionId: 'sample-pm-documentation',
+        label: 'Reviews',
+        projects: [],
       },
     ],
     onViewChange: () => undefined,
@@ -64,16 +73,7 @@ export const BoardIsSelected: Story = {
   args: { activeView: 'board' },
 }
 
-export const ProjectHasNoManagerSession: Story = {
-  name: 'A project row is disabled when no PM session exists',
-  args: {
-    pmProjects: [
-      {
-        name: 'documentation',
-        status: 'Idle',
-        needsActionCount: 0,
-        sessionId: null,
-      },
-    ],
-  },
+export const NoWorkTypeIsConfigured: Story = {
+  name: 'No work type list appears when no display labels are configured',
+  args: { workTypeNavGroups: [] },
 }

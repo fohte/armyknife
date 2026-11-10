@@ -6,7 +6,7 @@ use crate::commands::agent::types::Engine;
 
 use super::{
     AgentLaunchProfileConfig, AgentProfileTypeConfig, AgentStatusConfig, AgentWorkTypeConfig,
-    AutoCompactConfig, AutoPauseConfig, CodexConfig, WorktreeConfig,
+    AgentWorkTypeMarkerConfig, AutoCompactConfig, AutoPauseConfig, CodexConfig, WorktreeConfig,
 };
 
 /// Configuration for reminders sent when a background task exceeds its timeout.
@@ -150,11 +150,11 @@ pub struct AgentConfig {
 
     /// Display configuration used in `a agent watch` when a session has no recorded work type.
     #[serde(default)]
-    pub work_type_fallback: Option<AgentWorkTypeConfig>,
+    pub work_type_fallback: Option<AgentWorkTypeMarkerConfig>,
 
     /// Marker shown after the name of a session running in vibe mode.
     #[serde(default)]
-    pub vibe_marker: Option<AgentWorkTypeConfig>,
+    pub vibe_marker: Option<AgentWorkTypeMarkerConfig>,
 
     /// User-defined status names and the state each name represents.
     #[serde(default)]
@@ -245,14 +245,6 @@ impl AgentConfig {
     /// Look up the display configuration for a skill name.
     pub fn work_type(&self, skill_name: &str) -> Option<&AgentWorkTypeConfig> {
         self.work_types.get(skill_name)
-    }
-
-    /// Look up the work type displayed in `a agent watch`, including its fallback.
-    pub fn watch_work_type(&self, skill_name: Option<&str>) -> Option<&AgentWorkTypeConfig> {
-        match skill_name {
-            Some(skill_name) => self.work_type(skill_name),
-            None => self.work_type_fallback.as_ref(),
-        }
     }
 }
 
