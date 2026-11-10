@@ -72,8 +72,9 @@ struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
     fn send_message(&self, session: &Session, content: &str) -> Result<()> {
-        notify::notify(&session.session_id, content, None, None)?;
-        Ok(())
+        send_via_peer_notify(session, content, |session_id, content| {
+            notify::notify(session_id, content, None, None)
+        })
     }
 
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -125,6 +126,15 @@ impl ActionRuntime for LiveActionRuntime {
         )
         .map_err(anyhow::Error::from)
     }
+}
+
+fn send_via_peer_notify(
+    session: &Session,
+    content: &str,
+    deliver: impl FnOnce(&str, &str) -> Result<notify::Delivery>,
+) -> Result<()> {
+    deliver(&session.session_id, content)?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -201,7 +211,7 @@ async fn actions(
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
-        message: true,
+        message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && is_ask_user_question(&session),
@@ -1245,6 +1255,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn live_message_adapter_forwards_session_and_content_to_peer_notify() {
+        let session = session("sample-session");
+        let mut calls = Vec::new();
+
+        let result = send_via_peer_notify(
+            &session,
+            "continue the investigation",
+            |session_id, content| {
+                calls.push((session_id.to_string(), content.to_string()));
+                Ok(notify::Delivery::Sent)
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), calls),
+            (
+                Ok(()),
+                vec![(
+                    "sample-session".to_string(),
+                    "continue the investigation".to_string(),
+                )],
+            ),
+        );
+    }
+
     #[rstest]
     #[case::not_registered("not-stored")]
     #[case::invalid_id("bad..id")]
@@ -1578,7 +1614,7 @@ mod tests {
                 json!({
                     "status": StatusCode::OK.as_u16(),
                     "body": {
-                        "message": true,
+                        "message": false,
                         "answerQuestion": false,
                         "interrupt": false,
                         "openInTerminal": true,
