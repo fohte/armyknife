@@ -288,15 +288,17 @@ export function BoardView({
       ) : visibleProjects.length === 0 ? (
         <p className="board-message">No projects to show.</p>
       ) : (
-        <div className="board-projects-scroll" ref={projectsScrollRef}>
-          <div className="board-projects">
-            {visibleProjects.map((project) => (
-              <ProjectColumn
-                key={project.name}
-                project={project}
-                onSelectSession={onSelectSession}
-              />
-            ))}
+        <div className="board-projects-container">
+          <div className="board-projects-scroll" ref={projectsScrollRef}>
+            <div className="board-projects">
+              {visibleProjects.map((project) => (
+                <ProjectColumn
+                  key={project.name}
+                  project={project}
+                  onSelectSession={onSelectSession}
+                />
+              ))}
+            </div>
           </div>
           {remainingProjects > 0 ? (
             <div className="board-overflow-hint" aria-hidden="true">
