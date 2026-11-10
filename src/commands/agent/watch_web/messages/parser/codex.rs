@@ -143,7 +143,9 @@ fn value_text(value: &Value) -> Option<String> {
 
 fn parse_tool_input(input: Option<&Value>) -> Option<Value> {
     match input {
-        Some(Value::String(raw)) => serde_json::from_str(raw).ok(),
+        Some(Value::String(raw)) => {
+            Some(serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone())))
+        }
         Some(value) => Some(value.clone()),
         None => None,
     }
@@ -188,6 +190,7 @@ mod tests {
                 },
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
+                    operations: vec![operation("exec", Some("printf 'fictional command output'"))],
                 },
                 ChatItem::Assistant {
                     text: "The settings now use the shared parser.".to_string(),
@@ -210,6 +213,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action".to_string(),
+                operations: vec![operation("CommandExecution", Some("echo fixture"))],
             }]
         );
     }
@@ -226,6 +230,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action".to_string(),
+                operations: vec![operation("exec", Some("printf 'fictional command output'"))],
             }]
         );
     }
@@ -242,6 +247,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action · 2 files edited".to_string(),
+                operations: vec![operation("exec", Some("printf 'fictional command output'"))],
             }]
         );
     }
@@ -256,6 +262,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "1 action · 1 file edited".to_string(),
+                operations: vec![operation("FileChange", Some("src/fixture.rs"))],
             }]
         );
     }
@@ -316,7 +323,19 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
                 summary: "3 actions · 1 file edited".to_string(),
+                operations: vec![
+                    operation("exec", Some("printf 'fictional command output'")),
+                    operation("CommandExecution", Some("printf fixture")),
+                    operation("FileChange", Some("src/fixture.rs")),
+                ],
             }]
         );
+    }
+
+    fn operation(tool: &str, target: Option<&str>) -> super::super::super::ToolOperation {
+        super::super::super::ToolOperation {
+            tool: tool.to_string(),
+            target: target.map(str::to_owned),
+        }
     }
 }

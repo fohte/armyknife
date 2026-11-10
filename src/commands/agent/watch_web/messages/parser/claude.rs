@@ -318,6 +318,10 @@ mod tests {
                 },
                 ChatItem::ToolSummary {
                     summary: "2 actions · 1 file edited".to_string(),
+                    operations: vec![
+                        operation("Read", Some("fixture/flow.rs")),
+                        operation("Edit", Some("fixture/flow.rs")),
+                    ],
                 },
                 ChatItem::Question {
                     question: "Should notifications be grouped?".to_string(),
@@ -353,6 +357,7 @@ mod tests {
             vec![
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("echo earlier"))],
                 },
                 ChatItem::Permission {
                     tool: "Bash".to_string(),
@@ -386,6 +391,7 @@ mod tests {
                 },
                 ChatItem::ToolSummary {
                     summary: "1 action · 1 file edited".to_string(),
+                    operations: vec![operation("Edit", Some("fixture/notes.txt"))],
                 },
                 ChatItem::User {
                     text: "A visible user message.".to_string(),
@@ -414,5 +420,12 @@ mod tests {
                 from: Some("fixture-parent-title".to_string()),
             }]
         );
+    }
+
+    fn operation(tool: &str, target: Option<&str>) -> super::super::super::ToolOperation {
+        super::super::super::ToolOperation {
+            tool: tool.to_string(),
+            target: target.map(str::to_owned),
+        }
     }
 }

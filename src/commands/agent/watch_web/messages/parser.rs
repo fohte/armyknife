@@ -4,7 +4,7 @@ pub(super) mod codex;
 use std::collections::BTreeSet;
 use std::io::BufRead;
 
-use super::{ChatItem, ParentSession};
+use super::{ChatItem, ParentSession, ToolOperation};
 
 const PEER_MESSAGE_HEADER_SEPARATOR: &str = concat!("\n", "\n");
 const PEER_MESSAGE_END: &str = concat!("\n", "</peer-message>");
@@ -36,11 +36,16 @@ pub(super) fn for_each_jsonl_record(
 pub(super) struct ToolSummary {
     actions: usize,
     edited_files: BTreeSet<String>,
+    operations: Vec<ToolOperation>,
 }
 
 impl ToolSummary {
     pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>) {
         self.actions += 1;
+        self.operations.push(ToolOperation {
+            tool: name.to_owned(),
+            target: operation_target(name, input),
+        });
         if matches!(name, "Edit" | "Write" | "MultiEdit" | "NotebookEdit")
             && let Some(path) = input
                 .and_then(|value| value.get("file_path").or_else(|| value.get("path")))
@@ -52,6 +57,18 @@ impl ToolSummary {
 
     pub(super) fn record_codex(&mut self, name: &str, detail: Option<&serde_json::Value>) {
         self.actions += 1;
+        let tool = if matches!(name, "McpToolCall" | "mcpToolCall") {
+            detail
+                .and_then(|value| value.get("tool").or_else(|| value.get("name")))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(name)
+        } else {
+            name
+        };
+        self.operations.push(ToolOperation {
+            tool: tool.to_owned(),
+            target: operation_target(tool, detail),
+        });
         self.record_codex_files(name, detail);
     }
 
@@ -111,9 +128,53 @@ impl ToolSummary {
                 self.edited_files.len()
             )
         };
-        items.push(ChatItem::ToolSummary { summary });
+        items.push(ChatItem::ToolSummary {
+            summary,
+            operations: std::mem::take(&mut self.operations),
+        });
         *self = Self::default();
     }
+}
+
+fn operation_target(name: &str, detail: Option<&serde_json::Value>) -> Option<String> {
+    let target = detail.and_then(|value| {
+        value
+            .get("command")
+            .or_else(|| value.get("file_path"))
+            .or_else(|| value.get("path"))
+            .or_else(|| value.get("pattern"))
+            .or_else(|| value.get("url"))
+            .or_else(|| value.get("query"))
+            .and_then(serde_json::Value::as_str)
+            .or_else(|| {
+                matches!(name, "exec" | "shell" | "CommandExecution")
+                    .then(|| value.as_str())
+                    .flatten()
+            })
+    });
+    if let Some(target) = target {
+        return Some(target.chars().take(240).collect());
+    }
+
+    let paths = detail
+        .and_then(|value| value.get("changes"))
+        .map(|changes| match changes {
+            serde_json::Value::Object(changes) => changes.keys().cloned().collect::<Vec<_>>(),
+            serde_json::Value::Array(changes) => changes
+                .iter()
+                .filter_map(|change| {
+                    change
+                        .get("path")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                })
+                .collect(),
+            _ => Vec::new(),
+        })?;
+    if paths.is_empty() {
+        return None;
+    }
+    Some(paths.join(", ").chars().take(240).collect())
 }
 
 pub(super) fn append_text(
@@ -198,6 +259,12 @@ mod tests {
             items,
             vec![ChatItem::ToolSummary {
                 summary: expected.to_string(),
+                operations: (0..count)
+                    .map(|_| super::super::ToolOperation {
+                        tool: "Read".to_string(),
+                        target: None,
+                    })
+                    .collect(),
             }]
         );
     }
