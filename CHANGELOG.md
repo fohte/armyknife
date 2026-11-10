@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.524](https://github.com/fohte/armyknife/compare/v0.1.523...v0.1.524) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** support chat controls ([#1401](https://github.com/fohte/armyknife/issues/1401)) ([db47f4d](https://github.com/fohte/armyknife/commit/db47f4d4ccdcaa36b6c2aac6e025109df8f64f9f))
+
 ## [0.1.523](https://github.com/fohte/armyknife/compare/v0.1.522...v0.1.523) (2026-11-10)
 
 
