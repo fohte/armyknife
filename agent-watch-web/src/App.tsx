@@ -337,6 +337,13 @@ export function App() {
     )
   }
   const openSessionInInbox = (sessionId: string) => {
+    if (
+      sessionsWithElapsedTime.some(
+        (session) => session.id === sessionId && session.category === 'later',
+      )
+    ) {
+      setLaterExpanded(true)
+    }
     setSelectedId(sessionId)
     setView('inbox')
   }

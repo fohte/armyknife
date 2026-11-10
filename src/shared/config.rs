@@ -64,7 +64,9 @@ pub use launch_profile::{
 };
 #[cfg(feature = "schema-gen")]
 pub use schema::generate_schema;
-pub use work_type::{AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeNamedColor};
+pub use work_type::{
+    AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeMarkerConfig, AgentWorkTypeNamedColor,
+};
 
 pub(crate) fn format_sorted_names<'a>(names: impl Iterator<Item = &'a String>) -> String {
     let mut names = names.map(String::as_str).collect::<Vec<_>>();
@@ -1342,10 +1344,9 @@ mod tests {
 
         assert_eq!(
             config.agent.vibe_marker,
-            Some(AgentWorkTypeConfig {
+            Some(AgentWorkTypeMarkerConfig {
                 icon: "◈".to_string(),
                 color: AgentWorkTypeColor::Rgb([12, 34, 56]),
-                nav_label: None,
             })
         );
     }
@@ -1373,10 +1374,9 @@ mod tests {
         assert_eq!(
             (config.agent.work_type_fallback, config.agent.work_types,),
             (
-                Some(AgentWorkTypeConfig {
+                Some(AgentWorkTypeMarkerConfig {
                     icon: "∅".to_string(),
                     color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
-                    nav_label: None,
                 }),
                 HashMap::from([
                     (

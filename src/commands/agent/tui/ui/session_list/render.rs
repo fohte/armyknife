@@ -97,7 +97,9 @@ mod tests {
     use crate::commands::agent::types::AgentStatus;
     use crate::commands::agent::types::Session;
     use crate::commands::agent::types::SessionStatus;
-    use crate::shared::config::{AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig};
+    use crate::shared::config::{
+        AgentConfig, AgentWorkTypeColor, AgentWorkTypeConfig, AgentWorkTypeMarkerConfig,
+    };
     use indoc::indoc;
     use ratatui::style::Modifier;
     use rstest::{fixture, rstest};
@@ -238,12 +240,11 @@ mod tests {
         persisted_ancestor_child.ancestor_session_ids = vec!["stored-ancestor".to_string()];
 
         let sessions = vec![explicit.clone(), inherited, plain, persisted_ancestor_child];
-        let marker_config = AgentWorkTypeConfig {
+        let marker_config = AgentWorkTypeMarkerConfig {
             icon: "◆".to_string(),
             color: AgentWorkTypeColor::Named(
                 crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
             ),
-            nav_label: None,
         };
         let agent_config = AgentConfig {
             vibe_marker: Some(marker_config),
@@ -402,7 +403,10 @@ mod tests {
                     .work_types
                     .insert(work_type.to_string(), config);
             } else {
-                app.agent_config.work_type_fallback = Some(config);
+                app.agent_config.work_type_fallback = Some(AgentWorkTypeMarkerConfig {
+                    icon: config.icon,
+                    color: config.color,
+                });
             }
         });
 

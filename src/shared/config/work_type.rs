@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-/// Display settings for an agent watch marker.
+/// Display settings for a configured work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -14,6 +14,18 @@ pub struct AgentWorkTypeConfig {
     /// Heading used for this work type's session list in the agent watch navigation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub nav_label: Option<String>,
+}
+
+/// Display settings for an agent watch marker without a named work type.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWorkTypeMarkerConfig {
+    /// Icon shown in the agent watch marker.
+    pub icon: String,
+
+    /// Terminal color used in the agent watch marker.
+    pub color: AgentWorkTypeColor,
 }
 
 /// A terminal color accepted for an agent watch marker.

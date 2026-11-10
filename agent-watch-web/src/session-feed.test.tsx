@@ -46,6 +46,79 @@ function jsonResponse(body: unknown) {
   })
 }
 
+it('delivers configured work type metadata from a session response', async () => {
+  const source = new FakeEventSource()
+  const received = deferred<undefined>()
+  const responses: unknown[] = []
+  const errors: (string | null)[] = []
+  const fetcher = vi.fn().mockResolvedValue(
+    jsonResponse({
+      revision: 1,
+      workTypeNavLabels: { 'release-guide': 'Guides' },
+      sessions: [
+        {
+          id: 'sample-session',
+          workType: 'release-guide',
+          category: 'in_progress',
+          kind: null,
+          title: 'Prepare a launch checklist',
+          preview: null,
+          elapsedSeconds: 8,
+          unread: false,
+          task: null,
+          repo: 'example/service',
+          project: 'sample project',
+          parent: null,
+          ancestorSessionIds: [],
+          pullRequest: null,
+        },
+      ],
+    }),
+  )
+  const stop = startSessionFeed(
+    (response) => {
+      responses.push(response)
+      received.resolve(undefined)
+    },
+    (message) => errors.push(message),
+    { fetcher, createEventSource: () => source },
+  )
+
+  await received.promise
+  stop()
+
+  const snapshot = () => ({ responses, errors, closed: source.closed })
+
+  expect(snapshot()).toEqual({
+    responses: [
+      {
+        revision: 1,
+        workTypeNavLabels: { 'release-guide': 'Guides' },
+        sessions: [
+          {
+            id: 'sample-session',
+            workType: 'release-guide',
+            category: 'in_progress',
+            kind: null,
+            title: 'Prepare a launch checklist',
+            preview: null,
+            elapsedSeconds: 8,
+            unread: false,
+            task: null,
+            repo: 'example/service',
+            project: 'sample project',
+            parent: null,
+            ancestorSessionIds: [],
+            pullRequest: null,
+          },
+        ],
+      },
+    ],
+    errors: [null],
+    closed: true,
+  })
+})
+
 it('coalesces session events and refreshes when the stream reconnects', async () => {
   const source = new FakeEventSource()
   const firstRequestStarted = deferred<undefined>()

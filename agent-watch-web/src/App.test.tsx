@@ -282,6 +282,36 @@ it('omits the work type list when no display labels are configured', () => {
   expect(container.querySelectorAll('.work-type-nav')).toHaveLength(0)
 })
 
+it('opens a configured Later session from Nav while Later is collapsed', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-later-guide',
+        'Defer a report',
+        'later',
+        8,
+        'sample project',
+        null,
+        [],
+        'release-guide',
+      ),
+    ],
+    workTypeNavLabels: { 'release-guide': 'Guides' },
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Open sample project Guides session in Inbox"]',
+      )
+      ?.click()
+  })
+
+  expect(readSelectedTitle()).toBe('Defer a report')
+})
+
 const laterPresetTimes = {
   one_hour: { when: '16:00', deadline: '2030-03-04T16:00:00Z' },
   this_evening: { when: '19:00', deadline: '2030-03-04T19:00:00Z' },

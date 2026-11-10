@@ -213,7 +213,7 @@
           "description": "Marker shown after the name of a session running in vibe mode.",
           "anyOf": [
             {
-              "$ref": "#/$defs/AgentWorkTypeConfig"
+              "$ref": "#/$defs/AgentWorkTypeMarkerConfig"
             },
             {
               "type": "null"
@@ -225,7 +225,7 @@
           "description": "Display configuration used in `a agent watch` when a session has no recorded work type.",
           "anyOf": [
             {
-              "$ref": "#/$defs/AgentWorkTypeConfig"
+              "$ref": "#/$defs/AgentWorkTypeMarkerConfig"
             },
             {
               "type": "null"
@@ -445,7 +445,7 @@
       ]
     },
     "AgentWorkTypeConfig": {
-      "description": "Display settings for an agent watch marker.",
+      "description": "Display settings for a configured work type.",
       "type": "object",
       "properties": {
         "color": {
@@ -462,6 +462,25 @@
             "string",
             "null"
           ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "icon",
+        "color"
+      ]
+    },
+    "AgentWorkTypeMarkerConfig": {
+      "description": "Display settings for an agent watch marker without a named work type.",
+      "type": "object",
+      "properties": {
+        "color": {
+          "description": "Terminal color used in the agent watch marker.",
+          "$ref": "#/$defs/AgentWorkTypeColor"
+        },
+        "icon": {
+          "description": "Icon shown in the agent watch marker.",
+          "type": "string"
         }
       },
       "additionalProperties": false,
