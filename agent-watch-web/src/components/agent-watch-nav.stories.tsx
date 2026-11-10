@@ -6,6 +6,7 @@ import type { Session } from '#types'
 const todaySession: Session = {
   id: 'today-session',
   category: 'needs_action',
+  isPaused: false,
   kind: 'Question',
   title: 'Check the retry policy',
   preview: 'Choose a limit.',

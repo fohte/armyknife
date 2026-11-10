@@ -42,6 +42,7 @@ function isSession(value: unknown): value is Session {
 
   return (
     typeof value['id'] === 'string' &&
+    typeof value['isPaused'] === 'boolean' &&
     (value['workType'] === undefined ||
       value['workType'] === null ||
       typeof value['workType'] === 'string') &&

@@ -58,6 +58,7 @@ it('delivers configured work type metadata from a session response', async () =>
       sessions: [
         {
           id: 'sample-session',
+          isPaused: false,
           workType: 'release-guide',
           category: 'in_progress',
           kind: null,
@@ -97,6 +98,7 @@ it('delivers configured work type metadata from a session response', async () =>
         sessions: [
           {
             id: 'sample-session',
+            isPaused: false,
             workType: 'release-guide',
             category: 'in_progress',
             kind: null,
@@ -115,6 +117,60 @@ it('delivers configured work type metadata from a session response', async () =>
       },
     ],
     errors: [null],
+    closed: true,
+  })
+})
+
+it('rejects a session with a non-boolean paused state', async () => {
+  const source = new FakeEventSource()
+  const failureReported = deferred<undefined>()
+  const errors: (string | null)[] = []
+  let delivered = false
+  const fetcher = vi.fn().mockResolvedValue(
+    jsonResponse({
+      revision: 1,
+      sessions: [
+        {
+          id: 'invalid-paused-session',
+          category: 'done',
+          isPaused: 'true',
+          kind: null,
+          title: 'Prepare the next deployment window',
+          preview: null,
+          elapsedSeconds: 20,
+          unread: false,
+          task: null,
+          repo: 'example/service',
+          pullRequest: null,
+        },
+      ],
+    }),
+  )
+
+  const stop = startSessionFeed(
+    () => {
+      delivered = true
+    },
+    (message) => {
+      errors.push(message)
+      if (message === 'Unable to load sessions. Retrying…') {
+        failureReported.resolve(undefined)
+      }
+    },
+    {
+      fetcher,
+      createEventSource: () => source,
+      requestRetryDelayMs: 5_000,
+    },
+  )
+
+  await failureReported.promise
+  stop()
+
+  const snapshot = () => ({ delivered, errors, closed: source.closed })
+  expect(snapshot()).toEqual({
+    delivered: false,
+    errors: ['Unable to load sessions. Retrying…'],
     closed: true,
   })
 })
@@ -139,6 +195,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         sessions: [
           {
             id: 'session-update',
+            isPaused: false,
             category: 'in_progress',
             kind: 'FutureKind',
             title: 'Updated session',
@@ -154,6 +211,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
           },
           {
             id: 'session-future-category',
+            isPaused: false,
             category: 'later',
             kind: 'Question',
             title: 'Session in an unrecognized category',
@@ -176,6 +234,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         sessions: [
           {
             id: 'session-reconnected',
+            isPaused: false,
             category: 'needs_action',
             kind: 'Question',
             title: 'Latest session after reconnect',
@@ -219,6 +278,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       sessions: [
         {
           id: 'session-initial',
+          isPaused: false,
           category: 'needs_action',
           kind: 'Question',
           title: 'Initial session',
@@ -261,6 +321,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         sessions: [
           {
             id: 'session-initial',
+            isPaused: false,
             category: 'needs_action',
             kind: 'Question',
             title: 'Initial session',
@@ -286,6 +347,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         sessions: [
           {
             id: 'session-update',
+            isPaused: false,
             category: 'in_progress',
             kind: 'FutureKind',
             title: 'Updated session',
@@ -301,6 +363,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
           },
           {
             id: 'session-future-category',
+            isPaused: false,
             category: 'later',
             kind: 'Question',
             title: 'Session in an unrecognized category',
@@ -321,6 +384,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         sessions: [
           {
             id: 'session-reconnected',
+            isPaused: false,
             category: 'needs_action',
             kind: 'Question',
             title: 'Latest session after reconnect',
@@ -363,6 +427,7 @@ it('retries a failed session request and clears the error after success', async 
         sessions: [
           {
             id: 'session-retried',
+            isPaused: false,
             category: 'done',
             kind: 'Stopped',
             title: 'Session after retry',
