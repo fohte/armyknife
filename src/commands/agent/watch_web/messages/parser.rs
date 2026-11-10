@@ -34,12 +34,15 @@ pub(super) fn for_each_jsonl_record(
 
 pub(super) fn tool_target(input: Option<&serde_json::Value>) -> Option<String> {
     let input = input?;
-    let agent_details = ["subagent_type", "description"]
-        .into_iter()
-        .filter_map(|key| input.get(key).and_then(serde_json::Value::as_str))
-        .collect::<Vec<_>>();
-    if !agent_details.is_empty() {
-        return Some(agent_details.join(" · "));
+    if let Some(subagent_type) = input
+        .get("subagent_type")
+        .and_then(serde_json::Value::as_str)
+    {
+        let description = input.get("description").and_then(serde_json::Value::as_str);
+        return Some(description.map_or_else(
+            || subagent_type.to_owned(),
+            |description| format!("{subagent_type} · {description}"),
+        ));
     }
     let target = ["command", "file_path", "path", "pattern", "url", "query"]
         .into_iter()
@@ -321,7 +324,10 @@ mod tests {
     #[test]
     fn tool_targets_preserve_their_full_length() {
         let target = "x".repeat(241);
-        let command_input = serde_json::json!({ "command": target });
+        let command_input = serde_json::json!({
+            "command": target,
+            "description": "Run the tests",
+        });
         let raw_command = serde_json::Value::String(target.clone());
         let paths = (0..40)
             .map(|index| {

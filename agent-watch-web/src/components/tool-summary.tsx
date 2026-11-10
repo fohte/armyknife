@@ -2,6 +2,7 @@ import '#components/tool-summary.css'
 
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
+import { useState } from 'react'
 
 import type { ToolOperation } from '#types'
 
@@ -23,8 +24,16 @@ export function ToolSummary({
   operations,
   open = false,
 }: ToolSummaryProps) {
+  const [isOpen, setIsOpen] = useState(open)
+
   return (
-    <details className="chat-tool-summary" open={open}>
+    <details
+      className="chat-tool-summary"
+      open={isOpen}
+      onToggle={(event) => {
+        setIsOpen(event.currentTarget.open)
+      }}
+    >
       <summary>{summary}</summary>
       {operations.length > 0 ? (
         <ul className="chat-tool-operations">
@@ -34,7 +43,7 @@ export function ToolSummary({
             >
               <span className="chat-tool-name">{operation.tool}</span>
               {operation.target != null && operation.target !== '' ? (
-                isShellTool(operation.tool) ? (
+                isShellTool(operation.tool) && isOpen ? (
                   <code
                     className="chat-tool-command hljs"
                     dangerouslySetInnerHTML={{

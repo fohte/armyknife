@@ -35,3 +35,16 @@ it('renders the complete shell command after syntax highlighting', () => {
     `<details class="chat-tool-summary" open=""><summary>1 action</summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Bash</span><code class="chat-tool-command hljs"><span class="hljs-built_in">echo</span> ${'x'.repeat(241)}</code></li></ul></details>`,
   )
 })
+
+it('keeps shell commands plain until the summary is expanded', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="1 action"
+        operations={[{ tool: 'Bash', target: 'printf hello' }]}
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary"><summary>1 action</summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Bash</span><code>printf hello</code></li></ul></details>',
+  )
+})

@@ -575,6 +575,21 @@ mod tests {
         );
     }
 
+    #[test]
+    fn pending_agent_call_shows_its_type_and_description() {
+        let transcript = indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-pending-agent-call","name":"Agent","input":{"subagent_type":"Explore","description":"Find fixture loaders","prompt":"This full prompt stays hidden from the summary."}}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::ToolInProgress {
+                tool: "Agent".to_string(),
+                target: Some("Explore · Find fixture loaders".to_string()),
+            }],
+        );
+    }
+
     #[rstest]
     #[case::prompt_array(
         indoc! {r#"
