@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record};
+use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record, operation_target};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
@@ -12,7 +12,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
 ) -> std::io::Result<Vec<ChatItem>> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
-    let mut pending_tool_calls = Vec::new();
+    let mut pending_tool_calls: Vec<PendingTool> = Vec::new();
 
     for_each_jsonl_record(reader, |record| {
         let record_type = record.get("type").and_then(Value::as_str);
@@ -43,18 +43,24 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                         .unwrap_or_default();
                     let input =
                         parse_tool_input(payload.get("input").or_else(|| payload.get("arguments")));
-                    tools.record_codex(name, input.as_ref());
                     if let Some(call_id) = payload.get("call_id").and_then(Value::as_str) {
-                        pending_tool_calls.push(call_id.to_owned());
+                        pending_tool_calls.push(PendingTool {
+                            call_id: call_id.to_owned(),
+                            name: name.to_owned(),
+                            input,
+                        });
+                    } else {
+                        tools.record_codex(name, input.as_ref());
                     }
                 }
                 Some("custom_tool_call_output") | Some("function_call_output") => {
                     if let Some(call_id) = payload.get("call_id").and_then(Value::as_str)
                         && let Some(index) = pending_tool_calls
                             .iter()
-                            .position(|pending| pending == call_id)
+                            .position(|pending| pending.call_id == call_id)
                     {
-                        pending_tool_calls.remove(index);
+                        let completed = pending_tool_calls.remove(index);
+                        tools.record_codex(&completed.name, completed.input.as_ref());
                     }
                 }
                 Some("fileChange") => {
@@ -71,7 +77,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             Some("task_complete" | "turn_aborted")
         ) {
             // Missing tool outputs must not suppress actions from the next turn.
-            pending_tool_calls.clear();
+            for pending in pending_tool_calls.drain(..) {
+                tools.record_codex(&pending.name, pending.input.as_ref());
+            }
         } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
             && let Some(item) = payload.get("item")
         {
@@ -106,8 +114,23 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         }
     })?;
 
+    let active_tool = pending_tool_calls
+        .last()
+        .map(|pending| ChatItem::ToolInProgress {
+            tool: pending.name.clone(),
+            target: operation_target(&pending.name, pending.input.as_ref()),
+        });
     tools.flush_into(&mut items);
+    if let Some(active_tool) = active_tool {
+        items.push(active_tool);
+    }
     Ok(items)
+}
+
+struct PendingTool {
+    call_id: String,
+    name: String,
+    input: Option<Value>,
 }
 
 fn content_text(content: Option<&Value>) -> String {
@@ -170,6 +193,7 @@ mod tests {
             {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Synthetic AGENTS instructions."}]}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"Summarize these settings."}]}}}
             {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call","name":"exec","input":"printf 'fictional command output'"}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call","output":"fixture result"}}
             {"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The settings now use the shared parser."}]}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"AgentMessage","content":[{"type":"Text","text":"The settings now use the shared parser."}]}}}
             {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"<peer-message>\n- From session_id: fixture-parent-id\n\nPlease keep the summary brief.\n</peer-message>"}]}}}
@@ -337,16 +361,29 @@ mod tests {
     #[case::plain_command("echo fixture")]
     #[case::json_boolean_literal("true")]
     fn raw_exec_input_is_preserved_as_a_command_target(#[case] command: &str) {
-        let transcript = serde_json::to_string(&json!({
-            "type": "response_item",
-            "payload": {
-                "type": "custom_tool_call",
-                "call_id": "fixture-command-call",
-                "name": "exec",
-                "input": command,
-            },
-        }))
-        .unwrap();
+        let transcript = [
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "call_id": "fixture-command-call",
+                    "name": "exec",
+                    "input": command,
+                },
+            }),
+            json!({
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "fixture-command-call",
+                    "output": "fixture result",
+                },
+            }),
+        ]
+        .into_iter()
+        .map(|record| serde_json::to_string(&record).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
@@ -354,6 +391,30 @@ mod tests {
                 summary: "1 action".to_string(),
                 operations: vec![operation("exec", Some(command))],
             }]
+        );
+    }
+
+    #[test]
+    fn returns_the_last_tool_call_without_a_result() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-completed","name":"exec","input":"printf done"}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-completed","output":"fixture result"}}
+            {"type":"response_item","payload":{"type":"function_call","call_id":"fixture-active-one","name":"read_file","arguments":"{\"path\":\"fixture/one.rs\"}"}}
+            {"type":"response_item","payload":{"type":"function_call","call_id":"fixture-active-two","name":"exec","arguments":"cargo test"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("exec", Some("printf done"))],
+                },
+                ChatItem::ToolInProgress {
+                    tool: "exec".to_string(),
+                    target: Some("cargo test".to_string()),
+                },
+            ]
         );
     }
 

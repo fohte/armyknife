@@ -236,6 +236,11 @@ enum ChatItem {
         summary: String,
         operations: Vec<ToolOperation>,
     },
+    ToolInProgress {
+        tool: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        target: Option<String>,
+    },
     Question {
         question: String,
         choices: Vec<String>,
@@ -269,7 +274,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{ChatItem, load_messages_with, routes_with};
-    use crate::commands::agent::types::Session;
+    use crate::commands::agent::types::{Engine, Session};
 
     fn stored_session() -> Session {
         serde_json::from_value(json!({
@@ -374,6 +379,57 @@ mod tests {
                 Some("application/json".to_string()),
                 r#"[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}]"#
                     .to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn active_tool_route_returns_the_frontend_tool_item_shape() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let record = json!({
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "fixture-call-id",
+                "name": "exec",
+                "input": "cargo check",
+            },
+        });
+        std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with(move |_| Ok(Some(session.clone())));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            (status, content_type, body),
+            (
+                axum::http::StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}]"#.to_string(),
             )
         );
     }

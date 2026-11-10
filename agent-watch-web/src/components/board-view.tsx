@@ -13,6 +13,7 @@ type BoardViewProps = {
   hideQuietProjects: boolean
   onHideQuietProjectsChange: (checked: boolean) => void
   onSelectSession: (id: string) => void
+  focusedProjectName?: string | null
 }
 
 const GROUPS = [
@@ -209,13 +210,20 @@ export function BoardView({
   hideQuietProjects,
   onHideQuietProjectsChange,
   onSelectSession,
+  focusedProjectName = null,
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
   const quietCount = projects.filter((project) => project.quiet).length
-  const visibleProjects = hideQuietProjects
-    ? projects.filter((project) => !project.quiet)
-    : projects
+  const focusedProject = projects.filter(
+    (project) => project.name === focusedProjectName,
+  )
+  const visibleProjects =
+    focusedProjectName !== null
+      ? focusedProject
+      : hideQuietProjects
+        ? projects.filter((project) => !project.quiet)
+        : projects
 
   useEffect(() => {
     const scroller = projectsScrollRef.current

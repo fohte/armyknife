@@ -132,6 +132,9 @@ const meta = {
     onToggleInProgress: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
+    onSaveView: () => undefined,
+    onSaveViewOpenChange: () => undefined,
+    onSaveViewNameChange: () => undefined,
   },
   decorators: [
     (Story) => (
@@ -157,6 +160,20 @@ export const InboxHasNoFilters: Story = {
 export const InboxFiltersSessionsByProjectAndKind: Story = {
   name: 'The inbox shows project and kind filters as removable chips',
   args: { filterQuery: 'project:sample project kind:question,review' },
+}
+
+export const InboxFiltersCanBeSavedAsAView: Story = {
+  name: 'The filtered inbox offers a button to save its view',
+  args: { filterQuery: 'project:sample project kind:question,review' },
+}
+
+export const InboxNamesASavedView: Story = {
+  name: 'The filtered inbox shows the saved view name field',
+  args: {
+    filterQuery: 'project:sample project kind:question,review',
+    saveViewOpen: true,
+    saveViewName: 'Sample questions',
+  },
 }
 
 export const InboxFilterDialogIsOpen: Story = {
@@ -258,6 +275,34 @@ export const IPhoneInboxShowsCompletedSessions: Story = {
     isMobile: true,
     laterExpanded: false,
     doneExpanded: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxShowsSavedViews: Story = {
+  name: 'The iPhone inbox shows saved views above its sessions',
+  args: {
+    isMobile: true,
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    selectedSavedViewId: 'reviews',
   },
   decorators: [
     (Story) => (
