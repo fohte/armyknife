@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
+import { MessageComposer } from '#components/message-composer'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -36,7 +37,11 @@ export function ConversationPaneView({
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
-  const [draft, setDraft] = useState('')
+  const draftStorageKey = `agent-watch-web:composer-draft:${session.id}`
+  const [draft, setDraft] = useState(
+    () => window.localStorage.getItem(draftStorageKey) ?? '',
+  )
+  const draftRef = useRef(draft)
   const [sendPending, setSendPending] = useState(false)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
@@ -54,6 +59,16 @@ export function ConversationPaneView({
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
 
+  const updateDraft = (value: string) => {
+    draftRef.current = value
+    setDraft(value)
+    if (value === '') {
+      window.localStorage.removeItem(draftStorageKey)
+    } else {
+      window.localStorage.setItem(draftStorageKey, value)
+    }
+  }
+
   const sendMessage = () => {
     if (
       draft.trim() === '' ||
@@ -67,9 +82,7 @@ export function ConversationPaneView({
     setSendPending(true)
     void onAction('messages', { content: sentDraft }).then((succeeded) => {
       if (succeeded) {
-        setDraft((currentDraft) =>
-          currentDraft === sentDraft ? '' : currentDraft,
-        )
+        if (draftRef.current === sentDraft) updateDraft('')
       }
       sendingRef.current = false
       setSendPending(false)
@@ -425,58 +438,24 @@ export function ConversationPaneView({
           {error}
         </p>
       ) : null}
-      <form
-        className="conversation-composer"
-        onSubmit={(event) => {
-          event.preventDefault()
-          sendMessage()
+      <MessageComposer
+        draft={draft}
+        placeholder={
+          session.pullRequest
+            ? `Message PR ${String(session.pullRequest.number)}`
+            : 'Message session'
+        }
+        disabled={actions?.message !== true}
+        isSending={isSending}
+        isMobile={isMobile}
+        canInterrupt={actions?.interrupt === true}
+        onDraftChange={updateDraft}
+        onKeyDown={onComposerKeyDown}
+        onSend={sendMessage}
+        onInterrupt={() => {
+          void onAction('interrupt')
         }}
-      >
-        <textarea
-          aria-label="Message"
-          placeholder={
-            session.pullRequest
-              ? `Message PR ${String(session.pullRequest.number)}`
-              : 'Message session'
-          }
-          value={draft}
-          onChange={(event) => {
-            setDraft(event.currentTarget.value)
-          }}
-          onKeyDown={onComposerKeyDown}
-          disabled={actions?.message !== true}
-          rows={2}
-        />
-        <div className="composer-footer">
-          {!isMobile ? (
-            <span role={isSending ? 'status' : undefined}>
-              {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
-            </span>
-          ) : null}
-          {isMobile && actions?.interrupt === true ? (
-            <Button
-              className="mobile-interrupt-button"
-              type="button"
-              variant="plain"
-              onClick={() => {
-                void onAction('interrupt')
-              }}
-            >
-              Interrupt
-            </Button>
-          ) : null}
-          <Button
-            type="submit"
-            variant="plain"
-            aria-label="Send message"
-            disabled={
-              draft.trim() === '' || actions?.message !== true || isSending
-            }
-          >
-            ↑
-          </Button>
-        </div>
-      </form>
+      />
     </section>
   )
 
