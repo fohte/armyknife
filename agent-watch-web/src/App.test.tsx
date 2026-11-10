@@ -3302,15 +3302,18 @@ it('reloads the selected conversation when the session feed updates', async () =
           ? input.pathname
           : new URL(input.url).pathname
     const body = path.endsWith('/messages')
-      ? [
-          {
-            type: 'assistant',
-            text:
-              messageReadCount++ === 0
-                ? 'Before feed update'
-                : 'After feed update',
-          },
-        ]
+      ? {
+          messages: [
+            {
+              type: 'assistant',
+              text:
+                messageReadCount++ === 0
+                  ? 'Before feed update'
+                  : 'After feed update',
+            },
+          ],
+          backgroundTasks: [],
+        }
       : {
           message: true,
           answerQuestion: false,
@@ -3369,7 +3372,10 @@ it('opens a known session ID from a conversation message', async () => {
   fetcher.mockImplementation((input) => {
     const path = new URL(requestUrl(input), 'http://localhost').pathname
     const body = path.endsWith('/messages')
-      ? [{ type: 'assistant', text: `Open ${linkedId}` }]
+      ? {
+          messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
+          backgroundTasks: [],
+        }
       : {
           message: true,
           answerQuestion: false,
@@ -3436,14 +3442,17 @@ it('answers an Inbox question with a number key when the pane is not focused', a
   fetcher.mockImplementation((input) => {
     const path = requestPath(input)
     const body = path.endsWith('/messages')
-      ? [
-          {
-            type: 'question',
-            question: 'Which retry policy should be used?',
-            choices: ['Retry three times', 'Retry once'],
-            answer: null,
-          },
-        ]
+      ? {
+          messages: [
+            {
+              type: 'question',
+              question: 'Which retry policy should be used?',
+              choices: ['Retry three times', 'Retry once'],
+              answer: null,
+            },
+          ],
+          backgroundTasks: [],
+        }
       : path.endsWith('/actions')
         ? {
             message: true,
