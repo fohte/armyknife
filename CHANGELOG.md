@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.532](https://github.com/fohte/armyknife/compare/v0.1.531...v0.1.532) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show paused session state ([#1417](https://github.com/fohte/armyknife/issues/1417)) ([d828c49](https://github.com/fohte/armyknife/commit/d828c496118d561553356d1cc7058cce1b8b0d92))
+
 ## [0.1.531](https://github.com/fohte/armyknife/compare/v0.1.530...v0.1.531) (2026-11-10)
 
 
