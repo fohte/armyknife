@@ -110,7 +110,7 @@ it('shows the primary task and the count of other linked tasks for a session', (
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
   ).toBe(
-    'P1 #42 Improve notifications +1 · notification refresh · example/web-app',
+    'P1 #42 Improve notifications +1 · feature/notification-preferences · notification refresh · example/web-app',
   )
 })
 
