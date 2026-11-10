@@ -81,7 +81,12 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| anyhow::anyhow!("image attachment storage lock is poisoned"))?;
-    let directory = directory.unwrap_or(state_dir()?.join("armyknife").join("agent-watch-images"));
+    let directory = directory.unwrap_or(
+        crate::shared::dirs::state_dir()
+            .context("user state directory is unavailable")?
+            .join("armyknife")
+            .join("agent-watch-images"),
+    );
     create_private_directory(&directory)?;
     prune_expired(&directory)?;
     let existing_size = directory_size(&directory)?;
@@ -105,6 +110,32 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
 pub(super) fn remove(paths: &[PathBuf]) {
     for path in paths {
         let _ = fs::remove_file(path);
+    }
+}
+
+pub(super) fn append_paths_to_message(content: String, image_paths: &[PathBuf]) -> String {
+    if image_paths.is_empty() {
+        return content;
+    }
+    let paths = image_paths
+        .iter()
+        .map(|path| format!("- {}", path.display()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    if content.trim().is_empty() {
+        format!("Please inspect the attached image(s):\n{paths}")
+    } else {
+        format!(
+            indoc::indoc! {"
+                {}
+
+                Attached image(s):
+                {}
+            "},
+            content, paths
+        )
+        .trim_end()
+        .to_string()
     }
 }
 
@@ -180,25 +211,6 @@ fn create_private_directory(path: &Path) -> std::io::Result<()> {
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
     }
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn state_dir() -> anyhow::Result<PathBuf> {
-    crate::shared::dirs::home_dir()
-        .map(|home| home.join("Library").join("Application Support"))
-        .context("user state directory is unavailable")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn state_dir() -> anyhow::Result<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_STATE_HOME")
-        && !path.is_empty()
-    {
-        return Ok(PathBuf::from(path));
-    }
-    crate::shared::dirs::home_dir()
-        .map(|home| home.join(".local").join("state"))
-        .context("user state directory is unavailable")
 }
 
 #[cfg(test)]

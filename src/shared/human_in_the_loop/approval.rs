@@ -222,28 +222,10 @@ fn approvals_dir() -> PathBuf {
     {
         return PathBuf::from(v);
     }
-    state_dir().join("armyknife").join("approvals")
-}
-
-#[cfg(target_os = "macos")]
-fn state_dir() -> PathBuf {
-    if let Some(home) = crate::shared::dirs::home_dir() {
-        return home.join("Library").join("Application Support");
-    }
-    PathBuf::from("/tmp")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn state_dir() -> PathBuf {
-    if let Some(xdg) = std::env::var_os("XDG_STATE_HOME")
-        && !xdg.is_empty()
-    {
-        return PathBuf::from(xdg);
-    }
-    if let Some(home) = crate::shared::dirs::home_dir() {
-        return home.join(".local").join("state");
-    }
-    PathBuf::from("/tmp")
+    crate::shared::dirs::state_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("armyknife")
+        .join("approvals")
 }
 
 #[cfg(unix)]

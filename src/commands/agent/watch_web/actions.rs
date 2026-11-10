@@ -251,30 +251,7 @@ async fn send_message(
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let image_paths =
         run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
-    let content = if image_paths.is_empty() {
-        request.content
-    } else {
-        let paths = image_paths
-            .iter()
-            .map(|path| format!("- {}", path.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if request.content.trim().is_empty() {
-            format!("Please inspect the attached image(s):\n{paths}")
-        } else {
-            format!(
-                indoc::indoc! {"
-                    {}
-
-                    Attached image(s):
-                    {}
-                "},
-                request.content, paths
-            )
-            .trim_end()
-            .to_string()
-        }
-    };
+    let content = image_attachments::append_paths_to_message(request.content, &image_paths);
     let cleanup_paths = image_paths;
     let runtime = state.runtime;
     run_blocking(move || {
