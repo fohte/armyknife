@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.523](https://github.com/fohte/armyknife/compare/v0.1.522...v0.1.523) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add project board and PM UI ([#1399](https://github.com/fohte/armyknife/issues/1399)) ([a455a5b](https://github.com/fohte/armyknife/commit/a455a5b86d12fe6c5413ef146a1dab90434b19ef))
+
 ## [0.1.522](https://github.com/fohte/armyknife/compare/v0.1.521...v0.1.522) (2026-11-10)
 
 
