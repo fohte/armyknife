@@ -39,6 +39,24 @@ const sessions = [
   session('session-c', 'Update readme', 'done', null, 'docs'),
 ]
 
+function memoryStorage(initial: Record<string, string> = {}): Storage {
+  const values = new Map(Object.entries(initial))
+  return {
+    length: values.size,
+    clear: () => {
+      values.clear()
+    },
+    getItem: (key: string) => values.get(key) ?? null,
+    key: () => null,
+    removeItem: (key: string) => {
+      values.delete(key)
+    },
+    setItem: (key: string, value: string) => {
+      values.set(key, value)
+    },
+  }
+}
+
 it('builds default groups from needs-action, recent, and available commands', () => {
   expect(
     buildCommandPaletteGroups(sessions, '', 'all', ['session-b'], false),
@@ -102,25 +120,46 @@ it('matches text and scopes task results from a leading prefix', () => {
   ])
 })
 
+it('matches projects from an at-sign prefix', () => {
+  expect(
+    buildCommandPaletteGroups(sessions, '@alert', 'all', [], false),
+  ).toEqual([
+    {
+      heading: 'PROJECTS',
+      items: [
+        {
+          type: 'project',
+          id: 'project:alerts',
+          name: 'alerts',
+          sessions: [sessions[0], sessions[1]],
+        },
+      ],
+    },
+  ])
+})
+
 it('records a session once at the front of the recent list', () => {
-  const values = new Map<string, string>()
-  const storage: Storage = {
-    length: 0,
-    clear: () => {
-      values.clear()
-    },
-    getItem: (key: string) => values.get(key) ?? null,
-    key: () => null,
-    removeItem: (key: string) => {
-      values.delete(key)
-    },
-    setItem: (key: string, value: string) => {
-      values.set(key, value)
-    },
-  }
+  const storage = memoryStorage()
   recordRecentSessionId(storage, 'session-a')
   recordRecentSessionId(storage, 'session-b')
   recordRecentSessionId(storage, 'session-a')
 
   expect(readRecentSessionIds(storage)).toEqual(['session-a', 'session-b'])
+})
+
+it('falls back to an empty recent list when stored JSON is malformed', () => {
+  expect(
+    readRecentSessionIds(
+      memoryStorage({ agentWatchRecentSessionIds: '{invalid' }),
+    ),
+  ).toEqual([])
+})
+
+it('reports unavailable storage when a recent-session write fails', () => {
+  const storage = memoryStorage()
+  storage.setItem = () => {
+    throw new Error('storage is unavailable')
+  }
+
+  expect(recordRecentSessionId(storage, 'session-a')).toEqual(false)
 })

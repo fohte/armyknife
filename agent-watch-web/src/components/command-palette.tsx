@@ -51,24 +51,21 @@ function itemSubtitle(item: PaletteItem) {
           : `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title} · `
       return `${task}${item.session.project} · ${item.session.repo}`
     }
-    case 'task': {
-      const needsActionCount = item.sessions.filter(
-        (session) => session.category === 'needs_action',
-      ).length
-      const repos = Array.from(
-        new Set(item.sessions.map((session) => session.repo)),
-      )
-      return `${String(item.sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
-    }
-    case 'project': {
-      const needsActionCount = item.sessions.filter(
-        (session) => session.category === 'needs_action',
-      ).length
-      return `${String(item.sessions.length)} sessions · ${String(needsActionCount)} need action · ${Array.from(new Set(item.sessions.map((session) => session.repo))).join(', ')}`
-    }
+    case 'task':
+      return aggregateSubtitle(item.sessions)
+    case 'project':
+      return aggregateSubtitle(item.sessions)
     case 'command':
       return item.description
   }
+}
+
+function aggregateSubtitle(sessions: readonly Session[]) {
+  const needsActionCount = sessions.filter(
+    (session) => session.category === 'needs_action',
+  ).length
+  const repos = Array.from(new Set(sessions.map((session) => session.repo)))
+  return `${String(sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
 }
 
 function itemDetail(item: PaletteItem) {

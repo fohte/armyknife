@@ -1424,6 +1424,46 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   })
 })
 
+it('opens a selected project on Board at the mobile breakpoint', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-mobile-project',
+        'Review mobile project',
+        'needs_action',
+      ),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '@sample project')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    boardVisible:
+      container.querySelector('[aria-labelledby="board-title"]') !== null,
+    focusedProjects: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (project) => project.getAttribute('aria-label'),
+    ),
+  })
+  expect(snapshot()).toEqual({
+    boardVisible: true,
+    focusedProjects: ['sample project'],
+  })
+})
+
 it('archives each done session from the palette command', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
@@ -1457,6 +1497,99 @@ it('archives each done session from the palette command', async () => {
   expect(archivedUrls).toEqual([
     '/api/sessions/session-done-a/archive',
     '/api/sessions/session-done-b/archive',
+  ])
+})
+
+it('stops the archive batch and reports the failed session', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input).endsWith('/archive')
+        ? Promise.resolve(new Response(null, { status: 500 }))
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-failed-archive', 'Unarchivable session', 'done'),
+      session('session-not-attempted', 'Later done session', 'done'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Archive all done')
+    await userEvent.keyboard('{Enter}')
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('.load-message.is-error')?.textContent,
+    archiveUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive')),
+  })
+  expect(snapshot()).toEqual({
+    error: 'Could not archive Unarchivable session.',
+    archiveUrls: ['/api/sessions/session-failed-archive/archive'],
+  })
+})
+
+it('does not start a second archive batch while the first is pending', async () => {
+  const archiveRequest = {
+    resolve: null as ((response: Response) => void) | null,
+  }
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
+    requestUrl(input).endsWith('/archive')
+      ? new Promise<Response>((resolve) => {
+          archiveRequest.resolve = resolve
+        })
+      : mockSessionActionFetch(input),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-pending-archive', 'Pending archive', 'done')],
+  })
+
+  async function openAndRunArchiveCommand() {
+    act(() => {
+      dispatchKey(window, 'k', { ctrlKey: true })
+    })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    await act(async () => {
+      await userEvent.type(input, '>Archive all done')
+      await userEvent.keyboard('{Enter}')
+    })
+  }
+
+  await openAndRunArchiveCommand()
+  await openAndRunArchiveCommand()
+  const urlsBeforeCompletion = fetchMock.mock.calls
+    .map(([request]) => requestUrl(request))
+    .filter((url) => url.endsWith('/archive'))
+  const resolveArchive = archiveRequest.resolve
+  if (resolveArchive === null)
+    throw new Error('Archive request was not started')
+  await act(async () => {
+    resolveArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+
+  expect(urlsBeforeCompletion).toEqual([
+    '/api/sessions/session-pending-archive/archive',
   ])
 })
 

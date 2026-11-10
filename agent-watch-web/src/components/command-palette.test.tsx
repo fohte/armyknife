@@ -81,6 +81,22 @@ it('opens the project for the active result with a prefix and Enter', async () =
   expect(onOpenProject.mock.calls).toEqual([['notification refresh']])
 })
 
+it('opens a matching project from the project scope with Enter', async () => {
+  const onOpenProject = vi.fn<(name: string) => void>()
+  renderPalette({ onOpenProject })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '@notification')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  expect(onOpenProject.mock.calls).toEqual([['notification refresh']])
+})
+
 it('runs the selected command with Ctrl-n and Enter', async () => {
   const onRunCommand =
     vi.fn<NonNullable<ComponentProps<typeof CommandPalette>['onRunCommand']>>()

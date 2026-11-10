@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import {
+  getRecentSessionStorage,
   type PaletteItem,
   readRecentSessionIds,
   recordRecentSessionId,
@@ -47,11 +48,12 @@ export function useCommandPaletteController({
 }: CommandPaletteControllerOptions) {
   const [isOpen, setIsOpen] = useState(false)
   const [recentSessionIds, setRecentSessionIds] = useState(() =>
-    readRecentSessionIds(window.localStorage),
+    readRecentSessionIds(getRecentSessionStorage()),
   )
+  const archiveBatchInFlight = useRef(false)
   const recordRecentSession = useCallback((id: string) => {
-    recordRecentSessionId(window.localStorage, id)
-    setRecentSessionIds(readRecentSessionIds(window.localStorage))
+    recordRecentSessionId(getRecentSessionStorage(), id)
+    setRecentSessionIds(readRecentSessionIds(getRecentSessionStorage()))
   }, [])
   const withRecentSession = useCallback(
     (action: (id: string) => void) => (id: string) => {
@@ -103,20 +105,24 @@ export function useCommandPaletteController({
           navigate((current) => ({ ...current, view: 'inbox' }))
           return
         case 'archive-done': {
+          if (archiveBatchInFlight.current) return
+          archiveBatchInFlight.current = true
           const doneSessions = sessions.filter(
             (session) => session.category === 'done',
           )
+          let failure: string | null = null
           for (const session of doneSessions) {
             const archived = await archiveSession(session.id).match(
               () => true,
               () => false,
             )
             if (!archived) {
-              setError(`Could not archive ${session.title}.`)
-              return
+              failure = `Could not archive ${session.title}.`
+              break
             }
           }
-          setError(null)
+          archiveBatchInFlight.current = false
+          setError(failure)
           return
         }
         case 'clear-inbox-filter':
@@ -168,8 +174,6 @@ export function useCommandPaletteController({
     openSessionInInbox,
     openTodaySession,
     toggleToday,
-    recordRecentSession,
-    withRecentSession,
     runCommand,
   }
 }

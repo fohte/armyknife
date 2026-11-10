@@ -313,12 +313,6 @@ export function App() {
       ?.scrollIntoView({ block: 'nearest' })
   }, [selectedId, showAllInProgress, view])
 
-  useEffect(() => {
-    if (isMobile && view !== 'inbox') {
-      navigate((current) => ({ ...current, view: 'inbox' }), 'replace')
-    }
-  }, [isMobile, navigate, view])
-
   useSessionKeyboardNavigation({
     isMobile,
     laterSessionId,

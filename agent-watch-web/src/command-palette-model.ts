@@ -1,3 +1,5 @@
+import { Result } from 'neverthrow'
+
 import type { Session } from '#types'
 
 export type PaletteScope =
@@ -42,24 +44,45 @@ export type PaletteGroup = {
 const RECENT_SESSION_IDS_KEY = 'agentWatchRecentSessionIds'
 const RECENT_SESSION_LIMIT = 8
 
-export function readRecentSessionIds(storage: Storage): string[] {
-  const value = storage.getItem(RECENT_SESSION_IDS_KEY)
-  if (value === null) return []
-
-  const parsed: unknown = JSON.parse(value)
-  return Array.isArray(parsed)
-    ? parsed.filter((entry): entry is string => typeof entry === 'string')
-    : []
+function safely<T>(action: () => T) {
+  return Result.fromThrowable(action, (error: unknown) => error)()
 }
 
-export function recordRecentSessionId(storage: Storage, id: string) {
+export function getRecentSessionStorage(): Storage | null {
+  return safely(() => window.localStorage).match(
+    (storage) => storage,
+    () => null,
+  )
+}
+
+export function readRecentSessionIds(storage: Storage | null): string[] {
+  if (storage === null) return []
+
+  return safely(() => {
+    const value = storage.getItem(RECENT_SESSION_IDS_KEY)
+    if (value === null) return []
+
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === 'string')
+      : []
+  }).match(
+    (sessionIds) => sessionIds,
+    () => [],
+  )
+}
+
+export function recordRecentSessionId(storage: Storage | null, id: string) {
+  if (storage === null) return false
   const recentIds = readRecentSessionIds(storage).filter(
     (recentId) => recentId !== id,
   )
-  storage.setItem(
-    RECENT_SESSION_IDS_KEY,
-    JSON.stringify([id, ...recentIds].slice(0, RECENT_SESSION_LIMIT)),
-  )
+  return safely(() => {
+    storage.setItem(
+      RECENT_SESSION_IDS_KEY,
+      JSON.stringify([id, ...recentIds].slice(0, RECENT_SESSION_LIMIT)),
+    )
+  }).isOk()
 }
 
 function resolveScope(query: string, selectedScope: PaletteScope) {
