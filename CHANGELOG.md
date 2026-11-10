@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.550](https://github.com/fohte/armyknife/compare/v0.1.549...v0.1.550) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** attach dropped images ([#1458](https://github.com/fohte/armyknife/issues/1458)) ([e8fe334](https://github.com/fohte/armyknife/commit/e8fe3346192bd296db150a3a2ba0153781b2678e))
+
 ## [0.1.549](https://github.com/fohte/armyknife/compare/v0.1.548...v0.1.549) (2026-11-10)
 
 
