@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.554](https://github.com/fohte/armyknife/compare/v0.1.553...v0.1.554) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** link known session IDs ([#1465](https://github.com/fohte/armyknife/issues/1465)) ([f8b76c0](https://github.com/fohte/armyknife/commit/f8b76c0be1fc3213214f76bcb135753d8067b673))
+
+
+### Bug Fixes
+
+* **agent-watch-web:** pin hint to viewport edge ([#1467](https://github.com/fohte/armyknife/issues/1467)) ([970cae8](https://github.com/fohte/armyknife/commit/970cae8b26d7a524f194aa793961f705f54e6b65))
+
 ## [0.1.553](https://github.com/fohte/armyknife/compare/v0.1.552...v0.1.553) (2026-11-10)
 
 
