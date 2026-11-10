@@ -1,10 +1,25 @@
 .conversation-pane {
+  position: relative;
   display: flex;
   min-width: 0;
   height: 100%;
   flex: 1;
   flex-direction: column;
   background: #0a0a0a;
+}
+
+.conversation-drop-target {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  inset: 8px;
+  place-items: center;
+  border: 2px dashed #a1a1aa;
+  border-radius: 8px;
+  background: rgb(10 10 10 / 88%);
+  color: #fafafa;
+  font-size: 16px;
+  pointer-events: none;
 }
 
 .conversation-header {

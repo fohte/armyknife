@@ -27,6 +27,22 @@ import type { Session } from '#types'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 
 export function App() {
+  useEffect(() => {
+    const preventFileNavigation = (event: DragEvent) => {
+      if (!Array.from(event.dataTransfer?.types ?? []).includes('Files')) {
+        return
+      }
+      event.preventDefault()
+    }
+
+    window.addEventListener('dragover', preventFileNavigation, true)
+    window.addEventListener('drop', preventFileNavigation, true)
+    return () => {
+      window.removeEventListener('dragover', preventFileNavigation, true)
+      window.removeEventListener('drop', preventFileNavigation, true)
+    }
+  }, [])
+
   const {
     isMobile,
     inProgressExpanded,
