@@ -1,5 +1,6 @@
 import '#components/markdown-message.css'
 
+import { memo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -8,7 +9,10 @@ type MarkdownMessageProps = {
   className?: string
 }
 
-export function MarkdownMessage({ children, className }: MarkdownMessageProps) {
+export const MarkdownMessage = memo(function MarkdownMessage({
+  children,
+  className,
+}: MarkdownMessageProps) {
   const rootClassName =
     className === undefined
       ? 'markdown-message'
@@ -19,4 +23,4 @@ export function MarkdownMessage({ children, className }: MarkdownMessageProps) {
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>
     </div>
   )
-}
+})

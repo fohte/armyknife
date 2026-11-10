@@ -1,6 +1,6 @@
 .markdown-message {
   overflow-wrap: anywhere;
-  white-space: normal;
+  white-space: pre-line;
 }
 
 .markdown-message > * {

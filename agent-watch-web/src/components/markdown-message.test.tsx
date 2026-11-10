@@ -3,14 +3,20 @@ import { expect, it } from 'vitest'
 
 import { MarkdownMessage } from '#components/markdown-message'
 
-function renderMessage(markdown: string) {
-  return renderToStaticMarkup(<MarkdownMessage>{markdown}</MarkdownMessage>)
+function renderMessage(markdown: string, className?: string) {
+  const props = className === undefined ? {} : { className }
+  return renderToStaticMarkup(
+    <MarkdownMessage {...props}>{markdown}</MarkdownMessage>,
+  )
 }
 
 it('renders common markdown and GFM as semantic elements', () => {
-  const html = renderMessage(`## Summary
+  const html = renderMessage(
+    `## Summary
 
 Use \`retry()\` with the [guide](https://example.com/guide).
+First line
+Second line
 
 - Retry transient failures
 - Stop after three attempts
@@ -21,11 +27,15 @@ Use \`retry()\` with the [guide](https://example.com/guide).
 
 ~~~rust
 let attempts = 3;
-~~~`)
+~~~`,
+    'chat-user-message',
+  )
 
   const expected = [
-    '<div class="markdown-message"><h2>Summary</h2>',
-    '<p>Use <code>retry()</code> with the <a href="https://example.com/guide">guide</a>.</p>',
+    '<div class="markdown-message chat-user-message"><h2>Summary</h2>',
+    '<p>Use <code>retry()</code> with the <a href="https://example.com/guide">guide</a>.',
+    'First line',
+    'Second line</p>',
     '<ul>',
     '<li>Retry transient failures</li>',
     '<li>Stop after three attempts</li>',
