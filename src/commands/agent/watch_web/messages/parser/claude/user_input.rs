@@ -6,13 +6,6 @@ use crate::commands::agent::watch_web::{
     messages::{UserContentPart, claude_content_text as content_text},
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum UserOrigin {
-    Human,
-    Peer,
-    Legacy,
-}
-
 pub(super) fn is_tool_result_only_user_record(record: &Value) -> bool {
     record.get("type").and_then(Value::as_str) == Some("user")
         && record
@@ -25,41 +18,6 @@ pub(super) fn is_tool_result_only_user_record(record: &Value) -> bool {
                         block.get("type").and_then(Value::as_str) == Some("tool_result")
                     })
             })
-}
-
-pub(super) fn user_origin(record: &Value, message: &Value) -> Option<UserOrigin> {
-    if record.get("sourceToolAssistantUUID").is_some()
-        || record
-            .get("toolUseResult")
-            .is_some_and(|result| !result.is_null())
-    {
-        return None;
-    }
-
-    if let Some(origin) = record.get("origin").filter(|origin| !origin.is_null()) {
-        return match origin.get("kind").and_then(Value::as_str) {
-            Some("human") => Some(UserOrigin::Human),
-            Some("peer") => Some(UserOrigin::Peer),
-            _ => None,
-        };
-    }
-
-    (!is_legacy_harness_user_record(record, message)).then_some(UserOrigin::Legacy)
-}
-
-fn is_legacy_harness_user_record(record: &Value, message: &Value) -> bool {
-    let text = user_text(message);
-    ["isMeta", "isSidechain", "isCompactSummary"]
-        .into_iter()
-        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
-        || (text.trim_start().starts_with("<command-message>") && !text.contains("<command-name>"))
-        || [
-            "<task-notification>",
-            "<local-command-stdout>",
-            "<local-command-caveat>",
-        ]
-        .into_iter()
-        .any(|prefix| text.trim_start().starts_with(prefix))
 }
 
 pub(super) fn slash_command_text(text: &str) -> Option<String> {

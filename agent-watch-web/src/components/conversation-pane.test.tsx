@@ -836,6 +836,111 @@ it('links known session IDs in user, rich user, and assistant messages', () => {
   expect(getActual()).toEqual(expected)
 })
 
+it('shows directed peer messages and keeps non-failing events neutral', () => {
+  const linkedSession: Session = {
+    ...session,
+    id: 'fictional-peer-session',
+    category: 'in_progress',
+    title: 'Build verification',
+  }
+  const onSelectSession = vi.fn<(id: string) => void>()
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    onSelectSession,
+    [
+      {
+        type: 'peer',
+        direction: 'to',
+        session_id: linkedSession.id,
+        content: [{ type: 'text', text: 'Please check the fictional output.' }],
+      },
+      {
+        type: 'peer',
+        direction: 'from',
+        session_id: linkedSession.id,
+        content: [{ type: 'text', text: 'The fictional output passed.' }],
+      },
+      {
+        type: 'event',
+        kind: 'hook',
+        text: 'A fictional hook completed.',
+        failed: false,
+      },
+      {
+        type: 'event',
+        kind: 'system',
+        text: 'A fictional operation was blocked.',
+        failed: true,
+      },
+    ],
+    actions,
+    false,
+    [linkedSession],
+  )
+
+  const peerLink = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-peer-message-from .session-link-trigger',
+    ),
+  )
+  act(() => {
+    peerLink.click()
+  })
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLElement>(
+        '.chat-peer-message-to .chat-peer-content',
+      ),
+    ).click()
+  })
+
+  const snapshot = () => ({
+    items: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.chat-peer-message, .chat-event',
+      ),
+      (element) => ({
+        className: element.className,
+        text: element.textContent,
+        failed: element.getAttribute('data-failed'),
+        kind: element.getAttribute('data-kind'),
+      }),
+    ),
+    selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  const expected = {
+    items: [
+      {
+        className: 'chat-peer-message chat-peer-message-to',
+        text: 'TOBuild verificationPlease check the fictional output.',
+        failed: null,
+        kind: null,
+      },
+      {
+        className: 'chat-peer-message chat-peer-message-from',
+        text: 'FROMBuild verificationThe fictional output passed.',
+        failed: null,
+        kind: null,
+      },
+      {
+        className: 'chat-event',
+        text: 'A fictional hook completed.',
+        failed: null,
+        kind: 'hook',
+      },
+      {
+        className: 'chat-event',
+        text: 'A fictional operation was blocked.',
+        failed: 'true',
+        kind: 'system',
+      },
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id],
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
 it('shows elapsed time while the session is working without an active tool', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
