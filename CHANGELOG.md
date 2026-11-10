@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.557](https://github.com/fohte/armyknife/compare/v0.1.556...v0.1.557) (2026-11-10)
+
+
+### Features
+
+* **agent/watch-web:** show all linked tq tasks ([#1466](https://github.com/fohte/armyknife/issues/1466)) ([4f0fd94](https://github.com/fohte/armyknife/commit/4f0fd9433e2d615f9da231940a71ed0ca46883c2))
+
 ## [0.1.556](https://github.com/fohte/armyknife/compare/v0.1.555...v0.1.556) (2026-11-10)
 
 
