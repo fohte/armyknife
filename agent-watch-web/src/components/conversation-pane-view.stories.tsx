@@ -114,7 +114,7 @@ export const CritReviewCanOpenBesideTheConversation: Story = {
 }
 
 export const ReviewGuidanceFitsAnIPhone: Story = {
-  name: 'A review explains why crit needs a desktop',
+  name: 'A review directs iPhone users to their Mac',
   args: {
     isMobile: true,
     session: {

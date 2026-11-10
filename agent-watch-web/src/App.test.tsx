@@ -499,10 +499,68 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     desktopIframeCount,
   })
   expect(snapshot()).toEqual({
-    guidance: 'Open this session on your desktop to review it in crit.',
+    guidance: 'Open this session on your Mac to review it in crit.',
     iframeCount: 0,
     critButtonCount: 0,
     desktopIframeCount: 1,
+  })
+})
+
+it('shows desktop review guidance when a Review session has no crit URL', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-review', 'Review the retry policy'),
+        kind: 'Review',
+      },
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+
+  const snapshot = () => ({
+    guidance: container.querySelector('.mobile-review-note')?.textContent,
+    iframeCount: container.querySelectorAll('iframe').length,
+  })
+  expect(snapshot()).toEqual({
+    guidance: 'Open this session on your Mac to review it in crit.',
+    iframeCount: 0,
+  })
+})
+
+it('ignores desktop keyboard shortcuts at the mobile breakpoint', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+    dispatchKey(window, 'l')
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    laterMenuCount: container.querySelectorAll('.later-menu').length,
+    boardViewCount: container.querySelectorAll('.board-view').length,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'First session',
+    laterMenuCount: 0,
+    boardViewCount: 0,
   })
 })
 
@@ -575,6 +633,148 @@ it('opens Later for the session shown in a mobile conversation', async () => {
   expect(snapshot()).toEqual({
     menuTitle: 'Later: Reply to the question',
     menuLabel: 'Later: Reply to the question',
+  })
+})
+
+it('returns to the Inbox after submitting Later for a mobile conversation', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Reply to the question'),
+      session('session-b', 'Review another change'),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-conversation-later')
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '.later-menu-option:not(.later-menu-reset)',
+      )
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [
+      {
+        ...session('session-a', 'Reply to the question', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-04T16:00:00Z',
+      },
+      session('session-b', 'Review another change'),
+    ],
+  })
+
+  const snapshot = () => ({
+    screen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    conversationTitle: container.querySelector('.conversation-pane h1')
+      ?.textContent,
+    inboxSelection: readSelectedTitle(),
+    laterRequest: fetchMock.mock.calls
+      .filter(
+        ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+      )
+      .map(([input, init]) => [requestUrl(input), init]),
+  })
+  expect(snapshot()).toEqual({
+    screen: 'inbox',
+    conversationTitle: null,
+    inboxSelection: 'Review another change',
+    laterRequest: [
+      [
+        '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('returns to the Inbox when the mobile conversation disappears from the feed', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Reply to the question'),
+      session('session-b', 'Review another change'),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+
+  publishSessions({
+    revision: 2,
+    sessions: [session('session-b', 'Review another change')],
+  })
+
+  const snapshot = () => ({
+    screen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    conversationTitle: container.querySelector('.conversation-pane h1')
+      ?.textContent,
+    inboxSelection: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    screen: 'inbox',
+    conversationTitle: null,
+    inboxSelection: 'Review another change',
+  })
+})
+
+it('keeps the desktop Later summary hidden when empty and restores its markers', () => {
+  renderApp()
+  publishSessions({ revision: 1, sessions: [] })
+  const emptySummary =
+    container.querySelector('.later-next-return')?.textContent
+  publishSessions({
+    revision: 2,
+    sessions: [session('session-later', 'Wait for the build', 'later')],
+  })
+  const collapsedLabel = container
+    .querySelector('.later-next-return')
+    ?.textContent.trim()
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-collapsed-row')?.click()
+  })
+  const expandedLabel = container
+    .querySelector('.later-next-return')
+    ?.textContent.trim()
+
+  const snapshot = () => ({ emptySummary, collapsedLabel, expandedLabel })
+  expect(snapshot()).toEqual({
+    emptySummary: undefined,
+    collapsedLabel: 'Next activity ▸',
+    expandedLabel: 'Next activity ▾',
   })
 })
 

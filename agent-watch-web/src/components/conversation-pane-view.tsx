@@ -48,10 +48,9 @@ export function ConversationPaneView({
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isSending = sending || sendPending
+  const isReview = session.kind === 'Review'
   const critUrl =
-    session.category === 'needs_action' && session.kind === 'Review'
-      ? session.critUrl
-      : null
+    isReview && session.category === 'needs_action' ? session.critUrl : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
 
@@ -91,7 +90,7 @@ export function ConversationPaneView({
       void onAction('interrupt')
       return
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Enter' && !isMobile && !event.shiftKey) {
       event.preventDefault()
       sendMessage()
     }
@@ -116,6 +115,7 @@ export function ConversationPaneView({
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
       const target = event.target
       if (
+        isMobile ||
         event.defaultPrevented ||
         event.altKey ||
         event.ctrlKey ||
@@ -151,6 +151,7 @@ export function ConversationPaneView({
     actions?.answerQuestion,
     actionsReady,
     activeQuestionIndex,
+    isMobile,
     onAction,
     waitingQuestion,
   ])
@@ -290,9 +291,9 @@ export function ConversationPaneView({
         )}
       </header>
 
-      {isMobile && hasCritUrl ? (
+      {isMobile && isReview ? (
         <p className="mobile-review-note">
-          Open this session on your desktop to review it in crit.
+          Open this session on your Mac to review it in crit.
         </p>
       ) : null}
 
@@ -371,7 +372,7 @@ export function ConversationPaneView({
                         void onAction('answer', { choice: choiceIndex + 1 })
                       }}
                     >
-                      <kbd>{choiceIndex + 1}</kbd>
+                      {!isMobile ? <kbd>{choiceIndex + 1}</kbd> : null}
                       <span>{choice}</span>
                     </Button>
                   ))}
@@ -447,9 +448,23 @@ export function ConversationPaneView({
           rows={2}
         />
         <div className="composer-footer">
-          <span role={isSending ? 'status' : undefined}>
-            {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
-          </span>
+          {!isMobile ? (
+            <span role={isSending ? 'status' : undefined}>
+              {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
+            </span>
+          ) : null}
+          {isMobile && actions?.interrupt === true ? (
+            <Button
+              className="mobile-interrupt-button"
+              type="button"
+              variant="plain"
+              onClick={() => {
+                void onAction('interrupt')
+              }}
+            >
+              Interrupt
+            </Button>
+          ) : null}
           <Button
             type="submit"
             variant="plain"

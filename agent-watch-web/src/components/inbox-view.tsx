@@ -177,9 +177,18 @@ export function InboxView({
         >
           <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
-          <span className="later-next-return">
-            {nextReturnLabel(later)} {laterExpanded ? '⌄' : '›'}
-          </span>
+          {later.length > 0 || isMobile ? (
+            <span className="later-next-return">
+              {later.length > 0 ? nextReturnLabel(later) : 'Next activity'}{' '}
+              {isMobile
+                ? laterExpanded
+                  ? '⌄'
+                  : '›'
+                : laterExpanded
+                  ? '▾'
+                  : '▸'}
+            </span>
+          ) : null}
         </Button>
         {laterExpanded && later.length > 0 ? (
           <ul className="session-list later-session-list">

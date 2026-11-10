@@ -1,11 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
@@ -14,10 +7,14 @@ import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
 import {
+  createSessionNavigationActions,
+  useMobileLayout,
+  useMobileNavigation,
+} from '#mobile-layout'
+import {
   getLaterPresetTimes,
   setSessionBackNow,
   setSessionLater,
-  setSessionToday,
 } from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import {
@@ -31,17 +28,15 @@ import {
 import type { Session } from '#types'
 
 export function App() {
-  const isMobile = useSyncExternalStore(
-    (listener) => {
-      const query = window.matchMedia('(max-width: 760px)')
-      query.addEventListener('change', listener)
-      return () => {
-        query.removeEventListener('change', listener)
-      }
-    },
-    () => window.matchMedia('(max-width: 760px)').matches,
-    () => false,
-  )
+  const {
+    isMobile,
+    conversationOpen: mobileConversationOpen,
+    setConversationOpen: setMobileConversationOpen,
+    inProgressExpanded,
+    setInProgressExpanded,
+    doneExpanded,
+    setDoneExpanded,
+  } = useMobileLayout()
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
@@ -51,9 +46,6 @@ export function App() {
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
-  const [inProgressExpanded, setInProgressExpanded] = useState(false)
-  const [doneExpanded, setDoneExpanded] = useState(false)
-  const [mobileConversationOpen, setMobileConversationOpen] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [laterTimesError, setLaterTimesError] = useState(false)
@@ -112,6 +104,19 @@ export function App() {
       ),
     [laterExpanded, orderedSessions],
   )
+  const {
+    openConversation,
+    openSessionInInbox,
+    openTodaySession,
+    toggleToday,
+  } = createSessionNavigationActions({
+    sessions: sessionsWithElapsedTime,
+    setSelectedId,
+    setView,
+    setConversationOpen: setMobileConversationOpen,
+    setLaterExpanded,
+    setError,
+  })
   const projects = useMemo(
     () => buildBoardProjects(sessionsWithElapsedTime),
     [sessionsWithElapsedTime],
@@ -188,6 +193,10 @@ export function App() {
         () => {
           finishLaterMutation()
           closeLater()
+          if (isMobile) {
+            setLaterExpanded(false)
+            setMobileConversationOpen(false)
+          }
           setError(null)
         },
         () => {
@@ -201,8 +210,10 @@ export function App() {
       beginLaterMutation,
       closeLater,
       finishLaterMutation,
+      isMobile,
       laterTimes,
       openLater,
+      setMobileConversationOpen,
     ],
   )
   const submitBackNow = useCallback(
@@ -256,12 +267,6 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!navigableSessions.some((session) => session.id === selectedId)) {
-      setSelectedId(navigableSessions[0]?.id ?? null)
-    }
-  }, [navigableSessions, selectedId])
-
-  useEffect(() => {
     const hiddenProgress = orderedSessions.filter(
       (session) => session.category === 'in_progress',
     )
@@ -300,6 +305,7 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
+        isMobile ||
         event.defaultPrevented ||
         event.altKey ||
         event.ctrlKey ||
@@ -352,6 +358,7 @@ export function App() {
     }
   }, [
     closeLater,
+    isMobile,
     laterSessionId,
     navigableSessions,
     openLater,
@@ -369,42 +376,21 @@ export function App() {
   const selectedSession = sessionsWithElapsedTime.find(
     (session) => session.id === selectedId,
   )
-
-  const toggleToday = (id: string, isToday: boolean) => {
-    void setSessionToday(id, isToday).match(
-      () => {
-        setError(null)
-      },
-      () => {
-        setError('Could not update TODAY.')
-      },
-    )
-  }
-  const openSessionInInbox = (sessionId: string) => {
-    setSelectedId(sessionId)
-    setView('inbox')
-    setMobileConversationOpen(true)
-  }
-  const openConversation = (sessionId: string) => {
-    setSelectedId(sessionId)
-    setMobileConversationOpen(true)
-  }
-  const openTodaySession = (sessionId: string) => {
-    if (
-      sessionsWithElapsedTime.some(
-        (session) => session.id === sessionId && session.category === 'later',
-      )
-    ) {
-      setLaterExpanded(true)
-    }
-    openConversation(sessionId)
-  }
+  const { showConversation: showMobileConversation } = useMobileNavigation({
+    isMobile,
+    conversationOpen: mobileConversationOpen,
+    navigableSessions,
+    selectedId,
+    selectedSessionExists: selectedSession !== undefined,
+    setSelectedId,
+    setConversationOpen: setMobileConversationOpen,
+  })
 
   return (
     <div
       className="agent-watch-shell"
       data-layout={isMobile ? 'mobile' : 'desktop'}
-      data-mobile-screen={mobileConversationOpen ? 'conversation' : 'inbox'}
+      data-mobile-screen={showMobileConversation ? 'conversation' : 'inbox'}
     >
       {!isMobile ? (
         <AgentWatchNav
@@ -451,7 +437,7 @@ export function App() {
                 setDoneExpanded((expanded) => !expanded)
               }}
             />
-            {selectedSession && (!isMobile || mobileConversationOpen) ? (
+            {selectedSession && (!isMobile || showMobileConversation) ? (
               <ConversationPane
                 key={selectedSession.id}
                 session={selectedSession}

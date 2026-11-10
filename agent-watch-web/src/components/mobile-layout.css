@@ -1,6 +1,6 @@
 .agent-watch-shell[data-layout='mobile'] {
   height: 100vh;
-  height: 100dvh;
+  height: var(--mobile-viewport-height, 100dvh);
   min-height: 0;
 }
 
@@ -370,6 +370,18 @@
   width: 44px;
   height: 44px;
   min-height: 44px;
+}
+
+.conversation-pane[data-mobile='true'] .composer-footer {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.conversation-pane[data-mobile='true'] .mobile-interrupt-button {
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #3f3f46;
+  color: #d4d4d8;
 }
 
 .agent-watch-shell[data-layout='mobile'] .later-menu-option,
