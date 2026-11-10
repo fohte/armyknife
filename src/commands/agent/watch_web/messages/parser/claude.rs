@@ -251,7 +251,7 @@ fn parse_with_image_directory(
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
-    items.extend(queue.pending_items(parent, user_marker));
+    items.extend(queue.pending_items(parent, user_marker, image_directory));
     Ok(items)
 }
 
@@ -555,6 +555,50 @@ mod tests {
                 ],
                 from: None,
             }]
+        );
+    }
+
+    #[test]
+    fn pending_queued_message_resolves_saved_image_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000001.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(&image_path, b"fixture image").unwrap();
+        let content = formatdoc! {"
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": content,
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::QueuedUser {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }],
         );
     }
 

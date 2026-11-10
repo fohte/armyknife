@@ -60,7 +60,24 @@ export const QueuedPromptIsDimmed: Story = {
   args: {
     message: {
       type: 'queued_user',
-      text: 'Please rerun the fixture check.',
+      content: [{ type: 'text', text: 'Please rerun the fixture check.' }],
+    },
+  },
+}
+
+export const QueuedPromptShowsItsImage: Story = {
+  name: 'A queued prompt shows its dimmed image attachment',
+  args: {
+    message: {
+      type: 'queued_user',
+      content: [
+        { type: 'text', text: 'Inspect this screenshot: ' },
+        {
+          type: 'image',
+          source: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+          available: true,
+        },
+      ],
     },
   },
 }

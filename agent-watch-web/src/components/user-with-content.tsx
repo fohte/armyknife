@@ -47,23 +47,26 @@ export function UserWithContent({
   sessions?: readonly SessionLinkTarget[]
 }) {
   const content: UserContentPart[] =
-    message.type === 'user' || message.type === 'queued_user'
+    message.type === 'user'
       ? [{ type: 'text', text: message.text }]
       : message.content
+  const queued = message.type === 'queued_user'
 
   return (
-    <article className="chat-user-group">
+    <article
+      className={
+        queued ? 'chat-user-group chat-user-group-queued' : 'chat-user-group'
+      }
+    >
       {message.from != null && message.from !== '' ? (
         <div className="chat-from">From {message.from}</div>
       ) : null}
-      {message.type === 'queued_user' ? (
-        <div className="chat-queued-label">Queued</div>
-      ) : null}
+      {queued ? <div className="chat-queued-label">Queued</div> : null}
       {content.map((part, partIndex) =>
         part.type === 'text' ? (
           <MarkdownMessage
             className={
-              message.type === 'queued_user'
+              queued
                 ? 'chat-user-message chat-user-message-queued'
                 : 'chat-user-message'
             }

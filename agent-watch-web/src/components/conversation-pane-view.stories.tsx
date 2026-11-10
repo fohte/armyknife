@@ -97,7 +97,7 @@ export const QueuedPromptAppearsAfterConversation: Story = {
       },
       {
         type: 'queued_user',
-        text: 'Also check the error handling.',
+        content: [{ type: 'text', text: 'Also check the error handling.' }],
       },
     ],
   },

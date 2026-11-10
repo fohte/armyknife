@@ -318,6 +318,11 @@
   opacity: 0.55;
 }
 
+.chat-user-group-queued .chat-user-image,
+.chat-user-group-queued .chat-image-unavailable {
+  opacity: 0.55;
+}
+
 .chat-user-image {
   max-width: min(100%, 560px);
   max-height: 480px;

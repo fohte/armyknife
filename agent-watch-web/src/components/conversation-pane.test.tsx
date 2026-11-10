@@ -840,7 +840,10 @@ it('marks a queued prompt below the delivered conversation', () => {
   renderView(vi.fn().mockResolvedValue(true), session, undefined, [
     { type: 'user', text: 'Please summarize the current changes.' },
     { type: 'assistant', text: 'I am reviewing the current changes.' },
-    { type: 'queued_user', text: 'Also check the error handling.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'Also check the error handling.' }],
+    },
   ])
 
   const actual = Array.from(
@@ -869,7 +872,7 @@ it('marks a queued prompt below the delivered conversation', () => {
       bubbleClassName: null,
     },
     {
-      className: 'chat-user-group',
+      className: 'chat-user-group chat-user-group-queued',
       label: 'Queued',
       text: 'Also check the error handling.',
       bubbleClassName:

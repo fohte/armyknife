@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
+use std::path::Path;
 
 use serde_json::Value;
 
-use super::super::{ChatItem, ParentSession, claude_content_text};
+use super::super::{ChatItem, ParentSession, UserContentPart, claude_content_text};
 use super::append_text_with_user_marker_and_image_directory;
 
 #[derive(Default)]
@@ -95,6 +96,7 @@ impl Queue {
         self,
         parent: Option<&ParentSession>,
         user_marker: Option<&str>,
+        image_directory: Option<&Path>,
     ) -> Vec<ChatItem> {
         let mut items = Vec::new();
         for prompt in self.pending.into_iter().flatten() {
@@ -105,12 +107,21 @@ impl Queue {
                 parent,
                 user_marker,
                 Vec::new(),
-                None,
+                image_directory,
             );
             if items.len() > start
-                && let Some(ChatItem::User { text, from }) = items.pop()
+                && let Some(item) = items.pop()
             {
-                items.push(ChatItem::QueuedUser { text, from });
+                items.push(match item {
+                    ChatItem::User { text, from } => ChatItem::QueuedUser {
+                        content: vec![UserContentPart::Text { text }],
+                        from,
+                    },
+                    ChatItem::UserWithContent { content, from } => {
+                        ChatItem::QueuedUser { content, from }
+                    }
+                    item => item,
+                });
             }
         }
         items
@@ -143,7 +154,7 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
-    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
+    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession, UserContentPart};
 
     #[rstest]
     #[case::dequeue_consumes_the_oldest_item(
@@ -205,7 +216,9 @@ mod tests {
             )
             .unwrap(),
             vec![ChatItem::QueuedUser {
-                text: "Queued user request.".to_string(),
+                content: vec![UserContentPart::Text {
+                    text: "Queued user request.".to_string(),
+                }],
                 from: None,
             }],
         );
@@ -255,7 +268,9 @@ mod tests {
 
     fn queued_user(text: &str) -> ChatItem {
         ChatItem::QueuedUser {
-            text: text.to_owned(),
+            content: vec![UserContentPart::Text {
+                text: text.to_owned(),
+            }],
             from: None,
         }
     }

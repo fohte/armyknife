@@ -289,7 +289,7 @@ enum ChatItem {
         from: Option<String>,
     },
     QueuedUser {
-        text: String,
+        content: Vec<UserContentPart>,
         #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
@@ -569,7 +569,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"[{"type":"queued_user","text":"Pending queued prompt."}]"#.to_string(),
+                r#"[{"type":"queued_user","content":[{"type":"text","text":"Pending queued prompt."}]}]"#.to_string(),
             ),
         );
     }

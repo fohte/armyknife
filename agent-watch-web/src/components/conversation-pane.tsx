@@ -16,9 +16,9 @@ function isChatItem(value: unknown): value is ChatItem {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   switch (value['type']) {
     case 'user':
-    case 'queued_user':
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'queued_user':
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
