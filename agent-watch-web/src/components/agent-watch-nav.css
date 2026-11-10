@@ -107,6 +107,25 @@
   font-size: 10px;
 }
 
+.agent-watch-inbox-toggle {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  margin-left: 5px;
+  place-items: center;
+  border: 1px solid #303036;
+  border-radius: 4px;
+  background: #19191c;
+  color: #8b8b94;
+  cursor: pointer;
+}
+
+.agent-watch-inbox-toggle.is-active {
+  border-color: #52525b;
+  background: #303036;
+  color: #fafafa;
+}
+
 .work-type-nav h2 {
   height: 26px;
   margin: 0;

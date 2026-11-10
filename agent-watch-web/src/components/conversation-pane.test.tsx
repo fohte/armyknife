@@ -95,6 +95,8 @@ function renderView(
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
   viewSessions: readonly Session[] = [],
+  statusPanelOpen = false,
+  onToggleStatusPanel?: () => void,
   pendingPermissionAction?: {
     action: 'approve' | 'reject'
     status: 'sending' | 'sent'
@@ -117,6 +119,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        statusPanelOpen={statusPanelOpen}
+        {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
       />,
     )
   })
@@ -191,6 +195,8 @@ it('shows pending and sent permission action feedback', () => {
       false,
       [],
       [],
+      false,
+      undefined,
       {
         action: 'approve',
         status,
@@ -1108,87 +1114,38 @@ it('accepts the active tool returned by the messages endpoint', async () => {
   })
 })
 
-it('opens and closes a crit review beside a waiting conversation', () => {
-  const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction, {
-    ...session,
-    category: 'needs_action',
-    kind: 'Review',
-    critUrl: 'http://127.0.0.1:5000/review/sample',
-  })
-  const conversationScroll = requireElement(
-    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+it('shows the status panel toggle and reports its open state', () => {
+  const onToggleStatusPanel = vi.fn<() => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    () => undefined,
+    [question],
+    actions,
+    false,
+    [],
+    [],
+    true,
+    onToggleStatusPanel,
   )
-
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-status-panel-toggle',
+    ),
+  )
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).click()
-  })
-  const openState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    frameSource: requireElement(
-      container.querySelector<HTMLIFrameElement>('.crit-pane iframe'),
-    ).getAttribute('src'),
-    closeLabel: requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.crit-pane button[aria-label="Close crit"]',
-      ),
-    ).getAttribute('aria-label'),
-    scrollElementPreserved:
-      container.querySelector('.conversation-scroll') === conversationScroll,
-  }
-
-  renderView(onAction, {
-    ...session,
-    category: 'needs_action',
-    kind: 'Review',
-    critUrl: 'http://127.0.0.1:5001/review/sample',
-  })
-  const changedUrlState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    pane: container.querySelector('.crit-pane'),
-  }
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).click()
+    toggle.click()
   })
 
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.crit-pane button[aria-label="Close crit"]',
-      ),
-    ).click()
+  const snapshot = () => ({
+    expanded: toggle.getAttribute('aria-expanded'),
+    controls: toggle.getAttribute('aria-controls'),
+    calls: onToggleStatusPanel.mock.calls,
   })
-  const closedState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    pane: container.querySelector('.crit-pane'),
-  }
-
-  const snapshot = () => ({ openState, changedUrlState, closedState })
   expect(snapshot()).toEqual({
-    openState: {
-      expanded: 'true',
-      frameSource: 'http://127.0.0.1:5000/review/sample',
-      closeLabel: 'Close crit',
-      scrollElementPreserved: true,
-    },
-    changedUrlState: {
-      expanded: 'false',
-      pane: null,
-    },
-    closedState: {
-      expanded: 'false',
-      pane: null,
-    },
+    expanded: 'true',
+    controls: 'session-status-panel',
+    calls: [[]],
   })
 })
 
@@ -1239,7 +1196,7 @@ it('shows the paused state in the mobile conversation header', () => {
   })
 })
 
-it('does not offer crit for sessions without a waiting crit URL', () => {
+it('keeps the status panel toggle available without a waiting crit URL', () => {
   renderView(
     vi.fn(() => Promise.resolve(true)),
     {
@@ -1249,7 +1206,8 @@ it('does not offer crit for sessions without a waiting crit URL', () => {
       critUrl: null,
     },
   )
-  const missingUrl = container.querySelector('.conversation-crit-toggle')
+  const missingUrl =
+    container.querySelector('.conversation-status-panel-toggle') !== null
 
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -1260,12 +1218,13 @@ it('does not offer crit for sessions without a waiting crit URL', () => {
       critUrl: 'http://127.0.0.1:5000/review/sample',
     },
   )
-  const notWaiting = container.querySelector('.conversation-crit-toggle')
+  const notWaiting =
+    container.querySelector('.conversation-status-panel-toggle') !== null
 
   const snapshot = () => ({ missingUrl, notWaiting })
   expect(snapshot()).toEqual({
-    missingUrl: null,
-    notWaiting: null,
+    missingUrl: true,
+    notWaiting: true,
   })
 })
 

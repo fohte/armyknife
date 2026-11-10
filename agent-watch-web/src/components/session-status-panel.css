@@ -1,0 +1,70 @@
+.session-status-panel {
+  display: flex;
+  min-width: 300px;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  background: #0a0a0a;
+}
+
+.session-status-panel-tabs {
+  display: flex;
+  min-height: 44px;
+  flex: 0 0 44px;
+  align-items: stretch;
+  gap: 4px;
+  padding: 0 12px;
+  border-bottom: 1px solid #1a1a1a;
+  background: #141414;
+}
+
+.session-status-panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  padding: 0 8px;
+  background: transparent;
+  color: #8b8b94;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.session-status-panel-tab[aria-selected='true'] {
+  border-bottom-color: #a1a1aa;
+  color: #fafafa;
+}
+
+.session-status-panel-close {
+  min-width: 28px;
+  margin-left: auto;
+  color: #d4d4d8;
+  font-size: 16px;
+}
+
+.session-status-panel-count {
+  color: #8b8b94;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.session-status-panel-content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.session-status-panel-content > * {
+  width: 100%;
+  height: 100%;
+}
+
+.session-status-panel-empty {
+  display: grid;
+  flex: 1 1 auto;
+  place-items: center;
+  color: #8b8b94;
+  font-size: 12px;
+}
