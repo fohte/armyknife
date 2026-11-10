@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.526](https://github.com/fohte/armyknife/compare/v0.1.525...v0.1.526) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show crit beside chat ([#1405](https://github.com/fohte/armyknife/issues/1405)) ([265ffc1](https://github.com/fohte/armyknife/commit/265ffc1d4d663d5cfa7118a5a2ec64d189fb1959))
+
 ## [0.1.525](https://github.com/fohte/armyknife/compare/v0.1.524...v0.1.525) (2026-11-10)
 
 
