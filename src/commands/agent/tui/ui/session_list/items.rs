@@ -13,7 +13,7 @@ use crate::commands::agent::tui::session_rows::{
     SectionHeaderRow, SessionRowEntry, TaskMark, VibeMode, is_related_task, kin_relation,
 };
 use crate::commands::agent::user_turn::UserTurnKind;
-use crate::shared::config::AgentWorkTypeConfig;
+use crate::shared::config::AgentWorkTypeMarkerConfig;
 
 mod columns;
 use columns::{format_compact_time, pad_left_to_width, pad_to_width};
@@ -242,22 +242,27 @@ pub(super) fn build_session_item_with_annotation(
 
     let work_type_column_width = work_type_column_width(app);
     let state_label_gap = state_label_column_shift(has_state_label(entry, stage));
-    let work_type_config = app
-        .agent_config
-        .watch_work_type(session.work_type.as_deref());
+    let work_type_config = match session.work_type.as_deref() {
+        Some(work_type) => app
+            .agent_config
+            .work_type(work_type)
+            .map(|config| (config.icon.as_str(), config.color)),
+        None => app
+            .agent_config
+            .work_type_fallback
+            .as_ref()
+            .map(|config| (config.icon.as_str(), config.color)),
+    };
     let work_type_spans = work_type_config.map_or_else(
         || {
             vec![Span::raw(" ".repeat(
                 work_type_column_width.saturating_sub(state_label_gap),
             ))]
         },
-        |config| {
-            let icon_width = config.icon.width();
+        |(icon, color)| {
+            let icon_width = icon.width();
             vec![
-                Span::styled(
-                    config.icon.clone(),
-                    Style::default().fg(Color::from(config.color)),
-                ),
+                Span::styled(icon.to_string(), Style::default().fg(Color::from(color))),
                 Span::raw(
                     " ".repeat(work_type_column_width.saturating_sub(icon_width + state_label_gap)),
                 ),
@@ -344,7 +349,7 @@ pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bo
     branch
 }
 
-/// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
+/// `◐ {user turns}/{children}` on roots that have children.
 fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String {
     if child_count == 0 {
         String::new()
@@ -384,7 +389,7 @@ fn build_title_spans(
     title_width: usize,
     query: &str,
     title_style: Style,
-    vibe_marker: Option<&AgentWorkTypeConfig>,
+    vibe_marker: Option<&AgentWorkTypeMarkerConfig>,
     stage: Option<CurrentPrStage>,
 ) -> Vec<Span<'static>> {
     let child_badge = child_badge_text(entry.child_count, entry.child_user_turn_count);
@@ -474,7 +479,9 @@ mod tests {
     use super::*;
     use crate::commands::agent::tui::progress::{ProgressMark, StageMarks, current_pr_stage};
     use crate::commands::agent::tui::ui::test_support::create_test_session;
-    use crate::shared::config::{AgentWorkTypeColor, AgentWorkTypeNamedColor};
+    use crate::shared::config::{
+        AgentWorkTypeColor, AgentWorkTypeMarkerConfig, AgentWorkTypeNamedColor,
+    };
     use rstest::rstest;
 
     #[derive(Debug)]
@@ -517,7 +524,7 @@ mod tests {
             }),
             task: None,
         };
-        let work_type = AgentWorkTypeConfig {
+        let work_type = AgentWorkTypeMarkerConfig {
             icon: "P".to_string(),
             color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Magenta),
         };

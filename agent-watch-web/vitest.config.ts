@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin'
 import { playwright } from '@vitest/browser-playwright'
-import { defineConfig, mergeConfig } from 'vitest/config'
+import { configDefaults, defineConfig, mergeConfig } from 'vitest/config'
 
 import viteConfig from './vite.config'
 
@@ -11,6 +11,17 @@ const dirname = path.dirname(fileURLToPath(import.meta.url))
 const blockExternalRequestsArgs = [
   '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost',
 ]
+
+function chromiumBrowser() {
+  return {
+    enabled: true,
+    provider: playwright({
+      launchOptions: { args: blockExternalRequestsArgs },
+    }),
+    headless: true,
+    instances: [{ browser: 'chromium' as const }],
+  }
+}
 
 export default mergeConfig(
   viteConfig,
@@ -21,6 +32,24 @@ export default mergeConfig(
           extends: true,
           test: {
             name: 'unit',
+            exclude: [
+              ...configDefaults.exclude,
+              'src/App.test.tsx',
+              'src/components/agent-watch-nav.test.tsx',
+              'src/components/conversation-pane.test.tsx',
+            ],
+          },
+        },
+        {
+          extends: true,
+          test: {
+            name: 'app',
+            include: [
+              'src/App.test.tsx',
+              'src/components/agent-watch-nav.test.tsx',
+              'src/components/conversation-pane.test.tsx',
+            ],
+            browser: chromiumBrowser(),
           },
         },
         {
@@ -30,14 +59,7 @@ export default mergeConfig(
           ],
           test: {
             name: 'storybook',
-            browser: {
-              enabled: true,
-              provider: playwright({
-                launchOptions: { args: blockExternalRequestsArgs },
-              }),
-              headless: true,
-              instances: [{ browser: 'chromium' }],
-            },
+            browser: chromiumBrowser(),
             setupFiles: ['./.storybook/vitest.setup.ts'],
           },
         },

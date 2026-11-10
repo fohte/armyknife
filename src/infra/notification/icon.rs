@@ -87,11 +87,25 @@ mod tests {
     }
 
     #[test]
-    fn ensure_icon_returns_none_without_cache_dir() {
+    fn ensure_icon_uses_test_cache_without_user_cache_environment() {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let expected = Some(
+            temp_dir
+                .path()
+                .join(format!("armyknife-test-cache-{}", std::process::id()))
+                .join("armyknife")
+                .join(format!("claude-code-icon-{}.png", short_hash(ICON_BYTES))),
+        );
+        let temp_dir_path = temp_dir.path().to_str().expect("path should be UTF-8");
+
         temp_env::with_vars(
-            [("XDG_CACHE_HOME", None::<&str>), ("HOME", None::<&str>)],
+            [
+                ("XDG_CACHE_HOME", None::<&str>),
+                ("HOME", None::<&str>),
+                ("TMPDIR", Some(temp_dir_path)),
+            ],
             || {
-                assert!(ensure_icon().is_none());
+                assert_eq!(ensure_icon(), expected);
             },
         );
     }

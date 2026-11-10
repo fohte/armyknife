@@ -226,6 +226,9 @@ importers:
       lucide-react:
         specifier: 0.577.0
         version: 0.577.0(react@19.2.8)
+      neverthrow:
+        specifier: 8.2.0
+        version: 8.2.0
       react:
         specifier: 19.2.8
         version: 19.2.8

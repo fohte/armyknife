@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use axum::Json;
@@ -25,6 +25,7 @@ use crate::shared::config::{self, AgentConfig};
 #[serde(rename_all = "snake_case")]
 enum SessionCategory {
     NeedsAction,
+    Later,
     InProgress,
     Done,
 }
@@ -70,7 +71,9 @@ struct PullRequestView {
 struct SessionView {
     id: String,
     engine: Engine,
+    work_type: Option<String>,
     category: SessionCategory,
+    category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
     preview: Option<String>,
@@ -79,20 +82,27 @@ struct SessionView {
     unread: bool,
     task: Option<TqTaskView>,
     repo: String,
+    project: String,
     parent: Option<ParentSessionView>,
+    ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
+    crit_url: Option<String>,
+    later_until: Option<DateTime<Utc>>,
+    is_today: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionsResponse {
     revision: i64,
+    work_type_nav_labels: HashMap<String, String>,
     sessions: Vec<SessionView>,
 }
 
 struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
+    web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     agent_config: AgentConfig,
@@ -166,6 +176,11 @@ async fn list_sessions<S: SessionSource>(
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
     let now = source.now();
+    let state_by_id = snapshot
+        .web_states
+        .into_iter()
+        .map(|state| (state.session_id.clone(), state))
+        .collect::<HashMap<_, _>>();
 
     let mut sessions = snapshot
         .sessions
@@ -192,6 +207,19 @@ async fn list_sessions<S: SessionSource>(
                     id: id.clone(),
                     title: snapshot.title_by_id.get(id).cloned(),
                 });
+            let repo = snapshot
+                .repo_by_id
+                .get(&session.session_id)
+                .cloned()
+                .unwrap_or_default();
+            let parent_project = resolve_parent_project(
+                &session.ancestor_session_ids,
+                &task_metadata,
+                &snapshot.repo_by_id,
+            );
+            let task_project = task
+                .as_ref()
+                .and_then(|task| task_metadata.task_projects.get(&task.id));
             let pull_request = pull_requests
                 .get(&session.session_id)
                 .and_then(Option::as_ref)
@@ -200,17 +228,17 @@ async fn list_sessions<S: SessionSource>(
                     state: info.state.clone(),
                 });
 
+            let turn = turn_kinds.get(session.session_id.as_str()).copied();
+            let category_when_not_later = category_for(session, turn);
+            let state = state_by_id.get(&session.session_id);
+            let category = category_for_with_later(session, turn, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
-                category: category_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
-                kind: kind_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
+                work_type: session.work_type.clone(),
+                category,
+                category_when_not_later,
+                kind: kind_for(session, turn),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
@@ -224,21 +252,41 @@ async fn list_sessions<S: SessionSource>(
                     .max(0) as u64,
                 unread: session.is_unread_stopped(),
                 task,
-                repo: snapshot
-                    .repo_by_id
-                    .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
+                repo: repo.clone(),
+                project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
+                ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
+                crit_url: if turn_kinds.get(session.session_id.as_str())
+                    == Some(&UserTurnKind::Crit)
+                {
+                    session.crit_urls.last().cloned()
+                } else {
+                    None
+                },
+                later_until: state.and_then(|state| state.later_until),
+                is_today: state.is_some_and(|state| state.is_today),
             }
         })
         .collect::<Vec<_>>();
 
     sort_session_views(&mut sessions);
 
+    let work_type_nav_labels = snapshot
+        .agent_config
+        .work_types
+        .iter()
+        .filter_map(|(work_type, config)| {
+            config
+                .nav_label
+                .as_ref()
+                .map(|label| (work_type.clone(), label.clone()))
+        })
+        .collect();
+
     Ok(Json(SessionsResponse {
         revision: snapshot.revision,
+        work_type_nav_labels,
         sessions,
     }))
 }
@@ -246,22 +294,48 @@ async fn list_sessions<S: SessionSource>(
 fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let revision = store::session_store_revision()?;
     let sessions = store::list_sessions()?;
-    let title_by_id = store::list_all_sessions()?
-        .into_iter()
-        .map(|session| (session.session_id.clone(), title_display_name(&session)))
-        .collect();
-    let repo_by_id = sessions
+    let all_sessions = store::list_all_sessions()?;
+    let title_by_id = all_sessions
         .iter()
-        .map(|session| (session.session_id.clone(), resolve_repo(&session.cwd)))
+        .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
+    let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
 
     Ok(SessionSnapshot {
         revision,
         sessions,
+        web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
         agent_config: config::load_config_or_default().agent,
     })
+}
+
+fn resolve_repos_for_sessions(
+    sessions: &[Session],
+    all_sessions: &[Session],
+    mut resolve_repo: impl FnMut(&std::path::Path) -> String,
+) -> HashMap<String, String> {
+    let relevant_ids = sessions
+        .iter()
+        .flat_map(|session| {
+            std::iter::once(session.session_id.clone())
+                .chain(session.ancestor_session_ids.iter().cloned())
+        })
+        .collect::<HashSet<_>>();
+    let mut repo_by_cwd = HashMap::<std::path::PathBuf, String>::new();
+
+    all_sessions
+        .iter()
+        .filter(|session| relevant_ids.contains(&session.session_id))
+        .map(|session| {
+            let repo = repo_by_cwd
+                .entry(session.cwd.clone())
+                .or_insert_with(|| resolve_repo(&session.cwd))
+                .clone();
+            (session.session_id.clone(), repo)
+        })
+        .collect()
 }
 
 fn resolve_repo(cwd: &std::path::Path) -> String {
@@ -277,6 +351,165 @@ fn resolve_repo(cwd: &std::path::Path) -> String {
         .unwrap_or_else(|| cwd.display().to_string())
 }
 
+fn resolve_project(parent_project: Option<&str>, task_project: Option<&str>, repo: &str) -> String {
+    parent_project
+        .filter(|project| !project.trim().is_empty())
+        .or_else(|| task_project.filter(|project| !project.trim().is_empty()))
+        .or_else(|| (!repo.trim().is_empty()).then_some(repo))
+        .unwrap_or("Unsorted")
+        .to_string()
+}
+
+fn resolve_parent_project<'a>(
+    ancestor_session_ids: &[String],
+    task_metadata: &'a SessionTaskMetadata,
+    repo_by_id: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    ancestor_session_ids.iter().find_map(|ancestor_id| {
+        task_metadata
+            .links
+            .get(ancestor_id)
+            .and_then(|task| task_metadata.task_projects.get(&task.task_id))
+            .map(String::as_str)
+            .filter(|project| !project.trim().is_empty())
+            .or_else(|| {
+                repo_by_id
+                    .get(ancestor_id)
+                    .map(String::as_str)
+                    .filter(|repo| !repo.trim().is_empty())
+            })
+    })
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::{SessionTaskMetadata, resolve_parent_project, resolve_project};
+    use crate::commands::agent::tq_session_tasks::SessionTask;
+    use rstest::rstest;
+    use std::collections::HashMap;
+
+    fn task_metadata(links: &[(&str, &str)], projects: &[(&str, &str)]) -> SessionTaskMetadata {
+        SessionTaskMetadata {
+            links: links
+                .iter()
+                .map(|(session_id, task_id)| {
+                    (
+                        (*session_id).to_string(),
+                        SessionTask {
+                            task_id: (*task_id).to_string(),
+                            task_number: 1,
+                            task_title: "Sample task".to_string(),
+                            parent_task_id: None,
+                            is_closed: false,
+                        },
+                    )
+                })
+                .collect(),
+            task_projects: projects
+                .iter()
+                .map(|(task_id, project)| ((*task_id).to_string(), (*project).to_string()))
+                .collect(),
+            ..SessionTaskMetadata::default()
+        }
+    }
+
+    #[rstest]
+    #[case::parent_takes_precedence(
+        Some("parent-project"),
+        Some("task-project"),
+        "example-org/repo",
+        "parent-project"
+    )]
+    #[case::task_project_precedes_repo(
+        None,
+        Some("task-project"),
+        "example-org/repo",
+        "task-project"
+    )]
+    #[case::repo_is_the_fallback(None, None, "example-org/repo", "example-org/repo")]
+    #[case::unsorted_is_the_final_fallback(None, None, "", "Unsorted")]
+    #[case::empty_candidates_are_ignored(
+        Some(" "),
+        Some(""),
+        "example-org/repo",
+        "example-org/repo"
+    )]
+    fn resolves_projects_by_source_precedence(
+        #[case] parent_project: Option<&str>,
+        #[case] task_project: Option<&str>,
+        #[case] repo: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            resolve_project(parent_project, task_project, repo),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::single_parent_uses_its_task_project(
+        vec!["parent"],
+        vec![("parent", "parent-task")],
+        vec![("parent-task", "parent-project")],
+        vec![],
+        Some("parent-project")
+    )]
+    #[case::single_parent_falls_back_to_its_repo(
+        vec!["parent"],
+        vec![],
+        vec![],
+        vec![("parent", "sample/parent-repo")],
+        Some("sample/parent-repo")
+    )]
+    #[case::three_levels_use_the_root_project_first(
+        vec!["root", "middle", "parent"],
+        vec![("root", "root-task")],
+        vec![("root-task", "root-project")],
+        vec![
+            ("root", "sample/root-repo"),
+            ("middle", "sample/middle-repo"),
+            ("parent", "sample/parent-repo"),
+        ],
+        Some("root-project")
+    )]
+    #[case::unknown_root_uses_the_next_available_ancestor(
+        vec!["unknown-root", "middle", "parent"],
+        vec![("middle", "middle-task")],
+        vec![("middle-task", "middle-project")],
+        vec![("parent", "sample/parent-repo")],
+        Some("middle-project")
+    )]
+    #[case::unknown_ancestors_fall_back_to_the_current_session(
+        vec!["unknown-root", "unknown-parent"],
+        vec![],
+        vec![],
+        vec![],
+        None
+    )]
+    fn resolves_parent_project_from_root_to_parent(
+        #[case] ancestor_ids: Vec<&str>,
+        #[case] links: Vec<(&str, &str)>,
+        #[case] projects: Vec<(&str, &str)>,
+        #[case] repos: Vec<(&str, &str)>,
+        #[case] expected: Option<&str>,
+    ) {
+        let ancestor_ids = ancestor_ids
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let metadata = task_metadata(&links, &projects);
+        let repo_by_id = repos
+            .into_iter()
+            .map(|(session_id, repo)| (session_id.to_string(), repo.to_string()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            resolve_parent_project(&ancestor_ids, &metadata, &repo_by_id),
+            expected,
+        );
+    }
+}
+
 fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategory {
     if turn.is_some()
         || session.status == SessionStatus::Stopped
@@ -290,6 +523,28 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
         SessionCategory::InProgress
     } else {
         SessionCategory::Done
+    }
+}
+
+fn category_for_with_later(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> SessionCategory {
+    let still_unchanged = state.is_some_and(|state| {
+        state
+            .activity_snapshot
+            .is_none_or(|snapshot| session.updated_at <= snapshot)
+    });
+    let later_is_active = still_unchanged
+        && state.is_some_and(|state| {
+            state.until_activity || state.later_until.is_some_and(|deadline| now < deadline)
+        });
+    if later_is_active {
+        SessionCategory::Later
+    } else {
+        category_for(session, turn)
     }
 }
 
@@ -366,11 +621,14 @@ fn sort_session_views(sessions: &mut [SessionView]) {
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, TmuxInfo};
-    use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use crate::shared::config::{
+        AgentStatusConfig, AgentStatusState, AgentWorkTypeColor, AgentWorkTypeConfig,
+        AgentWorkTypeNamedColor,
+    };
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
     use tower::ServiceExt;
 
@@ -421,7 +679,9 @@ mod tests {
         SessionView {
             id: id.to_string(),
             engine: Engine::Claude,
+            work_type: None,
             category,
+            category_when_not_later: category,
             kind: None,
             title: id.to_string(),
             preview: None,
@@ -436,8 +696,13 @@ mod tests {
                 priority_order,
             }),
             repo: String::new(),
+            project: "Unsorted".to_string(),
             parent: None,
+            ancestor_session_ids: Vec::new(),
             pull_request: None,
+            crit_url: None,
+            later_until: None,
+            is_today: false,
         }
     }
 
@@ -445,12 +710,15 @@ mod tests {
     struct TestSessionSource {
         revision: i64,
         sessions: Vec<Session>,
+        web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
         task_links: HashMap<String, LinkedSessionTask>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
+        task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
+        work_type_nav_labels: HashMap<String, String>,
         now: DateTime<Utc>,
     }
 
@@ -459,9 +727,26 @@ mod tests {
             Ok(SessionSnapshot {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
+                web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
-                agent_config: AgentConfig::default(),
+                agent_config: AgentConfig {
+                    work_types: self
+                        .work_type_nav_labels
+                        .iter()
+                        .map(|(work_type, nav_label)| {
+                            (
+                                work_type.clone(),
+                                AgentWorkTypeConfig {
+                                    icon: "◇".to_string(),
+                                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                                    nav_label: Some(nav_label.clone()),
+                                },
+                            )
+                        })
+                        .collect(),
+                    ..AgentConfig::default()
+                },
             })
         }
 
@@ -470,6 +755,7 @@ mod tests {
                 links: self.task_links.clone(),
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
+                task_projects: self.task_projects.clone(),
             }
         }
 
@@ -485,7 +771,8 @@ mod tests {
         }
     }
 
-    fn test_source() -> TestSessionSource {
+    #[fixture]
+    fn source() -> TestSessionSource {
         let mut session = session(SessionStatus::Stopped);
         session.session_id = "child-session".to_string();
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
@@ -501,26 +788,55 @@ mod tests {
         TestSessionSource {
             revision: 7,
             sessions: vec![session],
+            web_states: vec![store::WatchWebSessionState {
+                session_id: "child-session".to_string(),
+                later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
+                activity_snapshot: Some(Utc.timestamp_opt(1_000, 0).unwrap()),
+                until_activity: false,
+                is_today: true,
+            }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
                 ("parent-session".to_string(), "parent title".to_string()),
             ]),
-            repo_by_id: HashMap::from([(
-                "child-session".to_string(),
-                "example-org/example-repo".to_string(),
-            )]),
-            task_links: HashMap::from([(
-                "child-session".to_string(),
-                LinkedSessionTask {
-                    task_id: "task-id".to_string(),
-                    task_number: 17,
-                    task_title: "task title".to_string(),
-                    parent_task_id: None,
-                    is_closed: false,
-                },
-            )]),
+            repo_by_id: HashMap::from([
+                (
+                    "child-session".to_string(),
+                    "example-org/example-repo".to_string(),
+                ),
+                (
+                    "parent-session".to_string(),
+                    "example-org/parent-repository".to_string(),
+                ),
+            ]),
+            task_links: HashMap::from([
+                (
+                    "child-session".to_string(),
+                    LinkedSessionTask {
+                        task_id: "task-id".to_string(),
+                        task_number: 17,
+                        task_title: "task title".to_string(),
+                        parent_task_id: None,
+                        is_closed: false,
+                    },
+                ),
+                (
+                    "parent-session".to_string(),
+                    LinkedSessionTask {
+                        task_id: "parent-task-id".to_string(),
+                        task_number: 18,
+                        task_title: "parent task".to_string(),
+                        parent_task_id: None,
+                        is_closed: false,
+                    },
+                ),
+            ]),
             task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
             task_priority_order: HashMap::from([("task-id".to_string(), 0)]),
+            task_projects: HashMap::from([
+                ("parent-task-id".to_string(), "parent project".to_string()),
+                ("task-id".to_string(), "task project".to_string()),
+            ]),
             pull_requests: HashMap::from([(
                 "child-session".to_string(),
                 Some(PrInfo {
@@ -530,14 +846,14 @@ mod tests {
                     url: "https://example.com/pull/42".to_string(),
                 }),
             )]),
+            work_type_nav_labels: HashMap::new(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
     }
 
-    #[tokio::test]
-    async fn sessions_route_returns_the_complete_inbox_response() {
+    async fn sessions_response(source: TestSessionSource) -> (StatusCode, serde_json::Value) {
         let response = Router::new()
-            .nest("/api", router_with_source(test_source()))
+            .nest("/api", router_with_source(source))
             .oneshot(
                 Request::builder()
                     .uri("/api/sessions")
@@ -549,40 +865,255 @@ mod tests {
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        (status, value)
+    }
+
+    #[test]
+    fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
+        let mut active = session(SessionStatus::Running);
+        active.session_id = "active-session".to_string();
+        active.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        let mut parent = session(SessionStatus::Ended);
+        parent.session_id = "parent-session".to_string();
+        parent.cwd = active.cwd.clone();
+
+        let mut unrelated = session(SessionStatus::Ended);
+        unrelated.session_id = "unrelated-session".to_string();
+        unrelated.cwd = PathBuf::from("/workspace/unrelated");
+
+        let all_sessions = vec![active.clone(), parent, unrelated];
+        let mut resolved_cwds = Vec::new();
+        let repos = resolve_repos_for_sessions(&[active.clone()], &all_sessions, |cwd| {
+            resolved_cwds.push(cwd.to_path_buf());
+            "example-org/sample-repo".to_string()
+        });
 
         assert_eq!(
-            (status, value),
+            (repos, resolved_cwds),
+            (
+                HashMap::from([
+                    (
+                        "active-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                    (
+                        "parent-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                ]),
+                vec![active.cwd],
+            ),
+        );
+    }
+
+    struct ExpectedSessionDetails<'a> {
+        kind: &'a str,
+        unread: bool,
+        crit_url: Option<&'a str>,
+    }
+
+    struct ExpectedSessionResponse<'a> {
+        work_type: Option<&'a str>,
+        work_type_nav_labels: serde_json::Value,
+        updated_at: &'a str,
+        elapsed_seconds: u64,
+    }
+
+    fn expected_response(
+        category: &str,
+        later_until: Option<&str>,
+        is_today: bool,
+        details: ExpectedSessionDetails<'_>,
+        response: ExpectedSessionResponse<'_>,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "revision": 7,
+            "workTypeNavLabels": response.work_type_nav_labels,
+            "sessions": [{
+                "id": "child-session",
+                "engine": "claude",
+                "workType": response.work_type,
+                "category": category,
+                "categoryWhenNotLater": "needs_action",
+                "kind": details.kind,
+                "title": "child title",
+                "preview": "last message",
+                "updatedAt": response.updated_at,
+                "elapsedSeconds": response.elapsed_seconds,
+                "unread": details.unread,
+                "task": {
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1
+                },
+                "repo": "example-org/example-repo",
+                "project": "parent project",
+                "parent": {
+                    "id": "parent-session",
+                    "title": "parent title"
+                },
+                "ancestorSessionIds": ["parent-session"],
+                "pullRequest": {
+                    "number": 42,
+                    "state": "Open"
+                },
+                "laterUntil": later_until,
+                "isToday": is_today,
+                "critUrl": details.crit_url
+            }]
+        })
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_the_complete_inbox_response(mut source: TestSessionSource) {
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_today = false;
+        source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.sessions[0].work_type = Some("release-guide".to_string());
+        source
+            .work_type_nav_labels
+            .insert("release-guide".to_string(), "Guides".to_string());
+
+        assert_eq!(
+            sessions_response(source).await,
             (
                 StatusCode::OK,
-                serde_json::json!({
-                    "revision": 7,
-                    "sessions": [{
-                        "id": "child-session",
-                        "engine": "claude",
-                        "category": "needs_action",
-                        "kind": "Stopped",
-                        "title": "child title",
-                        "preview": "last message",
-                        "updatedAt": "1970-01-01T00:16:40Z",
-                        "elapsedSeconds": 100,
-                        "unread": true,
-                        "task": {
-                            "id": "task-id",
-                            "number": 17,
-                            "title": "task title",
-                            "priority": 1
+                expected_response(
+                    "needs_action",
+                    None,
+                    false,
+                    ExpectedSessionDetails {
+                        kind: "Review",
+                        unread: false,
+                        crit_url: Some("http://127.0.0.1:6000"),
+                    },
+                    ExpectedSessionResponse {
+                        work_type: Some("release-guide"),
+                        work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_saved_later_and_today_state(source: TestSessionSource) {
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "later",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_restores_expired_later_sessions_to_their_category(
+        mut source: TestSessionSource,
+    ) {
+        source.now = Utc.timestamp_opt(4_700, 0).unwrap();
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "needs_action",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 3_700,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_keeps_until_activity_later_until_the_session_changes(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].until_activity = true;
+        source.web_states[0].later_until = None;
+        let before_change = source.clone();
+        source.sessions[0].updated_at = Utc.timestamp_opt(1_001, 0).unwrap();
+
+        assert_eq!(
+            (
+                sessions_response(before_change).await,
+                sessions_response(source).await,
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    expected_response(
+                        "later",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
                         },
-                        "repo": "example-org/example-repo",
-                        "parent": {
-                            "id": "parent-session",
-                            "title": "parent title"
+                        ExpectedSessionResponse {
+                            work_type: None,
+                            work_type_nav_labels: serde_json::json!({}),
+                            updated_at: "1970-01-01T00:16:40Z",
+                            elapsed_seconds: 100,
                         },
-                        "pullRequest": {
-                            "number": 42,
-                            "state": "Open"
-                        }
-                    }]
-                }),
+                    ),
+                ),
+                (
+                    StatusCode::OK,
+                    expected_response(
+                        "needs_action",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
+                        },
+                        ExpectedSessionResponse {
+                            work_type: None,
+                            work_type_nav_labels: serde_json::json!({}),
+                            updated_at: "1970-01-01T00:16:41Z",
+                            elapsed_seconds: 99,
+                        },
+                    ),
+                ),
             ),
         );
     }

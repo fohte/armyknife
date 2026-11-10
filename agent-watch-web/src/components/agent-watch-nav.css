@@ -1,0 +1,84 @@
+.work-type-nav {
+  margin-top: 22px;
+}
+
+.work-type-nav h2 {
+  height: 26px;
+  margin: 0;
+  padding: 5px 8px 0;
+  color: #8b8b94;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.work-type-nav ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.work-type-project {
+  display: grid;
+  width: 100%;
+  height: 28px;
+  grid-template-columns: 6px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #d4d4d8;
+  font-size: 12px;
+  font-family: inherit;
+  text-align: left;
+}
+
+.work-type-project:not(:disabled):hover {
+  background: #161616;
+}
+
+.work-type-project:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.work-type-project-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: transparent;
+}
+
+.work-type-project.has-needs-action .work-type-project-dot {
+  background: #fbbf24;
+}
+
+.work-type-project-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-type-project.has-needs-action .work-type-project-name {
+  color: #fafafa;
+  font-weight: 700;
+}
+
+.work-type-project-idle .work-type-project-name {
+  color: #a1a1aa;
+}
+
+.work-type-project-status {
+  color: #8b8b94;
+  font-size: 10.5px;
+}
+
+.work-type-project-review .work-type-project-status {
+  color: #fbbf24;
+}
+
+.work-type-project-working .work-type-project-status {
+  color: #60a5fa;
+}

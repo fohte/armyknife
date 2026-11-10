@@ -1,0 +1,62 @@
+.agent-watch-main > .conversation-pane {
+  flex: 1 1 440px;
+}
+
+.crit-pane {
+  display: flex;
+  min-width: 300px;
+  min-height: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  border-left: 1px solid #1a1a1a;
+  background: #0a0a0a;
+}
+
+.crit-pane-header {
+  display: flex;
+  min-height: 56px;
+  flex: 0 0 56px;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: 1px solid #1a1a1a;
+  background: #141414;
+}
+
+.crit-pane-title {
+  color: #fafafa;
+  font-weight: 700;
+}
+
+.crit-pane-header a {
+  overflow: hidden;
+  flex: 1;
+  color: var(--muted-foreground-strong);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.crit-pane-header [data-slot='button'] {
+  min-width: 28px;
+  min-height: 28px;
+  padding: 0 7px;
+  color: #d4d4d8;
+  font-size: 16px;
+}
+
+.crit-pane iframe {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  background: #0a0a0a;
+}
+
+@media (max-width: 1279px) {
+  .conversation-crit-toggle,
+  .crit-pane {
+    display: none;
+  }
+}

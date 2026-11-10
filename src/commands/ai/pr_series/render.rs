@@ -115,7 +115,7 @@ pub fn render_section(
     Ok(Some(section.trim_end_matches('\n').to_string()))
 }
 
-pub(super) fn has_managed_section(body: &str) -> Result<bool> {
+pub(in crate::commands::ai) fn has_managed_section(body: &str) -> Result<bool> {
     Ok(managed_section_range(body)?.is_some())
 }
 

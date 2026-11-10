@@ -121,6 +121,7 @@ mod tests {
             AgentWorkTypeConfig {
                 icon: "⚙".to_string(),
                 color,
+                nav_label: None,
             },
         );
         config

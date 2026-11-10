@@ -1,5 +1,68 @@
 # Changelog
 
+## [0.1.529](https://github.com/fohte/armyknife/compare/v0.1.528...v0.1.529) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** configure work type nav ([#1411](https://github.com/fohte/armyknife/issues/1411)) ([bad232d](https://github.com/fohte/armyknife/commit/bad232d6a729d5625703267b1732cfa1254aec83))
+
+## [0.1.528](https://github.com/fohte/armyknife/compare/v0.1.527...v0.1.528) (2026-11-10)
+
+
+### Bug Fixes
+
+* **ai/pr-draft:** require multi-PR markers ([#1409](https://github.com/fohte/armyknife/issues/1409)) ([cdd507a](https://github.com/fohte/armyknife/commit/cdd507afc9725c154babadc4bd0678166f4ac81c))
+
+## [0.1.527](https://github.com/fohte/armyknife/compare/v0.1.526...v0.1.527) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add Later and TODAY ([#1407](https://github.com/fohte/armyknife/issues/1407)) ([221630c](https://github.com/fohte/armyknife/commit/221630cfd07be8f0729479e07ec4cde635b9697c))
+
+## [0.1.526](https://github.com/fohte/armyknife/compare/v0.1.525...v0.1.526) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show crit beside chat ([#1405](https://github.com/fohte/armyknife/issues/1405)) ([265ffc1](https://github.com/fohte/armyknife/commit/265ffc1d4d663d5cfa7118a5a2ec64d189fb1959))
+
+## [0.1.525](https://github.com/fohte/armyknife/compare/v0.1.524...v0.1.525) (2026-11-10)
+
+
+### Bug Fixes
+
+* **cache:** isolate test cache ([#1403](https://github.com/fohte/armyknife/issues/1403)) ([7575d64](https://github.com/fohte/armyknife/commit/7575d64567441d8da9a9b0c93739126ad6fa5310))
+
+## [0.1.524](https://github.com/fohte/armyknife/compare/v0.1.523...v0.1.524) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** support chat controls ([#1401](https://github.com/fohte/armyknife/issues/1401)) ([db47f4d](https://github.com/fohte/armyknife/commit/db47f4d4ccdcaa36b6c2aac6e025109df8f64f9f))
+
+## [0.1.523](https://github.com/fohte/armyknife/compare/v0.1.522...v0.1.523) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add project board and PM UI ([#1399](https://github.com/fohte/armyknife/issues/1399)) ([a455a5b](https://github.com/fohte/armyknife/commit/a455a5b86d12fe6c5413ef146a1dab90434b19ef))
+
+## [0.1.522](https://github.com/fohte/armyknife/compare/v0.1.521...v0.1.522) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent:** accept newer session databases ([#1397](https://github.com/fohte/armyknife/issues/1397)) ([2d0738a](https://github.com/fohte/armyknife/commit/2d0738a03a61d3eb367caad948c2492c5ca82a47))
+
+## [0.1.521](https://github.com/fohte/armyknife/compare/v0.1.520...v0.1.521) (2026-11-09)
+
+
+### Features
+
+* **agent-watch-web:** add the Inbox view ([#1395](https://github.com/fohte/armyknife/issues/1395)) ([479ab55](https://github.com/fohte/armyknife/commit/479ab551c16e0ac0831c5017c94287f3724aaa18))
+
 ## [0.1.520](https://github.com/fohte/armyknife/compare/v0.1.519...v0.1.520) (2026-11-09)
 
 
