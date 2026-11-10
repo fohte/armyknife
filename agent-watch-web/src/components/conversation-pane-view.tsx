@@ -2,6 +2,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
+import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
@@ -67,6 +68,13 @@ export function ConversationPaneView({
   const followLatestRef = useRef(true)
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
+  )
+  const activeTool = messages.findLast(
+    (message) => message.type === 'tool_in_progress',
+  )
+  const conversationMessages = messages.filter(
+    (message) =>
+      message.type !== 'tool_in_progress' || session.category !== 'in_progress',
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
@@ -320,10 +328,10 @@ export function ConversationPaneView({
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
         ) : null}
-        {!loading && messages.length === 0 ? (
+        {!loading && conversationMessages.length === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {messages.map((message, index) => {
+        {conversationMessages.map((message, index) => {
           if (message.type === 'user') {
             return (
               <article
@@ -354,6 +362,14 @@ export function ConversationPaneView({
                 key={`tool-${String(index)}`}
                 summary={message.summary}
                 operations={message.operations ?? []}
+              />
+            )
+          if (message.type === 'tool_in_progress')
+            return (
+              <ToolSummary
+                key={`tool-${String(index)}`}
+                summary="1 action"
+                operations={[message]}
               />
             )
           if (message.type === 'question') {
@@ -431,6 +447,13 @@ export function ConversationPaneView({
           )
         })}
       </div>
+
+      {session.category === 'in_progress' ? (
+        <ConversationWorkingStatus
+          elapsedSeconds={session.elapsedSeconds}
+          activeTool={activeTool}
+        />
+      ) : null}
 
       {(error ?? attachmentError) != null &&
       (error ?? attachmentError) !== '' ? (
