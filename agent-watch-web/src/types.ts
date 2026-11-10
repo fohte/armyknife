@@ -50,6 +50,11 @@ export type Session = {
   isToday?: boolean
 }
 
+export type SessionLinkTarget = Pick<
+  Session,
+  'id' | 'title' | 'project' | 'category' | 'isPaused'
+>
+
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
   | {

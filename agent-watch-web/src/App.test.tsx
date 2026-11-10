@@ -3079,6 +3079,62 @@ it('reloads the selected conversation when the session feed updates', async () =
   })
 })
 
+it('opens a known session ID from a conversation message', async () => {
+  const linkedId = '33333333-3333-4333-8333-333333333333'
+  const fetcher = vi.fn<typeof fetch>()
+  fetcher.mockImplementation((input) => {
+    const path = new URL(requestUrl(input), 'http://localhost').pathname
+    const body = path.endsWith('/messages')
+      ? [{ type: 'assistant', text: `Open ${linkedId}` }]
+      : {
+          message: true,
+          answerQuestion: false,
+          interrupt: true,
+          openInTerminal: true,
+        }
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Current session'),
+      session(linkedId, 'Linked session', 'done', 12, 'example toolkit'),
+    ],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const link = container.querySelector<HTMLAnchorElement>(
+    '.chat-assistant-message a',
+  )
+  if (link === null) throw new Error('Expected a link to the known session')
+  const linkTitle = link.title
+  act(() => {
+    link.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    url: window.location.search,
+    linkTitle,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Linked session',
+    url: `?session=${linkedId}`,
+    linkTitle: 'Linked session\nexample toolkit\nDone',
+  })
+})
+
 it('answers an Inbox question with a number key when the pane is not focused', async () => {
   const requestPath = (input: Parameters<typeof fetch>[0]) =>
     typeof input === 'string'

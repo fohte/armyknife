@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
-import type { ChatItem, UserContentPart } from '#types'
+import type { ChatItem, SessionLinkTarget, UserContentPart } from '#types'
 
 type UserMessage = Extract<ChatItem, { type: 'user' | 'user_with_content' }>
 
@@ -34,7 +34,15 @@ function UserImage({
   )
 }
 
-export function UserWithContent({ message }: { message: UserMessage }) {
+export function UserWithContent({
+  message,
+  onSelectSession,
+  sessions,
+}: {
+  message: UserMessage
+  onSelectSession?: (id: string) => void
+  sessions?: readonly SessionLinkTarget[]
+}) {
   const content: UserContentPart[] =
     message.type === 'user'
       ? [{ type: 'text', text: message.text }]
@@ -50,6 +58,8 @@ export function UserWithContent({ message }: { message: UserMessage }) {
           <MarkdownMessage
             className="chat-user-message"
             key={`text-${String(partIndex)}`}
+            onSelectSession={onSelectSession}
+            sessions={sessions}
           >
             {part.text}
           </MarkdownMessage>
