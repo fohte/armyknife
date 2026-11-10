@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.538](https://github.com/fohte/armyknife/compare/v0.1.537...v0.1.538) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** allow image attachments ([#1429](https://github.com/fohte/armyknife/issues/1429)) ([334f205](https://github.com/fohte/armyknife/commit/334f205fbe36966b4d0de70bce67c5d29e56ad7f))
+
 ## [0.1.537](https://github.com/fohte/armyknife/compare/v0.1.536...v0.1.537) (2026-11-10)
 
 
