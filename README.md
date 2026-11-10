@@ -276,6 +276,8 @@ Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
 
+Before creating or updating a PR, `submit` requires both markers when the current branch has both tq metadata values and its saved plan contains at least two planned PRs. The check uses the plan's PR count because the final visible count is only known during synchronization. Put the markers on their own lines after the bullet list in the changes section; `submit` does not add them automatically. A standalone PR or a plan with at most one PR does not require them.
+
 When updating an existing PR, `submit` uses the draft's `pr-series` section when it contains content. If the draft includes an empty marker pair, `submit` fills it with the existing section's content at that position. A draft without markers does not inherit the existing section. To choose the section's position, put an empty marker pair in the draft:
 
 ```md
