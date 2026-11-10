@@ -23,7 +23,14 @@ type MessageComposerProps = {
 export type ComposerAttachment = {
   id: string
   name: string
+  size: number
   previewUrl: string | null
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes < 1024) return `${String(bytes)} B`
+  const megabytes = bytes / (1024 * 1024)
+  return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(megabytes)} MB`
 }
 
 export function MessageComposer({
@@ -96,6 +103,9 @@ export function MessageComposer({
                 <img src={attachment.previewUrl} alt="" />
               )}
               <span>{attachment.name}</span>
+              {attachment.previewUrl === null ? (
+                <small>{formatFileSize(attachment.size)}</small>
+              ) : null}
               <Button
                 type="button"
                 variant="plain"

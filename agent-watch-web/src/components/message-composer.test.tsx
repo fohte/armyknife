@@ -180,7 +180,12 @@ it('removes an attachment when its remove button is clicked', () => {
         isMobile={false}
         canInterrupt={false}
         attachments={[
-          { id: 'attachment-1', name: 'clipboard.png', previewUrl: null },
+          {
+            id: 'attachment-1',
+            name: 'clipboard.png',
+            size: 7,
+            previewUrl: null,
+          },
         ]}
         onDraftChange={() => undefined}
         onKeyDown={() => undefined}
@@ -200,4 +205,42 @@ it('removes an attachment when its remove button is clicked', () => {
   })
 
   expect(onRemoveAttachment.mock.calls).toEqual([['attachment-1']])
+})
+
+it('shows the size of a non-image attachment', () => {
+  act(() => {
+    root?.render(
+      <MessageComposer
+        draft=""
+        placeholder="Message session"
+        disabled={false}
+        isSending={false}
+        isMobile={false}
+        canInterrupt={false}
+        attachments={[
+          {
+            id: 'attachment-1',
+            name: 'design-mock.html',
+            size: 12 * 1024 * 1024,
+            previewUrl: null,
+          },
+        ]}
+        onDraftChange={() => undefined}
+        onKeyDown={() => undefined}
+        onPasteFiles={() => undefined}
+        onRemoveAttachment={() => undefined}
+        onSend={() => undefined}
+        onInterrupt={() => undefined}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    name: container.querySelector('.composer-attachment span')?.textContent,
+    size: container.querySelector('.composer-attachment small')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    name: 'design-mock.html',
+    size: '12 MB',
+  })
 })

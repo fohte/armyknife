@@ -60,6 +60,11 @@
   white-space: nowrap;
 }
 
+.composer-attachment small {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-ghost);
+}
+
 .composer-attachment [data-slot='button'] {
   width: 24px;
   height: 24px;

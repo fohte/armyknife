@@ -1165,8 +1165,9 @@ it('sends pasted file data with the message and keeps it when sending fails', as
         'messages',
         {
           content: '',
-          images: [
+          attachments: [
             {
+              name: 'clipboard.bin',
               mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
@@ -1179,7 +1180,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
-it('attaches dropped images through the composer and sends their data', async () => {
+it('attaches dropped files through the composer and sends their data', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
   const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
@@ -1223,7 +1224,7 @@ it('attaches dropped images through the composer and sends their data', async ()
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetVisibleDuringDrag: 'Drop files to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -1232,8 +1233,9 @@ it('attaches dropped images through the composer and sends their data', async ()
         'messages',
         {
           content: '',
-          images: [
+          attachments: [
             {
+              name: 'dropped.png',
               mimeType: 'image/png',
               size: 7,
               data: 'cGF5bG9hZA==',
@@ -1270,7 +1272,7 @@ it('hides the drop target when a file drag leaves the conversation', () => {
       container.querySelector('.conversation-drop-target')?.textContent ?? null,
   })
   expect(snapshot()).toEqual({
-    targetAfterEnter: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterEnter: 'Drop files to attach',
     targetAfterLeave: null,
   })
 })
@@ -1314,8 +1316,9 @@ it('clears pasted attachments after a successful send', async () => {
         'messages',
         {
           content: '',
-          images: [
+          attachments: [
             {
+              name: 'clipboard.bin',
               mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
@@ -1328,7 +1331,51 @@ it('clears pasted attachments after a successful send', async () => {
   })
 })
 
-it('shows a server image validation error and retains the rejected attachment', async () => {
+it('names the attachment that crosses the message size limit before sending', () => {
+  const onAction = vi.fn(() => Promise.resolve(false))
+  renderView(onAction)
+  const firstFile = new File(['first'], 'first.bin', {
+    type: 'application/octet-stream',
+  })
+  const limitCrossingFile = new File(['second'], 'limit-crossing.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(firstFile, 'size', {
+    value: 30 * 1024 * 1024,
+  })
+  Object.defineProperty(limitCrossingFile, 'size', {
+    value: 21 * 1024 * 1024,
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [firstFile, limitCrossingFile] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('[role="alert"]')?.textContent ?? null,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    error: 'limit-crossing.bin would exceed the 50 MiB attachment limit',
+    attachmentNames: ['first.bin', 'limit-crossing.bin'],
+    actionCalls: [],
+  })
+})
+
+it('shows a server attachment validation error and retains the rejected attachment', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1346,7 +1393,7 @@ it('shows a server image validation error and retains the rejected attachment', 
       }),
     )
     .mockResolvedValueOnce(
-      jsonResponse({ error: 'unsupported image type: application/pdf' }, 400),
+      jsonResponse({ error: 'file attachment data is invalid' }, 400),
     )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
@@ -1395,12 +1442,13 @@ it('shows a server image validation error and retains the rejected attachment', 
     postBody: fetcher.mock.calls[2]?.[1]?.body,
   })
   expect(snapshot()).toEqual({
-    error: 'unsupported image type: application/pdf',
+    error: 'file attachment data is invalid',
     attachmentName: 'document.pdf',
     postBody: JSON.stringify({
       content: '',
-      images: [
+      attachments: [
         {
+          name: 'document.pdf',
           mimeType: 'application/pdf',
           size: 12,
           data: 'bm90IGFuIGltYWdl',

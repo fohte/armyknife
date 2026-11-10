@@ -10,8 +10,8 @@ use base64::engine::general_purpose::STANDARD;
 use serde::Deserialize;
 use thiserror::Error;
 
-pub(super) const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
-pub(super) const MAX_IMAGES_PER_MESSAGE: usize = 16;
+pub(super) const MAX_ATTACHMENT_BYTES: usize = 50 * 1024 * 1024;
+pub(super) const MAX_ATTACHMENTS_PER_MESSAGE: usize = 16;
 const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
 const STORAGE_FILE_OVERHEAD_BYTES: u64 = 64 * 1024;
 const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -20,74 +20,68 @@ static STORAGE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Request {
-    pub(super) mime_type: String,
+    pub(super) name: String,
     pub(super) size: usize,
     pub(super) data: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct Image {
-    pub(super) extension: &'static str,
+pub(super) struct Attachment {
+    pub(super) name: String,
     pub(super) bytes: Vec<u8>,
 }
 
 #[derive(Debug, Error)]
 pub(super) enum ValidationError {
-    #[error("a message cannot include more than 16 image attachments")]
-    TooManyImages,
-    #[error("image attachments exceed the 10 MiB limit")]
+    #[error("a message cannot include more than 16 file attachments")]
+    TooManyAttachments,
+    #[error("file attachments exceed the 50 MiB limit")]
     TooLarge,
-    #[error("unsupported image type: {0}")]
-    UnsupportedType(String),
-    #[error("image data is invalid")]
+    #[error("file attachment data is invalid")]
     InvalidData,
 }
 
-pub(super) fn validate(images: Vec<Request>) -> Result<Vec<Image>, ValidationError> {
-    if images.len() > MAX_IMAGES_PER_MESSAGE {
-        return Err(ValidationError::TooManyImages);
+pub(super) fn validate(attachments: Vec<Request>) -> Result<Vec<Attachment>, ValidationError> {
+    if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+        return Err(ValidationError::TooManyAttachments);
     }
-    let total_size = images.iter().try_fold(0_usize, |total, image| {
+    let total_size = attachments.iter().try_fold(0_usize, |total, attachment| {
         total
-            .checked_add(image.size)
-            .filter(|size| *size <= MAX_IMAGE_BYTES)
+            .checked_add(attachment.size)
+            .filter(|size| *size <= MAX_ATTACHMENT_BYTES)
             .ok_or(ValidationError::TooLarge)
     })?;
-    if total_size > MAX_IMAGE_BYTES {
+    if total_size > MAX_ATTACHMENT_BYTES {
         return Err(ValidationError::TooLarge);
     }
-    images
+    attachments
         .into_iter()
-        .map(|image| {
-            let (extension, signature) = match image.mime_type.as_str() {
-                "image/png" => ("png", &[137, 80, 78, 71, 13, 10, 26, 10][..]),
-                "image/jpeg" => ("jpg", &[255, 216, 255][..]),
-                "image/gif" => ("gif", b"GIF8" as &[u8]),
-                "image/webp" => ("webp", b"RIFF" as &[u8]),
-                _ => return Err(ValidationError::UnsupportedType(image.mime_type)),
-            };
+        .map(|attachment| {
             let bytes = STANDARD
-                .decode(image.data)
+                .decode(attachment.data)
                 .map_err(|_| ValidationError::InvalidData)?;
-            if bytes.len() != image.size
-                || !bytes.starts_with(signature)
-                || (extension == "webp" && bytes.get(8..12) != Some(b"WEBP"))
-            {
+            if bytes.len() != attachment.size {
                 return Err(ValidationError::InvalidData);
             }
-            Ok(Image { extension, bytes })
+            Ok(Attachment {
+                name: attachment.name,
+                bytes,
+            })
         })
         .collect()
 }
 
-pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Result<Vec<PathBuf>> {
-    if images.is_empty() {
+pub(super) fn save(
+    attachments: Vec<Attachment>,
+    directory: Option<PathBuf>,
+) -> anyhow::Result<Vec<PathBuf>> {
+    if attachments.is_empty() {
         return Ok(Vec::new());
     }
     let _guard = STORAGE_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .map_err(|_| anyhow::anyhow!("image attachment storage lock is poisoned"))?;
+        .map_err(|_| anyhow::anyhow!("file attachment storage lock is poisoned"))?;
     let directory = directory.unwrap_or(
         crate::shared::dirs::state_dir()
             .context("user state directory is unavailable")?
@@ -97,19 +91,20 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
     create_private_directory(&directory)?;
     prune_expired(&directory)?;
     let existing_usage = directory_usage_bytes(&directory)?;
-    let incoming_usage = images.iter().try_fold(0_u64, |total, image| {
-        let image_usage = (image.bytes.len() as u64).checked_add(STORAGE_FILE_OVERHEAD_BYTES)?;
-        total.checked_add(image_usage)
+    let incoming_usage = attachments.iter().try_fold(0_u64, |total, attachment| {
+        let attachment_usage =
+            (attachment.bytes.len() as u64).checked_add(STORAGE_FILE_OVERHEAD_BYTES)?;
+        total.checked_add(attachment_usage)
     });
     let Some(incoming_usage) = incoming_usage else {
-        anyhow::bail!("image attachment storage size overflow");
+        anyhow::bail!("file attachment storage size overflow");
     };
     if existing_usage.saturating_add(incoming_usage) > MAX_STORAGE_BYTES {
-        anyhow::bail!("image attachment storage is full");
+        anyhow::bail!("file attachment storage is full");
     }
-    let mut paths = Vec::with_capacity(images.len());
-    for image in images {
-        match save_one(&directory, image) {
+    let mut paths = Vec::with_capacity(attachments.len());
+    for attachment in attachments {
+        match save_one(&directory, attachment) {
             Ok(path) => paths.push(path),
             Err(error) => {
                 remove_files_unlocked(&paths);
@@ -134,23 +129,23 @@ fn remove_files_unlocked(paths: &[PathBuf]) {
     }
 }
 
-pub(super) fn append_paths_to_message(content: String, image_paths: &[PathBuf]) -> String {
-    if image_paths.is_empty() {
+pub(super) fn append_paths_to_message(content: String, attachment_paths: &[PathBuf]) -> String {
+    if attachment_paths.is_empty() {
         return content;
     }
-    let paths = image_paths
+    let paths = attachment_paths
         .iter()
         .map(|path| format!("- {}", path.display()))
         .collect::<Vec<_>>()
         .join("\n");
     if content.trim().is_empty() {
-        format!("Please inspect the attached image(s):\n{paths}")
+        format!("Please inspect the attached file(s):\n{paths}")
     } else {
         format!(
             indoc::indoc! {"
                 {}
 
-                Attached image(s):
+                Attached file(s):
                 {}
             "},
             content, paths
@@ -197,8 +192,12 @@ fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
     })
 }
 
-fn save_one(directory: &Path, image: Image) -> anyhow::Result<PathBuf> {
-    let path = directory.join(format!("{}.{}", uuid::Uuid::new_v4(), image.extension));
+fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<PathBuf> {
+    let path = directory.join(format!(
+        "{}_{}",
+        uuid::Uuid::new_v4(),
+        sanitize_filename(&attachment.name)
+    ));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -207,7 +206,7 @@ fn save_one(directory: &Path, image: Image) -> anyhow::Result<PathBuf> {
         options.mode(0o600);
     }
     let mut file = options.open(&path)?;
-    if let Err(error) = file.write_all(&image.bytes) {
+    if let Err(error) = file.write_all(&attachment.bytes) {
         drop(file);
         let _ = fs::remove_file(&path);
         return Err(error.into());
@@ -215,18 +214,40 @@ fn save_one(directory: &Path, image: Image) -> anyhow::Result<PathBuf> {
     path.canonicalize().map_err(Into::into)
 }
 
+fn sanitize_filename(name: &str) -> String {
+    let basename = name.replace('\\', "/");
+    let basename = basename.rsplit('/').next().unwrap_or_default();
+    let sanitized: String = basename
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .take(180)
+        .collect();
+    let sanitized = sanitized.trim_matches('.');
+    if sanitized.is_empty() {
+        "attachment".to_string()
+    } else {
+        sanitized.to_string()
+    }
+}
+
 fn create_private_directory(path: &Path) -> std::io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::PermissionDenied,
-                "image attachment directory must not be a symlink",
+                "file attachment directory must not be a symlink",
             ));
         }
         Ok(metadata) if !metadata.is_dir() => {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::NotADirectory,
-                "image attachment path is not a directory",
+                "file attachment path is not a directory",
             ));
         }
         Ok(_) => {}
@@ -246,54 +267,86 @@ mod tests {
     use std::fs::OpenOptions;
 
     use base64::Engine as _;
+    use base64::engine::general_purpose::STANDARD;
     use rstest::rstest;
 
-    use super::{Image, Request, ValidationError, validate};
+    use super::{Attachment, MAX_ATTACHMENT_BYTES, Request, ValidationError, validate};
 
-    #[rstest]
-    #[case::png("image/png", vec![137, 80, 78, 71, 13, 10, 26, 10], "png")]
-    #[case::jpeg("image/jpeg", vec![255, 216, 255], "jpg")]
-    #[case::gif("image/gif", b"GIF89a".to_vec(), "gif")]
-    #[case::webp("image/webp", b"RIFF0000WEBP".to_vec(), "webp")]
-    fn accepts_supported_signatures(
-        #[case] mime_type: &str,
-        #[case] bytes: Vec<u8>,
-        #[case] _extension: &'static str,
-    ) {
-        let images = validate(vec![request(mime_type, &bytes)]).unwrap();
+    #[test]
+    fn accepts_non_image_files_and_preserves_their_names() {
+        let attachments = validate(vec![request("design.html", b"<main>Mock</main>")]).unwrap();
+
         assert_eq!(
-            images,
-            vec![Image {
-                extension: _extension,
-                bytes
+            attachments,
+            vec![Attachment {
+                name: "design.html".to_string(),
+                bytes: b"<main>Mock</main>".to_vec(),
             }]
         );
     }
 
     #[rstest]
-    #[case::non_image("text/plain", b"hello".to_vec(), ValidationError::UnsupportedType("text/plain".to_string()))]
-    #[case::mismatched_signature("image/png", b"GIF89a".to_vec(), ValidationError::InvalidData)]
-    fn rejects_untrusted_image_data(
-        #[case] mime_type: &str,
-        #[case] bytes: Vec<u8>,
+    #[case::declared_size_over_limit(vec![Request {
+        name: "large.bin".to_string(),
+        size: MAX_ATTACHMENT_BYTES + 1,
+        data: String::new(),
+    }], ValidationError::TooLarge)]
+    #[case::decoded_size_mismatch(vec![Request {
+        name: "mismatch.bin".to_string(),
+        size: 2,
+        data: STANDARD.encode(b"x"),
+    }], ValidationError::InvalidData)]
+    fn rejects_oversized_or_invalid_data(
+        #[case] attachments: Vec<Request>,
         #[case] expected: ValidationError,
     ) {
-        let actual = validate(vec![request(mime_type, &bytes)]).unwrap_err();
-        assert_eq!(actual.to_string(), expected.to_string());
+        assert_eq!(
+            validate(attachments).unwrap_err().to_string(),
+            expected.to_string()
+        );
     }
 
     #[test]
-    fn rejects_declared_size_over_the_limit_before_decoding() {
-        let error = validate(vec![Request {
-            mime_type: "image/png".to_string(),
-            size: super::MAX_IMAGE_BYTES + 1,
-            data: String::new(),
-        }])
-        .unwrap_err();
+    fn save_uses_unique_sanitized_names_without_leaving_the_attachment_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = super::save(
+            vec![
+                Attachment {
+                    name: "../design mock.html".to_string(),
+                    bytes: b"one".to_vec(),
+                },
+                Attachment {
+                    name: "../design mock.html".to_string(),
+                    bytes: b"two".to_vec(),
+                },
+            ],
+            Some(directory.path().to_path_buf()),
+        )
+        .unwrap();
+        let canonical_directory = directory.path().canonicalize().unwrap();
+        let snapshot = paths
+            .iter()
+            .map(|path| {
+                let filename = path.file_name().unwrap().to_string_lossy();
+                let sanitized_name = filename.split_once('_').unwrap().1.to_string();
+                (
+                    path.is_absolute(),
+                    path.parent() == Some(canonical_directory.as_path()),
+                    sanitized_name,
+                    std::fs::read(path).unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
 
         assert_eq!(
-            error.to_string(),
-            "image attachments exceed the 10 MiB limit"
+            (snapshot, paths[0] != paths[1]),
+            (
+                vec![
+                    (true, true, "design_mock.html".to_string(), b"one".to_vec(),),
+                    (true, true, "design_mock.html".to_string(), b"two".to_vec(),),
+                ],
+                true
+            )
         );
     }
 
@@ -310,22 +363,22 @@ mod tests {
             .unwrap();
 
         let error = super::save(
-            vec![super::Image {
-                extension: "gif",
-                bytes: b"GIF89a".to_vec(),
+            vec![Attachment {
+                name: "sample.bin".to_string(),
+                bytes: b"data".to_vec(),
             }],
             Some(directory.path().to_path_buf()),
         )
         .unwrap_err();
 
-        assert_eq!(error.to_string(), "image attachment storage is full");
+        assert_eq!(error.to_string(), "file attachment storage is full");
     }
 
-    fn request(mime_type: &str, bytes: &[u8]) -> Request {
+    fn request(name: &str, bytes: &[u8]) -> Request {
         Request {
-            mime_type: mime_type.to_string(),
+            name: name.to_string(),
             size: bytes.len(),
-            data: base64::engine::general_purpose::STANDARD.encode(bytes),
+            data: STANDARD.encode(bytes),
         }
     }
 }
