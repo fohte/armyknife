@@ -446,6 +446,7 @@ mod tests {
                     activity_snapshot: Some(session.updated_at),
                     until_activity: true,
                     is_today: true,
+                    is_compacting: false,
                 }],
                 before_revision + 2,
                 session.updated_at,
@@ -498,6 +499,7 @@ mod tests {
                     activity_snapshot: None,
                     until_activity: false,
                     is_today: true,
+                    is_compacting: false,
                 }],
                 before_revision + 1,
             ),
@@ -655,6 +657,7 @@ mod tests {
                     activity_snapshot: Some(session.updated_at),
                     until_activity,
                     is_today: false,
+                    is_compacting: false,
                 }],
             ),
         );
@@ -717,6 +720,7 @@ mod tests {
             activity_snapshot: expected_later_until.map(|_| session.updated_at),
             until_activity: false,
             is_today: false,
+            is_compacting: false,
         };
         assert_eq!(
             (
@@ -792,6 +796,7 @@ mod tests {
                 activity_snapshot: Some(session.updated_at),
                 until_activity: true,
                 is_today: true,
+                is_compacting: false,
             }]
         );
     }

@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
     SessionTask, build_all_tasks_by_session, fetch_session_tasks_with_parents,
+    order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
@@ -218,7 +219,7 @@ async fn fetch_task_metadata(
         return Ok(previous);
     };
     let tq_sessions = fetch_session_tasks_with_parents(&client, &session_ids).await?;
-    let links = build_all_tasks_by_session(tq_sessions, &session_ids);
+    let mut links = build_all_tasks_by_session(tq_sessions, &session_ids);
     let task_ids = links
         .values()
         .flatten()
@@ -237,16 +238,12 @@ async fn fetch_task_metadata(
         Ok(tasks) => tasks,
         Err(error) => {
             tracing::warn!(%error, "Failed to fetch agent watch tq task priorities; keeping cached priorities");
-            return Ok(SessionTaskMetadata {
-                links,
-                priorities: previous.priorities,
-                priority_order: previous.priority_order,
-                task_projects: previous.task_projects,
-            });
+            return Ok(keep_cached_priority_metadata(links, previous));
         }
     };
 
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
+    order_tasks_by_priority(&mut links, &priority_order);
     let task_projects = fetch_task_projects(tasks, previous.task_projects, || async {
         client
             .list_projects()
@@ -261,6 +258,14 @@ async fn fetch_task_metadata(
         priority_order,
         task_projects,
     })
+}
+
+fn keep_cached_priority_metadata(
+    mut links: HashMap<String, Vec<SessionTask>>,
+    previous: SessionTaskMetadata,
+) -> SessionTaskMetadata {
+    order_tasks_by_priority(&mut links, &previous.priority_order);
+    SessionTaskMetadata { links, ..previous }
 }
 
 async fn fetch_task_projects<F, Fut>(
@@ -301,22 +306,6 @@ fn task_project_names(
             Some((task.id, project_name.clone()))
         })
         .collect()
-}
-
-fn task_priority_metadata(
-    tasks: Vec<TqTaskSummary>,
-) -> (HashMap<String, Option<i32>>, HashMap<String, usize>) {
-    let mut order_by_priority = HashMap::new();
-    let mut priorities = HashMap::new();
-    let mut priority_order = HashMap::new();
-    for task in tasks {
-        let next_order = order_by_priority.len();
-        let order = *order_by_priority.entry(task.priority).or_insert(next_order);
-        priorities.insert(task.id.clone(), task.priority);
-        priority_order.insert(task.id, order);
-    }
-
-    (priorities, priority_order)
 }
 
 fn pull_request_keys(sessions: &[Session]) -> HashSet<BranchPrKey> {
@@ -377,6 +366,7 @@ async fn fetch_pull_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tq_session_tasks::task_priority_metadata;
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use chrono::{TimeZone, Utc};
     use rstest::rstest;
@@ -405,6 +395,16 @@ mod tests {
             title: "example task".to_string(),
             priority,
             project_id: None,
+        }
+    }
+
+    fn linked_task(id: &str) -> SessionTask {
+        SessionTask {
+            task_id: id.to_string(),
+            task_number: 1,
+            task_title: id.to_string(),
+            parent_task_id: None,
+            is_closed: false,
         }
     }
 
@@ -492,11 +492,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset_before_deferred(
+    #[case::unset_priority_is_left_unranked(
         vec![task("task-a", None), task("task-b", Some(-1))],
         (
             HashMap::from([("task-a".to_string(), None), ("task-b".to_string(), Some(-1))]),
-            HashMap::from([("task-a".to_string(), 0), ("task-b".to_string(), 1)]),
+            HashMap::from([("task-b".to_string(), 0)]),
         ),
     )]
     #[case::same_priority_shares_order(
@@ -519,6 +519,34 @@ mod tests {
         #[case] expected: (HashMap<String, Option<i32>>, HashMap<String, usize>),
     ) {
         assert_eq!(task_priority_metadata(tasks), expected);
+    }
+
+    #[test]
+    fn cached_priority_metadata_orders_new_links_after_task_lookup_failure() {
+        let previous = SessionTaskMetadata {
+            links: HashMap::new(),
+            priorities: HashMap::from([
+                ("higher".to_string(), Some(0)),
+                ("lower".to_string(), Some(1)),
+            ]),
+            priority_order: HashMap::from([("higher".to_string(), 0), ("lower".to_string(), 1)]),
+            task_projects: HashMap::from([("higher".to_string(), "sample project".to_string())]),
+        };
+        let links = HashMap::from([(
+            "session-a".to_string(),
+            vec![linked_task("lower"), linked_task("higher")],
+        )]);
+
+        assert_eq!(
+            keep_cached_priority_metadata(links, previous.clone()),
+            SessionTaskMetadata {
+                links: HashMap::from([(
+                    "session-a".to_string(),
+                    vec![linked_task("higher"), linked_task("lower")],
+                )]),
+                ..previous
+            },
+        );
     }
 
     #[test]

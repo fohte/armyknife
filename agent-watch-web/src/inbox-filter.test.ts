@@ -72,6 +72,31 @@ const sessions: Session[] = [
   },
 ]
 
+function sessionWithLinkedTasks(): Session {
+  const session = sessions[0]
+  if (session === undefined) {
+    throw new Error('Expected the task filter fixture to contain a session')
+  }
+
+  return {
+    ...session,
+    tasks: [
+      {
+        id: 'primary-task',
+        number: 123,
+        title: 'Improve request reliability',
+        priority: 1,
+      },
+      {
+        id: 'linked-task',
+        number: 456,
+        title: 'Update delivery notes',
+        priority: 2,
+      },
+    ],
+  }
+}
+
 it.each([
   {
     query: 'project:web-app kind:review,question task:#123',
@@ -105,6 +130,22 @@ it('matches task numbers with or without the hash prefix and combines fields wit
   )
 
   expect(filterInboxSessions(sessions, filters)).toEqual([sessions[0]])
+})
+
+it('matches a session when a linked non-primary task matches', () => {
+  const session = sessionWithLinkedTasks()
+  expect(
+    filterInboxSessions([session], parseInboxFilterQuery('task:456')),
+  ).toEqual([session])
+})
+
+it('offers every linked task as a filter option', () => {
+  const session = sessionWithLinkedTasks()
+
+  expect(getInboxFilterOptions([session], [], 'task')).toEqual([
+    { value: '123', count: 1 },
+    { value: '456', count: 1 },
+  ])
 })
 
 it('round trips quoted values containing spaces, commas, quotes, and field tokens', () => {
