@@ -813,15 +813,12 @@ it('links known session IDs in user and assistant messages', () => {
 
   const expected = {
     messageClasses: ['chat-user-group', 'chat-assistant-message'],
-    linkTitles: [
-      'Inspect the retry path\nexample toolkit\nDone',
-      'Inspect the retry path\nexample toolkit\nDone',
-    ],
+    linkHrefs: [`?session=${linkedSession.id}`, `?session=${linkedSession.id}`],
     selectedIds: [linkedSession.id, linkedSession.id],
   }
   const getActual = () => ({
     messageClasses: links.map((link) => link.closest('article')?.className),
-    linkTitles: links.map((link) => link.title),
+    linkHrefs: links.map((link) => link.getAttribute('href')),
     selectedIds: onSelectSession.mock.calls.map(([id]) => id),
   })
   expect(getActual()).toEqual(expected)

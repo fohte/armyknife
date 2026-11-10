@@ -59,12 +59,12 @@ function useSessionLinkTargets(
   // Elapsed-time updates replace session objects even when link details are unchanged.
   const targetsRef = useRef<readonly SessionLinkTarget[]>([])
   const nextTargets = sessions.map(
-    ({ id, title, project, category, isPaused }) => ({
+    ({ id, category, isPaused, task, repo }) => ({
       id,
-      title,
-      project,
       category,
       isPaused,
+      task,
+      repo,
     }),
   )
   const targetsAreUnchanged =
@@ -74,10 +74,12 @@ function useSessionLinkTargets(
       return (
         nextTarget !== undefined &&
         target.id === nextTarget.id &&
-        target.title === nextTarget.title &&
-        target.project === nextTarget.project &&
         target.category === nextTarget.category &&
-        target.isPaused === nextTarget.isPaused
+        target.isPaused === nextTarget.isPaused &&
+        target.task?.id === nextTarget.task?.id &&
+        target.task?.number === nextTarget.task?.number &&
+        target.task?.title === nextTarget.task?.title &&
+        target.repo === nextTarget.repo
       )
     })
 

@@ -1,0 +1,44 @@
+.session-link-trigger {
+  color: inherit;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.session-link-trigger:focus-visible {
+  border-radius: 2px;
+  outline: 2px solid #93c5fd;
+  outline-offset: 2px;
+}
+
+.session-link-positioner {
+  z-index: 50;
+}
+
+.session-link-card {
+  display: grid;
+  max-width: min(320px, calc(100vw - 24px));
+  gap: 4px;
+  padding: 9px 11px;
+  border: 1px solid #3f3f46;
+  border-radius: 7px;
+  background: #18181b;
+  color: #f4f4f5;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.session-link-card-state {
+  color: #93c5fd;
+  font-weight: 600;
+}
+
+.session-link-card-task,
+.session-link-card-repo {
+  overflow-wrap: anywhere;
+}
+
+.session-link-card-repo {
+  color: #a1a1aa;
+}
