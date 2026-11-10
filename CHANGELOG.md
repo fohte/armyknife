@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.537](https://github.com/fohte/armyknife/compare/v0.1.536...v0.1.537) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** save drafts, resize input ([#1422](https://github.com/fohte/armyknife/issues/1422)) ([085a2a4](https://github.com/fohte/armyknife/commit/085a2a494c5b075debc5008174ad191985a56e36))
+
 ## [0.1.536](https://github.com/fohte/armyknife/compare/v0.1.535...v0.1.536) (2026-11-10)
 
 
