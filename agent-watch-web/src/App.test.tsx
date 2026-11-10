@@ -714,6 +714,7 @@ afterEach(() => {
     })
   }
   root = null
+  window.localStorage.removeItem('agent-watch:navigation-width')
   container.remove()
   vi.useRealTimers()
   vi.restoreAllMocks()
