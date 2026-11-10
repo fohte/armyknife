@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.522](https://github.com/fohte/armyknife/compare/v0.1.521...v0.1.522) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent:** accept newer session databases ([#1397](https://github.com/fohte/armyknife/issues/1397)) ([2d0738a](https://github.com/fohte/armyknife/commit/2d0738a03a61d3eb367caad948c2492c5ca82a47))
+
 ## [0.1.521](https://github.com/fohte/armyknife/compare/v0.1.520...v0.1.521) (2026-11-09)
 
 
