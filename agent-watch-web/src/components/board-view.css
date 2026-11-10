@@ -54,12 +54,19 @@
 }
 
 .board-projects-scroll {
-  position: relative;
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto hidden;
   scrollbar-color: #3f3f46 transparent;
+}
+
+.board-projects-container {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
 }
 
 .board-overflow-hint {
