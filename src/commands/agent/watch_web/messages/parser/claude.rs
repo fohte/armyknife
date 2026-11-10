@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::{BufRead, Seek, SeekFrom};
 
 use serde_json::Value;
@@ -14,7 +14,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
-    let mut parent_uuids = BTreeMap::new();
+    let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
     for_each_jsonl_record(&mut reader, |record| {
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
@@ -22,34 +22,38 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         };
         latest_uuid = Some(uuid.to_owned());
         let parent_uuid = match record.get("parentUuid") {
-            Some(Value::String(parent)) => Some(parent.clone()),
+            Some(Value::String(parent)) => Some(Some(parent.clone())),
             Some(Value::Null) => match record.get("logicalParentUuid") {
-                None | Some(Value::Null) => None,
-                Some(Value::String(parent)) => Some(parent.clone()),
-                _ => {
-                    parent_uuids.remove(uuid);
-                    return;
-                }
+                None | Some(Value::Null) => Some(None),
+                Some(Value::String(parent)) => Some(Some(parent.clone())),
+                _ => None,
             },
-            _ => {
-                parent_uuids.remove(uuid);
-                return;
-            }
+            _ => None,
         };
-        parent_uuids.insert(uuid.to_owned(), parent_uuid);
+        transcript_nodes.insert(
+            uuid.to_owned(),
+            TranscriptNode {
+                parent_uuid,
+                membership: BranchMembership::Unknown,
+            },
+        );
     })?;
-    let active_uuids = active_branch_uuids(&parent_uuids, latest_uuid.as_deref());
-    let inactive_uuids = inactive_branch_uuids(&parent_uuids, &active_uuids);
+    mark_active_branch(&mut transcript_nodes, latest_uuid.as_deref());
     reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
 
     for_each_jsonl_record(&mut reader, |record| {
-        if let Some(uuid) = record.get("uuid").and_then(Value::as_str)
-            && inactive_uuids.contains(uuid)
-        {
-            return;
+        if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
+            let Some(node) = transcript_nodes.get(uuid) else {
+                return;
+            };
+            if node.membership == BranchMembership::Unknown
+                && is_inactive_branch(uuid, &mut transcript_nodes)
+            {
+                return;
+            }
         }
         (|| match record.get("type").and_then(Value::as_str) {
             _ if record
@@ -158,55 +162,77 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     Ok(items)
 }
 
-fn active_branch_uuids(
-    parent_uuids: &BTreeMap<String, Option<String>>,
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchMembership {
+    Unknown,
+    Visiting,
+    Active,
+    ReachesActive,
+    Disconnected,
+}
+
+struct TranscriptNode {
+    parent_uuid: Option<Option<String>>,
+    membership: BranchMembership,
+}
+
+fn mark_active_branch(
+    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
     latest_uuid: Option<&str>,
-) -> BTreeSet<String> {
-    let Some(mut uuid) = latest_uuid else {
-        return BTreeSet::new();
+) {
+    let Some(mut uuid) = latest_uuid.map(str::to_owned) else {
+        return;
     };
-    let mut active_uuids = BTreeSet::new();
 
     loop {
-        if !active_uuids.insert(uuid.to_owned()) {
-            return active_uuids;
-        }
-        let Some(Some(parent_uuid)) = parent_uuids.get(uuid) else {
-            return active_uuids;
+        let Some(node) = transcript_nodes.get_mut(&uuid) else {
+            return;
         };
+        if node.membership == BranchMembership::Active {
+            return;
+        }
+        node.membership = BranchMembership::Active;
+        let Some(Some(parent_uuid)) = &node.parent_uuid else {
+            return;
+        };
+        let parent_uuid = parent_uuid.clone();
+        if !transcript_nodes.contains_key(&parent_uuid) {
+            return;
+        }
         uuid = parent_uuid;
     }
 }
 
-fn inactive_branch_uuids(
-    parent_uuids: &BTreeMap<String, Option<String>>,
-    active_uuids: &BTreeSet<String>,
-) -> BTreeSet<String> {
-    let mut children_by_parent = BTreeMap::new();
-    for (uuid, parent_uuid) in parent_uuids {
-        if let Some(parent_uuid) = parent_uuid {
-            children_by_parent
-                .entry(parent_uuid.as_str())
-                .or_insert_with(Vec::new)
-                .push(uuid.as_str());
+fn is_inactive_branch(uuid: &str, transcript_nodes: &mut BTreeMap<String, TranscriptNode>) -> bool {
+    let mut current_uuid = uuid.to_owned();
+    let mut path = Vec::new();
+    let reaches_active = loop {
+        let Some(node) = transcript_nodes.get_mut(&current_uuid) else {
+            break false;
+        };
+        match node.membership {
+            BranchMembership::Active | BranchMembership::ReachesActive => break true,
+            BranchMembership::Disconnected | BranchMembership::Visiting => break false,
+            BranchMembership::Unknown => node.membership = BranchMembership::Visiting,
         }
-    }
+        path.push(current_uuid.clone());
+        let Some(Some(parent_uuid)) = &node.parent_uuid else {
+            break false;
+        };
+        current_uuid = parent_uuid.clone();
+    };
 
-    let mut pending = active_uuids
-        .iter()
-        .filter_map(|uuid| children_by_parent.get(uuid.as_str()))
-        .flat_map(|children| children.iter().copied())
-        .collect::<Vec<_>>();
-    let mut inactive_uuids = BTreeSet::new();
-    while let Some(uuid) = pending.pop() {
-        if active_uuids.contains(uuid) || !inactive_uuids.insert(uuid.to_owned()) {
-            continue;
-        }
-        if let Some(children) = children_by_parent.get(uuid) {
-            pending.extend(children.iter().copied());
+    let membership = if reaches_active {
+        BranchMembership::ReachesActive
+    } else {
+        BranchMembership::Disconnected
+    };
+    for uuid in path {
+        if let Some(node) = transcript_nodes.get_mut(&uuid) {
+            node.membership = membership;
         }
     }
-    inactive_uuids
+    reaches_active
 }
 
 struct ToolUse {
@@ -379,7 +405,7 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
     use indoc::indoc;
     use rstest::rstest;
@@ -675,6 +701,38 @@ mod tests {
     }
 
     #[test]
+    fn skips_uuid_rows_appended_after_branch_discovery() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep this earlier message."}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Keep this current message."}}
+        "#};
+        let reader = AppendingReader {
+            inner: Cursor::new(transcript.as_bytes().to_vec()),
+            appended_row: Some(
+                indoc! {r#"
+                    {"uuid":"fixture-new-fork-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Hide this newly appended fork."}}
+                "#}
+                .as_bytes()
+                .to_vec(),
+            ),
+        };
+
+        assert_eq!(
+            parse(reader, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this earlier message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this current message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn shows_all_messages_when_transcript_rows_have_no_uuids() {
         let transcript = indoc! {r#"
             {"type":"user","message":{"content":"Keep the first legacy message."}}
@@ -728,6 +786,38 @@ mod tests {
         super::super::super::ToolOperation {
             tool: tool.to_string(),
             target: target.map(str::to_owned),
+        }
+    }
+
+    struct AppendingReader {
+        inner: Cursor<Vec<u8>>,
+        appended_row: Option<Vec<u8>>,
+    }
+
+    impl Read for AppendingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(buffer)
+        }
+    }
+
+    impl BufRead for AppendingReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            self.inner.fill_buf()
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.inner.consume(amount);
+        }
+    }
+
+    impl Seek for AppendingReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            if position == SeekFrom::Start(0)
+                && let Some(appended_row) = self.appended_row.take()
+            {
+                self.inner.get_mut().extend(appended_row);
+            }
+            self.inner.seek(position)
         }
     }
 }
