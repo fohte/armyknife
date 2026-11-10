@@ -18,6 +18,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+function isUserContentPart(value: unknown): boolean {
+  if (!isRecord(value) || typeof value['type'] !== 'string') return false
+  if (value['type'] === 'text') return typeof value['text'] === 'string'
+  if (value['type'] === 'file') return typeof value['name'] === 'string'
+  if (value['type'] !== 'image') return false
+  return (
+    typeof value['source'] === 'string' &&
+    (value['source'].startsWith('/api/images/') ||
+      /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(
+        value['source'],
+      )) &&
+    typeof value['available'] === 'boolean'
+  )
+}
+
 function isChatItem(value: unknown): value is ChatItem {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   switch (value['type']) {
@@ -28,21 +43,25 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
-        value['content'].every((part) => {
-          if (!isRecord(part) || typeof part['type'] !== 'string') return false
-          if (part['type'] === 'text') return typeof part['text'] === 'string'
-          if (part['type'] === 'file') return typeof part['name'] === 'string'
-          if (part['type'] !== 'image') return false
-          return (
-            typeof part['source'] === 'string' &&
-            (part['source'].startsWith('/api/images/') ||
-              /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(
-                part['source'],
-              )) &&
-            typeof part['available'] === 'boolean'
-          )
-        }) &&
+        value['content'].every(isUserContentPart) &&
         (value['from'] === undefined || typeof value['from'] === 'string')
+      )
+    case 'peer':
+      return (
+        (value['direction'] === 'from' || value['direction'] === 'to') &&
+        typeof value['session_id'] === 'string' &&
+        (value['session_title'] === undefined ||
+          typeof value['session_title'] === 'string') &&
+        Array.isArray(value['content']) &&
+        value['content'].every(isUserContentPart)
+      )
+    case 'event':
+      return (
+        (value['kind'] === 'armyknife' ||
+          value['kind'] === 'system' ||
+          value['kind'] === 'hook') &&
+        typeof value['text'] === 'string' &&
+        typeof value['failed'] === 'boolean'
       )
     case 'tool_summary':
       return (

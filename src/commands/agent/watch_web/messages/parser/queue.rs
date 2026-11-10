@@ -5,7 +5,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::{ChatItem, ParentSession, UserContentPart, claude_content_text};
-use super::{append_text_with_user_marker_and_image_directory, marked_peer_message_body};
+use super::append_text_with_user_marker_and_image_directory;
+use super::classifier::marked_user_body;
 use crate::commands::agent::store::WatchWebQueuedPrompt;
 
 #[derive(Default)]
@@ -135,9 +136,9 @@ impl Queue {
             return;
         };
         let prompt_text = claude_content_text(Some(prompt));
-        let body = match marked_peer_message_body(&prompt_text, user_marker) {
+        let body = match marked_user_body(&prompt_text, user_marker) {
             Some(body) => body,
-            None if is_queued_command => prompt_text.as_str(),
+            None if is_queued_command => prompt_text.clone(),
             None => return,
         };
         let received_at = record_timestamp(record);
@@ -180,7 +181,7 @@ impl Queue {
             .pending
             .iter()
             .filter_map(Option::as_deref)
-            .map(|prompt| normalized_prompt(prompt, user_marker).to_owned())
+            .map(|prompt| normalized_prompt(prompt, user_marker))
             .collect::<Vec<_>>();
         let mut prompts = self.pending.into_iter().flatten().collect::<Vec<_>>();
         prompts.extend(
@@ -222,8 +223,8 @@ impl Queue {
     }
 }
 
-fn normalized_prompt<'a>(prompt: &'a str, user_marker: Option<&str>) -> &'a str {
-    marked_peer_message_body(prompt, user_marker).unwrap_or(prompt)
+fn normalized_prompt(prompt: &str, user_marker: Option<&str>) -> String {
+    marked_user_body(prompt, user_marker).unwrap_or_else(|| prompt.to_owned())
 }
 
 fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {

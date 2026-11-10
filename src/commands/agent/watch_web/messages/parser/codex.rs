@@ -184,7 +184,9 @@ mod tests {
     use serde_json::json;
 
     use super::parse;
-    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
+    use crate::commands::agent::watch_web::messages::{
+        ChatItem, ParentSession, PeerDirection, UserContentPart,
+    };
 
     #[test]
     fn parses_rollout_items_and_skips_unknown_rows() {
@@ -220,9 +222,13 @@ mod tests {
                 ChatItem::Assistant {
                     text: "The settings now use the shared parser.".to_string(),
                 },
-                ChatItem::User {
-                    text: "Please keep the summary brief.".to_string(),
-                    from: Some("fixture-parent-title".to_string()),
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: Some("fixture-parent-title".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: "Please keep the summary brief.".to_string(),
+                    }],
                 },
             ]
         );

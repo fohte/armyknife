@@ -350,6 +350,56 @@ export const TheConversationShowsOperationSummaries: Story = {
   },
 }
 
+export const PeerMessagesAndEventsHaveTheirOwnDirection: Story = {
+  name: 'The conversation separates peer messages from one-line events',
+  args: {
+    sessions: [
+      session,
+      {
+        ...session,
+        id: 'peer-session',
+        title: 'Build verification',
+        task: null,
+        parent: null,
+        ancestorSessionIds: [],
+        pullRequest: null,
+      },
+    ],
+    messages: [
+      {
+        type: 'user',
+        text: 'Please verify the fictional build output.',
+      },
+      {
+        type: 'peer',
+        direction: 'to',
+        session_id: 'peer-session',
+        content: [
+          { type: 'text', text: 'Please check the example validation step.' },
+        ],
+      },
+      {
+        type: 'peer',
+        direction: 'from',
+        session_id: 'peer-session',
+        content: [{ type: 'text', text: 'The example step passed.' }],
+      },
+      {
+        type: 'event',
+        kind: 'armyknife',
+        text: 'The delegated check has finished.',
+        failed: false,
+      },
+      {
+        type: 'event',
+        kind: 'system',
+        text: 'A fictional task was blocked.',
+        failed: true,
+      },
+    ],
+  },
+}
+
 export const AnActionFailureIsVisible: Story = {
   name: 'A failed action shows the server error',
   args: {
