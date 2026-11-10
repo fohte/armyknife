@@ -134,6 +134,56 @@ it('matches a session by branch name and shows its task and repository', () => {
   )
 })
 
+it.each([
+  ['caret before the query end', 2, 2, 3],
+  ['a selection before the query end', 2, 6, 6],
+] as const)(
+  'keeps ArrowRight in the input for %s',
+  async (_, start, end, expectedCaret) => {
+    renderPalette({ initialQuery: 'notification' })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    input.setSelectionRange(start, end)
+
+    await act(async () => {
+      await userEvent.keyboard('{ArrowRight}')
+    })
+
+    const snapshot = () => ({
+      actionMenu: container.querySelector('[role="menu"]') !== null,
+      selectionEnd: input.selectionEnd,
+      selectionStart: input.selectionStart,
+    })
+
+    expect(snapshot()).toEqual({
+      actionMenu: false,
+      selectionEnd: expectedCaret,
+      selectionStart: expectedCaret,
+    })
+  },
+)
+
+it('opens the highlighted actions when the query caret is at the end', async () => {
+  renderPalette({ initialQuery: 'Review' })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  input.setSelectionRange(input.value.length, input.value.length)
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}')
+  })
+
+  expect(
+    Array.from(container.querySelectorAll('[role="menuitem"]')).map(
+      (item) => item.textContent,
+    ),
+  ).toEqual(['Open session', 'Later', 'Copy session ID', 'Open in terminal'])
+})
+
 it('opens the highlighted session actions with ArrowRight and runs Later', async () => {
   const onLater = vi.fn<(id: string) => void>()
   renderPalette({ onLater })

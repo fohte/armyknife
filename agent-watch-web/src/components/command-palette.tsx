@@ -288,6 +288,14 @@ export function CommandPalette({
             event.preventDefault()
             activate(items[activeIndex])
           } else if (event.key === 'ArrowRight') {
+            const input = inputRef.current
+            if (
+              event.target === input &&
+              (input.selectionStart !== input.value.length ||
+                input.selectionStart !== input.selectionEnd)
+            ) {
+              return
+            }
             event.preventDefault()
             const item = items[activeIndex]
             if (item !== undefined) {
