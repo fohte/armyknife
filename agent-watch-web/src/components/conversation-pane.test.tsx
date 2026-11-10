@@ -617,6 +617,29 @@ it('restores the message draft after the conversation is remounted', () => {
   })
 })
 
+it('keeps the composer usable when browser storage is unavailable', () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  renderView(() => Promise.resolve(true))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep editing in memory')
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    composerVisible: textarea.isConnected,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Keep editing in memory',
+    composerVisible: true,
+  })
+})
+
 it('keeps drafts separate for each session', () => {
   renderView(() => Promise.resolve(true))
   setTextareaValue(

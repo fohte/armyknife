@@ -12,7 +12,7 @@
   width: 100%;
   min-height: 54px;
   max-height: 50dvh;
-  overflow-y: hidden;
+  overflow-y: auto;
   resize: none;
   padding: 10px 12px 4px;
   border: 0;

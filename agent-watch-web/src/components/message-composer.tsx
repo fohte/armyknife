@@ -43,8 +43,6 @@ export function MessageComposer({
       ? Math.min(textarea.scrollHeight, maxHeight)
       : textarea.scrollHeight
     textarea.style.height = `${String(height)}px`
-    textarea.style.overflowY =
-      textarea.scrollHeight > height ? 'auto' : 'hidden'
   }, [draft])
 
   const handleSubmit = (event: SubmitEvent<HTMLFormElement>) => {
@@ -73,7 +71,11 @@ export function MessageComposer({
       <div className="composer-footer">
         {!isMobile ? (
           <span role={isSending ? 'status' : undefined}>
-            {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
+            {isSending
+              ? 'Sending…'
+              : canInterrupt
+                ? '↵ Send · ⇧↵ New line · Esc Interrupt'
+                : '↵ Send · ⇧↵ New line'}
           </span>
         ) : null}
         {isMobile && canInterrupt ? (

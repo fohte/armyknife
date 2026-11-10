@@ -1,4 +1,5 @@
 import { Button } from '@fohte/ui/button'
+import { Result } from 'neverthrow'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
@@ -23,6 +24,33 @@ type ConversationPaneViewProps = {
   onBack?: () => void
   onLater?: () => void
 }
+
+function readComposerDraft(key: string) {
+  return Result.fromThrowable(
+    () => window.localStorage.getItem(key),
+    (error: unknown) => error,
+  )().match(
+    (draft) => draft ?? '',
+    () => '',
+  )
+}
+
+function writeComposerDraft(key: string, draft: string) {
+  Result.fromThrowable(
+    () => {
+      if (draft === '') {
+        window.localStorage.removeItem(key)
+      } else {
+        window.localStorage.setItem(key, draft)
+      }
+    },
+    (error: unknown) => error,
+  )().match(
+    () => undefined,
+    () => undefined,
+  )
+}
+
 export function ConversationPaneView({
   session,
   messages,
@@ -38,9 +66,7 @@ export function ConversationPaneView({
   onLater,
 }: ConversationPaneViewProps) {
   const draftStorageKey = `agent-watch-web:composer-draft:${session.id}`
-  const [draft, setDraft] = useState(
-    () => window.localStorage.getItem(draftStorageKey) ?? '',
-  )
+  const [draft, setDraft] = useState(() => readComposerDraft(draftStorageKey))
   const draftRef = useRef(draft)
   const [sendPending, setSendPending] = useState(false)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
@@ -62,11 +88,7 @@ export function ConversationPaneView({
   const updateDraft = (value: string) => {
     draftRef.current = value
     setDraft(value)
-    if (value === '') {
-      window.localStorage.removeItem(draftStorageKey)
-    } else {
-      window.localStorage.setItem(draftStorageKey, value)
-    }
+    writeComposerDraft(draftStorageKey, value)
   }
 
   const sendMessage = () => {
