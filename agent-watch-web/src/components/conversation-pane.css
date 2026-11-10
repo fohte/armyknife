@@ -153,21 +153,6 @@
   white-space: pre-wrap;
 }
 
-.chat-tool-summary {
-  align-self: flex-start;
-  color: var(--muted-foreground-strong);
-  font-size: 12.5px;
-}
-
-.chat-tool-summary summary {
-  min-height: 30px;
-  padding: 5px 9px;
-  border: 1px solid #2a2a2a;
-  border-radius: 5px;
-  cursor: pointer;
-  list-style: none;
-}
-
 .chat-question-card,
 .chat-permission-card {
   width: min(100%, 640px);
