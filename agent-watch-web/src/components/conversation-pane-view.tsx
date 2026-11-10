@@ -6,12 +6,14 @@ import { ConversationWorkingStatus } from '#components/conversation-working-stat
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
+import { PermissionCard } from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
+import { UserWithContent } from '#components/user-with-content'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -31,35 +33,6 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   onBack?: () => void
   onLater?: () => void
-}
-
-function UserImage({
-  source,
-  available,
-}: {
-  source: string
-  available: boolean
-}) {
-  const [isAvailable, setIsAvailable] = useState(available)
-
-  useEffect(() => {
-    setIsAvailable(available)
-  }, [available, source])
-
-  if (!isAvailable) {
-    return <p className="chat-image-unavailable">画像はもうありません</p>
-  }
-
-  return (
-    <img
-      className="chat-user-image"
-      src={source}
-      alt="Attached image"
-      onError={() => {
-        setIsAvailable(false)
-      }}
-    />
-  )
 }
 
 export function ConversationPaneView({
@@ -142,17 +115,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  const renderTerminalFallback = (message: string) => (
-    <div className="conversation-terminal-fallback">
-      <span>{message}</span>
-      {actions?.openInTerminal === true ? (
-        <Button type="button" variant="plain" onClick={openInTerminal}>
-          Open in terminal
-        </Button>
-      ) : null}
-    </div>
-  )
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
@@ -363,47 +325,12 @@ export function ConversationPaneView({
           <p className="conversation-status">No messages yet.</p>
         ) : null}
         {conversationMessages.map((message, index) => {
-          if (message.type === 'user') {
+          if (message.type === 'user' || message.type === 'user_with_content') {
             return (
-              <article
-                className="chat-user-group"
+              <UserWithContent
                 key={`user-${String(index)}`}
-              >
-                {message.from != null && message.from !== '' ? (
-                  <div className="chat-from">From {message.from}</div>
-                ) : null}
-                <MarkdownMessage className="chat-user-message">
-                  {message.text}
-                </MarkdownMessage>
-              </article>
-            )
-          }
-          if (message.type === 'user_with_content') {
-            return (
-              <article
-                className="chat-user-group"
-                key={`user-content-${String(index)}`}
-              >
-                {message.from != null && message.from !== '' ? (
-                  <div className="chat-from">From {message.from}</div>
-                ) : null}
-                {message.content.map((part, partIndex) =>
-                  part.type === 'text' ? (
-                    <MarkdownMessage
-                      className="chat-user-message"
-                      key={`text-${String(partIndex)}`}
-                    >
-                      {part.text}
-                    </MarkdownMessage>
-                  ) : (
-                    <UserImage
-                      key={`image-${String(partIndex)}`}
-                      source={part.source}
-                      available={part.available}
-                    />
-                  ),
-                )}
-              </article>
+                message={message}
+              />
             )
           }
           if (message.type === 'assistant')
@@ -459,41 +386,14 @@ export function ConversationPaneView({
             )
           }
           return (
-            <article
-              className="chat-permission-card"
+            <PermissionCard
               key={`permission-${String(index)}`}
-            >
-              <h2>Permission required</h2>
-              <p className="permission-tool">{message.tool}</p>
-              <p>{message.description}</p>
-              {actions?.permission != null &&
-              (actions.permission.approve || actions.permission.reject) ? (
-                <div className="permission-actions">
-                  <Button
-                    type="button"
-                    variant="plain"
-                    disabled={!actionsReady || !actions.permission.approve}
-                    onClick={() => {
-                      void onAction('permission/approve')
-                    }}
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="plain"
-                    disabled={!actionsReady || !actions.permission.reject}
-                    onClick={() => {
-                      void onAction('permission/reject')
-                    }}
-                  >
-                    Reject
-                  </Button>
-                </div>
-              ) : session.engine === 'Codex' && actions !== null ? (
-                renderTerminalFallback('Review this permission in terminal.')
-              ) : null}
-            </article>
+              message={message}
+              actions={actions}
+              actionsReady={actionsReady}
+              engine={session.engine}
+              onAction={onAction}
+            />
           )
         })}
       </div>

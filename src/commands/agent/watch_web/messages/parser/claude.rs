@@ -1,13 +1,16 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Seek, SeekFrom};
+use std::path::Path;
 
 use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::parser::{
-    ToolSummary, append_text, append_text_with_user_marker, for_each_jsonl_record,
-    peer_message_item_with_user_marker, tool_target,
+    ToolSummary, append_text_with_image_directory,
+    append_text_with_user_marker_and_image_directory, for_each_jsonl_record,
+    peer_message_item_with_user_marker_and_image_directory, tool_target,
+    user_item_with_image_directory,
 };
 use user_input::{
     UserOrigin, content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
@@ -17,10 +20,27 @@ use user_input::{
 mod user_input;
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+) -> std::io::Result<Vec<ChatItem>> {
+    let image_directory = super::super::super::image_attachments::storage_directory().ok();
+    parse_with_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        image_directory.as_deref(),
+    )
+}
+
+fn parse_with_image_directory(
     mut reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
+    image_directory: Option<&Path>,
 ) -> std::io::Result<Vec<ChatItem>> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
@@ -81,7 +101,14 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let (text, images) = user_content(Some(prompt));
                     if !text.is_empty() || !images.is_empty() {
                         tools.flush_into(&mut items);
-                        append_text_with_user_marker(&mut items, text, parent, user_marker, images);
+                        append_text_with_user_marker_and_image_directory(
+                            &mut items,
+                            text,
+                            parent,
+                            user_marker,
+                            images,
+                            image_directory,
+                        );
                     }
                 }
             }
@@ -120,11 +147,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let (text, images) = user_content(message.get("content"));
                     if !text.is_empty() || !images.is_empty() {
                         if origin == UserOrigin::Peer {
-                            let Some(item) = peer_message_item_with_user_marker(
+                            let Some(item) = peer_message_item_with_user_marker_and_image_directory(
                                 &text,
                                 parent,
                                 user_marker,
                                 images,
+                                image_directory,
                             ) else {
                                 return;
                             };
@@ -134,9 +162,20 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                             tools.flush_into(&mut items);
                             let text = slash_command_text(&text).unwrap_or(text);
                             if images.is_empty() {
-                                append_text(&mut items, text, true, parent);
+                                append_text_with_image_directory(
+                                    &mut items,
+                                    text,
+                                    true,
+                                    parent,
+                                    image_directory,
+                                );
                             } else {
-                                items.push(super::user_item_with_images(text, None, images));
+                                items.push(user_item_with_image_directory(
+                                    text,
+                                    None,
+                                    images,
+                                    image_directory,
+                                ));
                             }
                         }
                     }
@@ -152,7 +191,13 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                             Some("text") => {
                                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                                     tools.flush_into(&mut items);
-                                    append_text(&mut items, text.to_owned(), false, None);
+                                    append_text_with_image_directory(
+                                        &mut items,
+                                        text.to_owned(),
+                                        false,
+                                        None,
+                                        image_directory,
+                                    );
                                 }
                             }
                             Some("tool_use") => {
@@ -455,11 +500,60 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usi
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
+    use serde_json::json;
 
-    use super::parse;
+    use super::{parse, parse_with_image_directory};
     use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession, UserContentPart};
+
+    #[test]
+    fn parses_a_marked_peer_message_with_a_saved_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000001.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(&image_path, b"fixture image").unwrap();
+        let marker = "⟦armyknife-user:00000000-0000-4000-8000-000000000002⟧";
+        let content = formatdoc! {"
+            Another Claude session sent a message:
+            {marker}
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "user",
+            "isMeta": true,
+            "origin": {"kind": "peer", "from": "unknown"},
+            "message": {"content": content},
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                Some(marker),
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }]
+        );
+    }
 
     #[rstest]
     #[case::prompt_array(

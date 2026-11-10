@@ -86,46 +86,6 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
-export const UserMessageShowsPastedImage: Story = {
-  name: 'A user message shows a pasted image beside its placeholder',
-  args: {
-    messages: [
-      {
-        type: 'user_with_content',
-        content: [
-          { type: 'text', text: 'Please inspect this screenshot: ' },
-          {
-            type: 'image',
-            source:
-              'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
-            available: true,
-          },
-          { type: 'text', text: ' and retry the check.' },
-        ],
-      },
-    ],
-  },
-}
-
-export const UserMessageShowsExpiredImage: Story = {
-  name: 'A user message explains that its image is no longer available',
-  args: {
-    messages: [
-      {
-        type: 'user_with_content',
-        content: [
-          { type: 'text', text: 'Please inspect this screenshot: ' },
-          {
-            type: 'image',
-            source: '/api/images/00000000-0000-4000-8000-000000000001.png',
-            available: false,
-          },
-        ],
-      },
-    ],
-  },
-}
-
 export const QuestionShowsSelectedAnswer: Story = {
   name: 'A question marks the choice selected by the user',
   args: {

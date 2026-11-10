@@ -185,7 +185,13 @@ pub(super) fn extract_references(
 }
 
 pub(super) fn routes() -> Router {
-    routes_with(|| storage_directory().ok())
+    routes_with(|| {
+        storage_directory()
+            .map_err(|error| {
+                tracing::warn!(%error, "failed to resolve watch-web image storage directory");
+            })
+            .ok()
+    })
 }
 
 fn routes_with(directory: impl Fn() -> Option<PathBuf> + Send + Sync + 'static) -> Router {
