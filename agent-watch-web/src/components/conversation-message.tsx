@@ -1,7 +1,7 @@
-import { Button } from '@fohte/ui/button'
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { PermissionCard } from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
@@ -25,7 +25,6 @@ type RenderConversationMessageOptions = {
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
-  renderTerminalFallback: (message: string) => ReactNode
   session: Session
   sessions: readonly SessionLinkTarget[]
 }
@@ -40,7 +39,6 @@ export function renderConversationMessage({
   onAction,
   onOpenInTerminal,
   onSelectSession,
-  renderTerminalFallback,
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
@@ -112,40 +110,13 @@ export function renderConversationMessage({
     )
   }
   return (
-    <article
-      className="chat-permission-card"
+    <PermissionCard
       key={`permission-${String(index)}`}
-    >
-      <h2>Permission required</h2>
-      <p className="permission-tool">{message.tool}</p>
-      <p>{message.description}</p>
-      {actions?.permission != null &&
-      (actions.permission.approve || actions.permission.reject) ? (
-        <div className="permission-actions">
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.approve}
-            onClick={() => {
-              void onAction('permission/approve')
-            }}
-          >
-            Approve
-          </Button>
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.reject}
-            onClick={() => {
-              void onAction('permission/reject')
-            }}
-          >
-            Reject
-          </Button>
-        </div>
-      ) : session.engine === 'Codex' && actions !== null ? (
-        renderTerminalFallback('Review this permission in terminal.')
-      ) : null}
-    </article>
+      message={message}
+      actions={actions}
+      actionsReady={actionsReady}
+      engine={session.engine}
+      onAction={onAction}
+    />
   )
 }

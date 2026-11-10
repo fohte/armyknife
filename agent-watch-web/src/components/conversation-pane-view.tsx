@@ -175,17 +175,6 @@ export function ConversationPaneView({
     void onAction('focus')
   }
 
-  const renderTerminalFallback = (message: string) => (
-    <div className="conversation-terminal-fallback">
-      <span>{message}</span>
-      {actions?.openInTerminal === true ? (
-        <Button type="button" variant="plain" onClick={openInTerminal}>
-          Open in terminal
-        </Button>
-      ) : null}
-    </div>
-  )
-
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
       const target = event.target
@@ -416,7 +405,6 @@ export function ConversationPaneView({
             onAction,
             onOpenInTerminal: openInTerminal,
             onSelectSession: selectLinkedSession,
-            renderTerminalFallback,
             session,
             sessions: sessionLinkTargets,
           }),
