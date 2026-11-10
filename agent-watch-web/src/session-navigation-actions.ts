@@ -1,27 +1,29 @@
 import { setSessionToday } from '#session-actions'
-import type { SessionView } from '#session-navigation'
+import type { HistoryMode, SessionHistoryState } from '#session-history'
 import type { Session } from '#types'
 
 type SessionNavigationOptions = {
   sessions: readonly Session[]
-  setSelectedId: (id: string | null) => void
-  setView: (view: SessionView) => void
-  setConversationOpen: (open: boolean) => void
+  navigate: (
+    update: (current: SessionHistoryState) => SessionHistoryState,
+    mode?: HistoryMode,
+  ) => void
   setLaterExpanded: (expanded: boolean) => void
   setError: (error: string | null) => void
 }
 
 export function createSessionNavigationActions({
   sessions,
-  setSelectedId,
-  setView,
-  setConversationOpen,
+  navigate,
   setLaterExpanded,
   setError,
 }: SessionNavigationOptions) {
   const openConversation = (sessionId: string) => {
-    setSelectedId(sessionId)
-    setConversationOpen(true)
+    navigate((current) => ({
+      ...current,
+      selectedId: sessionId,
+      conversationOpen: true,
+    }))
   }
   const openSessionInInbox = (sessionId: string) => {
     if (
@@ -31,8 +33,12 @@ export function createSessionNavigationActions({
     ) {
       setLaterExpanded(true)
     }
-    setView('inbox')
-    openConversation(sessionId)
+    navigate((current) => ({
+      ...current,
+      selectedId: sessionId,
+      view: 'inbox',
+      conversationOpen: true,
+    }))
   }
   const openTodaySession = (sessionId: string) => {
     if (
