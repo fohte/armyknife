@@ -1,0 +1,92 @@
+.markdown-message {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.markdown-message > * {
+  margin: 0;
+}
+
+.markdown-message > * + * {
+  margin-top: 0.75rem;
+}
+
+.markdown-message :is(h1, h2, h3, h4, h5, h6) {
+  color: #fafafa;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.markdown-message h1 {
+  font-size: 1.35rem;
+}
+
+.markdown-message h2 {
+  font-size: 1.2rem;
+}
+
+.markdown-message h3,
+.markdown-message h4,
+.markdown-message h5,
+.markdown-message h6 {
+  font-size: 1.05rem;
+}
+
+.markdown-message :is(ul, ol) {
+  padding-left: 1.5rem;
+}
+
+.markdown-message li + li {
+  margin-top: 0.25rem;
+}
+
+.markdown-message blockquote {
+  padding-left: 0.75rem;
+  border-left: 2px solid #52525b;
+  color: #a1a1aa;
+}
+
+.markdown-message :not(pre) > code {
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  background: #27272a;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.markdown-message pre {
+  overflow-x: auto;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #27272a;
+  border-radius: 6px;
+  background: #111113;
+}
+
+.markdown-message pre code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.markdown-message a {
+  color: #93c5fd;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.markdown-message table {
+  width: max-content;
+  max-width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-message :is(th, td) {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid #3f3f46;
+  text-align: left;
+}
+
+.markdown-message th {
+  background: #1f1f1f;
+  color: #fafafa;
+  font-weight: 600;
+}
