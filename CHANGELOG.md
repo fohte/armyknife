@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.525](https://github.com/fohte/armyknife/compare/v0.1.524...v0.1.525) (2026-11-10)
+
+
+### Bug Fixes
+
+* **cache:** isolate test cache ([#1403](https://github.com/fohte/armyknife/issues/1403)) ([7575d64](https://github.com/fohte/armyknife/commit/7575d64567441d8da9a9b0c93739126ad6fa5310))
+
 ## [0.1.524](https://github.com/fohte/armyknife/compare/v0.1.523...v0.1.524) (2026-11-10)
 
 
