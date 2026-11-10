@@ -5,13 +5,15 @@ use serde_json::Value;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::parser::{
-    ToolSummary, append_text, for_each_jsonl_record, peer_message_item, tool_target,
+    ToolSummary, append_text, append_text_with_user_marker, for_each_jsonl_record,
+    peer_message_item_with_user_marker, tool_target,
 };
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
+    user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -32,7 +34,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let text = content_text(Some(prompt));
                     if !text.is_empty() {
                         tools.flush_into(&mut items);
-                        append_text(&mut items, text, true, parent);
+                        append_text_with_user_marker(&mut items, text, parent, user_marker);
                     }
                 }
             }
@@ -53,7 +55,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let text = user_text(message);
                     if !text.is_empty() {
                         if origin == UserOrigin::Peer {
-                            let Some(item) = peer_message_item(&text, parent) else {
+                            let Some(item) =
+                                peer_message_item_with_user_marker(&text, parent, user_marker)
+                            else {
                                 return;
                             };
                             tools.flush_into(&mut items);
@@ -338,7 +342,7 @@ mod tests {
         #[case] queued_text: &str,
     ) {
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Before the queued prompt.".to_string(),
@@ -371,7 +375,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![ChatItem::User {
                 text: "Please group these fictional events.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
@@ -399,7 +403,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Review the notification flow.".to_string(),
@@ -443,7 +447,8 @@ mod tests {
             parse(
                 Cursor::new(transcript),
                 None,
-                Some("Bash(echo awaiting approval)")
+                Some("Bash(echo awaiting approval)"),
+                None,
             )
             .unwrap(),
             vec![
@@ -467,7 +472,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
@@ -497,7 +502,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "/inspect fixture-argument".to_string(),
@@ -528,11 +533,48 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![ChatItem::User {
                 text: "Synthetic peer request contains </peer-message> inside.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
             }]
+        );
+    }
+
+    #[test]
+    fn peer_markers_control_user_attribution_in_both_delivery_paths() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nDirect user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nQueued user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+        "#};
+        let parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "Fixture parent".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None, Some(marker)).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Direct user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Queued user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.".to_string(),
+                    from: Some("Fixture parent".to_string()),
+                },
+                ChatItem::User {
+                    text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.".to_string(),
+                    from: Some("Fixture parent".to_string()),
+                },
+            ],
         );
     }
 

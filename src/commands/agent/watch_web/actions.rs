@@ -249,9 +249,18 @@ async fn send_message(
 
     let images = image_attachments::validate(request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let marker = if session.engine == Engine::Claude {
+        let sessions_dir =
+            resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+        let session_id = session.session_id.clone();
+        run_blocking(move || store::watch_web_user_marker_from(&sessions_dir, &session_id)).await?
+    } else {
+        None
+    };
     let image_paths =
         run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
     let content = image_attachments::append_paths_to_message(request.content, &image_paths);
+    let content = watch_web_message_content(&session, marker.as_deref(), &content);
     let cleanup_paths = image_paths;
     let runtime = state.runtime;
     run_blocking(move || {
@@ -263,6 +272,15 @@ async fn send_message(
     })
     .await?;
     Ok(Json(Success::new()))
+}
+
+fn watch_web_message_content(session: &Session, marker: Option<&str>, content: &str) -> String {
+    match (session.engine, marker) {
+        (Engine::Claude, Some(marker)) => {
+            super::super::watch_web_user_marker::prefix_message(marker, content)
+        }
+        _ => content.to_string(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -741,6 +759,54 @@ mod tests {
                     "kind": "message",
                     "sessionId": "sample-session",
                     "content": "  continue the investigation  ",
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::claude(Engine::Claude, true)]
+    #[case::codex(Engine::Codex, true)]
+    #[case::legacy_claude(Engine::Claude, false)]
+    #[tokio::test]
+    async fn send_message_adds_marker_only_for_marker_enabled_claude_sessions(
+        #[case] engine: Engine,
+        #[case] marker_enabled: bool,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.engine = engine;
+        action_context.save_session(&session);
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let marker = marker_enabled.then(|| {
+            store::lock_session_for_update(&sessions_dir, &session.session_id)
+                .unwrap()
+                .ensure_watch_web_user_marker()
+                .unwrap()
+        });
+        let expected_content = match (engine, marker.as_deref()) {
+            (Engine::Claude, Some(marker)) => format!("{marker}\ncontinue the investigation"),
+            _ => "continue the investigation".to_string(),
+        };
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "continue the investigation" }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": expected_content,
                 }],
             }),
         );
