@@ -7,6 +7,7 @@ const session: Session = {
   id: 'sample-session',
   engine: 'Claude',
   category: 'needs_action',
+  isPaused: false,
   kind: 'Question',
   title: 'Add request retry handling',
   preview: 'Which retry policy should be used?',
@@ -82,6 +83,44 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
     ],
   },
+}
+
+export const PausedSessionIsVisible: Story = {
+  name: 'The conversation header shows when its session is paused',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      isPaused: true,
+      unread: false,
+    },
+  },
+}
+
+export const PausedSessionIsVisibleOnIPhone: Story = {
+  name: 'The iPhone conversation header shows when its session is paused',
+  args: {
+    isMobile: true,
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      isPaused: true,
+      unread: false,
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const PermissionWaitsForApproval: Story = {

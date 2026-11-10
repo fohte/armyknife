@@ -73,6 +73,7 @@ struct SessionView {
     engine: Engine,
     work_type: Option<String>,
     category: SessionCategory,
+    is_paused: bool,
     category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
@@ -237,6 +238,7 @@ async fn list_sessions<S: SessionSource>(
                 engine: session.engine,
                 work_type: session.work_type.clone(),
                 category,
+                is_paused: session.status == SessionStatus::Paused,
                 category_when_not_later,
                 kind: kind_for(session, turn),
                 title: snapshot
@@ -681,6 +683,7 @@ mod tests {
             engine: Engine::Claude,
             work_type: None,
             category,
+            is_paused: false,
             category_when_not_later: category,
             kind: None,
             title: id.to_string(),
@@ -908,7 +911,8 @@ mod tests {
     }
 
     struct ExpectedSessionDetails<'a> {
-        kind: &'a str,
+        kind: Option<&'a str>,
+        is_paused: bool,
         unread: bool,
         crit_url: Option<&'a str>,
     }
@@ -935,7 +939,8 @@ mod tests {
                 "engine": "claude",
                 "workType": response.work_type,
                 "category": category,
-                "categoryWhenNotLater": "needs_action",
+                "isPaused": details.is_paused,
+                "categoryWhenNotLater": if details.is_paused { "done" } else { "needs_action" },
                 "kind": details.kind,
                 "title": "child title",
                 "preview": "last message",
@@ -987,13 +992,47 @@ mod tests {
                     None,
                     false,
                     ExpectedSessionDetails {
-                        kind: "Review",
+                        kind: Some("Review"),
+                        is_paused: false,
                         unread: false,
                         crit_url: Some("http://127.0.0.1:6000"),
                     },
                     ExpectedSessionResponse {
                         work_type: Some("release-guide"),
                         work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_marks_paused_sessions_without_changing_their_category(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Paused;
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "done",
+                    None,
+                    true,
+                    ExpectedSessionDetails {
+                        kind: None,
+                        is_paused: true,
+                        unread: false,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
                     },
@@ -1014,7 +1053,8 @@ mod tests {
                     Some("1970-01-01T01:18:20Z"),
                     true,
                     ExpectedSessionDetails {
-                        kind: "Stopped",
+                        kind: Some("Stopped"),
+                        is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
@@ -1045,7 +1085,8 @@ mod tests {
                     Some("1970-01-01T01:18:20Z"),
                     true,
                     ExpectedSessionDetails {
-                        kind: "Stopped",
+                        kind: Some("Stopped"),
+                        is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
@@ -1083,7 +1124,8 @@ mod tests {
                         None,
                         true,
                         ExpectedSessionDetails {
-                            kind: "Stopped",
+                            kind: Some("Stopped"),
+                            is_paused: false,
                             unread: true,
                             crit_url: None,
                         },
@@ -1102,7 +1144,8 @@ mod tests {
                         None,
                         true,
                         ExpectedSessionDetails {
-                            kind: "Stopped",
+                            kind: Some("Stopped"),
+                            is_paused: false,
                             unread: true,
                             crit_url: None,
                         },

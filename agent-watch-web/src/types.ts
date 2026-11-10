@@ -32,6 +32,7 @@ export type Session = {
   engine?: 'Claude' | 'Codex' | (string & {})
   workType?: string | null
   category: SessionCategory
+  isPaused: boolean
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
