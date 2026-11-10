@@ -7,6 +7,10 @@ import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
+import {
+  type PendingPermissionAction,
+  PermissionCard,
+} from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
@@ -21,6 +25,7 @@ type ConversationPaneViewProps = {
   messages: readonly ChatItem[]
   actions: SessionActions | null
   actionsReady?: boolean
+  pendingPermissionAction?: PendingPermissionAction | undefined
   loading: boolean
   sending?: boolean
   error: string | null
@@ -41,6 +46,7 @@ export function ConversationPaneView({
   messages,
   actions,
   actionsReady = true,
+  pendingPermissionAction = null,
   loading,
   sending = false,
   error,
@@ -124,17 +130,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  const renderTerminalFallback = (message: string) => (
-    <div className="conversation-terminal-fallback">
-      <span>{message}</span>
-      {actions?.openInTerminal === true ? (
-        <Button type="button" variant="plain" onClick={openInTerminal}>
-          Open in terminal
-        </Button>
-      ) : null}
-    </div>
-  )
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
@@ -424,41 +419,18 @@ export function ConversationPaneView({
             )
           }
           return (
-            <article
-              className="chat-permission-card"
+            <PermissionCard
               key={`permission-${String(index)}`}
-            >
-              <h2>Permission required</h2>
-              <p className="permission-tool">{message.tool}</p>
-              <p>{message.description}</p>
-              {actions?.permission != null &&
-              (actions.permission.approve || actions.permission.reject) ? (
-                <div className="permission-actions">
-                  <Button
-                    type="button"
-                    variant="plain"
-                    disabled={!actionsReady || !actions.permission.approve}
-                    onClick={() => {
-                      void onAction('permission/approve')
-                    }}
-                  >
-                    Approve
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="plain"
-                    disabled={!actionsReady || !actions.permission.reject}
-                    onClick={() => {
-                      void onAction('permission/reject')
-                    }}
-                  >
-                    Reject
-                  </Button>
-                </div>
-              ) : session.engine === 'Codex' && actions !== null ? (
-                renderTerminalFallback('Review this permission in terminal.')
-              ) : null}
-            </article>
+              message={message}
+              actions={actions}
+              actionsReady={actionsReady}
+              pendingAction={pendingPermissionAction}
+              isCodex={session.engine === 'Codex'}
+              onAction={(action) => {
+                void onAction(action)
+              }}
+              onOpenInTerminal={openInTerminal}
+            />
           )
         })}
       </div>

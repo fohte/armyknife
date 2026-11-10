@@ -38,6 +38,12 @@ const question: ChatItem = {
   answer: null,
 }
 
+const permission: ChatItem = {
+  type: 'permission',
+  tool: 'Shell',
+  description: 'Run the formatter on changed files.',
+}
+
 let container: HTMLDivElement
 let root: Root | null = null
 const originalExecCommand = Object.getOwnPropertyDescriptor(
@@ -78,6 +84,10 @@ function renderView(
   viewMessages: readonly ChatItem[] = [question],
   viewActions: SessionActions | null = actions,
   isMobile = false,
+  pendingPermissionAction?: {
+    action: 'approve' | 'reject'
+    status: 'sending' | 'sent'
+  } | null,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -86,6 +96,7 @@ function renderView(
         session={viewSession}
         messages={viewMessages}
         actions={viewActions}
+        pendingPermissionAction={pendingPermissionAction}
         loading={false}
         error={null}
         onAction={onAction}
@@ -151,6 +162,53 @@ afterEach(() => {
   } else {
     Object.defineProperty(navigator, 'clipboard', originalClipboard)
   }
+})
+
+it('shows pending and sent permission action feedback', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [permission], actions, false, {
+    action: 'approve',
+    status: 'sending',
+  })
+  const buttons = () =>
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+    )
+  const sending = {
+    labels: buttons().map((button) => button.textContent),
+    disabled: buttons().map((button) => button.disabled),
+    busy: buttons().map((button) => button.getAttribute('aria-busy')),
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+  }
+
+  renderView(onAction, session, undefined, [permission], actions, false, {
+    action: 'approve',
+    status: 'sent',
+  })
+
+  const snapshot = () => ({
+    sending,
+    sent: {
+      labels: buttons().map((button) => button.textContent),
+      disabled: buttons().map((button) => button.disabled),
+      status: container.querySelector('[role="status"]')?.textContent ?? null,
+    },
+  })
+  expect(snapshot()).toEqual({
+    sending: {
+      labels: ['Approving…', 'Reject'],
+      disabled: [true, true],
+      busy: ['true', 'false'],
+      status: null,
+    },
+    sent: {
+      labels: ['Approve', 'Reject'],
+      disabled: [true, true],
+      status: 'Approval sent. Session is resuming…',
+    },
+  })
 })
 
 it('copies the session ID from desktop and mobile headers', async () => {
@@ -1731,15 +1789,173 @@ it('shows the operation error returned by the server', async () => {
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
-  const actual = JSON.stringify([
-    container.querySelector('[role="alert"]')?.textContent,
+  const approveButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.permission-actions button'),
+  )
+  const snapshot = () => ({
+    error: container.querySelector('[role="alert"]')?.textContent ?? null,
     actionRequestUrl,
-  ])
-  const expected = JSON.stringify([
-    'session pane is idle or unavailable',
-    '/api/sessions/sample-session/permission/approve',
-  ])
-  expect(actual).toBe(expected)
+    approveButton: {
+      label: approveButton.textContent,
+      disabled: approveButton.disabled,
+    },
+  })
+  expect(snapshot()).toEqual({
+    error: 'session pane is idle or unavailable',
+    actionRequestUrl: '/api/sessions/sample-session/permission/approve',
+    approveButton: { label: 'Approve', disabled: false },
+  })
+})
+
+it('keeps a successful permission choice pending until the card disappears', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  let completeAction: ((response: Response) => void) | undefined
+  const completePendingAction = (response: Response) => {
+    const resolve = completeAction
+    if (resolve === undefined) {
+      throw new Error('Expected a pending action request')
+    }
+    resolve(response)
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse([permission]))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          completeAction = resolve
+        }),
+    )
+    .mockResolvedValueOnce(jsonResponse([permission]))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(jsonResponse([permission]))
+    .mockResolvedValueOnce(
+      jsonResponse({
+        ...actions,
+        permission: { approve: false, reject: false },
+      }),
+    )
+    .mockResolvedValueOnce(jsonResponse([]))
+    .mockResolvedValueOnce(
+      jsonResponse({
+        ...actions,
+        permission: { approve: false, reject: false },
+      }),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.permission-actions button'),
+    ).click()
+  })
+  const duringRequest = {
+    labels: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+    ).map((button) => button.textContent),
+    disabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+    ).map((button) => button.disabled),
+  }
+
+  completePendingAction(new Response(null, { status: 204 }))
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const afterSuccess = {
+    labels: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+    ).map((button) => button.textContent),
+    disabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+    ).map((button) => button.disabled),
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+  }
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const afterCapabilityDisappears = {
+    permissionCard: container.querySelector('.chat-permission-card') !== null,
+    permissionButtons: container.querySelectorAll('.permission-actions button')
+      .length,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+  }
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={2}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    duringRequest,
+    afterSuccess,
+    afterCapabilityDisappears,
+    afterCardDisappears: {
+      permissionCard: container.querySelector('.chat-permission-card'),
+      status: container.querySelector('[role="status"]')?.textContent ?? null,
+    },
+  })
+  expect(snapshot()).toEqual({
+    duringRequest: {
+      labels: ['Approving…', 'Reject'],
+      disabled: [true, true],
+    },
+    afterSuccess: {
+      labels: ['Approve', 'Reject'],
+      disabled: [true, true],
+      status: 'Approval sent. Session is resuming…',
+    },
+    afterCapabilityDisappears: {
+      permissionCard: true,
+      permissionButtons: 0,
+      status: null,
+    },
+    afterCardDisappears: { permissionCard: null, status: null },
+  })
 })
 
 it('shows an HTTP status when the initial messages response has no body', async () => {
