@@ -14,7 +14,7 @@ use super::super::parser::{
 };
 
 #[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse(
+fn parse(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -337,11 +337,14 @@ fn is_background_tool(name: &str, input: Option<&Value>, record: &Value) -> bool
             .and_then(|input| input.get("run_in_background"))
             .and_then(Value::as_bool)
             == Some(true))
-        || (name == "Agent"
-            && record.get("toolUseResult").is_some_and(|result| {
-                result.get("isAsync").and_then(Value::as_bool) == Some(true)
-                    && result.get("status").and_then(Value::as_str) == Some("async_launched")
-            }))
+        || (name == "Agent" && is_async_agent_result(record.get("toolUseResult")))
+}
+
+fn is_async_agent_result(result: Option<&Value>) -> bool {
+    result.is_some_and(|result| {
+        result.get("isAsync").and_then(Value::as_bool) == Some(true)
+            && result.get("status").and_then(Value::as_str) == Some("async_launched")
+    })
 }
 
 fn is_task_stop_tool(name: &str) -> bool {
@@ -364,16 +367,12 @@ fn tool_use_description(tool_use: &ToolUse) -> String {
 
 fn background_task_id(name: &str, record: &Value, result: &Value) -> Option<String> {
     let structured_result = record.get("toolUseResult");
-    let agent_id = (name == "Agent")
-        .then_some(structured_result)
-        .flatten()
-        .filter(|result| {
-            result.get("isAsync").and_then(Value::as_bool) == Some(true)
-                && result.get("status").and_then(Value::as_str) == Some("async_launched")
-        })
-        .and_then(|result| result.get("agentId"))
-        .and_then(Value::as_str);
-    if let Some(agent_id) = agent_id {
+    if name == "Agent"
+        && is_async_agent_result(structured_result)
+        && let Some(agent_id) = structured_result
+            .and_then(|result| result.get("agentId"))
+            .and_then(Value::as_str)
+    {
         return Some(agent_id.to_owned());
     }
     let id = structured_result.and_then(|result| {
@@ -426,11 +425,18 @@ fn finish_task_notification(record: &Value, tasks: &mut Vec<RunningBackgroundTas
 }
 
 fn is_task_notification(record: &Value) -> bool {
-    record
+    let has_task_notification_origin = record
         .get("origin")
         .and_then(|origin| origin.get("kind"))
         .and_then(Value::as_str)
-        == Some("task-notification")
+        == Some("task-notification");
+    has_task_notification_origin
+        || (record.get("type").and_then(Value::as_str) == Some("user")
+            && record.get("message").is_some_and(|message| {
+                user_text(message)
+                    .trim_start()
+                    .starts_with("<task-notification>")
+            }))
 }
 
 fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
@@ -728,7 +734,7 @@ mod tests {
 
     use chrono::{DateTime, Utc};
     use indoc::indoc;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
     use super::{parse, parse_with_background_tasks};
@@ -736,13 +742,13 @@ mod tests {
         BackgroundTask, ChatItem, ParentSession, ToolOperation,
     };
 
-    #[test]
-    fn reports_a_running_background_bash_task_with_elapsed_time() {
-        let transcript = background_bash_transcript();
-
+    #[rstest]
+    fn reports_a_running_background_bash_task_with_elapsed_time(
+        background_bash_transcript: String,
+    ) {
         assert_eq!(
             parse_with_background_tasks(
-                Cursor::new(transcript),
+                Cursor::new(background_bash_transcript),
                 None,
                 None,
                 None,
@@ -761,27 +767,43 @@ mod tests {
     }
 
     #[rstest]
-    #[case::completed("completed", Vec::new())]
-    #[case::failed("failed", Vec::new())]
-    #[case::killed("killed", Vec::new())]
+    #[case::completed("completed", Vec::new(), true)]
+    #[case::failed("failed", Vec::new(), true)]
+    #[case::killed("killed", Vec::new(), true)]
     #[case::still_running("running", vec![BackgroundTask {
         id: "fixture-task-id".to_string(),
         description: "Watch the synthetic build".to_string(),
         elapsed_seconds: 90,
-    }])]
+    }], true)]
+    #[case::legacy_notification("completed", Vec::new(), false)]
     fn task_notifications_only_remove_finished_tasks(
+        background_bash_transcript: String,
         #[case] status: &str,
         #[case] expected_tasks: Vec<BackgroundTask>,
+        #[case] include_origin: bool,
     ) {
-        let mut transcript = background_bash_transcript();
-        let notification = json!({
+        let mut transcript = background_bash_transcript;
+        let mut notification = json!({
+            "uuid": "fixture-notification-row",
+            "parentUuid": "fixture-disconnected-parent-row",
             "type": "user",
-            "origin": {"kind": "task-notification"},
             "message": {"content": format!(
                 "<task-notification><task-id>fixture-task-id</task-id><status>{status}</status></task-notification>"
             )},
         });
+        if include_origin {
+            notification["origin"] = json!({"kind": "task-notification"});
+        }
         transcript.push_str(&serde_json::to_string(&notification).unwrap());
+        transcript.push('\n');
+        transcript.push_str(
+            &serde_json::to_string(&json!({
+                "uuid": "fixture-current-row",
+                "parentUuid": "fixture-bash-result-row",
+                "type": "system",
+            }))
+            .unwrap(),
+        );
         transcript.push('\n');
 
         assert_eq!(
@@ -809,11 +831,12 @@ mod tests {
         "KillShell",
     )]
     fn stop_tool_calls_remove_running_tasks(
+        background_bash_transcript: String,
         #[case] tool: &str,
         #[case] input: Value,
         #[case] result_tool: &str,
     ) {
-        let mut transcript = background_bash_transcript();
+        let mut transcript = background_bash_transcript;
         let stop_call = json!({
             "uuid": "fixture-stop-call-row",
             "parentUuid": "fixture-bash-result-row",
@@ -877,6 +900,46 @@ mod tests {
     }
 
     #[test]
+    fn reports_a_running_task_tool_subagent() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-task-prompt-row","parentUuid":null,"type":"user","message":{"content":"Delegate a synthetic task."}}
+            {"uuid":"fixture-task-call-row","parentUuid":"fixture-task-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-task-tool-use-id","name":"Task","input":{"description":"Review the synthetic task","prompt":"Review a fictional task.","run_in_background":true}}]}}
+            {"uuid":"fixture-task-result-row","parentUuid":"fixture-task-call-row","type":"user","sourceToolAssistantUUID":"fixture-task-call-row","toolUseResult":{"task_id":"fixture-task-id"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-task-tool-use-id","content":"The task was launched."}]}}
+        "#};
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:00:30Z"),
+            )
+            .unwrap(),
+            (
+                vec![
+                    ChatItem::User {
+                        text: "Delegate a synthetic task.".to_string(),
+                        from: None,
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "1 action".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Task".to_string(),
+                            target: Some("Review the synthetic task".to_string()),
+                        }],
+                    },
+                ],
+                vec![BackgroundTask {
+                    id: "fixture-task-id".to_string(),
+                    description: "Review the synthetic task".to_string(),
+                    elapsed_seconds: 30,
+                }],
+            ),
+        );
+    }
+
+    #[test]
     fn reports_an_async_agent_from_its_structured_tool_result() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
@@ -916,6 +979,7 @@ mod tests {
         );
     }
 
+    #[fixture]
     fn background_bash_transcript() -> String {
         indoc! {r#"
             {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
