@@ -8,6 +8,7 @@ import {
   type PaletteScope,
 } from '#command-palette-model'
 import { useCopySessionId } from '#components/use-copy-session-id'
+import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
 type CommandPaletteProps = {
@@ -48,8 +49,7 @@ function itemTitle(item: PaletteItem) {
 function itemSubtitle(item: PaletteItem) {
   switch (item.type) {
     case 'session': {
-      const taskCount = item.session.tasks?.length ?? 1
-      const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+      const linkedTaskCount = formatLinkedTaskCount(item.session.tasks)
       const task = item.session.task
         ? `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title}${linkedTaskCount} · `
         : ''

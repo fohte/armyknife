@@ -5,6 +5,7 @@ import { Chip } from '@fohte/ui/chip'
 
 import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
+import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
 type SessionRowProps = {
@@ -60,8 +61,7 @@ function sessionTaskLabel(session: Session) {
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  const taskCount = session.tasks?.length ?? 1
-  const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
   return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
 }
 

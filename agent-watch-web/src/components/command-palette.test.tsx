@@ -165,6 +165,26 @@ it('matches a session by branch name and shows its task and repository', () => {
 })
 
 it.each([
+  ['omitted', undefined],
+  ['null', null],
+  ['blank', '   '],
+] as const)('omits the branch label for %s', (_, branch) => {
+  const sessionWithoutBranch: Session = { ...session }
+  if (branch === undefined) {
+    delete sessionWithoutBranch.branch
+  } else {
+    sessionWithoutBranch.branch = branch
+  }
+  renderPalette({ sessions: [sessionWithoutBranch] })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toEqual(
+    'P1 #42 Improve notifications · notification refresh · example/web-app',
+  )
+})
+
+it.each([
   ['caret before the query end', 2, 2, 3],
   ['a selection before the query end', 2, 6, 6],
 ] as const)(
