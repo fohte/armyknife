@@ -250,7 +250,9 @@ fn read_image(directory: &Path, filename: &str) -> anyhow::Result<Option<(&'stat
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if metadata.len() > MAX_IMAGE_BYTES as u64 || path.canonicalize()?.parent() != Some(&directory)
+    if metadata.len() > MAX_IMAGE_BYTES as u64
+        || is_expired(metadata.modified()?, SystemTime::now())
+        || path.canonicalize()?.parent() != Some(&directory)
     {
         return Ok(None);
     }
@@ -290,6 +292,9 @@ fn image_file_is_safe(directory: &Path, filename: &str) -> bool {
         metadata.is_file()
             && !metadata.file_type().is_symlink()
             && metadata.len() <= MAX_IMAGE_BYTES as u64
+            && metadata
+                .modified()
+                .is_ok_and(|modified| !is_expired(modified, SystemTime::now()))
             && path
                 .canonicalize()
                 .is_ok_and(|canonical| canonical.parent() == Some(directory))
@@ -358,14 +363,16 @@ fn prune_expired(directory: &Path) -> std::io::Result<()> {
             continue;
         }
         let metadata = entry.metadata()?;
-        if now
-            .duration_since(metadata.modified()?)
-            .is_ok_and(|age| age >= ATTACHMENT_RETENTION)
-        {
+        if is_expired(metadata.modified()?, now) {
             fs::remove_file(entry.path())?;
         }
     }
     Ok(())
+}
+
+fn is_expired(modified: SystemTime, now: SystemTime) -> bool {
+    now.duration_since(modified)
+        .is_ok_and(|age| age >= ATTACHMENT_RETENTION)
 }
 
 fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
@@ -434,6 +441,7 @@ fn create_private_directory(path: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs::{self, OpenOptions};
+    use std::time::SystemTime;
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request as HttpRequest, StatusCode};
@@ -524,6 +532,13 @@ mod tests {
         let image_path = directory_path.join(image_name);
         fs::write(&image_path, b"fixture image bytes").unwrap();
         let missing_name = "00000000-0000-4000-8000-000000000002.webp";
+        let expired_name = "00000000-0000-4000-8000-000000000004.gif";
+        let expired_path = directory_path.join(expired_name);
+        fs::write(&expired_path, b"expired fixture image").unwrap();
+        fs::File::open(&expired_path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH)
+            .unwrap();
         let external_path = directory_path
             .parent()
             .unwrap()
@@ -536,9 +551,11 @@ mod tests {
                 - {}
                 - {}
                 - {}
+                - {}
             "},
             image_path.display(),
             directory_path.join(missing_name).display(),
+            expired_path.display(),
             external_path.display(),
         );
 
@@ -555,6 +572,10 @@ mod tests {
                         source: format!("/api/images/{missing_name}"),
                         available: false,
                     },
+                    Reference {
+                        source: format!("/api/images/{expired_name}"),
+                        available: false,
+                    },
                 ],
             )),
         );
@@ -566,6 +587,13 @@ mod tests {
         let directory_path = directory.path().canonicalize().unwrap();
         let image_name = "00000000-0000-4000-8000-000000000001.png";
         fs::write(directory_path.join(image_name), b"fixture image bytes").unwrap();
+        let expired_name = "00000000-0000-4000-8000-000000000003.png";
+        let expired_path = directory_path.join(expired_name);
+        fs::write(&expired_path, b"expired fixture image").unwrap();
+        fs::File::open(&expired_path)
+            .unwrap()
+            .set_modified(SystemTime::UNIX_EPOCH)
+            .unwrap();
         let route_directory = directory_path.clone();
         let router = routes_with(move || Some(route_directory.clone()));
         let response = router
@@ -595,6 +623,18 @@ mod tests {
                 b"fixture image bytes".to_vec(),
             ),
         );
+
+        let response = router
+            .clone()
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/images/{expired_name}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
         let response = router
             .clone()
