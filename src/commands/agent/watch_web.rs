@@ -26,6 +26,7 @@ use tokio::net::TcpListener;
 use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -109,10 +110,12 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
 }
 
 fn app(restart_signal: watch::Receiver<bool>) -> Router {
-    app_with_assets_and_loader_and_restart_signal(
+    app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         &assets::DIST,
         store::load_session,
         store::watch_web_user_marker,
+        store::watch_web_queued_prompts,
+        store::delete_watch_web_queued_prompts,
         restart_signal,
     )
 }
@@ -136,10 +139,32 @@ fn app_with_assets_and_loader(
     )
 }
 
+#[cfg(test)]
 fn app_with_assets_and_loader_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
+    restart_signal: watch::Receiver<bool>,
+) -> Router {
+    app_with_assets_and_queued_prompt_loaders_and_restart_signal(
+        dist,
+        load_session,
+        load_user_marker,
+        |_| Ok(Vec::new()),
+        |_, _| Ok(()),
+        restart_signal,
+    )
+}
+
+fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
+    dist: &'static Dir<'static>,
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
+    load_queued_prompts: impl Fn(&str) -> anyhow::Result<Vec<WatchWebQueuedPrompt>>
+    + Send
+    + Sync
+    + 'static,
+    delete_queued_prompts: impl Fn(&str, &[i64]) -> anyhow::Result<()> + Send + Sync + 'static,
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
@@ -148,7 +173,12 @@ fn app_with_assets_and_loader_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(messages::routes_with(load_session, load_user_marker))
+        .merge(messages::routes_with_queued_prompts(
+            load_session,
+            load_user_marker,
+            load_queued_prompts,
+            delete_queued_prompts,
+        ))
         .merge(image_attachments::routes())
         .fallback(api_not_found);
 

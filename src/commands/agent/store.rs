@@ -22,7 +22,8 @@ mod database;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    SessionLock, SessionStoreChanges, WakeLock, WatchWebSessionState, serialize_session,
+    SessionLock, SessionStoreChanges, WakeLock, WatchWebQueuedPrompt, WatchWebSessionState,
+    serialize_session,
 };
 
 /// Threshold in seconds for sort stability.
@@ -127,6 +128,30 @@ pub(crate) fn watch_web_user_marker_from(
     session_id: &str,
 ) -> Result<Option<String>> {
     database::watch_web_user_marker(sessions_dir, session_id)
+}
+
+pub(crate) fn insert_watch_web_queued_prompt_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    content: &str,
+    sent_at: DateTime<Utc>,
+) -> Result<i64> {
+    database::insert_watch_web_queued_prompt(sessions_dir, session_id, content, sent_at)
+}
+
+pub(crate) fn watch_web_queued_prompts(session_id: &str) -> Result<Vec<WatchWebQueuedPrompt>> {
+    watch_web_queued_prompts_from(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn watch_web_queued_prompts_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<WatchWebQueuedPrompt>> {
+    database::watch_web_queued_prompts(sessions_dir, session_id)
+}
+
+pub(crate) fn delete_watch_web_queued_prompts(session_id: &str, ids: &[i64]) -> Result<()> {
+    database::delete_watch_web_queued_prompts(&sessions_dir()?, session_id, ids)
 }
 
 /// Acquires the exclusive session lock ahead of a load-mutate-save round

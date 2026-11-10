@@ -16,6 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -36,33 +37,46 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
 
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
+type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
+type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 
-pub(super) fn routes_with(
+pub(super) fn routes_with_queued_prompts(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/messages", get(get_messages))
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_user_marker) as UserMarkerLoader,
+            Arc::new(load_queued_prompts) as QueuedPromptLoader,
+            Arc::new(delete_queued_prompts) as QueuedPromptDeleter,
         ))
 }
 
 async fn get_messages(
-    State((load_session, load_user_marker)): State<(SessionLoader, UserMarkerLoader)>,
+    State((load_session, load_user_marker, load_queued_prompts, delete_queued_prompts)): State<(
+        SessionLoader,
+        UserMarkerLoader,
+        QueuedPromptLoader,
+        QueuedPromptDeleter,
+    )>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
     match tokio::task::spawn_blocking(move || {
-        load_conversation_with_marker(
+        load_conversation_with_queued_prompts(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
+            |id| load_queued_prompts(id),
+            |id, ids| delete_queued_prompts(id, ids),
         )
     })
     .await
     {
-        Ok(Ok(Some(conversation))) => match serde_json::to_vec(&conversation) {
+        Ok(Ok(Some((conversation, _)))) => match serde_json::to_vec(&conversation) {
             Ok(body) => (
                 StatusCode::OK,
                 [(CONTENT_TYPE, "application/json")],
@@ -91,17 +105,23 @@ fn load_messages_with(
     session_id: &str,
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
 ) -> Result<Option<Vec<ChatItem>>> {
-    Ok(
-        load_conversation_with_marker(session_id, load_session, |_| Ok(None))?
-            .map(|conversation| conversation.messages),
-    )
+    Ok(load_conversation_with_queued_prompts(
+        session_id,
+        load_session,
+        |_| Ok(None),
+        |_| Ok(Vec::new()),
+        |_, _| Ok(()),
+    )?
+    .map(|(conversation, _)| conversation.messages))
 }
 
-fn load_conversation_with_marker(
+fn load_conversation_with_queued_prompts(
     session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-) -> Result<Option<ConversationResponse>> {
+    load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
+    delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
+) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
     };
@@ -109,6 +129,11 @@ fn load_conversation_with_marker(
         load_user_marker(session_id)?
     } else {
         None
+    };
+    let queued_prompts = if session.engine == Engine::Claude {
+        load_queued_prompts(session_id)?
+    } else {
+        Vec::new()
     };
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
@@ -118,20 +143,14 @@ fn load_conversation_with_marker(
     let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
-    let mut conversation = session
-        .transcript_path
-        .as_deref()
-        .map(|path| {
-            parse_session_transcript(
-                path,
-                session.engine,
-                parent.as_ref(),
-                pending_tool,
-                user_marker.as_deref(),
-            )
-        })
-        .transpose()?
-        .unwrap_or_default();
+    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript(
+        session.transcript_path.as_deref(),
+        session.engine,
+        parent.as_ref(),
+        pending_tool,
+        user_marker.as_deref(),
+        &queued_prompts,
+    )?;
 
     let messages = &mut conversation.messages;
     if main_permission_pending
@@ -163,7 +182,16 @@ fn load_conversation_with_marker(
         });
     }
 
-    Ok(Some(conversation))
+    if !resolved_queued_prompt_ids.is_empty()
+        && let Err(error) = delete_queued_prompts(session_id, &resolved_queued_prompt_ids)
+    {
+        tracing::warn!(
+            session_id,
+            %error,
+            "failed to remove resolved watch-web queued prompts"
+        );
+    }
+    Ok(Some((conversation, resolved_queued_prompt_ids)))
 }
 
 fn parent_session(
@@ -194,37 +222,61 @@ fn parent_session(
 }
 
 fn parse_session_transcript(
-    path: &Path,
+    path: Option<&Path>,
     engine: Engine,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     watch_web_user_marker: Option<&str>,
-) -> Result<ConversationResponse> {
+    queued_prompts: &[WatchWebQueuedPrompt],
+) -> Result<(ConversationResponse, Vec<i64>)> {
     match engine {
         Engine::Claude => {
-            let Some(reader) = open_seekable_transcript(path)? else {
-                return Ok(ConversationResponse::default());
+            let reader = match path {
+                Some(path) => open_seekable_transcript(path)?,
+                None => None,
             };
-            let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
-                reader,
-                parent,
-                pending_tool,
-                watch_web_user_marker,
-                chrono::Utc::now(),
-            )?;
-            Ok(ConversationResponse {
-                messages,
-                background_tasks,
-            })
+            let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
+            let (messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
+                let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
+                    reader,
+                    parent,
+                    pending_tool,
+                    watch_web_user_marker,
+                    chrono::Utc::now(),
+                )?;
+                (messages, background_tasks, Vec::new())
+            } else {
+                parser::claude::parse_with_queued_prompts(
+                    reader,
+                    parent,
+                    pending_tool,
+                    watch_web_user_marker,
+                    chrono::Utc::now(),
+                    queued_prompts,
+                )?
+            };
+            Ok((
+                ConversationResponse {
+                    messages,
+                    background_tasks,
+                },
+                resolved_ids,
+            ))
         }
         Engine::Codex => {
-            let Some(reader) = open_transcript(path, true)? else {
-                return Ok(ConversationResponse::default());
+            let Some(path) = path else {
+                return Ok((ConversationResponse::default(), Vec::new()));
             };
-            Ok(ConversationResponse {
-                messages: parser::codex::parse(reader, parent)?,
-                background_tasks: Vec::new(),
-            })
+            let Some(reader) = open_transcript(path, true)? else {
+                return Ok((ConversationResponse::default(), Vec::new()));
+            };
+            Ok((
+                ConversationResponse {
+                    messages: parser::codex::parse(reader, parent)?,
+                    background_tasks: Vec::new(),
+                },
+                Vec::new(),
+            ))
         }
     }
 }
@@ -371,6 +423,7 @@ struct ParentSession {
 mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
 
     use axum::body::{Body, to_bytes};
     use axum::http::header::CONTENT_TYPE;
@@ -378,7 +431,8 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::{ChatItem, load_messages_with, routes_with};
+    use super::{ChatItem, load_messages_with, routes_with_queued_prompts};
+    use crate::commands::agent::store::WatchWebQueuedPrompt;
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
@@ -430,6 +484,16 @@ mod tests {
         )
         .unwrap();
         (status, content_type, body)
+    }
+
+    fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {
+        WatchWebQueuedPrompt {
+            id,
+            content: content.to_string(),
+            sent_at: chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        }
     }
 
     #[test]
@@ -537,7 +601,7 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with(
+        let router = routes_with_queued_prompts(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -546,6 +610,8 @@ mod tests {
                 })
             },
             |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
         );
         let response = router
             .oneshot(
@@ -564,6 +630,164 @@ mod tests {
                 r#"{"messages":[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}],"backgroundTasks":[]}"#
                     .to_string(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_returns_contentful_transcript_queue_items() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"queue-operation","operation":"enqueue","content":"Continue the fixture build."}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_returns_saved_prompts_when_no_transcript_exists() {
+        let session = stored_session();
+        let queued = saved_prompt(7, "Continue the fixture build.");
+        let deleted_ids = Arc::new(Mutex::new(Vec::new()));
+        let delete_log = Arc::clone(&deleted_ids);
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            move |_| Ok(vec![queued.clone()]),
+            move |_, ids| {
+                delete_log.lock().unwrap().extend_from_slice(ids);
+                Ok(())
+            },
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response).await,
+                deleted_ids.lock().unwrap().clone(),
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[]}"#.to_string(),
+                ),
+                Vec::<i64>::new(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_deletes_prompts_after_marked_delivery() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nDelivered fixture request."}}"#,
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let queued = saved_prompt(7, "Delivered fixture request.");
+        let deleted_ids = Arc::new(Mutex::new(Vec::new()));
+        let delete_log = Arc::clone(&deleted_ids);
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            move |_| Ok(vec![queued.clone()]),
+            move |_, ids| {
+                delete_log.lock().unwrap().extend_from_slice(ids);
+                Ok(())
+            },
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response).await,
+                deleted_ids.lock().unwrap().clone(),
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    r#"{"messages":[{"type":"user","text":"Delivered fixture request."}],"backgroundTasks":[]}"#.to_string(),
+                ),
+                vec![7],
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_message_route_does_not_load_saved_claude_prompts() {
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
+            |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[],"backgroundTasks":[]}"#.to_string(),
+            ),
         );
     }
 
@@ -620,7 +844,12 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with(move |_| Ok(Some(session.clone())), |_| Ok(None));
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
         let response = router
             .oneshot(
                 Request::builder()
@@ -672,7 +901,12 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with(move |_| Ok(Some(session.clone())), |_| Ok(None));
+        let router = routes_with_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
         let response = router
             .oneshot(
                 Request::builder()

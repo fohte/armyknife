@@ -249,10 +249,14 @@ async fn send_message(
 
     let images = image_attachments::validate(request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let marker = if session.engine == Engine::Claude {
-        let sessions_dir =
-            resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
+    let sessions_dir = if session.engine == Engine::Claude {
+        Some(resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?)
+    } else {
+        None
+    };
+    let marker = if let Some(sessions_dir) = sessions_dir.as_ref() {
         let session_id = session.session_id.clone();
+        let sessions_dir = sessions_dir.clone();
         run_blocking(move || store::watch_web_user_marker_from(&sessions_dir, &session_id)).await?
     } else {
         None
@@ -260,13 +264,28 @@ async fn send_message(
     let image_paths =
         run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
     let content = image_attachments::append_paths_to_message(request.content, &image_paths);
+    let queued_content = content.clone();
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
     let cleanup_paths = image_paths;
     let runtime = state.runtime;
     run_blocking(move || {
+        let sent_at = Utc::now();
         let result = runtime.send_message(&session, &content);
         if result.is_err() {
             image_attachments::remove(&cleanup_paths);
+        } else if let Some(sessions_dir) = sessions_dir.as_ref()
+            && let Err(error) = store::insert_watch_web_queued_prompt_from(
+                sessions_dir,
+                &session.session_id,
+                &queued_content,
+                sent_at,
+            )
+        {
+            tracing::warn!(
+                    session_id = %session.session_id,
+                %error,
+                "failed to save sent watch-web queued prompt"
+            );
         }
         result
     })
@@ -708,6 +727,30 @@ mod tests {
         })
     }
 
+    fn normalized_queued_prompts(
+        context: &ActionContext,
+        session_id: &str,
+        attachment_path: Option<&str>,
+    ) -> Value {
+        let sessions_dir = context.temp_dir.path().join("sessions");
+        let prompts = store::watch_web_queued_prompts_from(&sessions_dir, session_id).unwrap();
+        Value::Array(
+            prompts
+                .into_iter()
+                .map(|prompt| {
+                    let content = attachment_path.map_or(prompt.content.clone(), |path| {
+                        prompt.content.replace(path, "<attachment-path>")
+                    });
+                    json!({
+                        "id": "<prompt-id>",
+                        "content": content,
+                        "sentAt": "<sent-at>",
+                    })
+                })
+                .collect(),
+        )
+    }
+
     fn post(uri: &str, body: Value) -> Request<Body> {
         Request::builder()
             .method("POST")
@@ -751,16 +794,26 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
-                "calls": [{
-                    "kind": "message",
-                    "sessionId": "sample-session",
+            (
+                response_snapshot(response, &action_context).await,
+                normalized_queued_prompts(&action_context, "sample-session", None),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": "  continue the investigation  ",
+                    }],
+                }),
+                json!([{
+                    "id": "<prompt-id>",
                     "content": "  continue the investigation  ",
-                }],
-            }),
+                    "sentAt": "<sent-at>",
+                }]),
+            ),
         );
     }
 
@@ -798,17 +851,33 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(
+        let snapshot = (
             response_snapshot(response, &action_context).await,
-            json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
-                "calls": [{
-                    "kind": "message",
-                    "sessionId": "sample-session",
-                    "content": expected_content,
-                }],
-            }),
+            normalized_queued_prompts(&action_context, "sample-session", None),
+        );
+        let expected_prompts = if engine == Engine::Claude {
+            json!([{
+                "id": "<prompt-id>",
+                "content": "continue the investigation",
+                "sentAt": "<sent-at>",
+            }])
+        } else {
+            json!([])
+        };
+        assert_eq!(
+            snapshot,
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_content,
+                    }],
+                }),
+                expected_prompts,
+            ),
         );
     }
 
@@ -860,6 +929,11 @@ mod tests {
         let snapshot = || {
             json!({
                 "response": response_snapshot,
+                "queuedPrompts": normalized_queued_prompts(
+                    &action_context,
+                    "sample-session",
+                    Some(&path_string),
+                ),
                 "referencesSavedPath": references_saved_path,
                 "attachment": {
                     "isAbsolute": path.is_absolute(),
@@ -899,6 +973,11 @@ mod tests {
                         "content": expected_message,
                     }],
                 },
+                "queuedPrompts": [{
+                    "id": "<prompt-id>",
+                    "content": expected_message,
+                    "sentAt": "<sent-at>",
+                }],
                 "referencesSavedPath": true,
                 "attachment": {
                     "isAbsolute": true,
@@ -947,6 +1026,11 @@ mod tests {
             .unwrap_or_default();
         let actual = json!({
             "response": response,
+            "queuedPrompts": normalized_queued_prompts(
+                &action_context,
+                "sample-session",
+                None,
+            ),
             "pathIsAbsolute": path_is_absolute,
             "filesLeft": files_left,
         });
@@ -969,6 +1053,7 @@ mod tests {
                         "content": expected_message,
                     }],
                 },
+                "queuedPrompts": [],
                 "pathIsAbsolute": true,
                 "filesLeft": 0,
             }),

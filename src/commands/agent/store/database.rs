@@ -13,9 +13,14 @@ use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
 mod migration;
+mod queued_prompts;
 mod wake;
 mod web_state;
 
+pub(crate) use queued_prompts::WatchWebQueuedPrompt;
+pub(crate) use queued_prompts::{
+    delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
+};
 pub(crate) use web_state::WatchWebSessionState;
 pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{
@@ -26,7 +31,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 4] = [
+static MIGRATION_ENTRIES: [M<'static>; 5] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -52,6 +57,16 @@ static MIGRATION_ENTRIES: [M<'static>; 4] = [
     M::up(
         "ALTER TABLE watch_web_session_state
          ADD COLUMN is_compacting INTEGER;",
+    ),
+    M::up(
+        "CREATE TABLE watch_web_queued_prompt (
+            id INTEGER PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sent_at TEXT NOT NULL
+        );
+        CREATE INDEX watch_web_queued_prompt_session_id_id
+            ON watch_web_queued_prompt (session_id, id);",
     ),
 ];
 
@@ -432,6 +447,10 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
             "DELETE FROM watch_web_session_state WHERE session_id = ?1",
             [session_id],
         )?;
+        connection.execute(
+            "DELETE FROM watch_web_queued_prompt WHERE session_id = ?1",
+            [session_id],
+        )?;
         increment_revision(connection)?;
     }
     Ok(changed > 0)
@@ -512,10 +531,18 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
+        let queued_prompt_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'watch_web_queued_prompt')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
 
         assert_eq!(
-            (preserved, state_table_exists),
-            (("preserved-data".to_string(), 7, 7), true),
+            (preserved, state_table_exists, queued_prompt_table_exists),
+            (("preserved-data".to_string(), 7, 7), true, true),
         );
     }
 
