@@ -107,6 +107,38 @@ it('matches task numbers with or without the hash prefix and combines fields wit
   expect(filterInboxSessions(sessions, filters)).toEqual([sessions[0]])
 })
 
+it('matches and offers every task linked to a session', () => {
+  const firstSession = sessions[0]
+  if (firstSession === undefined) {
+    throw new Error('Expected the task filter fixture to contain a session')
+  }
+  const session: Session = {
+    ...firstSession,
+    tasks: [
+      {
+        id: 'primary-task',
+        number: 123,
+        title: 'Improve request reliability',
+        priority: 1,
+      },
+      {
+        id: 'linked-task',
+        number: 456,
+        title: 'Update delivery notes',
+        priority: 2,
+      },
+    ],
+  }
+
+  expect(
+    filterInboxSessions([session], parseInboxFilterQuery('task:456')),
+  ).toEqual([session])
+  expect(getInboxFilterOptions([session], [], 'task')).toEqual([
+    { value: '123', count: 1 },
+    { value: '456', count: 1 },
+  ])
+})
+
 it('round trips quoted values containing spaces, commas, quotes, and field tokens', () => {
   const filters = [
     {

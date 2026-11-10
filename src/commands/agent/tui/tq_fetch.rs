@@ -4,7 +4,8 @@
 
 use super::tq_snapshot::TqSnapshot;
 use crate::commands::agent::tq_session_tasks::{
-    build_all_tasks_by_session, fetch_session_tasks_with_parents,
+    build_all_tasks_by_session, fetch_session_tasks_with_parents, order_tasks_by_priority,
+    task_priority_metadata,
 };
 use crate::infra::tq::TqClient;
 use std::collections::HashSet;
@@ -26,7 +27,23 @@ pub async fn fetch_task_snapshot(
     };
 
     let sessions = fetch_session_tasks_with_parents(&client, &local_session_ids).await?;
-    let session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
+    let mut session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
+    let task_ids = session_tasks
+        .values()
+        .flatten()
+        .map(|task| task.task_id.clone())
+        .collect::<HashSet<_>>();
+    if !task_ids.is_empty() {
+        match client.list_tasks(&task_ids).await {
+            Ok(tasks) => {
+                let (_, priority_order) = task_priority_metadata(tasks);
+                order_tasks_by_priority(&mut session_tasks, &priority_order);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "Failed to fetch tq task priorities for agent sessions");
+            }
+        }
+    }
 
     Ok(Some(TqSnapshot::new(session_tasks)))
 }

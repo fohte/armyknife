@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use crate::commands::agent::claude_sessions::normalize_title;
-use crate::infra::tq::{SessionTasks, TqClient, TqTask, TqTaskStatus};
+use crate::infra::tq::{SessionTasks, TqClient, TqTask, TqTaskStatus, TqTaskSummary};
 
 /// A tq task linked to a session, as needed by session list views. `parent_task_id`
 /// is `None` both when the task has no parent and when an older `tq` binary
@@ -134,6 +134,46 @@ pub(super) fn build_all_tasks_by_session(
         .collect()
 }
 
+pub(super) fn task_priority_metadata(
+    tasks: Vec<TqTaskSummary>,
+) -> (HashMap<String, Option<i32>>, HashMap<String, usize>) {
+    let mut order_by_priority = HashMap::new();
+    let mut priorities = HashMap::new();
+    let mut priority_order = HashMap::new();
+    for task in tasks {
+        let order = task.priority.map(|priority| {
+            let next_order = order_by_priority.len();
+            *order_by_priority.entry(priority).or_insert(next_order)
+        });
+        priorities.insert(task.id.clone(), task.priority);
+        if let Some(order) = order {
+            priority_order.insert(task.id, order);
+        }
+    }
+
+    (priorities, priority_order)
+}
+
+pub(super) fn order_tasks_by_priority(
+    tasks_by_session: &mut HashMap<String, Vec<SessionTask>>,
+    priority_order: &HashMap<String, usize>,
+) {
+    for tasks in tasks_by_session.values_mut() {
+        tasks.sort_by(|left, right| {
+            left.is_closed.cmp(&right.is_closed).then_with(|| {
+                if left.is_closed {
+                    std::cmp::Ordering::Equal
+                } else {
+                    priority_order
+                        .get(&left.task_id)
+                        .unwrap_or(&usize::MAX)
+                        .cmp(priority_order.get(&right.task_id).unwrap_or(&usize::MAX))
+                }
+            })
+        });
+    }
+}
+
 fn to_session_task(task: TqTask) -> SessionTask {
     SessionTask {
         task_id: task.id,
@@ -148,6 +188,7 @@ fn to_session_task(task: TqTask) -> SessionTask {
 mod tests {
     use super::SessionTask;
     use super::build_all_tasks_by_session;
+    use super::order_tasks_by_priority;
     use crate::infra::tq::{SessionTasks, TqTask, TqTaskStatus};
     use chrono::{DateTime, Utc};
     use rstest::rstest;
@@ -293,6 +334,51 @@ mod tests {
                 &HashSet::from(["session-a".to_string(), "child-session".to_string()]),
             ),
             expected,
+        );
+    }
+
+    #[rstest]
+    #[case::open_priority_precedes_link_order_and_unset_is_lowest(
+        vec![
+            view_task("recent", 1, "Recent", false),
+            view_task("high", 2, "High priority", false),
+            view_task("unset", 3, "Unset priority", false),
+            view_task("completed", 4, "Completed", true),
+        ],
+        HashMap::from([("high".to_string(), 0), ("recent".to_string(), 1)]),
+        vec!["high", "recent", "unset", "completed"],
+    )]
+    #[case::equal_priorities_preserve_existing_order(
+        vec![
+            view_task("first", 1, "First", false),
+            view_task("second", 2, "Second", false),
+        ],
+        HashMap::from([("first".to_string(), 0), ("second".to_string(), 0)]),
+        vec!["first", "second"],
+    )]
+    #[case::completed_tasks_keep_existing_order(
+        vec![
+            view_task("first", 1, "First", true),
+            view_task("second", 2, "Second", true),
+        ],
+        HashMap::from([("second".to_string(), 0)]),
+        vec!["first", "second"],
+    )]
+    fn orders_linked_tasks_by_open_priority_then_existing_order(
+        #[case] tasks: Vec<SessionTask>,
+        #[case] priority_order: HashMap<String, usize>,
+        #[case] expected_ids: Vec<&str>,
+    ) {
+        let mut tasks_by_session = HashMap::from([("session-a".to_string(), tasks)]);
+
+        order_tasks_by_priority(&mut tasks_by_session, &priority_order);
+
+        assert_eq!(
+            tasks_by_session["session-a"]
+                .iter()
+                .map(|task| task.task_id.as_str())
+                .collect::<Vec<_>>(),
+            expected_ids,
         );
     }
 }

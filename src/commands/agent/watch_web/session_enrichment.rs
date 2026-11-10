@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
     SessionTask, build_all_tasks_by_session, fetch_session_tasks_with_parents,
+    order_tasks_by_priority, task_priority_metadata,
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
@@ -218,7 +219,7 @@ async fn fetch_task_metadata(
         return Ok(previous);
     };
     let tq_sessions = fetch_session_tasks_with_parents(&client, &session_ids).await?;
-    let links = build_all_tasks_by_session(tq_sessions, &session_ids);
+    let mut links = build_all_tasks_by_session(tq_sessions, &session_ids);
     let task_ids = links
         .values()
         .flatten()
@@ -237,6 +238,7 @@ async fn fetch_task_metadata(
         Ok(tasks) => tasks,
         Err(error) => {
             tracing::warn!(%error, "Failed to fetch agent watch tq task priorities; keeping cached priorities");
+            order_tasks_by_priority(&mut links, &previous.priority_order);
             return Ok(SessionTaskMetadata {
                 links,
                 priorities: previous.priorities,
@@ -247,6 +249,7 @@ async fn fetch_task_metadata(
     };
 
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
+    order_tasks_by_priority(&mut links, &priority_order);
     let task_projects = fetch_task_projects(tasks, previous.task_projects, || async {
         client
             .list_projects()
@@ -301,22 +304,6 @@ fn task_project_names(
             Some((task.id, project_name.clone()))
         })
         .collect()
-}
-
-fn task_priority_metadata(
-    tasks: Vec<TqTaskSummary>,
-) -> (HashMap<String, Option<i32>>, HashMap<String, usize>) {
-    let mut order_by_priority = HashMap::new();
-    let mut priorities = HashMap::new();
-    let mut priority_order = HashMap::new();
-    for task in tasks {
-        let next_order = order_by_priority.len();
-        let order = *order_by_priority.entry(task.priority).or_insert(next_order);
-        priorities.insert(task.id.clone(), task.priority);
-        priority_order.insert(task.id, order);
-    }
-
-    (priorities, priority_order)
 }
 
 fn pull_request_keys(sessions: &[Session]) -> HashSet<BranchPrKey> {
@@ -377,6 +364,7 @@ async fn fetch_pull_requests(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::tq_session_tasks::task_priority_metadata;
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
     use chrono::{TimeZone, Utc};
     use rstest::rstest;
@@ -492,11 +480,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::unset_before_deferred(
+    #[case::unset_priority_is_left_unranked(
         vec![task("task-a", None), task("task-b", Some(-1))],
         (
             HashMap::from([("task-a".to_string(), None), ("task-b".to_string(), Some(-1))]),
-            HashMap::from([("task-a".to_string(), 0), ("task-b".to_string(), 1)]),
+            HashMap::from([("task-b".to_string(), 0)]),
         ),
     )]
     #[case::same_priority_shares_order(
