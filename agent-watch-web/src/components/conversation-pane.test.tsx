@@ -16,6 +16,9 @@ const session: Session = {
   unread: true,
   task: null,
   repo: 'example/service',
+  project: 'service refresh',
+  parent: null,
+  ancestorSessionIds: [],
   pullRequest: null,
 }
 
@@ -35,6 +38,10 @@ const question: ChatItem = {
 
 let container: HTMLDivElement
 let root: Root | null = null
+type ActionHandler = (
+  action: string,
+  payload?: Record<string, unknown>,
+) => Promise<boolean>
 
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
@@ -42,19 +49,21 @@ function requireElement<T extends Element>(element: T | null): T {
 }
 
 function renderView(
-  onAction: (action: string, payload?: Record<string, unknown>) => void,
+  onAction: ActionHandler,
+  viewSession: Session = session,
+  onSelectSession: (id: string) => void = () => undefined,
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <ConversationPaneView
-        session={session}
+        session={viewSession}
         messages={[question]}
         actions={actions}
         loading={false}
         error={null}
         onAction={onAction}
-        onSelectSession={() => undefined}
+        onSelectSession={onSelectSession}
       />,
     )
   })
@@ -107,7 +116,7 @@ afterEach(() => {
 })
 
 it('answers a question from a number key or a choice click', () => {
-  const onAction = vi.fn()
+  const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
 
   const keyEvent = dispatchKeyInAct(
@@ -134,8 +143,8 @@ it('answers a question from a number key or a choice click', () => {
   expect(actual).toBe(expected)
 })
 
-it('sends on Enter and Command-Enter, preserves Shift-Enter, and interrupts on Escape', () => {
-  const onAction = vi.fn()
+it('sends on Enter and Command-Enter and preserves Shift-Enter', () => {
+  const onAction = vi.fn(() => new Promise<boolean>(() => undefined))
   renderView(onAction)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
@@ -164,9 +173,6 @@ it('sends on Enter and Command-Enter, preserves Shift-Enter, and interrupts on E
   })
   changeText('Add one more detail')
   const shiftEvent = dispatchKeyInAct(textarea, 'Enter', { shiftKey: true })
-  act(() => {
-    dispatchKey(textarea, 'Escape')
-  })
 
   const actual = JSON.stringify([
     onAction.mock.calls,
@@ -176,21 +182,107 @@ it('sends on Enter and Command-Enter, preserves Shift-Enter, and interrupts on E
     [
       ['messages', { content: 'Use bounded retries' }],
       ['messages', { content: 'Keep the error visible' }],
-      ['interrupt'],
     ],
     false,
   ])
   expect(actual).toBe(expected)
 })
 
+it('interrupts the session on Escape', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(container.querySelector('textarea'))
+  const event = dispatchKeyInAct(textarea, 'Escape')
+
+  const actual = JSON.stringify([onAction.mock.calls, event.defaultPrevented])
+  const expected = JSON.stringify([[['interrupt']], true])
+  expect(actual).toBe(expected)
+})
+
 it('does not use question shortcuts while typing', () => {
-  const onAction = vi.fn()
+  const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
   const textarea = requireElement(container.querySelector('textarea'))
   const event = dispatchKeyInAct(textarea, '1')
 
   const actual = JSON.stringify([onAction.mock.calls, event.defaultPrevented])
   const expected = JSON.stringify([[], false])
+  expect(actual).toBe(expected)
+})
+
+it('selects the parent session from its link', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const onSelectSession = vi.fn()
+  renderView(
+    onAction,
+    { ...session, parent: { id: 'parent-session', title: 'Parent session' } },
+    onSelectSession,
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLAnchorElement>('.conversation-parent'),
+    ).click()
+  })
+
+  expect(onSelectSession.mock.calls).toEqual([['parent-session']])
+})
+
+it('keeps the message draft when sending fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(false))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) {
+      Reflect.apply(valueSetter, textarea, ['Retain this draft'])
+    }
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const actual = JSON.stringify([textarea.value, onAction.mock.calls])
+  const expected = JSON.stringify([
+    'Retain this draft',
+    [['messages', { content: 'Retain this draft' }]],
+  ])
+  expect(actual).toBe(expected)
+})
+
+it('clears the message draft after a successful send', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) {
+      Reflect.apply(valueSetter, textarea, ['Send this message'])
+    }
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const actual = JSON.stringify([textarea.value, onAction.mock.calls])
+  const expected = JSON.stringify([
+    '',
+    [['messages', { content: 'Send this message' }]],
+  ])
   expect(actual).toBe(expected)
 })
 
@@ -242,12 +334,10 @@ it('shows the operation error returned by the server', async () => {
     await Promise.resolve()
     await Promise.resolve()
   })
-  expect(container.querySelector('.permission-actions')).not.toBeNull()
-
   act(() => {
-    container
-      .querySelector<HTMLButtonElement>('.permission-actions button')
-      ?.click()
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.permission-actions button'),
+    ).click()
   })
   await act(async () => {
     await Promise.resolve()
@@ -273,6 +363,50 @@ it('shows the operation error returned by the server', async () => {
     'session pane is idle or unavailable',
     '/api/sessions/sample-session/permission/approve',
   ])
+  expect(actual).toBe(expected)
+})
+
+it('shows an HTTP status when the initial messages response has no body', async () => {
+  const actionsResponse = new Response(
+    JSON.stringify({
+      message: false,
+      answerQuestion: false,
+      interrupt: false,
+      openInTerminal: true,
+    }),
+    { headers: { 'Content-Type': 'application/json' } },
+  )
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      new Response('', { status: 404, statusText: 'Not Found' }),
+    )
+    .mockResolvedValueOnce(actionsResponse)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const actual = JSON.stringify([
+    container.querySelector('[role="alert"]')?.textContent,
+    container.querySelector('.conversation-status')?.textContent,
+  ])
+  const expected = JSON.stringify(['Not Found', 'No messages yet.'])
   expect(actual).toBe(expected)
 })
 

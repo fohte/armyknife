@@ -638,3 +638,75 @@ it('advances elapsed time for all rows with one shared timer', async () => {
     intervalCount: 1,
   })
 })
+
+it('reloads the selected conversation when the session feed updates', async () => {
+  let messageReadCount = 0
+  const fetcher = vi.fn<typeof fetch>()
+  fetcher.mockImplementation((input) => {
+    const path =
+      typeof input === 'string'
+        ? new URL(input, 'http://localhost').pathname
+        : input instanceof URL
+          ? input.pathname
+          : new URL(input.url).pathname
+    const body = path.endsWith('/messages')
+      ? [
+          {
+            type: 'assistant',
+            text:
+              messageReadCount++ === 0
+                ? 'Before feed update'
+                : 'After feed update',
+          },
+        ]
+      : {
+          message: true,
+          answerQuestion: false,
+          interrupt: true,
+          openInTerminal: true,
+        }
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  publishSessions({
+    revision: 2,
+    sessions: [session('session-a', 'Updated session')],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    transcript: container.querySelector('.chat-assistant-message')?.textContent,
+    requestPaths: fetcher.mock.calls.map(([input]) =>
+      typeof input === 'string'
+        ? new URL(input, 'http://localhost').pathname
+        : input instanceof URL
+          ? input.pathname
+          : new URL(input.url).pathname,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    transcript: 'After feed update',
+    requestPaths: [
+      '/api/sessions/session-a/messages',
+      '/api/sessions/session-a/actions',
+      '/api/sessions/session-a/messages',
+      '/api/sessions/session-a/actions',
+    ],
+  })
+})

@@ -19,7 +19,9 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/service',
+  project: 'service refresh',
   parent: { id: 'parent-session', title: 'Service reliability' },
+  ancestorSessionIds: ['parent-session'],
   pullRequest: { number: 2049, state: 'Open' },
 }
 
@@ -32,7 +34,7 @@ const actions: SessionActions = {
 }
 
 const callbacks = {
-  onAction: () => undefined,
+  onAction: () => Promise.resolve(true),
   onSelectSession: () => undefined,
 }
 

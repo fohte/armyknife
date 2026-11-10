@@ -1,5 +1,5 @@
-import { err, ok, ResultAsync } from 'neverthrow'
-import { useCallback, useEffect, useState } from 'react'
+import { err, ok, Result, ResultAsync } from 'neverthrow'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -56,18 +56,29 @@ function toError(error: unknown) {
     : new Error('Request failed', { cause: error })
 }
 
+function errorFromResponse(response: Response) {
+  const fallback =
+    response.statusText || `Request failed (${String(response.status)})`
+  return ResultAsync.fromPromise(response.text(), toError).map((body) => {
+    const parsed =
+      body === ''
+        ? null
+        : Result.fromThrowable(() => JSON.parse(body) as unknown, toError)()
+    const message =
+      parsed !== null &&
+      parsed.isOk() &&
+      isRecord(parsed.value) &&
+      typeof parsed.value['error'] === 'string'
+        ? parsed.value['error']
+        : fallback
+    return new Error(message)
+  })
+}
+
 function requestJson<T>(url: string, validate: (value: unknown) => value is T) {
   return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
     if (!response.ok) {
-      return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-        err(
-          new Error(
-            isRecord(body) && typeof body['error'] === 'string'
-              ? body['error']
-              : response.statusText,
-          ),
-        ),
-      )
+      return errorFromResponse(response).andThen((error) => err(error))
     }
     return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
       validate(body)
@@ -95,15 +106,7 @@ function requestAction(
     toError,
   ).andThen((response) => {
     if (response.ok) return ok(undefined)
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      err(
-        new Error(
-          isRecord(body) && typeof body['error'] === 'string'
-            ? body['error']
-            : response.statusText,
-        ),
-      ),
-    )
+    return errorFromResponse(response).andThen((error) => err(error))
   })
 }
 
@@ -122,8 +125,11 @@ export function ConversationPane({
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const requestGeneration = useRef(0)
 
   const refresh = useCallback(() => {
+    const generation = requestGeneration.current + 1
+    requestGeneration.current = generation
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
     const messagesRequest = requestJson(
       `${sessionPath}/messages`,
@@ -141,6 +147,7 @@ export function ConversationPane({
     )
     void Promise.all([messagesRequest, actionsRequest]).then(
       ([messagesResult, actionsResult]) => {
+        if (requestGeneration.current !== generation) return
         if (messagesResult.isOk()) setMessages(messagesResult.value)
         if (actionsResult.isOk()) setActions(actionsResult.value)
         const firstError = messagesResult.isErr()
@@ -160,19 +167,23 @@ export function ConversationPane({
     setLoading(true)
     setError(null)
     refresh()
+    return () => {
+      requestGeneration.current += 1
+    }
   }, [refresh, refreshKey])
 
-  const onAction = (action: string, payload?: Record<string, unknown>) => {
-    void requestAction(session.id, action, payload).match(
+  const onAction = (action: string, payload?: Record<string, unknown>) =>
+    requestAction(session.id, action, payload).match(
       () => {
         setError(null)
         refresh()
+        return true
       },
       (requestError) => {
         setError(requestError.message)
+        return false
       },
     )
-  }
 
   return (
     <ConversationPaneView

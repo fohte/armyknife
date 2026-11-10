@@ -10,7 +10,10 @@ type ConversationPaneViewProps = {
   actions: SessionActions | null
   loading: boolean
   error: string | null
-  onAction: (action: string, payload?: Record<string, unknown>) => void
+  onAction: (
+    action: string,
+    payload?: Record<string, unknown>,
+  ) => Promise<boolean>
   onSelectSession: (id: string) => void
 }
 export function ConversationPaneView({
@@ -31,14 +34,20 @@ export function ConversationPaneView({
 
   const sendMessage = () => {
     if (draft.trim() === '' || actions?.message !== true) return
-    onAction('messages', { content: draft })
-    setDraft('')
+    const sentDraft = draft
+    void onAction('messages', { content: sentDraft }).then((succeeded) => {
+      if (succeeded) {
+        setDraft((currentDraft) =>
+          currentDraft === sentDraft ? '' : currentDraft,
+        )
+      }
+    })
   }
 
   const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Escape' && actions?.interrupt === true) {
       event.preventDefault()
-      onAction('interrupt')
+      void onAction('interrupt')
       return
     }
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -70,12 +79,12 @@ export function ConversationPaneView({
     const choice = Number(event.key)
     if (choice <= waitingQuestion.choices.length) {
       event.preventDefault()
-      onAction('answer', { choice })
+      void onAction('answer', { choice })
     }
   }
 
   const openInTerminal = () => {
-    onAction('focus')
+    void onAction('focus')
   }
 
   return (
@@ -144,7 +153,7 @@ export function ConversationPaneView({
 
       <div className="conversation-scroll" aria-live="polite">
         <div className="conversation-timeline">
-          <span>1 hour ago</span>
+          <span>Conversation</span>
         </div>
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
@@ -202,7 +211,7 @@ export function ConversationPaneView({
                       key={`${String(choiceIndex)}-${choice}`}
                       disabled={!canAnswer}
                       onClick={() => {
-                        onAction('answer', { choice: choiceIndex + 1 })
+                        void onAction('answer', { choice: choiceIndex + 1 })
                       }}
                     >
                       <kbd>{choiceIndex + 1}</kbd>
@@ -228,7 +237,7 @@ export function ConversationPaneView({
                     variant="plain"
                     disabled={!actions.permission.approve}
                     onClick={() => {
-                      onAction('permission/approve')
+                      void onAction('permission/approve')
                     }}
                   >
                     Approve
@@ -238,7 +247,7 @@ export function ConversationPaneView({
                     variant="plain"
                     disabled={!actions.permission.reject}
                     onClick={() => {
-                      onAction('permission/reject')
+                      void onAction('permission/reject')
                     }}
                   >
                     Reject
