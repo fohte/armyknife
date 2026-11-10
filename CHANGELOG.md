@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.535](https://github.com/fohte/armyknife/compare/v0.1.534...v0.1.535) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** filter session store events ([#1424](https://github.com/fohte/armyknife/issues/1424)) ([c79a42d](https://github.com/fohte/armyknife/commit/c79a42d91b786826cbbda05761ee45af6aa464ab))
+
 ## [0.1.534](https://github.com/fohte/armyknife/compare/v0.1.533...v0.1.534) (2026-11-10)
 
 
