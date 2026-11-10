@@ -7,6 +7,7 @@ import { BoardView } from '#components/board-view'
 import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
+import { ResizableColumns } from '#components/resizable-columns'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
 import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import {
@@ -378,56 +379,71 @@ export function App() {
       setDoneExpanded((expanded) => !expanded)
     },
   }
+  const navigation = !isMobile ? (
+    <AgentWatchNav
+      activeView={view}
+      needsActionCount={needsActionCount}
+      todaySessions={todaySessions}
+      workTypeNavGroups={workTypeNavGroups}
+      onViewChange={(nextView) => {
+        navigate((current) => ({ ...current, view: nextView }))
+      }}
+      onSelectToday={openSessionInInbox}
+      onSelectSession={openSessionInInbox}
+      onOpenPalette={() => {
+        setCommandPaletteOpen(true)
+      }}
+    />
+  ) : null
+  const main = (
+    <main className="agent-watch-main">
+      {view === 'inbox' ? (
+        <InboxConversationPanes
+          inboxProps={inboxProps}
+          selectedSession={selectedSession}
+          refreshKey={sessionsRevision}
+          isMobile={isMobile}
+          showMobileConversation={showMobileConversation}
+          onBack={backToInbox}
+          onLater={openLater}
+          onSelectSession={(id) => {
+            if (orderedSessions.some((session) => session.id === id)) {
+              navigate((current) => ({ ...current, selectedId: id }))
+            }
+          }}
+        />
+      ) : (
+        <BoardView
+          error={error}
+          hideQuietProjects={hideQuietProjects}
+          loaded={loaded}
+          onHideQuietProjectsChange={setHideQuietProjects}
+          onSelectSession={openSessionInInbox}
+          projects={projects}
+          focusedProjectName={focusedProjectName}
+        />
+      )}
+    </main>
+  )
   return (
     <div
       className="agent-watch-shell"
       data-layout={isMobile ? 'mobile' : 'desktop'}
       data-mobile-screen={showMobileConversation ? 'conversation' : 'inbox'}
     >
-      {!isMobile ? (
-        <AgentWatchNav
-          activeView={view}
-          needsActionCount={needsActionCount}
-          todaySessions={todaySessions}
-          workTypeNavGroups={workTypeNavGroups}
-          onViewChange={(nextView) => {
-            navigate((current) => ({ ...current, view: nextView }))
-          }}
-          onSelectToday={openSessionInInbox}
-          onSelectSession={openSessionInInbox}
-          onOpenPalette={() => {
-            setCommandPaletteOpen(true)
-          }}
+      {isMobile ? (
+        main
+      ) : (
+        <ResizableColumns
+          first={navigation}
+          second={main}
+          storageKey="agent-watch:navigation-width"
+          firstSize={240}
+          firstMinSize={160}
+          secondMinSize={508}
+          label="Resize navigation and content"
         />
-      ) : null}
-      <main className="agent-watch-main">
-        {view === 'inbox' ? (
-          <InboxConversationPanes
-            inboxProps={inboxProps}
-            selectedSession={selectedSession}
-            refreshKey={sessionsRevision}
-            isMobile={isMobile}
-            showMobileConversation={showMobileConversation}
-            onBack={backToInbox}
-            onLater={openLater}
-            onSelectSession={(id) => {
-              if (orderedSessions.some((session) => session.id === id)) {
-                navigate((current) => ({ ...current, selectedId: id }))
-              }
-            }}
-          />
-        ) : (
-          <BoardView
-            error={error}
-            hideQuietProjects={hideQuietProjects}
-            loaded={loaded}
-            onHideQuietProjectsChange={setHideQuietProjects}
-            onSelectSession={openSessionInInbox}
-            projects={projects}
-            focusedProjectName={focusedProjectName}
-          />
-        )}
-      </main>
+      )}
       {laterSession !== undefined ? (
         <LaterMenu
           sessionTitle={laterSession.title}

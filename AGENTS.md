@@ -45,7 +45,7 @@ Generic framework for interactive document editing:
 
 ### Release workflow
 
-Release publication is automated with release-please. Do not tell the user to run `a update` immediately after their PR merges into `master`. Tell them to run it after the release PR is automatically merged and the GitHub release is created; they do not need to wait for binary uploads or monitor the asset build. `a update` retries when a published release is missing the asset for the current platform, but it does not wait for the release itself to be created. See the [Release section in README.md](README.md#release).
+Release publication is automated with release-please. After the release PR is automatically merged and the GitHub release is created, run `a update` yourself; do not ask the user to run it. Do not run `a update` immediately after a feature PR merges into `master`, because the release may not exist yet and the update would not include it. You do not need to wait for binary uploads or monitor the asset build. `a update` retries when a published release is missing the asset for the current platform, but it does not wait for the release itself to be created. See the [Release section in README.md](README.md#release).
 
 ### Lints
 
