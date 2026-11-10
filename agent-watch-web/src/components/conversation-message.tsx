@@ -1,7 +1,11 @@
-import { Button } from '@fohte/ui/button'
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import {
+  type PendingPermissionAction,
+  PermissionCard,
+  type PermissionRequestIdentity,
+} from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { ToolSummary } from '#components/tool-summary'
 import type {
@@ -18,13 +22,14 @@ type RenderConversationMessageOptions = {
   index: number
   isMobile: boolean
   message: ChatItem
+  pendingAction: PendingPermissionAction
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
-  renderTerminalFallback: (message: string) => ReactNode
   session: Session
   sessions: readonly SessionLinkTarget[]
 }
@@ -36,10 +41,10 @@ export function renderConversationMessage({
   index,
   isMobile,
   message,
+  pendingAction,
   onAction,
   onOpenInTerminal,
   onSelectSession,
-  renderTerminalFallback,
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
@@ -123,40 +128,17 @@ export function renderConversationMessage({
     )
   }
   return (
-    <article
-      className="chat-permission-card"
+    <PermissionCard
       key={`permission-${String(index)}`}
-    >
-      <h2>Permission required</h2>
-      <p className="permission-tool">{message.tool}</p>
-      <p>{message.description}</p>
-      {actions?.permission != null &&
-      (actions.permission.approve || actions.permission.reject) ? (
-        <div className="permission-actions">
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.approve}
-            onClick={() => {
-              void onAction('permission/approve')
-            }}
-          >
-            Approve
-          </Button>
-          <Button
-            type="button"
-            variant="plain"
-            disabled={!actionsReady || !actions.permission.reject}
-            onClick={() => {
-              void onAction('permission/reject')
-            }}
-          >
-            Reject
-          </Button>
-        </div>
-      ) : session.engine === 'Codex' && actions !== null ? (
-        renderTerminalFallback('Review this permission in terminal.')
-      ) : null}
-    </article>
+      message={message}
+      actions={actions}
+      actionsReady={actionsReady}
+      pendingAction={pendingAction}
+      isCodex={session.engine === 'Codex'}
+      onAction={(action, permissionIdentity) => {
+        void onAction(action, undefined, permissionIdentity)
+      }}
+      onOpenInTerminal={onOpenInTerminal}
+    />
   )
 }
