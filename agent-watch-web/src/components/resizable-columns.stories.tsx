@@ -77,6 +77,7 @@ export const NavigationHasAnAdjustableBoundary: Story = {
         onDeleteSavedView={() => undefined}
         onSelectToday={() => undefined}
         onSelectSession={() => undefined}
+        onOpenPalette={() => undefined}
       />
     ),
     second: (

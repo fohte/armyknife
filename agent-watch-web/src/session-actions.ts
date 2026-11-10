@@ -40,6 +40,10 @@ export function setSessionBackNow(sessionId: string) {
   return postSessionAction(sessionId, 'later', { preset: 'back_now' })
 }
 
+export function archiveSession(sessionId: string) {
+  return postSessionAction(sessionId, 'archive', {})
+}
+
 export function setSessionToday(sessionId: string, isToday: boolean) {
   return postSessionAction(sessionId, 'today', { isToday })
 }

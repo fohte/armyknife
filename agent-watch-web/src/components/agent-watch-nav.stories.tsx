@@ -63,6 +63,7 @@ const meta = {
     todaySessions: [todaySession],
     onSelectToday: () => undefined,
     onSelectSession: () => undefined,
+    onOpenPalette: () => undefined,
   },
 } satisfies Meta<typeof AgentWatchNav>
 

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
+import { useCommandPaletteController } from '#command-palette-controller'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
+import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
 import { ResizableColumns } from '#components/resizable-columns'
@@ -11,7 +13,7 @@ import {
   formatInboxFilterQuery,
   parseInboxFilterQuery,
 } from '#inbox-filter'
-import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
+import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
   setSessionBackNow,
@@ -21,7 +23,6 @@ import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
-import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
 import { useSavedInboxViews } from '#use-saved-inbox-views'
 
@@ -48,6 +49,9 @@ export function App() {
     navigate,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
+  const [focusedProjectName, setFocusedProjectName] = useState<string | null>(
+    null,
+  )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
@@ -125,15 +129,29 @@ export function App() {
     [filteredOrderedSessions, laterExpanded],
   )
   const {
+    isOpen: commandPaletteOpen,
+    setIsOpen: setCommandPaletteOpen,
+    recentSessionIds,
+    runCommand: runPaletteCommand,
     openConversation,
     openSessionInInbox,
     openTodaySession,
     toggleToday,
-  } = createSessionNavigationActions({
+  } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
+    inboxFilterQuery,
+    setInboxFilterQuery,
     navigate,
-    setLaterExpanded,
     setError,
+    setFocusedProjectName,
+    setLaterExpanded,
+    selectedId,
+    selectedSessionExists:
+      selectedId !== null &&
+      sessionsWithElapsedTime.some((session) => session.id === selectedId),
+    view,
+    isMobile,
+    conversationOpen: mobileConversationOpen,
   })
   const projects = useMemo(
     () => buildBoardProjects(sessionsWithElapsedTime),
@@ -308,12 +326,6 @@ export function App() {
       ?.scrollIntoView({ block: 'nearest' })
   }, [selectedId, showAllInProgress, view])
 
-  useEffect(() => {
-    if (isMobile && view !== 'inbox') {
-      navigate((current) => ({ ...current, view: 'inbox' }), 'replace')
-    }
-  }, [isMobile, navigate, view])
-
   useSessionKeyboardNavigation({
     isMobile,
     laterSessionId,
@@ -341,18 +353,6 @@ export function App() {
       setLaterExpanded(true)
     }
   }, [selectedSession?.category])
-  const setSelectedId = useCallback(
-    (id: string | null) => {
-      navigate((current) => ({ ...current, selectedId: id }), 'replace')
-    },
-    [navigate],
-  )
-  const setConversationOpen = useCallback(
-    (open: boolean) => {
-      navigate((current) => ({ ...current, conversationOpen: open }), 'replace')
-    },
-    [navigate],
-  )
   const selectInboxSavedView = useCallback(
     (id: string) => {
       const query = savedViews.selectView(id)
@@ -362,15 +362,15 @@ export function App() {
     },
     [navigate, savedViews.selectView],
   )
-  const { showConversation: showMobileConversation } = useMobileNavigation({
-    isMobile,
-    conversationOpen: mobileConversationOpen,
-    navigableSessions,
-    selectedSessionExists: selectedSession !== undefined,
-    sessionsLoaded: loaded,
-    setSelectedId,
-    setConversationOpen,
-  })
+  const { showConversation: showMobileConversation } =
+    useSessionMobileNavigation({
+      isMobile,
+      conversationOpen: mobileConversationOpen,
+      navigableSessions,
+      selectedSessionExists: selectedSession !== undefined,
+      sessionsLoaded: loaded,
+      navigate,
+    })
   const inboxProps = {
     error: error ?? savedViews.storageError,
     loaded,
@@ -424,6 +424,9 @@ export function App() {
       onDeleteSavedView={savedViews.deleteView}
       onSelectToday={openSessionInInbox}
       onSelectSession={openSessionInInbox}
+      onOpenPalette={() => {
+        setCommandPaletteOpen(true)
+      }}
     />
   ) : null
   const main = (
@@ -451,11 +454,11 @@ export function App() {
           onHideQuietProjectsChange={setHideQuietProjects}
           onSelectSession={openSessionInInbox}
           projects={projects}
+          focusedProjectName={focusedProjectName}
         />
       )}
     </main>
   )
-
   return (
     <div
       className="agent-watch-shell"
@@ -493,6 +496,33 @@ export function App() {
           onSelect={(preset) => {
             submitLater(laterSession.id, preset)
           }}
+        />
+      ) : null}
+      {commandPaletteOpen ? (
+        <CommandPalette
+          inboxFilterQuery={inboxFilterQuery}
+          onClose={() => {
+            setCommandPaletteOpen(false)
+          }}
+          onOpenProject={(project) => {
+            setCommandPaletteOpen(false)
+            setFocusedProjectName(project)
+            navigate((current) => ({
+              ...current,
+              selectedId: null,
+              view: 'board',
+              conversationOpen: false,
+            }))
+          }}
+          onOpenSession={(id) => {
+            setCommandPaletteOpen(false)
+            openSessionInInbox(id)
+          }}
+          onRunCommand={(command) => {
+            void runPaletteCommand(command)
+          }}
+          recentSessionIds={recentSessionIds}
+          sessions={sessionsWithElapsedTime}
         />
       ) : null}
     </div>

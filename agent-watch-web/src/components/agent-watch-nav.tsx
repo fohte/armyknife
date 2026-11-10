@@ -27,6 +27,7 @@ type AgentWatchNavProps = {
   todaySessions: readonly Session[]
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
+  onOpenPalette: () => void
 }
 
 export function AgentWatchNav({
@@ -41,6 +42,7 @@ export function AgentWatchNav({
   todaySessions,
   onSelectToday,
   onSelectSession,
+  onOpenPalette,
 }: AgentWatchNavProps) {
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
@@ -49,6 +51,14 @@ export function AgentWatchNav({
           &gt;
         </span>
         <span className="brand-name">agent watch</span>
+        <button
+          aria-label="Jump to with Command K"
+          className="agent-watch-command-key"
+          onClick={onOpenPalette}
+          type="button"
+        >
+          ⌘K
+        </button>
       </div>
       <div className="view-switch" role="group" aria-label="Views">
         <Button

@@ -36,6 +36,7 @@ export default mergeConfig(
               ...configDefaults.exclude,
               'src/App.test.tsx',
               'src/components/agent-watch-nav.test.tsx',
+              'src/components/command-palette.test.tsx',
               'src/components/board-view.test.tsx',
               'src/components/conversation-pane.test.tsx',
               'src/components/message-composer.test.tsx',
@@ -54,6 +55,7 @@ export default mergeConfig(
             include: [
               'src/App.test.tsx',
               'src/components/agent-watch-nav.test.tsx',
+              'src/components/command-palette.test.tsx',
               'src/components/board-view.test.tsx',
               'src/components/conversation-pane.test.tsx',
               'src/components/message-composer.test.tsx',

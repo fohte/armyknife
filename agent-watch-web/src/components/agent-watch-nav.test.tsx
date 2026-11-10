@@ -30,6 +30,7 @@ function renderNav(
         todaySessions={[]}
         onSelectToday={() => undefined}
         onSelectSession={onSelectSession}
+        onOpenPalette={() => undefined}
       />,
     )
   })
