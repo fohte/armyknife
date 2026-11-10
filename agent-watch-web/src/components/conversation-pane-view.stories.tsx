@@ -214,28 +214,6 @@ export const AMessageIsSending: Story = {
   },
 }
 
-export const TheSessionIsWorking: Story = {
-  name: 'The conversation shows elapsed time while the session works',
-  args: {
-    session: { ...session, category: 'in_progress', elapsedSeconds: 92 },
-    messages: [],
-  },
-}
-
-export const TheSessionIsRunningATool: Story = {
-  name: 'The working status shows the active tool and its target',
-  args: {
-    session: { ...session, category: 'in_progress', elapsedSeconds: 92 },
-    messages: [
-      {
-        type: 'tool_in_progress',
-        tool: 'exec',
-        target: 'cargo test --manifest-path fixture/Cargo.toml',
-      },
-    ],
-  },
-}
-
 export const TheConversationShowsOperationSummaries: Story = {
   name: 'The transcript shows messages and operation summaries',
   args: {

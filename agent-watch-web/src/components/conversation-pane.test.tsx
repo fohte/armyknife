@@ -397,20 +397,27 @@ it('hides working status when the session is done', () => {
     undefined,
     [
       {
-        type: 'tool_summary',
-        summary: '1 action',
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo test',
       },
     ],
   )
 
   const snapshot = () => ({
     workingStatus: container.querySelector('.conversation-working-status'),
-    toolSummary: container.querySelector('.chat-tool-summary')?.textContent,
+    toolSummary:
+      container.querySelector('.chat-tool-summary summary')?.textContent ??
+      null,
+    operations: Array.from(
+      container.querySelectorAll('.chat-tool-operations li'),
+    ).map((operation) => operation.textContent),
   })
 
   expect(snapshot()).toEqual({
     workingStatus: null,
     toolSummary: '1 action',
+    operations: ['execcargo test'],
   })
 })
 
