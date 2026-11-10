@@ -543,7 +543,11 @@ mod tests {
         let image_directory = directory.path().canonicalize().unwrap();
         let image_name = "00000000-0000-4000-8000-000000000001.png";
         let image_path = image_directory.join(image_name);
-        std::fs::write(&image_path, b"fixture image").unwrap();
+        std::fs::write(
+            &image_path,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
         let marker = "⟦armyknife-user:00000000-0000-4000-8000-000000000002⟧";
         let content = formatdoc! {"
             Another Claude session sent a message:
@@ -591,7 +595,11 @@ mod tests {
         let image_directory = directory.path().canonicalize().unwrap();
         let image_name = "00000000-0000-4000-8000-000000000003.png";
         let image_path = image_directory.join(image_name);
-        std::fs::write(&image_path, b"fixture image").unwrap();
+        std::fs::write(
+            &image_path,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
         let content = formatdoc! {"
             <peer-message>
             - From session_id: fixture-peer-session

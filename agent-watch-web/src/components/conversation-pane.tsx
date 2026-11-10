@@ -21,6 +21,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isUserContentPart(value: unknown): boolean {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   if (value['type'] === 'text') return typeof value['text'] === 'string'
+  if (value['type'] === 'file') return typeof value['name'] === 'string'
   if (value['type'] !== 'image') return false
   return (
     typeof value['source'] === 'string' &&

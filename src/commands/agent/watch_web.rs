@@ -1,5 +1,6 @@
 mod actions;
 mod assets;
+mod attachments;
 mod events;
 mod image_attachments;
 mod interrupted;

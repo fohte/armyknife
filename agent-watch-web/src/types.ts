@@ -99,6 +99,7 @@ export type ChatItem =
 export type UserContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; source: string; available: boolean }
+  | { type: 'file'; name: string }
 
 export type ToolOperation = {
   tool: string

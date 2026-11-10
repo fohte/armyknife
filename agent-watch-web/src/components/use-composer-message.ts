@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { ComposerAttachment } from '#components/message-composer'
 
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
+const MAX_ATTACHMENTS_PER_MESSAGE = 16
+const BASE64_CHUNK_BYTES = 0x6000
 const PREVIEW_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -24,22 +26,52 @@ type ComposerMessageOptions = {
   ) => Promise<boolean>
 }
 
-function encodeAttachment(file: File) {
-  if (file.size > MAX_IMAGE_BYTES) {
-    return Promise.resolve({ mimeType: file.type, size: file.size, data: '' })
-  }
-  return file.arrayBuffer().then((buffer) => {
-    const bytes = new Uint8Array(buffer)
+async function encodeAttachment(file: File) {
+  let data = ''
+  for (let offset = 0; offset < file.size; offset += BASE64_CHUNK_BYTES) {
+    const bytes = new Uint8Array(
+      await file.slice(offset, offset + BASE64_CHUNK_BYTES).arrayBuffer(),
+    )
     let binary = ''
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+    for (
+      let chunkOffset = 0;
+      chunkOffset < bytes.length;
+      chunkOffset += 0x8000
+    ) {
+      binary += String.fromCharCode(
+        ...bytes.subarray(chunkOffset, chunkOffset + 0x8000),
+      )
     }
-    return {
-      mimeType: file.type,
-      size: file.size,
-      data: window.btoa(binary),
+    data += window.btoa(binary)
+  }
+  return {
+    name: file.name || 'Pasted file',
+    mimeType: file.type,
+    size: file.size,
+    data,
+  }
+}
+
+async function encodeAttachments(attachments: readonly SelectedAttachment[]) {
+  const encoded = []
+  for (const { file } of attachments) {
+    encoded.push(await encodeAttachment(file))
+  }
+  return encoded
+}
+
+function attachmentLimitError(attachments: readonly SelectedAttachment[]) {
+  let totalBytes = 0
+  for (const [index, attachment] of attachments.entries()) {
+    if (index >= MAX_ATTACHMENTS_PER_MESSAGE) {
+      return `${attachment.name} exceeds the limit of ${String(MAX_ATTACHMENTS_PER_MESSAGE)} attachments per message`
     }
-  })
+    if (totalBytes + attachment.file.size > MAX_ATTACHMENT_BYTES) {
+      return `${attachment.name} would exceed the 50 MiB attachment limit`
+    }
+    totalBytes += attachment.file.size
+  }
+  return null
 }
 
 function toError(error: unknown): Error {
@@ -60,6 +92,7 @@ export function useComposerMessage({
   const attachmentsRef = useRef(attachments)
   attachmentsRef.current = attachments
   const isSending = externalSending || sendPending
+  const limitError = attachmentLimitError(attachments)
 
   useEffect(
     () => () => {
@@ -76,6 +109,7 @@ export function useComposerMessage({
     const added = files.map((file) => ({
       id: crypto.randomUUID(),
       name: file.name || 'Pasted file',
+      size: file.size,
       file,
       previewUrl: PREVIEW_MIME_TYPES.has(file.type)
         ? URL.createObjectURL(file)
@@ -108,6 +142,7 @@ export function useComposerMessage({
   }
 
   const sendMessage = () => {
+    if (attachmentLimitError(attachments) !== null) return
     if (
       (draft.trim() === '' && attachments.length === 0) ||
       !messageEnabled ||
@@ -131,13 +166,13 @@ export function useComposerMessage({
       return
     }
     void ResultAsync.fromPromise(
-      Promise.all(sentAttachments.map(({ file }) => encodeAttachment(file))),
+      encodeAttachments(sentAttachments),
       toError,
     ).match(
-      async (images) => {
+      async (encodedAttachments) => {
         const succeeded = await onAction('messages', {
           content: sentDraft,
-          images,
+          attachments: encodedAttachments,
         })
         if (succeeded) {
           clearDraftIfUnchanged(sentDraft)
@@ -155,7 +190,7 @@ export function useComposerMessage({
 
   return {
     attachments,
-    error,
+    error: limitError ?? error,
     isSending,
     onPasteFiles,
     removeAttachment,

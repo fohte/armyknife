@@ -58,6 +58,15 @@
   color: var(--muted-foreground-strong);
 }
 
+.chat-peer-file {
+  max-width: 100%;
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #1f1f1f;
+  overflow-wrap: anywhere;
+}
+
 .chat-event {
   overflow: hidden;
   align-self: center;

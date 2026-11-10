@@ -87,19 +87,23 @@ export function PeerMessage({
             >
               {part.text}
             </MarkdownMessage>
-          ) : part.available ? (
+          ) : part.type === 'image' && part.available ? (
             <img
               className="chat-peer-image"
               key={`image-${String(index)}`}
               src={part.source}
               alt="Attached image"
             />
-          ) : (
+          ) : part.type === 'image' ? (
             <p
               className="chat-peer-image-unavailable"
               key={`image-${String(index)}`}
             >
               画像はもうありません
+            </p>
+          ) : (
+            <p className="chat-peer-file" key={`file-${String(index)}`}>
+              {part.name}
             </p>
           ),
         )}

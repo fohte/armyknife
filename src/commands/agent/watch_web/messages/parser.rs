@@ -372,14 +372,14 @@ fn user_content_parts_with_image_directory(
             super::super::image_attachments::extract_references(&text, directory)
     {
         text = visible_text;
-        images.extend(
-            references
-                .into_iter()
-                .map(|reference| UserContentPart::Image {
-                    source: reference.source,
-                    available: reference.available,
-                }),
-        );
+        images.extend(references.into_iter().map(|reference| match reference {
+            super::super::image_attachments::Reference::Image { source, available } => {
+                UserContentPart::Image { source, available }
+            }
+            super::super::image_attachments::Reference::File { name } => {
+                UserContentPart::File { name }
+            }
+        }));
     }
 
     if images.is_empty() {
@@ -432,6 +432,8 @@ fn image_placeholder(text: &str) -> Option<(usize, usize)> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use indoc::formatdoc;
     use rstest::{fixture, rstest};
 
@@ -441,16 +443,17 @@ mod tests {
     };
 
     #[fixture]
-    fn saved_image_directory() -> tempfile::TempDir {
+    fn saved_image_directory() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory
                 .path()
                 .join("00000000-0000-4000-8000-000000000001.png"),
-            b"fixture image",
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
         )
         .unwrap();
-        directory
+        let image_directory = directory.path().canonicalize().unwrap();
+        (directory, image_directory)
     }
     #[rstest]
     #[case::singular(1, "1 action")]
@@ -481,10 +484,10 @@ mod tests {
     #[case::transcript_user(false)]
     #[case::queued_user(true)]
     fn extracts_saved_images_from_unmarked_user_paths(
-        saved_image_directory: tempfile::TempDir,
+        saved_image_directory: (tempfile::TempDir, PathBuf),
         #[case] is_queued: bool,
     ) {
-        let image_directory = saved_image_directory.path().canonicalize().unwrap();
+        let (_directory, image_directory) = saved_image_directory;
         let image_path = image_directory.join("00000000-0000-4000-8000-000000000001.png");
         let text = formatdoc! {"
             Inspect this image.
@@ -517,6 +520,53 @@ mod tests {
                     UserContentPart::Image {
                         source: "/api/images/00000000-0000-4000-8000-000000000001.png".to_string(),
                         available: true,
+                    },
+                ],
+                from: None,
+            }]
+        );
+    }
+
+    #[rstest]
+    fn extracts_images_and_file_names_from_generic_user_paths(
+        saved_image_directory: (tempfile::TempDir, PathBuf),
+    ) {
+        let (_directory, image_directory) = saved_image_directory;
+        let image_name = "00000000-0000-4000-8000-000000000005~image~screenshot.png";
+        let file_name = "00000000-0000-4000-8000-000000000006~file~design-mock.html";
+        std::fs::write(
+            image_directory.join(image_name),
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
+        std::fs::write(image_directory.join(file_name), b"<main>Mock</main>").unwrap();
+        let text = formatdoc! {"
+            Inspect the attachments.
+
+            Attached file(s):
+            - {}
+            - {}
+        ",
+            image_directory.join(image_name).display(),
+            image_directory.join(file_name).display(),
+        };
+        let mut items = Vec::new();
+
+        append_text_with_image_directory(&mut items, text, true, None, Some(&image_directory));
+
+        assert_eq!(
+            items,
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect the attachments.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                    UserContentPart::File {
+                        name: "design-mock.html".to_string(),
                     },
                 ],
                 from: None,

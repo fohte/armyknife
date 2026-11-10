@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.565](https://github.com/fohte/armyknife/compare/v0.1.564...v0.1.565) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** support file attachments ([#1487](https://github.com/fohte/armyknife/issues/1487)) ([6f5e0c1](https://github.com/fohte/armyknife/commit/6f5e0c1a7df23ff169b9edc68e2f130c84430e30))
+
 ## [0.1.564](https://github.com/fohte/armyknife/compare/v0.1.563...v0.1.564) (2026-11-10)
 
 
