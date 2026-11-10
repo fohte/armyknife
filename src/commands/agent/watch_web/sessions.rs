@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::EnrichmentUpdates;
+use super::interrupted::is_waiting_after_user_interrupt;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
@@ -230,9 +231,11 @@ async fn list_sessions<S: SessionSource>(
                 });
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
-            let category_when_not_later = category_for(session, turn);
+            let interrupted = is_waiting_after_user_interrupt(session);
+            let category_when_not_later =
+                category_for_with_interruption(session, turn, interrupted);
             let state = state_by_id.get(&session.session_id);
-            let category = category_for_with_later(session, turn, state, now);
+            let category = category_for_with_later(session, turn, interrupted, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -531,6 +534,7 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
 fn category_for_with_later(
     session: &Session,
     turn: Option<UserTurnKind>,
+    interrupted: bool,
     state: Option<&store::WatchWebSessionState>,
     now: DateTime<Utc>,
 ) -> SessionCategory {
@@ -545,6 +549,18 @@ fn category_for_with_later(
         });
     if later_is_active {
         SessionCategory::Later
+    } else {
+        category_for_with_interruption(session, turn, interrupted)
+    }
+}
+
+fn category_for_with_interruption(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    interrupted: bool,
+) -> SessionCategory {
+    if interrupted {
+        SessionCategory::NeedsAction
     } else {
         category_for(session, turn)
     }
@@ -912,12 +928,14 @@ mod tests {
 
     struct ExpectedSessionDetails<'a> {
         kind: Option<&'a str>,
+        category_when_not_later: &'a str,
         is_paused: bool,
         unread: bool,
         crit_url: Option<&'a str>,
     }
 
     struct ExpectedSessionResponse<'a> {
+        engine: &'a str,
         work_type: Option<&'a str>,
         work_type_nav_labels: serde_json::Value,
         updated_at: &'a str,
@@ -936,11 +954,11 @@ mod tests {
             "workTypeNavLabels": response.work_type_nav_labels,
             "sessions": [{
                 "id": "child-session",
-                "engine": "claude",
+                "engine": response.engine,
                 "workType": response.work_type,
                 "category": category,
                 "isPaused": details.is_paused,
-                "categoryWhenNotLater": if details.is_paused { "done" } else { "needs_action" },
+                "categoryWhenNotLater": details.category_when_not_later,
                 "kind": details.kind,
                 "title": "child title",
                 "preview": "last message",
@@ -993,13 +1011,100 @@ mod tests {
                     false,
                     ExpectedSessionDetails {
                         kind: Some("Review"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: false,
                         crit_url: Some("http://127.0.0.1:6000"),
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: Some("release-guide"),
                         work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::interrupted(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"custom-title","customTitle":"A title"}
+        "#},
+        "needs_action"
+    )]
+    #[case::assistant_activity_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Working again"}]}}
+        "#},
+        "in_progress"
+    )]
+    #[case::new_prompt_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"user","message":{"content":"Continue the task"}}
+        "#},
+        "in_progress"
+    )]
+    #[case::codex_remains_in_progress(
+        SessionStatus::Running,
+        Engine::Codex,
+        r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+        "in_progress"
+    )]
+    #[case::ended_claude_remains_done(
+        SessionStatus::Ended,
+        Engine::Claude,
+        r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+        "done"
+    )]
+    #[tokio::test]
+    async fn sessions_route_only_marks_running_claude_interrupts_as_needing_action(
+        mut source: TestSessionSource,
+        #[case] status: SessionStatus,
+        #[case] engine: Engine,
+        #[case] transcript: &str,
+        #[case] expected_category: &str,
+    ) {
+        let transcript_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(transcript_file.path(), transcript).unwrap();
+        source.sessions[0].status = status;
+        source.sessions[0].engine = engine;
+        source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    expected_category,
+                    None,
+                    true,
+                    ExpectedSessionDetails {
+                        kind: None,
+                        category_when_not_later: expected_category,
+                        is_paused: false,
+                        unread: false,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        engine: match engine {
+                            Engine::Claude => "claude",
+                            Engine::Codex => "codex",
+                        },
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
                     },
@@ -1026,11 +1131,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: None,
+                        category_when_not_later: "done",
                         is_paused: true,
                         unread: false,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1054,11 +1161,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: Some("Stopped"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1086,11 +1195,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: Some("Stopped"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1125,11 +1236,13 @@ mod tests {
                         true,
                         ExpectedSessionDetails {
                             kind: Some("Stopped"),
+                            category_when_not_later: "needs_action",
                             is_paused: false,
                             unread: true,
                             crit_url: None,
                         },
                         ExpectedSessionResponse {
+                            engine: "claude",
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:40Z",
@@ -1145,11 +1258,13 @@ mod tests {
                         true,
                         ExpectedSessionDetails {
                             kind: Some("Stopped"),
+                            category_when_not_later: "needs_action",
                             is_paused: false,
                             unread: true,
                             crit_url: None,
                         },
                         ExpectedSessionResponse {
+                            engine: "claude",
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:41Z",
