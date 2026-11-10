@@ -21,6 +21,11 @@ type PullRequest = {
   state: 'Open' | 'Closed' | 'Merged' | (string & {})
 }
 
+type ParentSession = {
+  id: string
+  title: string | null
+}
+
 export type Session = {
   id: string
   category: SessionCategory
@@ -31,6 +36,8 @@ export type Session = {
   unread: boolean
   task: SessionTask | null
   repo: string
+  project?: string
+  parent?: ParentSession | null
   pullRequest: PullRequest | null
 }
 

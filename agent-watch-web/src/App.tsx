@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import { BoardView } from '#components/board-view'
 import { InboxView } from '#components/inbox-view'
 import { startSessionFeed } from '#session-feed'
 import { getSessionShortcutAction, moveSelection } from '#session-navigation'
@@ -14,6 +16,7 @@ export function App() {
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [view, setView] = useState<View>('inbox')
+  const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -36,6 +39,19 @@ export function App() {
         elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
       })),
     [elapsedOffsetSeconds, sessions],
+  )
+  const projects = useMemo(
+    () => buildBoardProjects(sessionsWithElapsedTime),
+    [sessionsWithElapsedTime],
+  )
+  const pmProjects = useMemo(
+    () =>
+      sortPmProjects(projects).map(({ name, status, needsActionCount }) => ({
+        name,
+        status,
+        needsActionCount,
+      })),
+    [projects],
   )
 
   useEffect(
@@ -134,6 +150,7 @@ export function App() {
       <AgentWatchNav
         activeView={view}
         needsActionCount={needsActionCount}
+        pmProjects={pmProjects}
         onViewChange={setView}
       />
       <main className="agent-watch-main">
@@ -150,11 +167,13 @@ export function App() {
             onSelect={setSelectedId}
           />
         ) : (
-          <section className="board-placeholder" aria-labelledby="board-title">
-            <header className="view-header">
-              <h1 id="board-title">Board</h1>
-            </header>
-          </section>
+          <BoardView
+            error={error}
+            hideQuietProjects={hideQuietProjects}
+            loaded={loaded}
+            onHideQuietProjectsChange={setHideQuietProjects}
+            projects={projects}
+          />
         )}
       </main>
     </div>

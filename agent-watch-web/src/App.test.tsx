@@ -26,6 +26,7 @@ function session(
   title: string,
   category: Session['category'] = 'needs_action',
   elapsedSeconds = 8,
+  project = 'service refresh',
 ): Session {
   return {
     id,
@@ -37,9 +38,97 @@ function session(
     unread: false,
     task: null,
     repo: 'example/service',
+    project,
+    parent: null,
     pullRequest: null,
   }
 }
+
+it('keeps the Board updated from the session feed while it is active', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session', 'needs_action', 8, 'alpha'),
+      session('session-quiet', 'Quiet session', 'done', 30, 'quiet project'),
+    ],
+  })
+
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  const projectsBeforeUpdate = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+    (element) => element.getAttribute('aria-label'),
+  )
+
+  publishSessions({
+    revision: 2,
+    sessions: [
+      session('session-a', 'Updated session', 'in_progress', 10, 'alpha'),
+      session('session-b', 'New session', 'needs_action', 20, 'beta'),
+    ],
+  })
+
+  const snapshot = () => ({
+    projectsBeforeUpdate,
+    projectsAfterUpdate: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (element) => element.getAttribute('aria-label'),
+    ),
+    updatedCard: container.querySelector('.board-card-title')?.textContent,
+    activeView: readActiveView(),
+  })
+
+  expect(snapshot()).toEqual({
+    projectsBeforeUpdate: ['alpha'],
+    projectsAfterUpdate: ['beta', 'alpha'],
+    updatedCard: 'New session',
+    activeView: 'Board',
+  })
+})
+
+it('hides quiet projects by default and lets the filter reveal them', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-active', 'Waiting session', 'needs_action', 8, 'active'),
+      session('session-quiet', 'Finished session', 'done', 30, 'quiet'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+
+  const visibleBeforeToggle = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+    (element) => element.getAttribute('aria-label'),
+  )
+  const quietToggle = container.querySelector<HTMLInputElement>(
+    '.board-quiet-toggle input',
+  )
+  act(() => {
+    quietToggle?.click()
+  })
+
+  const snapshot = () => ({
+    visibleBeforeToggle,
+    visibleAfterToggle: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (element) => element.getAttribute('aria-label'),
+    ),
+    toggleChecked: quietToggle?.checked,
+    label: container.querySelector('.board-quiet-toggle')?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    visibleBeforeToggle: ['active'],
+    visibleAfterToggle: ['active', 'quiet'],
+    toggleChecked: false,
+    label: 'Hide quiet projects (1)',
+  })
+})
 
 function readSelectedTitle() {
   return (

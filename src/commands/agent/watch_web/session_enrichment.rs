@@ -11,7 +11,7 @@ use crate::commands::agent::tq_session_tasks::{
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
-use crate::infra::tq::{TqClient, TqTaskSummary};
+use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
@@ -67,7 +67,10 @@ impl SessionEnrichmentCache {
 
         let session_ids = sessions
             .iter()
-            .map(|session| session.session_id.clone())
+            .flat_map(|session| {
+                std::iter::once(session.session_id.clone())
+                    .chain(session.ancestor_session_ids.iter().cloned())
+            })
             .collect::<HashSet<_>>();
         let fetch_session_ids = session_ids.clone();
         let fetcher = Arc::clone(&self.task_fetcher);
@@ -120,6 +123,7 @@ pub(super) struct SessionTaskMetadata {
     pub(super) links: HashMap<String, SessionTask>,
     pub(super) priorities: HashMap<String, Option<i32>>,
     pub(super) priority_order: HashMap<String, usize>,
+    pub(super) task_projects: HashMap<String, String>,
 }
 
 struct RefreshingCache<T, K> {
@@ -224,6 +228,7 @@ async fn fetch_task_metadata(
             links,
             priorities: previous.priorities,
             priority_order: previous.priority_order,
+            task_projects: previous.task_projects,
         });
     }
 
@@ -235,17 +240,48 @@ async fn fetch_task_metadata(
                 links,
                 priorities: previous.priorities,
                 priority_order: previous.priority_order,
+                task_projects: previous.task_projects,
             });
         }
     };
 
-    let (priorities, priority_order) = task_priority_metadata(tasks);
+    let (priorities, priority_order) = task_priority_metadata(tasks.clone());
+    let task_projects = if tasks.iter().any(|task| task.project_id.is_some()) {
+        match client.list_projects().await {
+            Ok(projects) => task_project_names(tasks, projects),
+            Err(error) => {
+                tracing::warn!(%error, "Failed to fetch agent watch tq projects; keeping cached values");
+                previous.task_projects
+            }
+        }
+    } else {
+        HashMap::new()
+    };
 
     Ok(SessionTaskMetadata {
         links,
         priorities,
         priority_order,
+        task_projects,
     })
+}
+
+fn task_project_names(
+    tasks: Vec<TqTaskSummary>,
+    projects: Vec<TqProjectSummary>,
+) -> HashMap<String, String> {
+    let project_names = projects
+        .into_iter()
+        .map(|project| (project.id, project.title))
+        .collect::<HashMap<_, _>>();
+
+    tasks
+        .into_iter()
+        .filter_map(|task| {
+            let project_name = project_names.get(task.project_id.as_deref()?)?;
+            Some((task.id, project_name.clone()))
+        })
+        .collect()
 }
 
 fn task_priority_metadata(
@@ -349,6 +385,7 @@ mod tests {
             number: 1,
             title: "example task".to_string(),
             priority,
+            project_id: None,
         }
     }
 
@@ -373,6 +410,7 @@ mod tests {
             links,
             priorities: HashMap::new(),
             priority_order: HashMap::new(),
+            task_projects: HashMap::new(),
         }
     }
 
@@ -462,6 +500,22 @@ mod tests {
         #[case] expected: (HashMap<String, Option<i32>>, HashMap<String, usize>),
     ) {
         assert_eq!(task_priority_metadata(tasks), expected);
+    }
+
+    #[test]
+    fn maps_tq_task_projects_to_project_titles() {
+        let mut task = task("task-a", None);
+        task.project_id = Some("project-a".to_string());
+        let tasks = vec![task];
+        let projects = vec![TqProjectSummary {
+            id: "project-a".to_string(),
+            title: "Example project".to_string(),
+        }];
+
+        assert_eq!(
+            task_project_names(tasks, projects),
+            HashMap::from([("task-a".to_string(), "Example project".to_string())]),
+        );
     }
 
     #[tokio::test]

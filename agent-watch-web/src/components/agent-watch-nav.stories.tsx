@@ -7,6 +7,11 @@ const meta = {
   args: {
     activeView: 'inbox',
     needsActionCount: 3,
+    pmProjects: [
+      { name: 'service refresh', status: 'Review', needsActionCount: 3 },
+      { name: 'observability', status: 'Working', needsActionCount: 0 },
+      { name: 'documentation', status: 'Idle', needsActionCount: 0 },
+    ],
     onViewChange: () => undefined,
   },
 } satisfies Meta<typeof AgentWatchNav>

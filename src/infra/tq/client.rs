@@ -32,6 +32,7 @@ const TASK_LIST_ARGS: &[&str] = &[
     "--sort-by",
     "priority",
 ];
+const PROJECT_LIST_ARGS: &[&str] = &["project", "list", "--context", "all", "--status", "all"];
 const SESSION_ARCHIVE_ARGS: &[&str] = &["session", "archive"];
 
 /// Claude Code's provider identifier in tq's agent-session schema. Always
@@ -115,6 +116,16 @@ pub struct TqTaskSummary {
     pub title: String,
     #[serde(default)]
     pub priority: Option<i32>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+}
+
+/// Minimal project metadata used to label tasks in agent watch.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TqProjectSummary {
+    pub id: String,
+    pub title: String,
 }
 
 pub struct TqClient;
@@ -158,6 +169,20 @@ impl TqClient {
             Ok(result) => result,
             Err(e) => Err(TqError::command_failed(
                 &args,
+                format!("task panicked: {e}"),
+                None,
+            )),
+        }
+    }
+
+    /// Lists projects across contexts so linked tasks can be labeled consistently.
+    pub async fn list_projects(&self) -> Result<Vec<TqProjectSummary>> {
+        let args = PROJECT_LIST_ARGS;
+        let join_result = tokio::task::spawn_blocking(run_project_list).await;
+        match join_result {
+            Ok(result) => result,
+            Err(e) => Err(TqError::command_failed(
+                args,
                 format!("task panicked: {e}"),
                 None,
             )),
@@ -277,6 +302,30 @@ fn parse_task_list(stdout: &str) -> Result<Vec<TqTaskSummary>> {
     Ok(serde_json::from_str(stdout)?)
 }
 
+fn run_project_list() -> Result<Vec<TqProjectSummary>> {
+    let args = PROJECT_LIST_ARGS;
+    let mut command = ExternalTool::Tq.command();
+    command.args(args);
+
+    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
+        .map_err(|e| TqError::command_failed(args, e.to_string(), None))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(TqError::command_failed(
+            args,
+            "command exited with non-zero status",
+            Some(stderr),
+        ));
+    }
+
+    parse_project_list(&String::from_utf8_lossy(&output.stdout))
+}
+
+fn parse_project_list(stdout: &str) -> Result<Vec<TqProjectSummary>> {
+    Ok(serde_json::from_str(stdout)?)
+}
+
 /// Runs `tq task url <task_id>` to completion and returns its trimmed
 /// stdout (the task's web page URL). Blocking, so callers must run it via
 /// [`tokio::task::spawn_blocking`].
@@ -382,7 +431,7 @@ mod tests {
     fn parses_task_priorities_without_requiring_tq_process() {
         let json = indoc! {r#"
             [
-              { "id": "task-one", "number": 1, "title": "First task", "priority": 0 },
+              { "id": "task-one", "number": 1, "title": "First task", "priority": 0, "projectId": "project-one" },
               { "id": "task-two", "number": 2, "title": "Second task" }
             ]
         "#};
@@ -395,14 +444,33 @@ mod tests {
                     number: 1,
                     title: "First task".to_string(),
                     priority: Some(0),
+                    project_id: Some("project-one".to_string()),
                 },
                 TqTaskSummary {
                     id: "task-two".to_string(),
                     number: 2,
                     title: "Second task".to_string(),
                     priority: None,
+                    project_id: None,
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn parses_project_titles_without_requiring_tq_process() {
+        let json = indoc! {r#"
+            [
+              { "id": "project-one", "title": "Example project" }
+            ]
+        "#};
+
+        assert_eq!(
+            parse_project_list(json).unwrap(),
+            vec![TqProjectSummary {
+                id: "project-one".to_string(),
+                title: "Example project".to_string(),
+            }],
         );
     }
 
