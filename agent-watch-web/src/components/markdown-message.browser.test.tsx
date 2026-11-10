@@ -165,6 +165,7 @@ ${unknownId}
     links: links.map((link) => ({
       text: link.textContent,
       title: link.title,
+      underlineStyle: getComputedStyle(link).textDecorationStyle,
       href: link.getAttribute('href'),
       insideCode: link.closest('code') !== null,
       insidePre: link.closest('pre') !== null,
@@ -176,21 +177,24 @@ ${unknownId}
     links: [
       {
         text: linkedId,
-        title: 'Inspect the retry path\nexample toolkit\nIn progress',
+        title: '',
+        underlineStyle: 'dotted',
         href: `?session=${linkedId}`,
         insideCode: false,
         insidePre: false,
       },
       {
         text: linkedId,
-        title: 'Inspect the retry path\nexample toolkit\nIn progress',
+        title: '',
+        underlineStyle: 'dotted',
         href: `?session=${linkedId}`,
         insideCode: true,
         insidePre: false,
       },
       {
         text: linkedId,
-        title: 'Inspect the retry path\nexample toolkit\nIn progress',
+        title: '',
+        underlineStyle: 'dotted',
         href: `?session=${linkedId}`,
         insideCode: true,
         insidePre: true,
