@@ -21,6 +21,11 @@ export const WorkingWithoutAnActiveTool: Story = {
   name: 'The session is working without a known active tool',
 }
 
+export const CompactingConversation: Story = {
+  name: 'The conversation is being compacted',
+  args: { isCompacting: true },
+}
+
 export const WorkingWithAnActiveTool: Story = {
   name: 'the long active tool target stays on one line',
   args: {

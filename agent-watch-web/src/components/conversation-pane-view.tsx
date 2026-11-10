@@ -142,7 +142,8 @@ export function ConversationPaneView({
   )
   const conversationMessages = messages.filter(
     (message) =>
-      message.type !== 'tool_in_progress' || session.category !== 'in_progress',
+      message.type !== 'tool_in_progress' ||
+      (session.category !== 'in_progress' && session.isCompacting !== true),
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
@@ -408,12 +409,15 @@ export function ConversationPaneView({
         )}
       </div>
 
-      {session.category === 'in_progress' || backgroundTasks.length > 0 ? (
+      {session.isCompacting === true ||
+      session.category === 'in_progress' ||
+      backgroundTasks.length > 0 ? (
         <ConversationWorkingStatus
           showWorking={session.category === 'in_progress'}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
           backgroundTasks={backgroundTasks}
+          isCompacting={session.isCompacting === true}
         />
       ) : null}
 

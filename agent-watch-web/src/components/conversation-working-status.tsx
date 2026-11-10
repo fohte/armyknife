@@ -5,6 +5,7 @@ type ConversationWorkingStatusProps = {
   elapsedSeconds: number
   activeTool: ToolOperation | undefined
   backgroundTasks?: readonly BackgroundTask[]
+  isCompacting?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -25,14 +26,19 @@ export function ConversationWorkingStatus({
   elapsedSeconds,
   activeTool,
   backgroundTasks = [],
+  isCompacting = false,
 }: ConversationWorkingStatusProps) {
   return (
     <div className="conversation-working-status" role="status">
-      {showWorking ? (
+      {showWorking || isCompacting ? (
         <>
           <span className="conversation-working-dot" aria-hidden="true" />
-          <span>Working · {formatElapsedTime(elapsedSeconds)}</span>
-          {activeTool != null ? (
+          <span>
+            {isCompacting
+              ? 'Compacting conversation…'
+              : `Working · ${formatElapsedTime(elapsedSeconds)}`}
+          </span>
+          {!isCompacting && activeTool != null ? (
             <span className="conversation-working-tool">
               {activeTool.tool}
               {activeTool.target != null && activeTool.target !== '' ? (

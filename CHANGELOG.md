@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.560](https://github.com/fohte/armyknife/compare/v0.1.559...v0.1.560) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show compaction status ([#1475](https://github.com/fohte/armyknife/issues/1475)) ([19d0e65](https://github.com/fohte/armyknife/commit/19d0e65748540456f3f70f4ac9bb4047aafc31eb))
+
 ## [0.1.559](https://github.com/fohte/armyknife/compare/v0.1.558...v0.1.559) (2026-11-10)
 
 

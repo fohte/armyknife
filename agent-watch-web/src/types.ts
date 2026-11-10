@@ -34,6 +34,7 @@ export type Session = {
   workType?: string | null
   category: SessionCategory
   isPaused: boolean
+  isCompacting?: boolean
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
