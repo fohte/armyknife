@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.567](https://github.com/fohte/armyknife/compare/v0.1.566...v0.1.567) (2026-11-10)
+
+
+### Features
+
+* **agent/watch-web:** show queued prompts ([#1491](https://github.com/fohte/armyknife/issues/1491)) ([03f837a](https://github.com/fohte/armyknife/commit/03f837aac289d3a77d5d38160fd86fd1b61729a4))
+
 ## [0.1.566](https://github.com/fohte/armyknife/compare/v0.1.565...v0.1.566) (2026-11-10)
 
 
