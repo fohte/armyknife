@@ -6,7 +6,7 @@ import { Chip } from '@fohte/ui/chip'
 import { Filter, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
-import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
@@ -18,6 +18,7 @@ type SavedViewNavItem = SavedInboxView & {
 }
 type AgentWatchNavProps = {
   activeView: View
+  paletteShortcut: CommandPaletteShortcut
   needsActionCount: number
   savedViews: readonly SavedViewNavItem[]
   selectedSavedViewId: string | null
@@ -33,6 +34,7 @@ type AgentWatchNavProps = {
 
 export function AgentWatchNav({
   activeView,
+  paletteShortcut,
   needsActionCount,
   savedViews,
   selectedSavedViewId,
@@ -45,8 +47,6 @@ export function AgentWatchNav({
   onSelectSession,
   onOpenPalette,
 }: AgentWatchNavProps) {
-  const paletteShortcut = getCommandPaletteShortcut(navigator.platform)
-
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
       <div className="brand-row">

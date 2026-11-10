@@ -1849,6 +1849,22 @@ it('opens the command palette from the navigation shortcut', async () => {
   })
 })
 
+it('shows Ctrl-K in the navigation on other platforms', () => {
+  renderApp()
+  const shortcut = container.querySelector<HTMLButtonElement>(
+    '.agent-watch-command-key',
+  )
+  const snapshot = () => ({
+    label: shortcut?.textContent,
+    ariaLabel: shortcut?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    label: 'Ctrl K',
+    ariaLabel: 'Jump to with Control K',
+  })
+})
+
 it('filters the Inbox from a task command in the palette', async () => {
   setPlatform('MacIntel')
   const taskSession = session('session-task', 'Review alert settings')

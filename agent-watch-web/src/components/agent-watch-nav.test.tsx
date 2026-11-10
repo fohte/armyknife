@@ -4,10 +4,6 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 
-function setPlatform(platform: string) {
-  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
-}
-
 let container: HTMLDivElement
 let root: Root | null = null
 
@@ -18,12 +14,18 @@ function renderNav(
   selectedSavedViewId: string | null = null,
   onSelectSavedView: (id: string) => void = () => undefined,
   onDeleteSavedView: (id: string) => void = () => undefined,
+  paletteShortcut: ComponentProps<typeof AgentWatchNav>['paletteShortcut'] = {
+    modifier: 'ctrlKey',
+    label: 'Ctrl K',
+    ariaLabel: 'Control K',
+  },
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <AgentWatchNav
         activeView="inbox"
+        paletteShortcut={paletteShortcut}
         needsActionCount={0}
         savedViews={savedViews}
         selectedSavedViewId={selectedSavedViewId}
@@ -110,20 +112,37 @@ it('renders no work type sections without configured groups', () => {
 
 it.each([
   {
-    platform: 'MacIntel',
+    platform: 'macOS',
+    paletteShortcut: {
+      modifier: 'metaKey',
+      label: '⌘K',
+      ariaLabel: 'Command K',
+    },
     label: '⌘K',
     ariaLabel: 'Jump to with Command K',
   },
   {
-    platform: 'Linux x86_64',
+    platform: 'other platforms',
+    paletteShortcut: {
+      modifier: 'ctrlKey',
+      label: 'Ctrl K',
+      ariaLabel: 'Control K',
+    },
     label: 'Ctrl K',
     ariaLabel: 'Jump to with Control K',
   },
-])(
+] as const)(
   'shows the $label shortcut on $platform',
-  ({ platform, label, ariaLabel }) => {
-    setPlatform(platform)
-    renderNav([])
+  ({ paletteShortcut, label, ariaLabel }) => {
+    renderNav(
+      [],
+      () => undefined,
+      [],
+      null,
+      () => undefined,
+      () => undefined,
+      paletteShortcut,
+    )
 
     const shortcut = container.querySelector<HTMLButtonElement>(
       '.agent-watch-command-key',

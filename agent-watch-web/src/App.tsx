@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { useCommandPaletteController } from '#command-palette-controller'
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { CommandPalette } from '#components/command-palette'
@@ -412,6 +413,7 @@ export function App() {
   const navigation = !isMobile ? (
     <AgentWatchNav
       activeView={view}
+      paletteShortcut={getCommandPaletteShortcut(navigator.platform)}
       needsActionCount={needsActionCount}
       savedViews={savedViews.savedViewsForNav}
       selectedSavedViewId={savedViews.activeSavedViewId}
