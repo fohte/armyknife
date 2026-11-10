@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use crate::commands::agent::claude_sessions::normalize_title;
-use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
+use crate::infra::tq::{SessionTasks, TqClient, TqTask, TqTaskStatus};
 
 /// A tq task linked to a session, as needed by session list views. `parent_task_id`
 /// is `None` both when the task has no parent and when an older `tq` binary
@@ -144,16 +144,7 @@ pub(super) fn build_all_tasks_by_session(
                     })
                     .then_with(|| right.linked_at.cmp(&left.linked_at))
             });
-            let tasks = tasks
-                .into_iter()
-                .map(|task| SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
-                })
-                .collect();
+            let tasks = tasks.into_iter().map(to_session_task).collect();
             (session.session_id, tasks)
         })
         .collect()
@@ -174,19 +165,20 @@ pub(super) fn build_watch_web_tasks_by_session(
                     .cmp(&(right.status == TqTaskStatus::Completed))
                     .then_with(|| right.linked_at.cmp(&left.linked_at))
             });
-            let tasks = tasks
-                .into_iter()
-                .map(|task| SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
-                })
-                .collect();
+            let tasks = tasks.into_iter().map(to_session_task).collect();
             (session.session_id, tasks)
         })
         .collect()
+}
+
+fn to_session_task(task: TqTask) -> SessionTask {
+    SessionTask {
+        task_id: task.id,
+        task_number: task.number,
+        task_title: normalize_title(&task.title),
+        parent_task_id: task.parent_id,
+        is_closed: task.status == TqTaskStatus::Completed,
+    }
 }
 
 #[cfg(test)]
@@ -223,32 +215,44 @@ mod tests {
         }
     }
 
+    fn session(session_id: &str, tasks: Vec<TqTask>) -> SessionTasks {
+        SessionTasks {
+            session_id: session_id.to_string(),
+            parent_session_id: None,
+            tasks,
+        }
+    }
+
     #[rstest]
     #[case::open_links_precede_completed_links(
-        vec![
+        vec![session("session-a", vec![
             task("completed-newest", "2026-01-03T00:00:00Z", TqTaskStatus::Completed),
             task("open-oldest", "2026-01-01T00:00:00Z", TqTaskStatus::Todo),
             task("open-newest", "2026-01-02T00:00:00Z", TqTaskStatus::Todo),
-        ],
-        vec![view_task("open-newest", false), view_task("open-oldest", false), view_task("completed-newest", true)],
+        ])],
+        HashMap::from([("session-a".to_string(), vec![view_task("open-newest", false), view_task("open-oldest", false), view_task("completed-newest", true)])]),
     )]
     #[case::newest_link_wins_when_all_tasks_are_completed(
-        vec![
+        vec![session("session-a", vec![
             task("older", "2026-01-01T00:00:00Z", TqTaskStatus::Completed),
             task("newer", "2026-01-02T00:00:00Z", TqTaskStatus::Completed),
-        ],
-        vec![view_task("newer", true), view_task("older", true)],
+        ])],
+        HashMap::from([("session-a".to_string(), vec![view_task("newer", true), view_task("older", true)])]),
     )]
-    fn orders_watch_web_links(#[case] tasks: Vec<TqTask>, #[case] expected: Vec<SessionTask>) {
-        let sessions = vec![SessionTasks {
-            session_id: "session-a".to_string(),
-            parent_session_id: None,
-            tasks,
-        }];
-
+    #[case::drops_unrequested_sessions(
+        vec![
+            session("session-a", vec![task("requested", "2026-01-01T00:00:00Z", TqTaskStatus::Todo)]),
+            session("session-b", vec![task("unrequested", "2026-01-02T00:00:00Z", TqTaskStatus::Todo)]),
+        ],
+        HashMap::from([("session-a".to_string(), vec![view_task("requested", false)])]),
+    )]
+    fn orders_watch_web_links(
+        #[case] sessions: Vec<SessionTasks>,
+        #[case] expected: HashMap<String, Vec<SessionTask>>,
+    ) {
         assert_eq!(
             build_watch_web_tasks_by_session(sessions, &HashSet::from(["session-a".to_string()])),
-            HashMap::from([("session-a".to_string(), expected)]),
+            expected,
         );
     }
 }

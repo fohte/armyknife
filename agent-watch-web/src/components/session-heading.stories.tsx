@@ -49,6 +49,7 @@ export const SessionWithLinkedTasks: Story = {
         isClosed: true,
       },
     ],
+    taskListOpen: true,
   },
-  name: 'A session shows its primary task and the remaining task count',
+  name: 'A session shows each linked task and marks completed work',
 }

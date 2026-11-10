@@ -52,14 +52,25 @@
   display: none;
 }
 
+.session-task-links[open] {
+  box-sizing: border-box;
+  width: min(240px, 80vw);
+  margin-left: calc(22px - min(240px, 80vw));
+}
+
+.session-task-links[open] summary {
+  position: absolute;
+  right: 0;
+}
+
 .session-task-links ul {
   position: absolute;
   z-index: 5;
   top: calc(100% + 7px);
   left: 0;
   display: grid;
-  min-width: 240px;
-  max-width: min(420px, 80vw);
+  box-sizing: border-box;
+  width: 100%;
   gap: 8px;
   margin: 0;
   padding: 10px;

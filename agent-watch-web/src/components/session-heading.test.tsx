@@ -9,6 +9,7 @@ let root: Root | null = null
 
 function snapshot() {
   return {
+    expanded: container.querySelector('details')?.open,
     primary: {
       href: container
         .querySelector('.session-heading-task-line > a')
@@ -66,12 +67,15 @@ it('lists all linked tasks and marks completed tasks', () => {
             isClosed: true,
           },
         ]}
-        taskListOpen
       />,
     )
   })
+  act(() => {
+    container.querySelector('summary')?.click()
+  })
 
   expect(snapshot()).toEqual({
+    expanded: true,
     primary: {
       href: 'https://tq.fohte.net/tasks/open-task',
       text: 'P1 #2048 Improve request reliability',
