@@ -32,6 +32,9 @@ impl BackgroundTaskTracker {
     }
 
     pub(super) fn finish_notification(&mut self, record: &Value) {
+        if !is_task_notification(record) {
+            return;
+        }
         let Some(message) = record.get("message") else {
             return;
         };
@@ -278,6 +281,47 @@ mod tests {
             )
             .unwrap(),
             (background_bash_messages(), expected_tasks),
+        );
+    }
+
+    #[rstest]
+    fn quoted_task_tags_in_user_text_do_not_finish_a_running_task(
+        background_bash_transcript: String,
+    ) {
+        let user_text = "I saw <task-id>fixture-task-id</task-id> with <status>completed</status> in the output.";
+        let mut transcript = background_bash_transcript;
+        transcript.push_str(
+            &serde_json::to_string(&json!({
+                "type": "user",
+                "message": {"content": user_text},
+            }))
+            .unwrap(),
+        );
+        transcript.push('\n');
+
+        let mut expected_messages = background_bash_messages();
+        expected_messages.push(ChatItem::User {
+            text: user_text.to_string(),
+            from: None,
+        });
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:01:30Z"),
+            )
+            .unwrap(),
+            (
+                expected_messages,
+                vec![BackgroundTask {
+                    id: "fixture-task-id".to_string(),
+                    description: "Watch the synthetic build".to_string(),
+                    elapsed_seconds: 90,
+                }],
+            ),
         );
     }
 
