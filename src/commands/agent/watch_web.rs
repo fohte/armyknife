@@ -219,33 +219,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn later_post_requires_a_matching_origin_and_missing_session_is_not_found() {
-        let make_request = |origin: Option<&str>| {
-            let mut builder = Request::builder()
-                .method("POST")
-                .uri("/api/sessions/nonexistent-session/today")
-                .header(HOST, "localhost")
-                .header(CONTENT_TYPE, "application/json");
-            if let Some(origin) = origin {
-                builder = builder.header(ORIGIN, origin);
-            }
-            builder.body(Body::from(r#"{"isToday":true}"#)).unwrap()
-        };
-
-        let app = app();
-        let rejected = app.clone().oneshot(make_request(None)).await.unwrap();
-        let missing = app
-            .oneshot(make_request(Some("http://localhost")))
-            .await
-            .unwrap();
-
-        assert_eq!(
-            (rejected.status(), missing.status()),
-            (StatusCode::FORBIDDEN, StatusCode::NOT_FOUND),
-        );
-    }
-
     #[rstest]
     #[case::known_session(
         "/api/sessions/fixture-session/messages",

@@ -146,7 +146,9 @@ mod tests {
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use axum::body::Body;
+    use axum::http::header::{HOST, ORIGIN};
     use axum::http::{Request, StatusCode};
+    use axum::middleware::from_fn;
     use chrono::TimeZone;
     use std::path::PathBuf;
     use tower::ServiceExt;
@@ -190,21 +192,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn missing_sessions_return_not_found_for_state_updates() {
+    async fn state_updates_require_origin_and_missing_sessions_return_not_found() {
         let temp = tempfile::tempdir().unwrap();
-        let app = router_with_store(SessionStateStore {
-            sessions_dir: Some(temp.path().to_path_buf()),
-        });
-        let response = app
-            .oneshot(
-                Request::post("/sessions/absent/today")
-                    .header("content-type", "application/json")
-                    .body(Body::from(r#"{"isToday":true}"#))
-                    .unwrap(),
+        let app = axum::Router::new()
+            .nest(
+                "/api",
+                router_with_store(SessionStateStore {
+                    sessions_dir: Some(temp.path().to_path_buf()),
+                }),
             )
+            .layer(from_fn(super::super::security::validate_request));
+        let make_request = |origin: Option<&str>| {
+            let mut builder = Request::post("/api/sessions/absent/today")
+                .header(HOST, "localhost")
+                .header("content-type", "application/json");
+            if let Some(origin) = origin {
+                builder = builder.header(ORIGIN, origin);
+            }
+            builder.body(Body::from(r#"{"isToday":true}"#)).unwrap()
+        };
+
+        let rejected = app.clone().oneshot(make_request(None)).await.unwrap();
+        let missing = app
+            .oneshot(make_request(Some("http://localhost")))
             .await
             .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+        assert_eq!(
+            (rejected.status(), missing.status()),
+            (StatusCode::FORBIDDEN, StatusCode::NOT_FOUND),
+        );
     }
 
     #[tokio::test]
