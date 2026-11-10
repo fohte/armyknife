@@ -40,7 +40,7 @@ function sessionStatus(session: Session) {
   }
 
   if (session.category === 'done') {
-    if (session.isPaused) {
+    if (session.isPaused && session.pullRequest?.state !== 'Merged') {
       return formatElapsedTime(session.elapsedSeconds)
     }
     const detail =
