@@ -297,6 +297,13 @@
   font-size: 16px;
 }
 
+.conversation-pane[data-mobile='true'] .conversation-copy-session-id {
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
 .mobile-conversation-back {
   width: 44px;
   padding: 0;

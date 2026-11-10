@@ -32,12 +32,26 @@ pub(super) fn for_each_jsonl_record(
     Ok(())
 }
 
-pub(super) fn tool_target(input: Option<&serde_json::Value>) -> Option<String> {
+pub(super) fn tool_target(name: &str, input: Option<&serde_json::Value>) -> Option<String> {
     let input = input?;
+    if matches!(name, "Agent" | "Task") {
+        let subagent_type = input
+            .get("subagent_type")
+            .and_then(serde_json::Value::as_str);
+        let description = input.get("description").and_then(serde_json::Value::as_str);
+        return match (subagent_type, description) {
+            (Some(subagent_type), Some(description)) => {
+                Some(format!("{subagent_type} · {description}"))
+            }
+            (Some(subagent_type), None) => Some(subagent_type.to_owned()),
+            (None, Some(description)) => Some(description.to_owned()),
+            (None, None) => None,
+        };
+    }
     let target = ["command", "file_path", "path", "pattern", "url", "query"]
         .into_iter()
         .find_map(|key| input.get(key).and_then(serde_json::Value::as_str))?;
-    Some(target.chars().take(240).collect())
+    Some(target.to_owned())
 }
 
 #[derive(Default)]
@@ -151,13 +165,13 @@ pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -
             .or_else(|| value.get("input"))
             .or_else(|| value.get("parameters"))
     });
-    if let Some(target) = tool_target(detail).or_else(|| tool_target(nested_detail)) {
+    if let Some(target) = tool_target(name, detail).or_else(|| tool_target(name, nested_detail)) {
         return Some(target);
     }
     if matches!(name, "exec" | "shell" | "CommandExecution")
         && let Some(target) = detail.and_then(serde_json::Value::as_str)
     {
-        return Some(target.chars().take(240).collect());
+        return Some(target.to_owned());
     }
 
     let paths = detail
@@ -178,7 +192,7 @@ pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -
     if paths.is_empty() {
         return None;
     }
-    Some(paths.join(", ").chars().take(240).collect())
+    Some(paths.join(", "))
 }
 
 pub(super) fn append_text(
@@ -283,7 +297,7 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
 mod tests {
     use rstest::rstest;
 
-    use super::{ChatItem, ToolSummary};
+    use super::{ChatItem, ToolSummary, operation_target};
 
     #[rstest]
     #[case::singular(1, "1 action")]
@@ -308,6 +322,35 @@ mod tests {
                     })
                     .collect(),
             }]
+        );
+    }
+
+    #[test]
+    fn tool_targets_preserve_their_full_length() {
+        let target = "x".repeat(241);
+        let command_input = serde_json::json!({
+            "command": target,
+            "description": "Run the tests",
+        });
+        let raw_command = serde_json::Value::String(target.clone());
+        let paths = (0..40)
+            .map(|index| {
+                (
+                    format!("file-{index:02}-long-path.rs"),
+                    serde_json::Value::Null,
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let expected_paths = paths.keys().cloned().collect::<Vec<_>>().join(", ");
+        let changed_paths = serde_json::json!({ "changes": paths });
+
+        assert_eq!(
+            vec![
+                operation_target("Bash", Some(&command_input)),
+                operation_target("exec", Some(&raw_command)),
+                operation_target("FileChange", Some(&changed_paths)),
+            ],
+            vec![Some(target.clone()), Some(target), Some(expected_paths)],
         );
     }
 }

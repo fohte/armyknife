@@ -10,6 +10,7 @@ import {
 
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
+import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MessageComposer } from '#components/message-composer'
 import { renderConversationCritColumns } from '#components/resizable-columns'
@@ -295,6 +296,7 @@ export function ConversationPaneView({
                 isPaused={session.isPaused}
               />
             </div>
+            <CopySessionIdControl sessionId={session.id} compact />
             <Button
               className="mobile-conversation-later cursor-pointer"
               type="button"
@@ -371,6 +373,7 @@ export function ConversationPaneView({
                   #{session.pullRequest.number} PR
                 </a>
               ) : null}
+              <CopySessionIdControl sessionId={session.id} />
               {actions?.openInTerminal === true ? (
                 <Button type="button" variant="plain" onClick={openInTerminal}>
                   Open in terminal

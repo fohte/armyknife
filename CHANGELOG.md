@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.553](https://github.com/fohte/armyknife/compare/v0.1.552...v0.1.553) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** allow copying session IDs ([#1460](https://github.com/fohte/armyknife/issues/1460)) ([0c36560](https://github.com/fohte/armyknife/commit/0c365609af7842a26d099fe24c2f9cc8ff0de8d9))
+
+## [0.1.552](https://github.com/fohte/armyknife/compare/v0.1.551...v0.1.552) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show complete tool commands ([#1461](https://github.com/fohte/armyknife/issues/1461)) ([5f9e763](https://github.com/fohte/armyknife/commit/5f9e763a8ccd9383ca4a51af3ab355deca8bd61a))
+
 ## [0.1.551](https://github.com/fohte/armyknife/compare/v0.1.550...v0.1.551) (2026-11-10)
 
 
