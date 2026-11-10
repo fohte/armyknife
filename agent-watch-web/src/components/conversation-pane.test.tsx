@@ -335,6 +335,9 @@ it('opens and closes a crit review beside a waiting conversation', () => {
     kind: 'Review',
     critUrl: 'http://127.0.0.1:5000/review/sample',
   })
+  const conversationScroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
 
   act(() => {
     requireElement(
@@ -349,8 +352,12 @@ it('opens and closes a crit review beside a waiting conversation', () => {
       container.querySelector<HTMLIFrameElement>('.crit-pane iframe'),
     ).getAttribute('src'),
     closeLabel: requireElement(
-      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+      container.querySelector<HTMLButtonElement>(
+        '.crit-pane button[aria-label="Close crit"]',
+      ),
     ).getAttribute('aria-label'),
+    scrollElementPreserved:
+      container.querySelector('.conversation-scroll') === conversationScroll,
   }
 
   renderView(onAction, {
@@ -373,7 +380,9 @@ it('opens and closes a crit review beside a waiting conversation', () => {
 
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>('.crit-pane button'),
+      container.querySelector<HTMLButtonElement>(
+        '.crit-pane button[aria-label="Close crit"]',
+      ),
     ).click()
   })
   const closedState = {
@@ -389,6 +398,7 @@ it('opens and closes a crit review beside a waiting conversation', () => {
       expanded: 'true',
       frameSource: 'http://127.0.0.1:5000/review/sample',
       closeLabel: 'Close crit',
+      scrollElementPreserved: true,
     },
     changedUrlState: {
       expanded: 'false',

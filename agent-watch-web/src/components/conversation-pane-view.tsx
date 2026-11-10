@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
+import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -490,17 +491,13 @@ export function ConversationPaneView({
     </section>
   )
 
-  return (
-    <>
-      {conversationPane}
-      {critOpen && !isMobile ? (
-        <CritPane
-          url={critUrl}
-          onClose={() => {
-            setOpenCritUrl(null)
-          }}
-        />
-      ) : null}
-    </>
+  const closeCrit = () => {
+    setOpenCritUrl(null)
+  }
+  if (isMobile) return conversationPane
+
+  return renderConversationCritColumns(
+    conversationPane,
+    critOpen ? <CritPane url={critUrl} onClose={closeCrit} /> : null,
   )
 }
