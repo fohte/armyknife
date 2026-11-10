@@ -16,7 +16,6 @@ export function useMobileLayout() {
     () => window.matchMedia(mobileBreakpoint).matches,
     () => false,
   )
-  const [conversationOpen, setConversationOpen] = useState(false)
   const [inProgressExpanded, setInProgressExpanded] = useState(false)
   const [doneExpanded, setDoneExpanded] = useState(false)
 
@@ -43,8 +42,6 @@ export function useMobileLayout() {
 
   return {
     isMobile,
-    conversationOpen,
-    setConversationOpen,
     inProgressExpanded,
     setInProgressExpanded,
     doneExpanded,
@@ -55,8 +52,8 @@ type MobileNavigationOptions = {
   isMobile: boolean
   conversationOpen: boolean
   navigableSessions: readonly Session[]
-  selectedId: string | null
   selectedSessionExists: boolean
+  sessionsLoaded: boolean
   setSelectedId: (id: string | null) => void
   setConversationOpen: (open: boolean) => void
 }
@@ -65,37 +62,31 @@ export function useMobileNavigation({
   isMobile,
   conversationOpen,
   navigableSessions,
-  selectedId,
   selectedSessionExists,
+  sessionsLoaded,
   setSelectedId,
   setConversationOpen,
 }: MobileNavigationOptions) {
-  const selectedIsNavigable = navigableSessions.some(
-    (session) => session.id === selectedId,
-  )
-
   useEffect(() => {
-    if (isMobile && conversationOpen && !selectedIsNavigable) {
+    if (!sessionsLoaded) {
+      return
+    }
+    if (isMobile && conversationOpen && !selectedSessionExists) {
       setConversationOpen(false)
     }
-    if (!selectedIsNavigable) {
+    if (!selectedSessionExists) {
       setSelectedId(navigableSessions[0]?.id ?? null)
     }
   }, [
     conversationOpen,
     isMobile,
     navigableSessions,
-    selectedId,
-    selectedIsNavigable,
+    sessionsLoaded,
     setConversationOpen,
     setSelectedId,
   ])
 
   return {
-    showConversation:
-      isMobile &&
-      conversationOpen &&
-      selectedIsNavigable &&
-      selectedSessionExists,
+    showConversation: isMobile && conversationOpen && selectedSessionExists,
   }
 }

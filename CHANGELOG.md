@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.533](https://github.com/fohte/armyknife/compare/v0.1.532...v0.1.533) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** restore view history ([#1419](https://github.com/fohte/armyknife/issues/1419)) ([cf569b4](https://github.com/fohte/armyknife/commit/cf569b4eeeb5f06024821e56720a91c8c97a7ea9))
+
 ## [0.1.532](https://github.com/fohte/armyknife/compare/v0.1.531...v0.1.532) (2026-11-10)
 
 
