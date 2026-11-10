@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.530](https://github.com/fohte/armyknife/compare/v0.1.529...v0.1.530) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add iPhone layouts ([#1413](https://github.com/fohte/armyknife/issues/1413)) ([67db3ce](https://github.com/fohte/armyknife/commit/67db3cebcb4b96e4f5e3defb0c2b17d84f305e50))
+
 ## [0.1.529](https://github.com/fohte/armyknife/compare/v0.1.528...v0.1.529) (2026-11-10)
 
 
