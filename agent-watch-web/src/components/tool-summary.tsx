@@ -1,6 +1,16 @@
 import '#components/tool-summary.css'
 
+import hljs from 'highlight.js/lib/core'
+import bash from 'highlight.js/lib/languages/bash'
+
 import type { ToolOperation } from '#types'
+
+const shellHighlighter = hljs.newInstance()
+shellHighlighter.registerLanguage('bash', bash)
+
+function isShellTool(tool: string) {
+  return ['Bash', 'bash', 'exec', 'shell', 'CommandExecution'].includes(tool)
+}
 
 type ToolSummaryProps = {
   summary: string
@@ -24,7 +34,18 @@ export function ToolSummary({
             >
               <span className="chat-tool-name">{operation.tool}</span>
               {operation.target != null && operation.target !== '' ? (
-                <code>{operation.target}</code>
+                isShellTool(operation.tool) ? (
+                  <code
+                    className="chat-tool-command hljs"
+                    dangerouslySetInnerHTML={{
+                      __html: shellHighlighter.highlight(operation.target, {
+                        language: 'bash',
+                      }).value,
+                    }}
+                  />
+                ) : (
+                  <code>{operation.target}</code>
+                )
               ) : null}
             </li>
           ))}

@@ -559,6 +559,22 @@ mod tests {
     use super::parse;
     use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
 
+    #[test]
+    fn agent_tool_summary_shows_its_type_and_description_without_its_prompt() {
+        let transcript = indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-agent-call","name":"Agent","input":{"subagent_type":"Explore","description":"Find fixture loaders","prompt":"This full prompt stays hidden from the summary."}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-agent-call","content":"Fixture research result."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "1 action".to_string(),
+                operations: vec![operation("Agent", Some("Explore · Find fixture loaders"))],
+            }],
+        );
+    }
+
     #[rstest]
     #[case::prompt_array(
         indoc! {r#"

@@ -34,10 +34,17 @@ pub(super) fn for_each_jsonl_record(
 
 pub(super) fn tool_target(input: Option<&serde_json::Value>) -> Option<String> {
     let input = input?;
+    let agent_details = ["subagent_type", "description"]
+        .into_iter()
+        .filter_map(|key| input.get(key).and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>();
+    if !agent_details.is_empty() {
+        return Some(agent_details.join(" · "));
+    }
     let target = ["command", "file_path", "path", "pattern", "url", "query"]
         .into_iter()
         .find_map(|key| input.get(key).and_then(serde_json::Value::as_str))?;
-    Some(target.chars().take(240).collect())
+    Some(target.to_owned())
 }
 
 #[derive(Default)]
@@ -157,7 +164,7 @@ pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -
     if matches!(name, "exec" | "shell" | "CommandExecution")
         && let Some(target) = detail.and_then(serde_json::Value::as_str)
     {
-        return Some(target.chars().take(240).collect());
+        return Some(target.to_owned());
     }
 
     let paths = detail
@@ -178,7 +185,7 @@ pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -
     if paths.is_empty() {
         return None;
     }
-    Some(paths.join(", ").chars().take(240).collect())
+    Some(paths.join(", "))
 }
 
 pub(super) fn append_text(
@@ -283,7 +290,7 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
 mod tests {
     use rstest::rstest;
 
-    use super::{ChatItem, ToolSummary};
+    use super::{ChatItem, ToolSummary, operation_target};
 
     #[rstest]
     #[case::singular(1, "1 action")]
@@ -308,6 +315,32 @@ mod tests {
                     })
                     .collect(),
             }]
+        );
+    }
+
+    #[test]
+    fn tool_targets_preserve_their_full_length() {
+        let target = "x".repeat(241);
+        let command_input = serde_json::json!({ "command": target });
+        let raw_command = serde_json::Value::String(target.clone());
+        let paths = (0..40)
+            .map(|index| {
+                (
+                    format!("file-{index:02}-long-path.rs"),
+                    serde_json::Value::Null,
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let expected_paths = paths.keys().cloned().collect::<Vec<_>>().join(", ");
+        let changed_paths = serde_json::json!({ "changes": paths });
+
+        assert_eq!(
+            vec![
+                operation_target("Bash", Some(&command_input)),
+                operation_target("exec", Some(&raw_command)),
+                operation_target("FileChange", Some(&changed_paths)),
+            ],
+            vec![Some(target.clone()), Some(target), Some(expected_paths)],
         );
     }
 }
