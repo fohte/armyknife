@@ -33,6 +33,35 @@ type ConversationPaneViewProps = {
   onLater?: () => void
 }
 
+function UserImage({
+  source,
+  available,
+}: {
+  source: string
+  available: boolean
+}) {
+  const [isAvailable, setIsAvailable] = useState(available)
+
+  useEffect(() => {
+    setIsAvailable(available)
+  }, [available, source])
+
+  if (!isAvailable) {
+    return <p className="chat-image-unavailable">画像はもうありません</p>
+  }
+
+  return (
+    <img
+      className="chat-user-image"
+      src={source}
+      alt="Attached image"
+      onError={() => {
+        setIsAvailable(false)
+      }}
+    />
+  )
+}
+
 export function ConversationPaneView({
   session,
   messages,
@@ -346,6 +375,34 @@ export function ConversationPaneView({
                 <MarkdownMessage className="chat-user-message">
                   {message.text}
                 </MarkdownMessage>
+              </article>
+            )
+          }
+          if (message.type === 'user_with_content') {
+            return (
+              <article
+                className="chat-user-group"
+                key={`user-content-${String(index)}`}
+              >
+                {message.from != null && message.from !== '' ? (
+                  <div className="chat-from">From {message.from}</div>
+                ) : null}
+                {message.content.map((part, partIndex) =>
+                  part.type === 'text' ? (
+                    <MarkdownMessage
+                      className="chat-user-message"
+                      key={`text-${String(partIndex)}`}
+                    >
+                      {part.text}
+                    </MarkdownMessage>
+                  ) : (
+                    <UserImage
+                      key={`image-${String(partIndex)}`}
+                      source={part.source}
+                      available={part.available}
+                    />
+                  ),
+                )}
               </article>
             )
           }

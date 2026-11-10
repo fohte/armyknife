@@ -4,10 +4,12 @@ pub(super) mod codex;
 use std::collections::BTreeSet;
 use std::io::BufRead;
 
-use super::{ChatItem, ParentSession, ToolOperation};
+use super::{ChatItem, ParentSession, ToolOperation, UserContentPart};
 
 const PEER_MESSAGE_HEADER_SEPARATOR: &str = concat!("\n", "\n");
 const PEER_MESSAGE_END: &str = concat!("\n", "</peer-message>");
+const PEER_TRAILING_NOTICE_SEPARATOR: &str =
+    concat!("\n", "\n", "This came from another Claude session");
 
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
@@ -225,8 +227,19 @@ pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -
 
 fn marked_peer_message_body<'a>(message: &'a str, marker: Option<&str>) -> Option<&'a str> {
     let marker = marker?;
-    let (_, body) = peer_message_parts(message)?;
-    crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
+    if let Some((_, body)) = peer_message_parts(message) {
+        return crate::commands::agent::watch_web_user_marker::strip_message(marker, body);
+    }
+
+    let marker_offset = message.match_indices(marker).find_map(|(offset, _)| {
+        let prefix = &message[..offset];
+        (offset == 0 || prefix.ends_with('\n')).then_some(offset)
+    })?;
+    let body = message[marker_offset + marker.len()..].strip_prefix('\n')?;
+    let body = body
+        .split_once(PEER_TRAILING_NOTICE_SEPARATOR)
+        .map_or(body, |(body, _)| body);
+    Some(body)
 }
 
 pub(super) fn append_text_with_user_marker(
@@ -234,31 +247,126 @@ pub(super) fn append_text_with_user_marker(
     text: String,
     parent: Option<&ParentSession>,
     marker: Option<&str>,
+    images: Vec<UserContentPart>,
 ) {
     if let Some(body) = marked_peer_message_body(&text, marker) {
-        if !body.trim().is_empty() {
-            items.push(ChatItem::User {
-                text: body.to_owned(),
-                from: None,
-            });
-        }
+        items.push(marked_user_item(body.to_owned(), None, images));
         return;
     }
-    append_text(items, text, true, parent);
+    append_user_text_with_images(items, text, parent, images);
 }
 
 pub(super) fn peer_message_item_with_user_marker(
     message: &str,
     parent: Option<&ParentSession>,
     marker: Option<&str>,
+    images: Vec<UserContentPart>,
 ) -> Option<ChatItem> {
     if let Some(body) = marked_peer_message_body(message, marker) {
-        return (!body.trim().is_empty()).then(|| ChatItem::User {
-            text: body.to_owned(),
-            from: None,
+        return (!body.trim().is_empty() || !images.is_empty())
+            .then(|| marked_user_item(body.to_owned(), None, images));
+    }
+    let item = peer_message_item(message, parent)?;
+    let ChatItem::User { text, from } = item else {
+        return None;
+    };
+    Some(user_item_with_images(text, from, images))
+}
+
+fn append_user_text_with_images(
+    items: &mut Vec<ChatItem>,
+    text: String,
+    parent: Option<&ParentSession>,
+    images: Vec<UserContentPart>,
+) {
+    let (text, from) = if let Some((sender_id, body)) = peer_message_parts(&text) {
+        (
+            body.to_owned(),
+            parent
+                .filter(|parent| parent.session_id == sender_id)
+                .map(|parent| parent.title.clone()),
+        )
+    } else {
+        (text, None)
+    };
+    if !text.trim().is_empty() || !images.is_empty() {
+        items.push(user_item_with_images(text, from, images));
+    }
+}
+
+fn marked_user_item(
+    mut text: String,
+    from: Option<String>,
+    mut images: Vec<UserContentPart>,
+) -> ChatItem {
+    let directory = super::super::image_attachments::storage_directory().unwrap_or_default();
+    if let Some((visible_text, references)) =
+        super::super::image_attachments::extract_references(&text, &directory)
+    {
+        text = visible_text;
+        images.extend(
+            references
+                .into_iter()
+                .map(|reference| UserContentPart::Image {
+                    source: reference.source,
+                    available: reference.available,
+                }),
+        );
+    }
+    user_item_with_images(text, from, images)
+}
+
+pub(super) fn user_item_with_images(
+    text: String,
+    from: Option<String>,
+    images: Vec<UserContentPart>,
+) -> ChatItem {
+    if images.is_empty() {
+        return ChatItem::User { text, from };
+    }
+
+    let mut content = Vec::new();
+    let mut remaining_images = images.into_iter();
+    let mut cursor = 0;
+    while let Some((start, end)) = image_placeholder(&text[cursor..]) {
+        let Some(image) = remaining_images.next() else {
+            break;
+        };
+        let start = cursor + start;
+        let end = cursor + end;
+        if start > cursor {
+            content.push(UserContentPart::Text {
+                text: text[cursor..start].to_owned(),
+            });
+        }
+        content.push(image);
+        cursor = end;
+    }
+    if cursor < text.len() {
+        content.push(UserContentPart::Text {
+            text: text[cursor..].to_owned(),
         });
     }
-    peer_message_item(message, parent)
+    content.extend(remaining_images);
+    ChatItem::UserWithContent { content, from }
+}
+
+fn image_placeholder(text: &str) -> Option<(usize, usize)> {
+    let mut search_from = 0;
+    while let Some(offset) = text[search_from..].find("[Image #") {
+        let start = search_from + offset;
+        let number_start = start + "[Image #".len();
+        let number_end = text[number_start..].find(']')? + number_start;
+        if !text[number_start..number_end].is_empty()
+            && text[number_start..number_end]
+                .chars()
+                .all(|character| character.is_ascii_digit())
+        {
+            return Some((start, number_end + 1));
+        }
+        search_from = start + "[Image #".len();
+    }
+    None
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {

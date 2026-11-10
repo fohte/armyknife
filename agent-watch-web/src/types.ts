@@ -52,6 +52,11 @@ export type Session = {
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
+  | {
+      type: 'user_with_content'
+      content: UserContentPart[]
+      from?: string
+    }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool_summary'
@@ -66,6 +71,10 @@ export type ChatItem =
       answer: string | null
     }
   | { type: 'permission'; tool: string; description: string }
+
+export type UserContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: string; available: boolean }
 
 export type ToolOperation = {
   tool: string
