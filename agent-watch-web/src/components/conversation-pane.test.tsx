@@ -643,6 +643,29 @@ it('keeps the composer usable when browser storage is unavailable', () => {
   })
 })
 
+it('reports when a draft cannot be saved after loading storage succeeds', () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  renderView(() => Promise.resolve(true))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep editing in memory')
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    composerVisible: textarea.isConnected,
+    storageNotice: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Keep editing in memory',
+    composerVisible: true,
+    storageNotice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
+  })
+})
+
 it('keeps drafts separate for each session', () => {
   renderView(() => Promise.resolve(true))
   setTextareaValue(
