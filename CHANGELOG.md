@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.564](https://github.com/fohte/armyknife/compare/v0.1.563...v0.1.564) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** find sessions by branch ([#1483](https://github.com/fohte/armyknife/issues/1483)) ([b59e39c](https://github.com/fohte/armyknife/commit/b59e39c8dee7af7b9ed33afe9cf7d6215fdf9b1b))
+
 ## [0.1.563](https://github.com/fohte/armyknife/compare/v0.1.562...v0.1.563) (2026-11-10)
 
 
