@@ -8,6 +8,7 @@ type ConversationPaneViewProps = {
   session: Session
   messages: readonly ChatItem[]
   actions: SessionActions | null
+  actionsPending?: boolean
   loading: boolean
   sending?: boolean
   error: string | null
@@ -21,6 +22,7 @@ export function ConversationPaneView({
   session,
   messages,
   actions,
+  actionsPending = false,
   loading,
   sending = false,
   error,
@@ -115,6 +117,7 @@ export function ConversationPaneView({
         !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
         activeQuestionIndex < 0 ||
+        actionsPending ||
         actions?.answerQuestion !== true
       ) {
         return
@@ -130,7 +133,13 @@ export function ConversationPaneView({
     return () => {
       window.removeEventListener('keydown', onQuestionKeyDown)
     }
-  }, [actions?.answerQuestion, activeQuestionIndex, onAction, waitingQuestion])
+  }, [
+    actions?.answerQuestion,
+    actionsPending,
+    activeQuestionIndex,
+    onAction,
+    waitingQuestion,
+  ])
 
   useLayoutEffect(() => {
     const scrollContainer = scrollRef.current
@@ -263,7 +272,9 @@ export function ConversationPaneView({
             )
           if (message.type === 'question') {
             const canAnswer =
-              index === activeQuestionIndex && actions?.answerQuestion === true
+              index === activeQuestionIndex &&
+              !actionsPending &&
+              actions?.answerQuestion === true
             return (
               <article
                 className="chat-question-card"
@@ -309,7 +320,7 @@ export function ConversationPaneView({
                   <Button
                     type="button"
                     variant="plain"
-                    disabled={!actions.permission.approve}
+                    disabled={actionsPending || !actions.permission.approve}
                     onClick={() => {
                       void onAction('permission/approve')
                     }}
@@ -319,7 +330,7 @@ export function ConversationPaneView({
                   <Button
                     type="button"
                     variant="plain"
-                    disabled={!actions.permission.reject}
+                    disabled={actionsPending || !actions.permission.reject}
                     onClick={() => {
                       void onAction('permission/reject')
                     }}

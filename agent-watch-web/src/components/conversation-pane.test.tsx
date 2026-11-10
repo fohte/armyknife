@@ -305,6 +305,10 @@ it('directs Codex questions and permissions to the terminal', () => {
     ],
     codexActions,
   )
+  let shortcutEvent: KeyboardEvent | null = null
+  act(() => {
+    shortcutEvent = dispatchKey(window, '1')
+  })
   const terminalButtons = Array.from(
     container.querySelectorAll<HTMLButtonElement>(
       '.conversation-terminal-fallback button',
@@ -331,6 +335,7 @@ it('directs Codex questions and permissions to the terminal', () => {
     composerDisabled: requireElement(
       container.querySelector<HTMLTextAreaElement>('textarea'),
     ).disabled,
+    shortcutDefaultPrevented: shortcutEvent?.defaultPrevented,
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
@@ -341,6 +346,7 @@ it('directs Codex questions and permissions to the terminal', () => {
     ],
     terminalButtons: ['Open in terminal', 'Open in terminal'],
     composerDisabled: false,
+    shortcutDefaultPrevented: false,
     actionCalls: [['focus'], ['focus']],
   })
 })
@@ -719,12 +725,21 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([{ type: 'assistant', text: 'Current conversation' }]),
+      jsonResponse([
+        { type: 'assistant', text: 'Current conversation' },
+        question,
+        {
+          type: 'permission',
+          tool: 'Shell',
+          description: 'Run the project formatter.',
+        },
+      ]),
     )
     .mockResolvedValueOnce(
       jsonResponse({
         message: true,
-        answerQuestion: false,
+        answerQuestion: true,
+        permission: { approve: true, reject: true },
         interrupt: true,
         openInTerminal: true,
       }),
@@ -770,6 +785,20 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
     composerDisabled: textarea.disabled,
     composerFocused: document.activeElement === textarea,
     transcript: container.querySelector('.chat-assistant-message')?.textContent,
+    questionChoiceDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    permissionButtonsDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+      (button) => button.disabled,
+    ),
+    conversationStatus: container.querySelector('.conversation-status')
+      ?.textContent,
     requestsStarted: fetcher.mock.calls.length,
   })
   expect(snapshot()).toEqual({
@@ -778,6 +807,101 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
     composerDisabled: false,
     composerFocused: true,
     transcript: 'Current conversation',
+    questionChoiceDisabled: [true, true],
+    permissionButtonsDisabled: [true, true],
+    conversationStatus: undefined,
     requestsStarted: 4,
+  })
+})
+
+it('keeps question and permission actions disabled after a refresh error', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse([
+        question,
+        {
+          type: 'permission',
+          tool: 'Shell',
+          description: 'Run the project formatter.',
+        },
+      ]),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        message: true,
+        answerQuestion: true,
+        permission: { approve: true, reject: true },
+        interrupt: true,
+        openInTerminal: true,
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'Messages unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        message: true,
+        answerQuestion: true,
+        permission: { approve: true, reject: true },
+        interrupt: true,
+        openInTerminal: true,
+      }),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    questionChoiceDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    permissionButtonsDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.permission-actions button',
+      ),
+      (button) => button.disabled,
+    ),
+    error: container.querySelector('[role="alert"]')?.textContent,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    questionChoiceDisabled: [true, true],
+    permissionButtonsDisabled: [true, true],
+    error: 'Messages unavailable',
+    requestCount: 4,
   })
 })

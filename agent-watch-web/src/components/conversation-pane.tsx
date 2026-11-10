@@ -1,5 +1,5 @@
 import { err, ok, Result, ResultAsync } from 'neverthrow'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -123,6 +123,7 @@ export function ConversationPane({
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
   const [actions, setActions] = useState<SessionActions | null>(null)
+  const [actionsPending, setActionsPending] = useState(true)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
@@ -130,6 +131,7 @@ export function ConversationPane({
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
+    setActionsPending(true)
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
     const messagesRequest = requestJson(
       `${sessionPath}/messages`,
@@ -155,13 +157,14 @@ export function ConversationPane({
           : actionsResult.isErr()
             ? actionsResult.error
             : null
+        setActionsPending(messagesResult.isErr() || actionsResult.isErr())
         setError(firstError?.message ?? null)
         setLoading(false)
       },
     )
   }, [session.id])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     refresh()
     return () => {
       requestGeneration.current += 1
@@ -186,6 +189,7 @@ export function ConversationPane({
       session={session}
       messages={messages}
       actions={actions}
+      actionsPending={actionsPending}
       loading={loading}
       error={error}
       onAction={onAction}
