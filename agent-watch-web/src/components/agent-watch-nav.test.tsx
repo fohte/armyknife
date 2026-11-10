@@ -4,6 +4,10 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 
+function setPlatform(platform: string) {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+}
+
 let container: HTMLDivElement
 let root: Root | null = null
 
@@ -103,6 +107,34 @@ it('renders no work type sections without configured groups', () => {
     ),
   ).toEqual([])
 })
+
+it.each([
+  {
+    platform: 'MacIntel',
+    label: '⌘K',
+    ariaLabel: 'Jump to with Command K',
+  },
+  {
+    platform: 'Linux x86_64',
+    label: 'Ctrl K',
+    ariaLabel: 'Jump to with Control K',
+  },
+])(
+  'shows the $label shortcut on $platform',
+  ({ platform, label, ariaLabel }) => {
+    setPlatform(platform)
+    renderNav([])
+
+    const shortcut = container.querySelector<HTMLButtonElement>(
+      '.agent-watch-command-key',
+    )
+    const snapshot = () => ({
+      label: shortcut?.textContent,
+      ariaLabel: shortcut?.getAttribute('aria-label'),
+    })
+    expect(snapshot()).toEqual({ label, ariaLabel })
+  },
+)
 
 it('selects the active saved view and shows its needs-action count color', () => {
   const onSelectSavedView = vi.fn<(id: string) => void>()

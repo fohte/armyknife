@@ -6,6 +6,7 @@ import {
   readRecentSessionIds,
   recordRecentSessionId,
 } from '#command-palette-model'
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { formatInboxFilterQuery, parseInboxFilterQuery } from '#inbox-filter'
 import { archiveSession } from '#session-actions'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
@@ -154,8 +155,9 @@ export function useCommandPaletteController({
   )
 
   useEffect(() => {
+    const { modifier } = getCommandPaletteShortcut(navigator.platform)
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      if (event[modifier] && event.key.toLowerCase() === 'k') {
         event.preventDefault()
         setIsOpen(true)
       }

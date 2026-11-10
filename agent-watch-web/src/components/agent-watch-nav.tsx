@@ -6,6 +6,7 @@ import { Chip } from '@fohte/ui/chip'
 import { Filter, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
@@ -44,6 +45,8 @@ export function AgentWatchNav({
   onSelectSession,
   onOpenPalette,
 }: AgentWatchNavProps) {
+  const paletteShortcut = getCommandPaletteShortcut(navigator.platform)
+
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
       <div className="brand-row">
@@ -52,12 +55,12 @@ export function AgentWatchNav({
         </span>
         <span className="brand-name">agent watch</span>
         <button
-          aria-label="Jump to with Command K"
+          aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
           className="agent-watch-command-key"
           onClick={onOpenPalette}
           type="button"
         >
-          ⌘K
+          {paletteShortcut.label}
         </button>
       </div>
       <div className="view-switch" role="group" aria-label="Views">
