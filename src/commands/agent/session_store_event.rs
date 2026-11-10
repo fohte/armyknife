@@ -86,6 +86,13 @@ mod tests {
         )),
         false
     )]
+    #[case::unrelated_file_ignored(
+        "/sessions/notes.txt",
+        notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any
+        )),
+        false
+    )]
     fn filters_session_store_events(
         #[case] path: &str,
         #[case] kind: notify::EventKind,
@@ -98,5 +105,19 @@ mod tests {
         };
 
         assert_eq!(is_session_store_change(&event), expected);
+    }
+
+    #[test]
+    fn accepts_database_paths_in_batch_events() {
+        let event = notify::Event {
+            kind: notify::EventKind::Modify(notify::event::ModifyKind::Any),
+            paths: vec![
+                PathBuf::from("/sessions/old-session.json"),
+                PathBuf::from("/sessions/sessions.db-wal"),
+            ],
+            attrs: Default::default(),
+        };
+
+        assert!(is_session_store_change(&event));
     }
 }

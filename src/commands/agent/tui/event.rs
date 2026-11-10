@@ -397,7 +397,6 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_app_event_enum() {
@@ -477,19 +476,5 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 5);
-    }
-
-    #[test]
-    fn test_session_store_change_accepts_database_paths_in_batch_events() {
-        let event = notify::Event {
-            kind: notify::EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![
-                PathBuf::from("/sessions/old-session.json"),
-                PathBuf::from("/sessions/sessions.db-wal"),
-            ],
-            attrs: Default::default(),
-        };
-
-        assert!(crate::commands::agent::session_store_event::is_session_store_change(&event));
     }
 }
