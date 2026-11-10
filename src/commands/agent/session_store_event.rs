@@ -118,6 +118,7 @@ mod tests {
             attrs: Default::default(),
         };
 
-        assert!(is_session_store_change(&event));
+        let expected = true;
+        assert_eq!(is_session_store_change(&event), expected);
     }
 }
