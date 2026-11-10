@@ -144,7 +144,7 @@ impl ToolSummary {
     }
 }
 
-fn operation_target(name: &str, detail: Option<&serde_json::Value>) -> Option<String> {
+pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -> Option<String> {
     let nested_detail = detail.and_then(|value| {
         value
             .get("arguments")

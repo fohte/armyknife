@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { App } from '#App'
+import { readSavedInboxViews } from '#saved-inbox-views'
 import type { Session, SessionsResponse } from '#types'
 
 const capturedFeed = vi.hoisted(() => ({
@@ -700,6 +701,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', matchMediaMock)
   mobileViewportMatches = false
   window.history.replaceState(null, '', '/')
+  window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   mediaQueries.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -714,10 +716,368 @@ afterEach(() => {
     })
   }
   root = null
+  window.localStorage.removeItem('agent-watch:navigation-width')
   container.remove()
+  window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('saves a filtered view, restores it, and opens it from navigation', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const persistedView = readSavedInboxViews().views.map(({ name, query }) => ({
+    name,
+    query,
+  }))
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
+  })
+
+  const snapshot = () => ({
+    persistedView,
+    savedViewNames: Array.from(
+      container.querySelectorAll('.saved-view-name'),
+      (element) => element.textContent,
+    ),
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    activeView: readActiveView(),
+    visibleTitles: readSessionTitles(),
+  })
+
+  expect(snapshot()).toEqual({
+    persistedView: [{ name: 'Worker reviews', query: 'project:worker' }],
+    savedViewNames: ['Worker reviews'],
+    selectedView: 'true',
+    activeView: 'Inbox',
+    visibleTitles: ['Worker project session'],
+  })
+})
+
+it('deletes a saved view from navigation and storage', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      {
+        id: 'saved-view',
+        name: 'Sample reviews',
+        query: 'project:sample-project',
+      },
+    ]),
+  )
+  renderApp()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    savedViewItems: container.querySelectorAll('.saved-view-item').length,
+    storedViews: window.localStorage.getItem(
+      'agent-watch-web:saved-inbox-views',
+    ),
+  })
+
+  expect(snapshot()).toEqual({ savedViewItems: 0, storedViews: '[]' })
+})
+
+it('clears the saved view highlight when the inbox filter changes', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      {
+        name: 'Sample reviews',
+        query: 'project:sample-project',
+      },
+    ]),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample-project',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Remove Project filter"]')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    activeView: readActiveView(),
+    filterChips: container.querySelector('.inbox-filter-chips'),
+  })
+
+  expect(snapshot()).toEqual({
+    selectedView: 'false',
+    activeView: 'Inbox',
+    filterChips: null,
+  })
+})
+
+it('opens saved views from the mobile inbox', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([{ name: 'Worker reviews', query: 'project:worker' }]),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample-project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    viewNames: Array.from(
+      container.querySelectorAll('.mobile-saved-view-name'),
+      (element) => element.textContent,
+    ),
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    visibleTitles: readSessionTitles(),
+  })
+
+  expect(snapshot()).toEqual({
+    viewNames: ['Worker reviews'],
+    selectedView: 'true',
+    visibleTitles: ['Worker project session'],
+  })
+})
+
+it('reports a failed save without adding the view', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-worker', 'Worker session', 'needs_action', 8, 'worker'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('Storage is unavailable')
+  })
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.load-message.is-error')?.textContent,
+    savedViews: container.querySelectorAll('.saved-view-item').length,
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not save the view.',
+    savedViews: 0,
+  })
+})
+
+it('reports a failed delete and keeps the saved view visible', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      { name: 'Sample reviews', query: 'project:sample-project' },
+    ]),
+  )
+  renderApp()
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('Storage is unavailable')
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.load-message.is-error')?.textContent,
+    savedViewNames: Array.from(
+      container.querySelectorAll('.saved-view-name'),
+      (element) => element.textContent,
+    ),
+    stored: readSavedInboxViews().views.map(({ name, query }) => ({
+      name,
+      query,
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not delete the view.',
+    savedViewNames: ['Sample reviews'],
+    stored: [{ name: 'Sample reviews', query: 'project:sample-project' }],
+  })
+})
+
+it('preserves views written to storage after this tab was opened', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-worker', 'Worker session', 'needs_action', 8, 'worker'),
+    ],
+  })
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([{ name: 'Existing', query: 'project:existing' }]),
+  )
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () =>
+    readSavedInboxViews().views.map(({ name, query }) => ({ name, query }))
+
+  expect(snapshot()).toEqual([
+    { name: 'Existing', query: 'project:existing' },
+    { name: 'Worker reviews', query: 'project:worker' },
+  ])
 })
 
 it('switches between the Inbox and conversation at the mobile breakpoint', () => {
@@ -743,6 +1103,9 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       ?.getAttribute('data-mobile-screen'),
     title: container.querySelector('.conversation-pane h1')?.textContent,
     navCount: container.querySelectorAll('.agent-watch-nav').length,
+    navSeparatorCount: container.querySelectorAll(
+      '[aria-label="Resize navigation and content"]',
+    ).length,
   }
 
   act(() => {
@@ -763,6 +1126,9 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-layout'),
     desktopNavCount: container.querySelectorAll('.agent-watch-nav').length,
+    desktopNavSeparatorCount: container.querySelectorAll(
+      '[aria-label="Resize navigation and content"]',
+    ).length,
   })
   expect(snapshot()).toEqual({
     mobileConversation: {
@@ -770,10 +1136,61 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       screen: 'conversation',
       title: 'Review the retry policy',
       navCount: 0,
+      navSeparatorCount: 0,
     },
     mobileInboxScreen: 'inbox',
     desktopLayout: 'desktop',
     desktopNavCount: 1,
+    desktopNavSeparatorCount: 1,
+  })
+})
+
+it('restores the desktop navigation width after keyboard resizing', () => {
+  const storageKey = 'agent-watch:navigation-width'
+  window.localStorage.removeItem(storageKey)
+  container.style.width = '1200px'
+  renderApp()
+
+  const resizeNavigation = () =>
+    container.querySelector<HTMLDivElement>(
+      '[aria-label="Resize navigation and content"]',
+    )
+  const separator = resizeNavigation()
+  if (separator === null) throw new Error('Expected the navigation separator')
+
+  act(() => {
+    separator.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const resizedWidth = separator.getAttribute('aria-valuenow')
+  const storedWidth = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderApp()
+
+  const restoredSeparator = resizeNavigation()
+  const snapshot = () => ({
+    resizedWidth,
+    storedWidth,
+    restoredWidth: restoredSeparator?.getAttribute('aria-valuenow'),
+    navigationPaneWidth: container.querySelector<HTMLDivElement>(
+      '.resizable-columns-first-pane',
+    )?.style.flexBasis,
+  })
+
+  expect(snapshot()).toEqual({
+    resizedWidth: '250',
+    storedWidth: '250',
+    restoredWidth: '250',
+    navigationPaneWidth: '250px',
   })
 })
 
@@ -822,6 +1239,7 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     resizerCount: 0,
     desktopIframeCount: 1,
     desktopResizers: [
+      'Resize navigation and content',
       'Resize session list and conversation',
       'Resize conversation and crit',
     ],
@@ -1316,6 +1734,305 @@ it('limits keyboard navigation to sessions matching the Inbox filters', () => {
   })
 
   expect(readSelectedTitle()).toEqual('Worker project session')
+})
+
+it('opens the command palette with Ctrl-K while the inbox filter is focused', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'Review the retry policy')],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null)
+    throw new Error('Inbox filter input was not rendered')
+
+  act(() => {
+    dispatchKey(filterInput, 'k', { ctrlKey: true })
+  })
+  const opened = container.querySelector('[aria-label="Jump to"]') !== null
+  const paletteInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (paletteInput === null) throw new Error('Palette input was not rendered')
+  act(() => {
+    dispatchKey(paletteInput, 'Escape')
+  })
+
+  const snapshot = () => ({
+    opened,
+    paletteClosed: container.querySelector('[aria-label="Jump to"]') === null,
+    filterStillOpen:
+      container.querySelector('[aria-label="Filter inbox"]') !== null,
+  })
+  expect(snapshot()).toEqual({
+    opened: true,
+    paletteClosed: true,
+    filterStillOpen: true,
+  })
+})
+
+it('opens the command palette from the navigation shortcut', async () => {
+  renderApp()
+  const shortcut = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Jump to with Command K"]',
+  )
+  if (shortcut === null) throw new Error('Navigation shortcut was not rendered')
+
+  await act(async () => {
+    await userEvent.click(shortcut)
+  })
+
+  const snapshot = () => ({
+    dialogRole:
+      container.querySelector('[aria-label="Jump to"]')?.getAttribute('role') ??
+      null,
+    focusedInput: document.activeElement?.getAttribute('aria-label') ?? null,
+  })
+  expect(snapshot()).toEqual({
+    dialogRole: 'dialog',
+    focusedInput:
+      'Jump to a session, tq task or project, or type > for commands',
+  })
+})
+
+it('filters the Inbox from a task command in the palette', async () => {
+  const taskSession = session('session-task', 'Review alert settings')
+  taskSession.task = {
+    id: 'task-alerts',
+    number: 42,
+    title: 'Improve notifications',
+    priority: 1,
+  }
+  renderApp()
+  publishSessions({ revision: 1, sessions: [taskSession] })
+  act(() => {
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Filter inbox by task #42')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    activeView: readActiveView(),
+    activeFilter: container.querySelector('[aria-label="Active inbox filters"]')
+      ?.textContent,
+    visibleSessions: readSessionTitles(),
+  })
+  expect(snapshot()).toEqual({
+    activeView: 'Inbox',
+    activeFilter: 'tq task #42×',
+    visibleSessions: ['Review alert settings'],
+  })
+})
+
+it('opens a session in the Inbox when selected from the palette on Board', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-palette', 'Distinctive review session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, 'Distinctive review session')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    view: readActiveView(),
+    title: readSelectedTitle(),
+  })
+  expect(snapshot()).toEqual({
+    view: 'Inbox',
+    title: 'Distinctive review session',
+  })
+})
+
+it('opens a selected project on Board at the mobile breakpoint', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-mobile-project',
+        'Review mobile project',
+        'needs_action',
+      ),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '@sample project')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    boardVisible:
+      container.querySelector('[aria-labelledby="board-title"]') !== null,
+    focusedProjects: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-project'),
+      (project) => project.getAttribute('aria-label'),
+    ),
+  })
+  expect(snapshot()).toEqual({
+    boardVisible: true,
+    focusedProjects: ['sample project'],
+  })
+})
+
+it('archives each done session from the palette command', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Archive all done')
+    await userEvent.keyboard('{Enter}')
+    await flushAsyncState()
+  })
+
+  const archivedUrls = fetchMock.mock.calls
+    .map(([request]) => requestUrl(request))
+    .filter((url) => url.endsWith('/archive'))
+  expect(archivedUrls).toEqual([
+    '/api/sessions/session-done-a/archive',
+    '/api/sessions/session-done-b/archive',
+  ])
+})
+
+it('stops the archive batch and reports the failed session', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input).endsWith('/archive')
+        ? Promise.resolve(new Response(null, { status: 500 }))
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-failed-archive', 'Unarchivable session', 'done'),
+      session('session-not-attempted', 'Later done session', 'done'),
+    ],
+  })
+  act(() => {
+    dispatchKey(window, 'k', { ctrlKey: true })
+  })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+
+  await act(async () => {
+    await userEvent.type(input, '>Archive all done')
+    await userEvent.keyboard('{Enter}')
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('.load-message.is-error')?.textContent,
+    archiveUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive')),
+  })
+  expect(snapshot()).toEqual({
+    error: 'Could not archive Unarchivable session.',
+    archiveUrls: ['/api/sessions/session-failed-archive/archive'],
+  })
+})
+
+it('does not start a second archive batch while the first is pending', async () => {
+  const archiveRequest = {
+    resolve: null as ((response: Response) => void) | null,
+  }
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) =>
+    requestUrl(input).endsWith('/archive')
+      ? new Promise<Response>((resolve) => {
+          archiveRequest.resolve = resolve
+        })
+      : mockSessionActionFetch(input),
+  )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-pending-archive', 'Pending archive', 'done')],
+  })
+
+  async function openAndRunArchiveCommand() {
+    act(() => {
+      dispatchKey(window, 'k', { ctrlKey: true })
+    })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    await act(async () => {
+      await userEvent.type(input, '>Archive all done')
+      await userEvent.keyboard('{Enter}')
+    })
+  }
+
+  await openAndRunArchiveCommand()
+  await openAndRunArchiveCommand()
+  const urlsBeforeCompletion = fetchMock.mock.calls
+    .map(([request]) => requestUrl(request))
+    .filter((url) => url.endsWith('/archive'))
+  const resolveArchive = archiveRequest.resolve
+  if (resolveArchive === null)
+    throw new Error('Archive request was not started')
+  await act(async () => {
+    resolveArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+
+  expect(urlsBeforeCompletion).toEqual([
+    '/api/sessions/session-pending-archive/archive',
+  ])
 })
 
 it('opens Later with L and selects a preset with its number key', async () => {

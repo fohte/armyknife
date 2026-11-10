@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.544](https://github.com/fohte/armyknife/compare/v0.1.543...v0.1.544) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show working indicator ([#1443](https://github.com/fohte/armyknife/issues/1443)) ([69372da](https://github.com/fohte/armyknife/commit/69372da7b7d697f06fa881a2c829aee9b934c8a4))
+
+## [0.1.543](https://github.com/fohte/armyknife/compare/v0.1.542...v0.1.543) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add a command palette ([#1439](https://github.com/fohte/armyknife/issues/1439)) ([50197a4](https://github.com/fohte/armyknife/commit/50197a4d6d67d35c779a8f9fe1224ed2d18d09de))
+
+## [0.1.542](https://github.com/fohte/armyknife/compare/v0.1.541...v0.1.542) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** save named Inbox views ([#1437](https://github.com/fohte/armyknife/issues/1437)) ([f4c7a4b](https://github.com/fohte/armyknife/commit/f4c7a4b71fa6ebb1f1de2bfc99acc7909e526cd6))
+
+## [0.1.541](https://github.com/fohte/armyknife/compare/v0.1.540...v0.1.541) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** allow navigation resizing ([#1436](https://github.com/fohte/armyknife/issues/1436)) ([59b1933](https://github.com/fohte/armyknife/commit/59b1933622b0f3079aa527a36a7867c8b3486c23))
+
 ## [0.1.540](https://github.com/fohte/armyknife/compare/v0.1.539...v0.1.540) (2026-11-10)
 
 

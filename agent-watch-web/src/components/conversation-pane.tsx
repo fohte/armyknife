@@ -27,6 +27,11 @@ function isChatItem(value: unknown): value is ChatItem {
                   typeof operation['target'] === 'string'),
             )))
       )
+    case 'tool_in_progress':
+      return (
+        typeof value['tool'] === 'string' &&
+        (value['target'] === undefined || typeof value['target'] === 'string')
+      )
     case 'question':
       return (
         typeof value['question'] === 'string' &&

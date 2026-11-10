@@ -86,6 +86,129 @@
   white-space: nowrap;
 }
 
+.inbox-save-view,
+.inbox-save-view-submit,
+.inbox-save-view-cancel {
+  flex: 0 0 auto;
+  border-radius: 5px;
+  padding: 4px 7px;
+  color: #a1a1aa;
+  font-size: 10.5px;
+}
+
+.inbox-save-view:hover,
+.inbox-save-view-submit:not(:disabled):hover,
+.inbox-save-view-cancel:hover {
+  background: #252529;
+  color: #f4f4f5;
+}
+
+.inbox-save-view-form {
+  display: flex;
+  flex: 1 1 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+
+.inbox-filter-bar:has(.inbox-save-view-form) {
+  flex-wrap: wrap;
+}
+
+.inbox-save-view-form input {
+  width: 132px;
+  min-width: 0;
+  border: 1px solid #38383e;
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: #111113;
+  color: #f4f4f5;
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.inbox-save-view-submit:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.mobile-saved-views {
+  padding: 8px 16px;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.mobile-saved-views h2 {
+  margin: 0 0 5px;
+  color: #8b8b94;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.mobile-saved-views ul {
+  display: grid;
+  gap: 3px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mobile-saved-views li {
+  position: relative;
+}
+
+.mobile-saved-view-link {
+  display: grid;
+  width: 100%;
+  min-height: 30px;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  border-radius: 5px;
+  padding: 0 34px 0 8px;
+  color: #d4d4d8;
+  text-align: left;
+}
+
+.mobile-saved-view-link.is-active {
+  background: #262626;
+  color: #fafafa;
+  font-weight: 700;
+}
+
+.mobile-saved-view-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-saved-view-count {
+  color: #8b8b94;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.mobile-saved-view-count.is-needs-action {
+  color: #fbbf24;
+}
+
+.mobile-saved-view-count.is-error {
+  color: #f87171;
+}
+
+.mobile-saved-view-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: #8b8b94;
+}
+
 .inbox-filter-overlay {
   position: fixed;
   z-index: 50;

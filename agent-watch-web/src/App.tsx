@@ -1,12 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
+import { useCommandPaletteController } from '#command-palette-controller'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
+import { CommandPalette } from '#components/command-palette'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
-import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
-import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
+import { ResizableColumns } from '#components/resizable-columns'
+import {
+  filterInboxSessions,
+  formatInboxFilterQuery,
+  parseInboxFilterQuery,
+} from '#inbox-filter'
+import { useMobileLayout, useSessionMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
   setSessionBackNow,
@@ -16,8 +23,8 @@ import { startSessionFeed } from '#session-feed'
 import { useSessionHistory } from '#session-history'
 import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
-import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
+import { useSavedInboxViews } from '#use-saved-inbox-views'
 
 export function App() {
   const {
@@ -42,6 +49,9 @@ export function App() {
     navigate,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
+  const [focusedProjectName, setFocusedProjectName] = useState<string | null>(
+    null,
+  )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
@@ -96,13 +106,20 @@ export function App() {
     ],
     [sessionsWithElapsedTime],
   )
+  const inboxFilters = useMemo(
+    () => parseInboxFilterQuery(inboxFilterQuery),
+    [inboxFilterQuery],
+  )
   const filteredOrderedSessions = useMemo(
-    () =>
-      filterInboxSessions(
-        orderedSessions,
-        parseInboxFilterQuery(inboxFilterQuery),
-      ),
-    [inboxFilterQuery, orderedSessions],
+    () => filterInboxSessions(orderedSessions, inboxFilters),
+    [inboxFilters, orderedSessions],
+  )
+  const normalizedInboxFilterQuery = formatInboxFilterQuery(inboxFilters)
+  const savedViews = useSavedInboxViews(
+    sessionsWithElapsedTime,
+    normalizedInboxFilterQuery,
+    view === 'inbox',
+    setError,
   )
   const navigableSessions = useMemo(
     () =>
@@ -112,15 +129,29 @@ export function App() {
     [filteredOrderedSessions, laterExpanded],
   )
   const {
+    isOpen: commandPaletteOpen,
+    setIsOpen: setCommandPaletteOpen,
+    recentSessionIds,
+    runCommand: runPaletteCommand,
     openConversation,
     openSessionInInbox,
     openTodaySession,
     toggleToday,
-  } = createSessionNavigationActions({
+  } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
+    inboxFilterQuery,
+    setInboxFilterQuery,
     navigate,
-    setLaterExpanded,
     setError,
+    setFocusedProjectName,
+    setLaterExpanded,
+    selectedId,
+    selectedSessionExists:
+      selectedId !== null &&
+      sessionsWithElapsedTime.some((session) => session.id === selectedId),
+    view,
+    isMobile,
+    conversationOpen: mobileConversationOpen,
   })
   const projects = useMemo(
     () => buildBoardProjects(sessionsWithElapsedTime),
@@ -295,12 +326,6 @@ export function App() {
       ?.scrollIntoView({ block: 'nearest' })
   }, [selectedId, showAllInProgress, view])
 
-  useEffect(() => {
-    if (isMobile && view !== 'inbox') {
-      navigate((current) => ({ ...current, view: 'inbox' }), 'replace')
-    }
-  }, [isMobile, navigate, view])
-
   useSessionKeyboardNavigation({
     isMobile,
     laterSessionId,
@@ -328,34 +353,40 @@ export function App() {
       setLaterExpanded(true)
     }
   }, [selectedSession?.category])
-  const setSelectedId = useCallback(
-    (id: string | null) => {
-      navigate((current) => ({ ...current, selectedId: id }), 'replace')
+  const selectInboxSavedView = useCallback(
+    (id: string) => {
+      const query = savedViews.selectView(id)
+      if (query === null) return
+      setInboxFilterQuery(query)
+      navigate((current) => ({ ...current, view: 'inbox' }))
     },
-    [navigate],
+    [navigate, savedViews.selectView],
   )
-  const setConversationOpen = useCallback(
-    (open: boolean) => {
-      navigate((current) => ({ ...current, conversationOpen: open }), 'replace')
-    },
-    [navigate],
-  )
-  const { showConversation: showMobileConversation } = useMobileNavigation({
-    isMobile,
-    conversationOpen: mobileConversationOpen,
-    navigableSessions,
-    selectedSessionExists: selectedSession !== undefined,
-    sessionsLoaded: loaded,
-    setSelectedId,
-    setConversationOpen,
-  })
+  const { showConversation: showMobileConversation } =
+    useSessionMobileNavigation({
+      isMobile,
+      conversationOpen: mobileConversationOpen,
+      navigableSessions,
+      selectedSessionExists: selectedSession !== undefined,
+      sessionsLoaded: loaded,
+      navigate,
+    })
   const inboxProps = {
-    error,
+    error: error ?? savedViews.storageError,
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,
     filterQuery: inboxFilterQuery,
     onFilterQueryChange: setInboxFilterQuery,
+    saveViewOpen: savedViews.saveViewOpen,
+    saveViewName: savedViews.saveViewName,
+    onSaveViewOpenChange: savedViews.setSaveViewOpen,
+    onSaveViewNameChange: savedViews.setSaveViewName,
+    onSaveView: savedViews.saveView,
+    savedViews: savedViews.savedViewsForNav,
+    selectedSavedViewId: savedViews.activeSavedViewId,
+    onSelectSavedView: selectInboxSavedView,
+    onDeleteSavedView: savedViews.deleteView,
     showAllInProgress,
     onShowMore: () => {
       setShowAllInProgress(true)
@@ -378,53 +409,75 @@ export function App() {
       setDoneExpanded((expanded) => !expanded)
     },
   }
-
+  const navigation = !isMobile ? (
+    <AgentWatchNav
+      activeView={view}
+      needsActionCount={needsActionCount}
+      savedViews={savedViews.savedViewsForNav}
+      selectedSavedViewId={savedViews.activeSavedViewId}
+      todaySessions={todaySessions}
+      workTypeNavGroups={workTypeNavGroups}
+      onViewChange={(nextView) => {
+        navigate((current) => ({ ...current, view: nextView }))
+      }}
+      onSelectSavedView={selectInboxSavedView}
+      onDeleteSavedView={savedViews.deleteView}
+      onSelectToday={openSessionInInbox}
+      onSelectSession={openSessionInInbox}
+      onOpenPalette={() => {
+        setCommandPaletteOpen(true)
+      }}
+    />
+  ) : null
+  const main = (
+    <main className="agent-watch-main">
+      {view === 'inbox' ? (
+        <InboxConversationPanes
+          inboxProps={inboxProps}
+          selectedSession={selectedSession}
+          refreshKey={sessionsRevision}
+          isMobile={isMobile}
+          showMobileConversation={showMobileConversation}
+          onBack={backToInbox}
+          onLater={openLater}
+          onSelectSession={(id) => {
+            if (orderedSessions.some((session) => session.id === id)) {
+              navigate((current) => ({ ...current, selectedId: id }))
+            }
+          }}
+        />
+      ) : (
+        <BoardView
+          error={error}
+          hideQuietProjects={hideQuietProjects}
+          loaded={loaded}
+          onHideQuietProjectsChange={setHideQuietProjects}
+          onSelectSession={openSessionInInbox}
+          projects={projects}
+          focusedProjectName={focusedProjectName}
+        />
+      )}
+    </main>
+  )
   return (
     <div
       className="agent-watch-shell"
       data-layout={isMobile ? 'mobile' : 'desktop'}
       data-mobile-screen={showMobileConversation ? 'conversation' : 'inbox'}
     >
-      {!isMobile ? (
-        <AgentWatchNav
-          activeView={view}
-          needsActionCount={needsActionCount}
-          todaySessions={todaySessions}
-          workTypeNavGroups={workTypeNavGroups}
-          onViewChange={(nextView) => {
-            navigate((current) => ({ ...current, view: nextView }))
-          }}
-          onSelectToday={openSessionInInbox}
-          onSelectSession={openSessionInInbox}
+      {isMobile ? (
+        main
+      ) : (
+        <ResizableColumns
+          first={navigation}
+          second={main}
+          storageKey="agent-watch:navigation-width"
+          firstSize={240}
+          firstMinSize={160}
+          secondMinSize={508}
+          label="Resize navigation and content"
         />
-      ) : null}
-      <main className="agent-watch-main">
-        {view === 'inbox' ? (
-          <InboxConversationPanes
-            inboxProps={inboxProps}
-            selectedSession={selectedSession}
-            refreshKey={sessionsRevision}
-            isMobile={isMobile}
-            showMobileConversation={showMobileConversation}
-            onBack={backToInbox}
-            onLater={openLater}
-            onSelectSession={(id) => {
-              if (orderedSessions.some((session) => session.id === id)) {
-                navigate((current) => ({ ...current, selectedId: id }))
-              }
-            }}
-          />
-        ) : (
-          <BoardView
-            error={error}
-            hideQuietProjects={hideQuietProjects}
-            loaded={loaded}
-            onHideQuietProjectsChange={setHideQuietProjects}
-            onSelectSession={openSessionInInbox}
-            projects={projects}
-          />
-        )}
-      </main>
+      )}
       {laterSession !== undefined ? (
         <LaterMenu
           sessionTitle={laterSession.title}
@@ -443,6 +496,33 @@ export function App() {
           onSelect={(preset) => {
             submitLater(laterSession.id, preset)
           }}
+        />
+      ) : null}
+      {commandPaletteOpen ? (
+        <CommandPalette
+          inboxFilterQuery={inboxFilterQuery}
+          onClose={() => {
+            setCommandPaletteOpen(false)
+          }}
+          onOpenProject={(project) => {
+            setCommandPaletteOpen(false)
+            setFocusedProjectName(project)
+            navigate((current) => ({
+              ...current,
+              selectedId: null,
+              view: 'board',
+              conversationOpen: false,
+            }))
+          }}
+          onOpenSession={(id) => {
+            setCommandPaletteOpen(false)
+            openSessionInInbox(id)
+          }}
+          onRunCommand={(command) => {
+            void runPaletteCommand(command)
+          }}
+          recentSessionIds={recentSessionIds}
+          sessions={sessionsWithElapsedTime}
         />
       ) : null}
     </div>
