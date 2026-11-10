@@ -15,7 +15,18 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'assistant':
       return typeof value['text'] === 'string'
     case 'tool_summary':
-      return typeof value['summary'] === 'string'
+      return (
+        typeof value['summary'] === 'string' &&
+        (value['operations'] === undefined ||
+          (Array.isArray(value['operations']) &&
+            value['operations'].every(
+              (operation) =>
+                isRecord(operation) &&
+                typeof operation['tool'] === 'string' &&
+                (operation['target'] === undefined ||
+                  typeof operation['target'] === 'string'),
+            )))
+      )
     case 'question':
       return (
         typeof value['question'] === 'string' &&

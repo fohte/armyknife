@@ -3,7 +3,8 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
-import { SessionPausedBadge } from '#components/session-paused-badge'
+import { SessionHeading } from '#components/session-heading'
+import { ToolSummary } from '#components/tool-summary'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -207,8 +208,10 @@ export function ConversationPaneView({
                 {session.task ? <span aria-hidden="true"> · </span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
-              <h1>{session.title || 'Untitled session'}</h1>
-              <SessionPausedBadge isPaused={session.isPaused} />
+              <SessionHeading
+                title={session.title}
+                isPaused={session.isPaused}
+              />
             </div>
             <Button
               className="mobile-conversation-later cursor-pointer"
@@ -257,8 +260,10 @@ export function ConversationPaneView({
                   </a>
                 ) : null}
               </div>
-              <h1>{session.title || 'Untitled session'}</h1>
-              <SessionPausedBadge isPaused={session.isPaused} />
+              <SessionHeading
+                title={session.title}
+                isPaused={session.isPaused}
+              />
             </div>
             <div className="conversation-header-actions">
               {hasCritUrl ? (
@@ -340,12 +345,11 @@ export function ConversationPaneView({
             )
           if (message.type === 'tool_summary')
             return (
-              <details
-                className="chat-tool-summary"
+              <ToolSummary
                 key={`tool-${String(index)}`}
-              >
-                <summary>▸ {message.summary}</summary>
-              </details>
+                summary={message.summary}
+                operations={message.operations ?? []}
+              />
             )
           if (message.type === 'question') {
             const canAnswer =

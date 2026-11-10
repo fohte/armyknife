@@ -53,9 +53,18 @@ export type Session = {
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
   | { type: 'assistant'; text: string }
-  | { type: 'tool_summary'; summary: string }
+  | {
+      type: 'tool_summary'
+      summary: string
+      operations?: ToolOperation[]
+    }
   | { type: 'question'; question: string; choices: string[] }
   | { type: 'permission'; tool: string; description: string }
+
+export type ToolOperation = {
+  tool: string
+  target?: string
+}
 
 export type SessionActions = {
   message: boolean
