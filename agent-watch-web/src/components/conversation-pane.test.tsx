@@ -871,6 +871,102 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
+it('attaches dropped images through the composer and sends their data', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
+  })
+  const pane = requireElement(container.querySelector('.conversation-pane'))
+  const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
+  const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragEnter, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragEnter)
+  })
+  const targetVisibleDuringDrag = container.querySelector(
+    '.conversation-drop-target',
+  )?.textContent
+  const drop = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(drop)
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    targetVisibleDuringDrag,
+    targetAfterDrop:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+    dropPrevented: drop.defaultPrevented,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    targetVisibleDuringDrag: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterDrop: null,
+    dropPrevented: true,
+    attachmentNames: [],
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          images: [
+            {
+              mimeType: 'image/png',
+              size: 7,
+              data: 'cGF5bG9hZA==',
+            },
+          ],
+        },
+      ],
+    ],
+  })
+})
+
+it('hides the drop target when a file drag leaves the conversation', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const pane = requireElement(container.querySelector('.conversation-pane'))
+  const dataTransfer = { types: ['Files'], files: [] }
+  const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragEnter, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragEnter)
+  })
+  const targetAfterEnter = container.querySelector(
+    '.conversation-drop-target',
+  )?.textContent
+  const dragLeave = new Event('dragleave', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragLeave, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragLeave)
+  })
+
+  const snapshot = () => ({
+    targetAfterEnter,
+    targetAfterLeave:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    targetAfterEnter: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterLeave: null,
+  })
+})
+
 it('clears pasted attachments after a successful send', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)

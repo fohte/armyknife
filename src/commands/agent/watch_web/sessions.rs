@@ -10,6 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::EnrichmentUpdates;
+use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
@@ -168,10 +169,24 @@ async fn list_sessions<S: SessionSource>(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let sessions_to_check = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.engine == Engine::Claude && session.status == SessionStatus::Running
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let interrupted_sessions =
+        tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
+
     let (task_metadata, pull_requests) = tokio::join!(
         source.fetch_task_metadata(&snapshot.sessions),
         source.fetch_pull_requests(&snapshot.sessions),
     );
+    let interrupted_session_ids = interrupted_sessions
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -230,9 +245,11 @@ async fn list_sessions<S: SessionSource>(
                 });
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
-            let category_when_not_later = category_for(session, turn);
+            let interrupted = interrupted_session_ids.contains(&session.session_id);
+            let category_when_not_later =
+                category_for_with_interruption(session, turn, interrupted);
             let state = state_by_id.get(&session.session_id);
-            let category = category_for_with_later(session, turn, state, now);
+            let category = category_for_with_later(session, turn, interrupted, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -531,6 +548,7 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
 fn category_for_with_later(
     session: &Session,
     turn: Option<UserTurnKind>,
+    interrupted: bool,
     state: Option<&store::WatchWebSessionState>,
     now: DateTime<Utc>,
 ) -> SessionCategory {
@@ -545,6 +563,18 @@ fn category_for_with_later(
         });
     if later_is_active {
         SessionCategory::Later
+    } else {
+        category_for_with_interruption(session, turn, interrupted)
+    }
+}
+
+fn category_for_with_interruption(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    interrupted: bool,
+) -> SessionCategory {
+    if interrupted {
+        SessionCategory::NeedsAction
     } else {
         category_for(session, turn)
     }
@@ -614,7 +644,7 @@ fn sort_session_views(sessions: &mut [SessionView]) {
         left.category
             .cmp(&right.category)
             .then_with(|| compare_tasks(&left.task, &right.task))
-            .then_with(|| left.updated_at.cmp(&right.updated_at))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.id.cmp(&right.id))
     });
 }
@@ -912,12 +942,14 @@ mod tests {
 
     struct ExpectedSessionDetails<'a> {
         kind: Option<&'a str>,
+        category_when_not_later: &'a str,
         is_paused: bool,
         unread: bool,
         crit_url: Option<&'a str>,
     }
 
     struct ExpectedSessionResponse<'a> {
+        engine: &'a str,
         work_type: Option<&'a str>,
         work_type_nav_labels: serde_json::Value,
         updated_at: &'a str,
@@ -936,11 +968,11 @@ mod tests {
             "workTypeNavLabels": response.work_type_nav_labels,
             "sessions": [{
                 "id": "child-session",
-                "engine": "claude",
+                "engine": response.engine,
                 "workType": response.work_type,
                 "category": category,
                 "isPaused": details.is_paused,
-                "categoryWhenNotLater": if details.is_paused { "done" } else { "needs_action" },
+                "categoryWhenNotLater": details.category_when_not_later,
                 "kind": details.kind,
                 "title": "child title",
                 "preview": "last message",
@@ -993,13 +1025,109 @@ mod tests {
                     false,
                     ExpectedSessionDetails {
                         kind: Some("Review"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: false,
                         crit_url: Some("http://127.0.0.1:6000"),
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: Some("release-guide"),
                         work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::interrupted(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"custom-title","customTitle":"A title"}
+        "#},
+        "needs_action"
+    )]
+    #[case::assistant_activity_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Working again"}]}}
+        "#},
+        "in_progress"
+    )]
+    #[case::new_prompt_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"type":"user","message":{"content":"Continue the task"}}
+        "#},
+        "in_progress"
+    )]
+    #[case::queued_command_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":"Continue the task"}}
+        "#},
+        "in_progress"
+    )]
+    #[case::codex_remains_in_progress(
+        SessionStatus::Running,
+        Engine::Codex,
+        r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+        "in_progress"
+    )]
+    #[case::ended_claude_remains_done(
+        SessionStatus::Ended,
+        Engine::Claude,
+        r#"{"type":"user","message":{"content":"[Request interrupted by user]"}}"#,
+        "done"
+    )]
+    #[tokio::test]
+    async fn sessions_route_only_marks_running_claude_interrupts_as_needing_action(
+        mut source: TestSessionSource,
+        #[case] status: SessionStatus,
+        #[case] engine: Engine,
+        #[case] transcript: &str,
+        #[case] expected_category: &str,
+    ) {
+        let transcript_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(transcript_file.path(), transcript).unwrap();
+        source.sessions[0].status = status;
+        source.sessions[0].engine = engine;
+        source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    expected_category,
+                    None,
+                    true,
+                    ExpectedSessionDetails {
+                        kind: None,
+                        category_when_not_later: expected_category,
+                        is_paused: false,
+                        unread: false,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        engine: match engine {
+                            Engine::Claude => "claude",
+                            Engine::Codex => "codex",
+                        },
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
                     },
@@ -1026,11 +1154,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: None,
+                        category_when_not_later: "done",
                         is_paused: true,
                         unread: false,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1054,11 +1184,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: Some("Stopped"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1086,11 +1218,13 @@ mod tests {
                     true,
                     ExpectedSessionDetails {
                         kind: Some("Stopped"),
+                        category_when_not_later: "needs_action",
                         is_paused: false,
                         unread: true,
                         crit_url: None,
                     },
                     ExpectedSessionResponse {
+                        engine: "claude",
                         work_type: None,
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
@@ -1125,11 +1259,13 @@ mod tests {
                         true,
                         ExpectedSessionDetails {
                             kind: Some("Stopped"),
+                            category_when_not_later: "needs_action",
                             is_paused: false,
                             unread: true,
                             crit_url: None,
                         },
                         ExpectedSessionResponse {
+                            engine: "claude",
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:40Z",
@@ -1145,11 +1281,13 @@ mod tests {
                         true,
                         ExpectedSessionDetails {
                             kind: Some("Stopped"),
+                            category_when_not_later: "needs_action",
                             is_paused: false,
                             unread: true,
                             crit_url: None,
                         },
                         ExpectedSessionResponse {
+                            engine: "claude",
                             work_type: None,
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:41Z",
@@ -1318,12 +1456,26 @@ mod tests {
         ],
         vec!["inbox", "deferred"]
     )]
-    #[case::oldest_waiting_first(
+    #[case::newest_same_priority_first(
         vec![
             row("newer", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
             row("older", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 10),
         ],
-        vec!["older", "newer"]
+        vec!["newer", "older"]
+    )]
+    #[case::newest_without_task_first(
+        vec![
+            row("newer", SessionCategory::NeedsAction, None, 20),
+            row("older", SessionCategory::NeedsAction, None, 10),
+        ],
+        vec!["newer", "older"]
+    )]
+    #[case::id_breaks_equal_timestamps(
+        vec![
+            row("session_b", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
+            row("session_a", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 20),
+        ],
+        vec!["session_a", "session_b"]
     )]
     fn orders_session_rows(#[case] mut rows: Vec<SessionView>, #[case] expected_ids: Vec<&str>) {
         sort_session_views(&mut rows);

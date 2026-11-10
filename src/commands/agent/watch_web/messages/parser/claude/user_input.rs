@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::commands::agent::watch_web::{
     image_attachments::{MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE},
-    messages::UserContentPart,
+    messages::{UserContentPart, claude_content_text as content_text},
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -164,19 +164,6 @@ fn user_content_with_limits(
         }
     }
     (content_text(content), images)
-}
-
-fn content_text(content: Option<&Value>) -> String {
-    match content {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
 }
 
 pub(super) fn content_blocks(content: &Value) -> Vec<&Value> {
