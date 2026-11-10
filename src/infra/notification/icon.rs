@@ -87,11 +87,18 @@ mod tests {
     }
 
     #[test]
-    fn ensure_icon_returns_none_without_cache_dir() {
+    fn ensure_icon_uses_test_cache_without_user_cache_environment() {
+        let expected = Some(
+            std::env::temp_dir()
+                .join(format!("armyknife-test-cache-{}", std::process::id()))
+                .join("armyknife")
+                .join(format!("claude-code-icon-{}.png", short_hash(ICON_BYTES))),
+        );
+
         temp_env::with_vars(
             [("XDG_CACHE_HOME", None::<&str>), ("HOME", None::<&str>)],
             || {
-                assert!(ensure_icon().is_none());
+                assert_eq!(ensure_icon(), expected);
             },
         );
     }
