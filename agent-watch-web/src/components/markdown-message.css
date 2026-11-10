@@ -99,7 +99,8 @@
   font-size: 0.9em;
 }
 
-.markdown-message a {
+.markdown-message a,
+.markdown-message .markdown-link-text {
   color: #93c5fd;
   text-decoration: underline;
   text-underline-offset: 2px;

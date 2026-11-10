@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Seek, SeekFrom};
 
 use serde_json::Value;
@@ -45,6 +45,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
+    let mut question_uses = HashMap::<String, Vec<usize>>::new();
 
     for_each_jsonl_record(&mut reader, |record| {
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
@@ -80,7 +81,25 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             }
             Some("user") => {
                 if let Some(message) = record.get("message") {
-                    for id in tool_result_ids(message) {
+                    let tool_use_result = record
+                        .get("toolUseResult")
+                        .filter(|result| !result.is_null());
+                    for block in tool_result_blocks(message) {
+                        let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
+                            continue;
+                        };
+                        if let Some(indices) = question_uses.remove(id) {
+                            let answers = match tool_use_result {
+                                Some(result) => tool_use_result_answers(result),
+                                None => block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .and_then(|text| parse_question_answers(&text)),
+                            };
+                            if let Some(answers) = answers {
+                                apply_question_answers(&mut items, &indices, &answers);
+                            }
+                        }
                         if let Some(index) = tool_uses
                             .iter()
                             .position(|tool_use: &ToolUse| tool_use.id == id)
@@ -135,7 +154,12 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                                 let input = block.get("input");
                                 if name == "AskUserQuestion" {
                                     tools.flush_into(&mut items);
-                                    append_questions(&mut items, input);
+                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                                        let indices = append_questions(&mut items, input);
+                                        question_uses.insert(id.to_owned(), indices);
+                                    } else {
+                                        append_questions(&mut items, input);
+                                    }
                                 } else if let Some(id) = block.get("id").and_then(Value::as_str) {
                                     tool_uses.push(ToolUse {
                                         id: id.to_owned(),
@@ -253,16 +277,108 @@ struct ToolUse {
     input: Option<Value>,
 }
 
-fn tool_result_ids(message: &Value) -> Vec<String> {
+fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {
     message
         .get("content")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-        .filter_map(|block| block.get("tool_use_id").and_then(Value::as_str))
-        .map(str::to_owned)
-        .collect()
+}
+
+fn tool_result_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => Some(
+            blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        _ => None,
+    }
+}
+
+fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
+    let mut remaining = content
+        .strip_prefix("Your questions have been answered:")
+        .or_else(|| content.strip_prefix("The user answered:"))?
+        .trim_start();
+    let mut answers = Vec::new();
+
+    loop {
+        let (question, after_question) = parse_quoted_json_string(remaining)?;
+        let after_equals = after_question.strip_prefix('=')?;
+        let (answer, after_answer) = parse_quoted_json_string(after_equals)?;
+        answers.push((question, answer));
+
+        remaining = after_answer.trim_start();
+        if let Some(after_comma) = remaining.strip_prefix(',') {
+            remaining = after_comma.trim_start();
+        } else if !remaining.starts_with('"') {
+            break;
+        }
+    }
+
+    (!answers.is_empty()).then_some(answers)
+}
+
+fn tool_use_result_answers(tool_use_result: &Value) -> Option<Vec<(String, String)>> {
+    let answers = tool_use_result.get("answers")?.as_object()?;
+    let answers = answers
+        .iter()
+        .filter_map(|(question, answer)| {
+            answer
+                .as_str()
+                .map(|answer| (question.clone(), answer.to_owned()))
+        })
+        .collect::<Vec<_>>();
+    (!answers.is_empty()).then_some(answers)
+}
+
+fn parse_quoted_json_string(value: &str) -> Option<(String, &str)> {
+    if !value.starts_with('"') {
+        return None;
+    }
+
+    let mut escaped = false;
+    for (index, character) in value.char_indices().skip(1) {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            let end = index + character.len_utf8();
+            let parsed = serde_json::from_str(&value[..end]).ok()?;
+            return Some((parsed, &value[end..]));
+        }
+    }
+
+    None
+}
+
+fn apply_question_answers(
+    items: &mut [ChatItem],
+    question_indices: &[usize],
+    answers: &[(String, String)],
+) {
+    let mut remaining_answers = answers.to_vec();
+    for index in question_indices {
+        let Some(ChatItem::Question {
+            question, answer, ..
+        }) = items.get_mut(*index)
+        else {
+            continue;
+        };
+        if let Some(answer_index) = remaining_answers
+            .iter()
+            .position(|(asked, _)| asked == question)
+        {
+            let (_, selected_answer) = remaining_answers.remove(answer_index);
+            *answer = Some(selected_answer);
+        }
+    }
 }
 
 fn is_tool_result_only_user_record(record: &Value) -> bool {
@@ -403,13 +519,14 @@ fn content_blocks(content: &Value) -> Vec<&Value> {
     }
 }
 
-fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) {
+fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usize> {
     let Some(questions) = input
         .and_then(|input| input.get("questions"))
         .and_then(Value::as_array)
     else {
-        return;
+        return Vec::new();
     };
+    let mut indices = Vec::new();
     for question in questions {
         let Some(text) = question.get("question").and_then(Value::as_str) else {
             continue;
@@ -422,11 +539,14 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) {
             .filter_map(|option| option.get("label").and_then(Value::as_str))
             .map(str::to_owned)
             .collect();
+        indices.push(items.len());
         items.push(ChatItem::Question {
             question: text.to_owned(),
             choices,
+            answer: None,
         });
     }
+    indices
 }
 
 #[cfg(test)]
@@ -549,6 +669,7 @@ mod tests {
                 ChatItem::Question {
                     question: "Should notifications be grouped?".to_string(),
                     choices: vec!["Yes".to_string(), "No".to_string()],
+                    answer: None,
                 },
                 ChatItem::User {
                     text: "Group the events by source.".to_string(),
@@ -559,6 +680,100 @@ mod tests {
                     from: None,
                 },
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::one_question(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-one","name":"AskUserQuestion","input":{"questions":[{"question":"Should the summary be brief?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-one","content":"Your questions have been answered: \"Should the summary be brief?\"=\"Yes\". You can now continue with these answers in mind."}]}}
+        "#},
+        vec![ChatItem::Question {
+            question: "Should the summary be brief?".to_string(),
+            choices: vec!["Yes".to_string(), "No".to_string()],
+            answer: Some("Yes".to_string()),
+        }]
+    )]
+    #[case::multiple_questions(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-many","name":"AskUserQuestion","input":{"questions":[{"question":"Which output format?","options":[{"label":"Markdown"},{"label":"Plain text"}]},{"question":"Include examples?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-many","content":"Your questions have been answered: \"Which output format?\"=\"Markdown\", \"Include examples?\"=\"No\". You can now continue with these answers in mind."}]}}
+        "#},
+        vec![
+            ChatItem::Question {
+                question: "Which output format?".to_string(),
+                choices: vec!["Markdown".to_string(), "Plain text".to_string()],
+                answer: Some("Markdown".to_string()),
+            },
+            ChatItem::Question {
+                question: "Include examples?".to_string(),
+                choices: vec!["Yes".to_string(), "No".to_string()],
+                answer: Some("No".to_string()),
+            },
+        ]
+    )]
+    #[case::answer_outside_choices(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-custom","name":"AskUserQuestion","input":{"questions":[{"question":"How should the cache expire?","options":[{"label":"After one hour"},{"label":"After one day"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"The user answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
+        "#},
+        vec![ChatItem::Question {
+            question: "How should the cache expire?".to_string(),
+            choices: vec!["After one hour".to_string(), "After one day".to_string()],
+            answer: Some("Keep it until deployment".to_string()),
+        }]
+    )]
+    #[case::tool_use_result_answers(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-structured","name":"AskUserQuestion","input":{"questions":[{"question":"Which color theme?","options":[{"label":"Light"},{"label":"Dark"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-structured","content":"Your questions have been answered: \"Which color theme?\"=\"Dark\". You can now continue with these answers in mind."}]},"toolUseResult":{"questions":[{"question":"Which color theme?"}],"answers":{"Which color theme?":"Use a fictional palette"},"annotations":{}}}
+        "#},
+        vec![ChatItem::Question {
+            question: "Which color theme?".to_string(),
+            choices: vec!["Light".to_string(), "Dark".to_string()],
+            answer: Some("Use a fictional palette".to_string()),
+        }]
+    )]
+    #[case::null_tool_use_result_uses_text_answer(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-null-result","name":"AskUserQuestion","input":{"questions":[{"question":"Should weekends be shown?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-null-result","content":"The user answered: \"Should weekends be shown?\"=\"No\". You can now continue with these answers in mind."}]},"toolUseResult":null}
+        "#},
+        vec![ChatItem::Question {
+            question: "Should weekends be shown?".to_string(),
+            choices: vec!["Yes".to_string(), "No".to_string()],
+            answer: Some("No".to_string()),
+        }]
+    )]
+    #[case::no_answer(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-pending","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+        "#},
+        vec![ChatItem::Question {
+            question: "Should the report include a chart?".to_string(),
+            choices: vec!["Yes".to_string(), "No".to_string()],
+            answer: None,
+        }]
+    )]
+    #[case::answer_extraction_fails(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-cancelled","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-cancelled","content":"The user cancelled this question."}]}}
+        "#},
+        vec![ChatItem::Question {
+            question: "Should the report include a chart?".to_string(),
+            choices: vec!["Yes".to_string(), "No".to_string()],
+            answer: None,
+        }]
+    )]
+    fn parses_question_answers_from_tool_results(
+        #[case] transcript: &str,
+        #[case] expected: Vec<ChatItem>,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            expected
         );
     }
 

@@ -35,6 +35,7 @@ const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
   choices: ['Retry a few times', 'Retry once'],
+  answer: null,
 }
 
 let container: HTMLDivElement
@@ -160,6 +161,95 @@ it('answers a question from a number key or a choice click', () => {
     true,
   ])
   expect(actual).toBe(expected)
+})
+
+it('shows a selected answer, dims other choices, and renders Markdown', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    {
+      ...question,
+      question: 'Which **retry** policy should be used?',
+      choices: ['Retry *a few* times', 'Retry once'],
+      answer: 'Retry once',
+    },
+  ])
+  dispatchKeyInAct(window, '1')
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.chat-question-choices button')
+      ?.click()
+  })
+
+  const card = requireElement(container.querySelector('.chat-question-card'))
+  const snapshot = () => ({
+    question: card.querySelector('.chat-question-text strong')?.textContent,
+    markdownChoice: card.querySelector('.chat-question-choice-text em')
+      ?.textContent,
+    answer: card.querySelector('.chat-question-answer')?.textContent,
+    choices: Array.from(
+      card.querySelectorAll<HTMLButtonElement>('.chat-question-choices button'),
+      (button) => ({
+        label: button.querySelector('.chat-question-choice-text')?.textContent,
+        disabled: button.disabled,
+        selected: button.classList.contains('is-selected'),
+        dimmed: button.classList.contains('is-unselected'),
+        check: button.querySelector('.chat-question-choice-check')?.textContent,
+      }),
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    question: 'retry',
+    markdownChoice: 'a few',
+    answer: undefined,
+    choices: [
+      {
+        label: 'Retry a few times',
+        disabled: true,
+        selected: false,
+        dimmed: true,
+        check: undefined,
+      },
+      {
+        label: 'Retry once',
+        disabled: true,
+        selected: true,
+        dimmed: false,
+        check: '✓',
+      },
+    ],
+    actionCalls: [],
+  })
+})
+
+it('shows a freeform answer below the choices', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    { ...question, answer: 'Wait until the next deployment' },
+  ])
+
+  const snapshot = () => ({
+    answer: container.querySelector('.chat-question-answer')?.textContent,
+    selectedChoices: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button.is-selected',
+      ),
+      (button) => button.textContent,
+    ),
+    disabledChoices: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    answer: 'Answer: Wait until the next deployment',
+    selectedChoices: [],
+    disabledChoices: [true, true],
+    actionCalls: [],
+  })
 })
 
 it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {

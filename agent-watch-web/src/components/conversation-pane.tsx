@@ -36,7 +36,8 @@ function isChatItem(value: unknown): value is ChatItem {
       return (
         typeof value['question'] === 'string' &&
         Array.isArray(value['choices']) &&
-        value['choices'].every((choice) => typeof choice === 'string')
+        value['choices'].every((choice) => typeof choice === 'string') &&
+        (value['answer'] === null || typeof value['answer'] === 'string')
       )
     case 'permission':
       return (

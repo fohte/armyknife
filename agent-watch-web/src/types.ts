@@ -59,7 +59,12 @@ export type ChatItem =
       operations?: ToolOperation[]
     }
   | { type: 'tool_in_progress'; tool: string; target?: string }
-  | { type: 'question'; question: string; choices: string[] }
+  | {
+      type: 'question'
+      question: string
+      choices: string[]
+      answer: string | null
+    }
   | { type: 'permission'; tool: string; description: string }
 
 export type ToolOperation = {

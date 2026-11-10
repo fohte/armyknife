@@ -76,6 +76,7 @@ function remarkTrimNonAsciiAutolinks() {
 type MarkdownMessageProps = {
   children: string
   className?: string
+  inline?: boolean
 }
 
 const markdownComponents: Components = {
@@ -85,23 +86,37 @@ const markdownComponents: Components = {
     ) : null,
 }
 
+const inlineMarkdownComponents: Components = {
+  ...markdownComponents,
+  p: ({ children }) => <span>{children}</span>,
+  a: ({ node, href, children }) =>
+    node?.tagName === 'a' ? (
+      <span className="markdown-link-text">{href ?? children}</span>
+    ) : null,
+}
+
 export const MarkdownMessage = memo(function MarkdownMessage({
   children,
   className,
+  inline = false,
 }: MarkdownMessageProps) {
   const rootClassName =
     className === undefined
       ? 'markdown-message'
       : `markdown-message ${className}`
 
-  return (
-    <div className={rootClassName}>
-      <ReactMarkdown
-        components={markdownComponents}
-        remarkPlugins={[remarkGfm, remarkTrimNonAsciiAutolinks]}
-      >
-        {children}
-      </ReactMarkdown>
-    </div>
+  const message = (
+    <ReactMarkdown
+      components={inline ? inlineMarkdownComponents : markdownComponents}
+      remarkPlugins={[remarkGfm, remarkTrimNonAsciiAutolinks]}
+    >
+      {children}
+    </ReactMarkdown>
+  )
+
+  return inline ? (
+    <span className={rootClassName}>{message}</span>
+  ) : (
+    <div className={rootClassName}>{message}</div>
   )
 })
