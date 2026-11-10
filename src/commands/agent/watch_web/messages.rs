@@ -401,7 +401,7 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with(move |_| Ok(Some(session.clone())));
+        let router = routes_with(move |_| Ok(Some(session.clone())), |_| Ok(None));
         let response = router
             .oneshot(
                 Request::builder()

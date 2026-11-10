@@ -472,7 +472,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
