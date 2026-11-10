@@ -746,6 +746,33 @@ it('shows elapsed time while the session is working without an active tool', () 
   })
 })
 
+it('shows the compacting status while hiding elapsed time and stale tool details', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, isCompacting: true, elapsedSeconds: 92 },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo test --manifest-path fixture/Cargo.toml',
+      },
+    ],
+  )
+
+  const getSnapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    toolItems: container.querySelectorAll('.conversation-working-tool').length,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  })
+  expect(getSnapshot()).toEqual({
+    workingStatus: 'Compacting conversation…',
+    toolItems: 0,
+    inProgressItems: 0,
+  })
+})
+
 it('shows an active tool and hides it from the completed conversation', () => {
   renderView(
     vi.fn().mockResolvedValue(true),

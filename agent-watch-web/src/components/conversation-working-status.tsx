@@ -3,6 +3,7 @@ import type { ToolOperation } from '#types'
 type ConversationWorkingStatusProps = {
   elapsedSeconds: number
   activeTool: ToolOperation | undefined
+  isCompacting?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -21,12 +22,17 @@ function formatElapsedTime(totalSeconds: number) {
 export function ConversationWorkingStatus({
   elapsedSeconds,
   activeTool,
+  isCompacting = false,
 }: ConversationWorkingStatusProps) {
   return (
     <div className="conversation-working-status" role="status">
       <span className="conversation-working-dot" aria-hidden="true" />
-      <span>Working · {formatElapsedTime(elapsedSeconds)}</span>
-      {activeTool != null ? (
+      <span>
+        {isCompacting
+          ? 'Compacting conversation…'
+          : `Working · ${formatElapsedTime(elapsedSeconds)}`}
+      </span>
+      {!isCompacting && activeTool != null ? (
         <span className="conversation-working-tool">
           {activeTool.tool}
           {activeTool.target != null && activeTool.target !== '' ? (
