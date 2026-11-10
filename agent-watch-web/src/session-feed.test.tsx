@@ -183,6 +183,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const reconnectReceived = deferred<undefined>()
   const responses: unknown[] = []
   const errors: (string | null)[] = []
+  const reloads: number[] = []
   const fetcher = vi
     .fn()
     .mockImplementationOnce(() => {
@@ -256,7 +257,6 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         ],
       }),
     )
-
   const stop = startSessionFeed(
     (response) => {
       responses.push(response)
@@ -267,7 +267,11 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       }
     },
     (message) => errors.push(message),
-    { fetcher, createEventSource: () => source },
+    {
+      fetcher,
+      createEventSource: () => source,
+      reloadPage: () => reloads.push(responses.length),
+    },
   )
 
   await firstRequestStarted.promise
@@ -310,6 +314,7 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
   const snapshot = () => [
     responses,
     errors,
+    reloads,
     fetcher.mock.calls.length,
     source.closed,
   ]
@@ -407,9 +412,39 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
       },
     ],
     [null, null, 'Connection lost. Reconnecting…', null, null],
+    [],
     3,
     true,
   ])
+})
+
+it('reloads after the server announces a restart and reconnects', async () => {
+  const source = new FakeEventSource()
+  const initialResponse = deferred<undefined>()
+  const reloads: string[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+  const stop = startSessionFeed(
+    () => {
+      initialResponse.resolve(undefined)
+    },
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => source,
+      reloadPage: () => reloads.push('reloaded'),
+    },
+  )
+
+  await initialResponse.promise
+  source.emit('restart')
+  source.emit('error')
+  source.emit('open')
+  stop()
+
+  const snapshot = () => [reloads, fetcher.mock.calls.length, source.closed]
+  expect(snapshot()).toEqual([['reloaded'], 1, true])
 })
 
 it('retries a failed session request and clears the error after success', async () => {

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.552](https://github.com/fohte/armyknife/compare/v0.1.551...v0.1.552) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show complete tool commands ([#1461](https://github.com/fohte/armyknife/issues/1461)) ([5f9e763](https://github.com/fohte/armyknife/commit/5f9e763a8ccd9383ca4a51af3ab355deca8bd61a))
+
+## [0.1.551](https://github.com/fohte/armyknife/compare/v0.1.550...v0.1.551) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** restart after binary updates ([#1457](https://github.com/fohte/armyknife/issues/1457)) ([69c20c9](https://github.com/fohte/armyknife/commit/69c20c9a510fd23e976885445c65d7d83e3a434e))
+
+## [0.1.550](https://github.com/fohte/armyknife/compare/v0.1.549...v0.1.550) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** attach dropped images ([#1458](https://github.com/fohte/armyknife/issues/1458)) ([e8fe334](https://github.com/fohte/armyknife/commit/e8fe3346192bd296db150a3a2ba0153781b2678e))
+
 ## [0.1.549](https://github.com/fohte/armyknife/compare/v0.1.548...v0.1.549) (2026-11-10)
 
 
