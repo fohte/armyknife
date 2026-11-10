@@ -781,6 +781,38 @@ mod tests {
     }
 
     #[test]
+    fn keeps_tool_results_appended_after_branch_discovery() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Read the plan."}}
+            {"uuid":"fixture-tool-use-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read-id","name":"Read","input":{"file_path":"fixture/plan.md"}}]}}
+        "#};
+        let reader = AppendingReader {
+            inner: Cursor::new(transcript.as_bytes().to_vec()),
+            appended_row: Some(
+                indoc! {r#"
+                    {"uuid":"fixture-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-id","content":"Fictional delayed result."}]}}
+                "#}
+                .as_bytes()
+                .to_vec(),
+            ),
+        };
+
+        assert_eq!(
+            parse(reader, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Read the plan.".to_string(),
+                    from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Read", Some("fixture/plan.md"))],
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn shows_all_messages_when_transcript_rows_have_no_uuids() {
         let transcript = indoc! {r#"
             {"type":"user","message":{"content":"Keep the first legacy message."}}
