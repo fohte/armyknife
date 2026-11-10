@@ -60,7 +60,7 @@ impl EnrichmentUpdates {
 
 pub async fn run(_args: &WatchWebArgs) -> Result<()> {
     let executable = std::env::current_exe()?;
-    let executable_identity = restart::ExecutableIdentity::read(&executable)?;
+    let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
     let listener = TcpListener::bind(address).await?;
@@ -72,35 +72,81 @@ pub async fn run(_args: &WatchWebArgs) -> Result<()> {
         eprintln!("Could not open a browser automatically: {error}");
     }
 
-    let server = async {
-        axum::serve(listener, app()).await?;
-        Ok::<_, std::io::Error>(())
-    };
-    tokio::select! {
-        result = server => result.map_err(Into::into),
-        result = restart::restart_when_replaced(executable, executable_identity, args) => result,
+    let mut listener = listener;
+    let mut restart_retry_interval = restart::POLL_INTERVAL;
+    loop {
+        let (restart_sender, restart_receiver) = watch::channel(false);
+        let mut shutdown_receiver = restart_sender.subscribe();
+        let server = async move {
+            axum::serve(listener, app(restart_receiver))
+                .with_graceful_shutdown(async move {
+                    let _ = shutdown_receiver.changed().await;
+                })
+                .await
+        };
+        tokio::pin!(server);
+
+        tokio::select! {
+            result = &mut server => return result.map_err(Into::into),
+            () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
+                restart_sender.send_replace(true);
+                server.await?;
+                match restart::exec_replacement(&executable, executable_identity, &args) {
+                    Ok(_) => restart_retry_interval = restart::POLL_INTERVAL,
+                    Err(error) => {
+                        eprintln!("Could not restart the Agent Watch Web UI: {error}");
+                        if let Ok(identity) = restart::ExecutableIdentity::read(&executable) {
+                            executable_identity = identity;
+                        }
+                        restart_retry_interval = restart::EXEC_RETRY_INTERVAL;
+                    }
+                }
+                listener = TcpListener::bind(address).await?;
+            }
+        }
     }
 }
 
-fn app() -> Router {
-    app_with_assets(&assets::DIST)
+fn app(restart_signal: watch::Receiver<bool>) -> Router {
+    app_with_assets_and_loader_and_restart_signal(
+        &assets::DIST,
+        store::load_session,
+        store::watch_web_user_marker,
+        restart_signal,
+    )
 }
 
+#[cfg(test)]
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
     app_with_assets_and_loader(dist, store::load_session, store::watch_web_user_marker)
 }
 
+#[cfg(test)]
 fn app_with_assets_and_loader(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
+) -> Router {
+    app_with_assets_and_loader_and_restart_signal(
+        dist,
+        load_session,
+        load_user_marker,
+        watch::channel(false).1,
+    )
+}
+
+fn app_with_assets_and_loader_and_restart_signal(
+    dist: &'static Dir<'static>,
+    load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
+    restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
         .merge(actions::router())
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
-        .merge(events::router(enrichment_updates))
+        .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with(load_session, load_user_marker))
         .fallback(api_not_found);
 
@@ -124,6 +170,7 @@ mod tests {
     use axum::http::{Request, Response, StatusCode};
     use include_dir::{Dir, include_dir};
     use rstest::rstest;
+    use tokio::sync::watch;
     use tower::ServiceExt;
 
     use super::{app, app_with_assets, app_with_assets_and_loader};
@@ -226,7 +273,7 @@ mod tests {
         #[case] expected_content_type: Option<&str>,
         #[case] expected_body: &str,
     ) {
-        let response = app()
+        let response = app(watch::channel(false).1)
             .oneshot(request(method, uri, host, origin))
             .await
             .unwrap();
@@ -292,7 +339,7 @@ mod tests {
 
     #[tokio::test]
     async fn matching_origin_reaches_the_action_route() {
-        let response = app()
+        let response = app(watch::channel(false).1)
             .oneshot(
                 Request::builder()
                     .method("POST")

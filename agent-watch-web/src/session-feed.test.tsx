@@ -229,21 +229,48 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
         ],
       }),
     )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        revision: 7,
+        sessions: [
+          {
+            id: 'session-reconnected',
+            isPaused: false,
+            category: 'needs_action',
+            kind: 'Question',
+            title: 'Latest session after reconnect',
+            preview: 'The stream reconnected.',
+            elapsedSeconds: 14,
+            unread: true,
+            task: {
+              id: 'task-reconnected',
+              number: 2048,
+              title: 'Restore event delivery',
+              priority: 1,
+            },
+            project: 'sample project',
+            ancestorSessionIds: [],
+            parent: null,
+            repo: 'example/service',
+            pullRequest: { number: 81, state: 'Open' },
+          },
+        ],
+      }),
+    )
   const stop = startSessionFeed(
     (response) => {
       responses.push(response)
       if (response.revision === 6) {
         updateReceived.resolve(undefined)
+      } else if (response.revision === 7) {
+        reconnectReceived.resolve(undefined)
       }
     },
     (message) => errors.push(message),
     {
       fetcher,
       createEventSource: () => source,
-      reloadPage: () => {
-        reloads.push(responses.length)
-        reconnectReceived.resolve(undefined)
-      },
+      reloadPage: () => reloads.push(responses.length),
     },
   )
 
@@ -357,12 +384,67 @@ it('coalesces session events and refreshes when the stream reconnects', async ()
           },
         ],
       },
+      {
+        revision: 7,
+        sessions: [
+          {
+            id: 'session-reconnected',
+            isPaused: false,
+            category: 'needs_action',
+            kind: 'Question',
+            title: 'Latest session after reconnect',
+            preview: 'The stream reconnected.',
+            elapsedSeconds: 14,
+            unread: true,
+            task: {
+              id: 'task-reconnected',
+              number: 2048,
+              title: 'Restore event delivery',
+              priority: 1,
+            },
+            project: 'sample project',
+            ancestorSessionIds: [],
+            parent: null,
+            repo: 'example/service',
+            pullRequest: { number: 81, state: 'Open' },
+          },
+        ],
+      },
     ],
-    [null, null, 'Connection lost. Reconnecting…', null],
-    [2],
-    2,
+    [null, null, 'Connection lost. Reconnecting…', null, null],
+    [],
+    3,
     true,
   ])
+})
+
+it('reloads after the server announces a restart and reconnects', async () => {
+  const source = new FakeEventSource()
+  const initialResponse = deferred<undefined>()
+  const reloads: string[] = []
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(jsonResponse({ revision: 1, sessions: [] }))
+  const stop = startSessionFeed(
+    () => {
+      initialResponse.resolve(undefined)
+    },
+    () => {},
+    {
+      fetcher,
+      createEventSource: () => source,
+      reloadPage: () => reloads.push('reloaded'),
+    },
+  )
+
+  await initialResponse.promise
+  source.emit('restart')
+  source.emit('error')
+  source.emit('open')
+  stop()
+
+  const snapshot = () => [reloads, fetcher.mock.calls.length, source.closed]
+  expect(snapshot()).toEqual([['reloaded'], 1, true])
 })
 
 it('retries a failed session request and clears the error after success', async () => {

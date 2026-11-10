@@ -19,18 +19,33 @@ use crate::commands::agent::store;
 const REVISION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(15);
 
-pub(super) fn router(updates: EnrichmentUpdates) -> Router {
+#[derive(Clone)]
+struct EventUpdates {
+    enrichment: EnrichmentUpdates,
+    restart: watch::Receiver<bool>,
+}
+
+pub(super) fn router(updates: EnrichmentUpdates, restart: watch::Receiver<bool>) -> Router {
     Router::new()
         .route("/events", get(events))
-        .with_state(updates)
+        .with_state(EventUpdates {
+            enrichment: updates,
+            restart,
+        })
 }
 
 async fn events(
-    State(updates): State<EnrichmentUpdates>,
+    State(updates): State<EventUpdates>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let (signal_tx, signal_rx) = mpsc::unbounded_channel();
     let watcher = create_watcher(signal_tx).await;
-    let stream = revision_stream(signal_rx, updates.subscribe(), watcher, current_revision);
+    let stream = revision_stream(
+        signal_rx,
+        updates.enrichment.subscribe(),
+        watcher,
+        updates.restart,
+        current_revision,
+    );
 
     Sse::new(stream).keep_alive(
         KeepAlive::new()
@@ -74,6 +89,10 @@ struct RevisionStreamState<F> {
     watch_channel_open: bool,
     enrichment_updates: watch::Receiver<()>,
     enrichment_channel_open: bool,
+    restart_signal: watch::Receiver<bool>,
+    restart_channel_open: bool,
+    restart_event_pending: bool,
+    restart_event_sent: bool,
     interval: Interval,
     read_revision: F,
 }
@@ -82,6 +101,7 @@ fn revision_stream<F, Fut>(
     signals: UnboundedReceiver<()>,
     enrichment_updates: watch::Receiver<()>,
     watcher: Option<RecommendedWatcher>,
+    restart_signal: watch::Receiver<bool>,
     read_revision: F,
 ) -> impl Stream<Item = Result<Event, Infallible>>
 where
@@ -100,27 +120,58 @@ where
             watch_channel_open: true,
             enrichment_updates,
             enrichment_channel_open: true,
+            restart_signal,
+            restart_channel_open: true,
+            restart_event_pending: false,
+            restart_event_sent: false,
             interval,
             read_revision,
         },
         |mut state| async move {
+            if *state.restart_signal.borrow() {
+                state.restart_event_pending = true;
+            }
+            if state.restart_event_sent {
+                return None;
+            }
+            if state.restart_event_pending {
+                state.restart_event_pending = false;
+                state.restart_event_sent = true;
+                return Some((
+                    Ok(Event::default().event("restart").data("restarting")),
+                    state,
+                ));
+            }
+
             loop {
                 let _keep_watcher_alive = state.watcher.as_ref();
-                let enrichment_update = tokio::select! {
-                    _ = state.interval.tick() => false,
+                let (enrichment_update, restart_received) = tokio::select! {
+                    _ = state.interval.tick() => (false, false),
                     signal = state.signals.recv(), if state.watch_channel_open => {
                         if signal.is_none() {
                             state.watch_channel_open = false;
                         }
-                        false
+                        (false, false)
                     }
                     update = state.enrichment_updates.changed(), if state.enrichment_channel_open => {
                         if update.is_err() {
                             state.enrichment_channel_open = false;
                         }
-                        update.is_ok()
+                        (update.is_ok(), false)
+                    }
+                    update = state.restart_signal.changed(), if state.restart_channel_open => {
+                        if update.is_err() {
+                            state.restart_channel_open = false;
+                            (false, false)
+                        } else {
+                            (false, *state.restart_signal.borrow())
+                        }
                     }
                 };
+                if restart_received {
+                    state.restart_event_pending = true;
+                    continue;
+                }
                 state.enrichment_update_pending |= enrichment_update;
 
                 let Some(revision) = (state.read_revision)().await else {
@@ -161,6 +212,7 @@ mod tests {
         let revision = Arc::new(AtomicI64::new(7));
         let (signal_tx, signal_rx) = mpsc::unbounded_channel();
         let (enrichment_tx, enrichment_rx) = watch::channel(());
+        let (_restart_tx, restart_rx) = watch::channel(false);
         let read_revision = {
             let revision = Arc::clone(&revision);
             move || {
@@ -172,6 +224,7 @@ mod tests {
             signal_rx,
             enrichment_rx,
             None,
+            restart_rx,
             read_revision,
         ))
         .into_response()
@@ -188,6 +241,7 @@ mod tests {
 
         let (_reconnect_signal_tx, reconnect_signal_rx) = mpsc::unbounded_channel();
         let (_reconnect_enrichment_tx, reconnect_enrichment_rx) = watch::channel(());
+        let (_reconnect_restart_tx, reconnect_restart_rx) = watch::channel(false);
         let read_current_revision = {
             let revision = Arc::clone(&revision);
             move || {
@@ -199,6 +253,7 @@ mod tests {
             reconnect_signal_rx,
             reconnect_enrichment_rx,
             None,
+            reconnect_restart_rx,
             read_current_revision,
         ))
         .into_response()
@@ -233,6 +288,45 @@ mod tests {
 
                 "}
                 .to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn emits_restart_and_closes_the_event_stream() {
+        let (_signal_tx, signal_rx) = mpsc::unbounded_channel();
+        let (_enrichment_tx, enrichment_rx) = watch::channel(());
+        let (restart_tx, restart_rx) = watch::channel(false);
+        let stream = revision_stream(signal_rx, enrichment_rx, None, restart_rx, || async {
+            Some(12)
+        });
+        let body = Sse::new(stream).into_response().into_body();
+        let mut chunks = body.into_data_stream();
+        let initial = next_chunk(&mut chunks).await;
+
+        restart_tx.send_replace(true);
+        let restarting = next_chunk(&mut chunks).await;
+        let closed = tokio::time::timeout(Duration::from_secs(1), chunks.next())
+            .await
+            .unwrap()
+            .is_none();
+
+        assert_eq!(
+            (initial, restarting, closed),
+            (
+                indoc! {"
+                    event: sessions
+                    data: 12
+
+                "}
+                .to_string(),
+                indoc! {"
+                    event: restart
+                    data: restarting
+
+                "}
+                .to_string(),
+                true,
             ),
         );
     }
