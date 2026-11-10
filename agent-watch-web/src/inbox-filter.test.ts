@@ -2,6 +2,7 @@ import { expect, it } from 'vitest'
 
 import {
   filterInboxSessions,
+  formatInboxFilterQuery,
   getInboxFilterOptions,
   parseInboxFilterQuery,
 } from '#inbox-filter'
@@ -104,6 +105,20 @@ it('matches task numbers with or without the hash prefix and combines fields wit
   )
 
   expect(filterInboxSessions(sessions, filters)).toEqual([sessions[0]])
+})
+
+it('round trips quoted values containing spaces, commas, quotes, and field tokens', () => {
+  const filters = [
+    {
+      key: 'project' as const,
+      values: ['sample kind:review', 'service, worker', 'say "hello"'],
+    },
+    { key: 'kind' as const, values: ['Question'] },
+  ]
+
+  expect(parseInboxFilterQuery(formatInboxFilterQuery(filters))).toEqual(
+    filters,
+  )
 })
 
 it('counts each value after applying the other selected filters', () => {

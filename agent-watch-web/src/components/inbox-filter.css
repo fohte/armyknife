@@ -110,7 +110,7 @@
   display: flex;
   min-height: 54px;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   padding: 9px 13px;
   border-bottom: 1px solid #29292e;
 }
@@ -123,7 +123,7 @@
   background: transparent;
   color: #f4f4f5;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .inbox-filter-query::placeholder {

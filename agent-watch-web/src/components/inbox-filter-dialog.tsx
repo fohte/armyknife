@@ -6,6 +6,7 @@ import {
   getInboxFilterOptions,
   INBOX_FILTER_FIELDS,
   type InboxFilterKey,
+  normalizeInboxFilterValue,
   parseInboxFilterQuery,
 } from '#inbox-filter'
 import type { Session } from '#types'
@@ -34,11 +35,6 @@ export function InboxFilterDialog({
   const selectedValues =
     draftFilters.find((filter) => filter.key === selectedKey)?.values ?? []
   const options = getInboxFilterOptions(sessions, draftFilters, selectedKey)
-  const normalize = (value: string) =>
-    selectedKey === 'task'
-      ? value.trim().replace(/^#/, '').toLocaleLowerCase()
-      : value.trim().toLocaleLowerCase()
-
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
@@ -47,7 +43,9 @@ export function InboxFilterDialog({
     const filters = parseInboxFilterQuery(query)
     const current = filters.find((filter) => filter.key === selectedKey)
     const nextValues = (current?.values ?? []).filter(
-      (currentValue) => normalize(currentValue) !== normalize(value),
+      (currentValue) =>
+        normalizeInboxFilterValue(selectedKey, currentValue) !==
+        normalizeInboxFilterValue(selectedKey, value),
     )
     if (nextValues.length === (current?.values.length ?? 0)) {
       nextValues.push(value)
@@ -126,7 +124,9 @@ export function InboxFilterDialog({
             {options.length > 0 ? (
               options.map((option) => {
                 const checked = selectedValues.some(
-                  (value) => normalize(value) === normalize(option.value),
+                  (value) =>
+                    normalizeInboxFilterValue(selectedKey, value) ===
+                    normalizeInboxFilterValue(selectedKey, option.value),
                 )
                 return (
                   <label key={option.value} className="inbox-filter-option">

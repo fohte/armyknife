@@ -173,6 +173,38 @@ function chipSnapshot() {
   }
 }
 
+function dialogSnapshot() {
+  return { isOpen: container.querySelector('[role="dialog"]') !== null }
+}
+
+function clickFilterOption(value: string) {
+  const option = Array.from(
+    container.querySelectorAll<HTMLLabelElement>('.inbox-filter-option'),
+  ).find((label) => label.textContent.startsWith(value))
+  option?.querySelector('input')?.click()
+}
+
+function slashInputSnapshot(event: KeyboardEvent) {
+  return {
+    defaultPrevented: event.defaultPrevented,
+    ...dialogSnapshot(),
+  }
+}
+
+function checkboxSnapshot() {
+  return {
+    query: container.querySelector<HTMLInputElement>(
+      '[aria-label="Inbox filter query"]',
+    )?.value,
+    reviewChecked: Array.from(
+      container.querySelectorAll<HTMLLabelElement>('.inbox-filter-option'),
+    )
+      .find((label) => label.textContent.startsWith('Review'))
+      ?.querySelector<HTMLInputElement>('input')?.checked,
+    ...dialogSnapshot(),
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -202,25 +234,20 @@ it('filters each inbox section and updates the visible counts', () => {
   })
 })
 
-it('opens the filter dialog with slash and leaves slash unhandled in its input', () => {
+it('opens the filter dialog from its button', () => {
   renderInbox()
 
-  const trigger =
-    container.querySelector<HTMLButtonElement>('.inbox-filter-open')
-  expect(trigger).not.toBeNull()
   act(() => {
-    trigger?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    container
+      .querySelector<HTMLButtonElement>('.inbox-filter-open')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
-  expect(container.querySelector('[role="dialog"]')).not.toBeNull()
-  act(() => {
-    container.querySelector('[aria-label="Inbox filter query"]')?.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'Escape',
-        bubbles: true,
-        cancelable: true,
-      }),
-    )
-  })
+
+  expect(dialogSnapshot()).toEqual({ isOpen: true })
+})
+
+it('opens the filter dialog with slash', () => {
+  renderInbox()
 
   act(() => {
     window.dispatchEvent(
@@ -232,27 +259,52 @@ it('opens the filter dialog with slash and leaves slash unhandled in its input',
     )
   })
 
-  const dialog = container.querySelector('[role="dialog"]')
+  expect(dialogSnapshot()).toEqual({ isOpen: true })
+})
+
+it('leaves slash unhandled when the filter query input has focus', () => {
+  renderInbox()
+  act(() => {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '/',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
   const input = container.querySelector<HTMLInputElement>(
     '[aria-label="Inbox filter query"]',
   )
-  expect(dialog).not.toBeNull()
-  expect(input).not.toBeNull()
-
   const slashEvent = new KeyboardEvent('keydown', {
     key: '/',
     bubbles: true,
     cancelable: true,
   })
+
   act(() => {
     input?.dispatchEvent(slashEvent)
   })
 
-  expect(slashEvent.defaultPrevented).toBe(false)
-  expect(container.querySelector('[role="dialog"]')).not.toBeNull()
+  expect(slashInputSnapshot(slashEvent)).toEqual({
+    defaultPrevented: false,
+    isOpen: true,
+  })
+})
 
+it('closes the filter dialog with Escape', () => {
+  renderInbox()
   act(() => {
-    input?.dispatchEvent(
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: '/',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+  act(() => {
+    container.querySelector('[aria-label="Inbox filter query"]')?.dispatchEvent(
       new KeyboardEvent('keydown', {
         key: 'Escape',
         bubbles: true,
@@ -261,7 +313,7 @@ it('opens the filter dialog with slash and leaves slash unhandled in its input',
     )
   })
 
-  expect(container.querySelector('[role="dialog"]')).toBeNull()
+  expect(dialogSnapshot()).toEqual({ isOpen: false })
 })
 
 it('applies the query when the dialog form is submitted', () => {
@@ -302,5 +354,36 @@ it('removes only the filter chip that was cleared', () => {
   expect(chipSnapshot()).toEqual({
     chips: 'Kind review×',
     visibleTitles: ['Review the changes'],
+  })
+})
+
+it('toggles dialog options while retaining other filter fields', () => {
+  renderInbox()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.inbox-filter-open')
+      ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+  act(() => {
+    clickFilterOption('web-app')
+  })
+  act(() => {
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.inbox-filter-field'),
+    )
+      .find((button) => button.textContent.includes('Kind'))
+      ?.click()
+  })
+  act(() => {
+    clickFilterOption('Review')
+  })
+  act(() => {
+    clickFilterOption('Review')
+  })
+
+  expect(checkboxSnapshot()).toEqual({
+    query: 'project:web-app',
+    reviewChecked: false,
+    isOpen: true,
   })
 })

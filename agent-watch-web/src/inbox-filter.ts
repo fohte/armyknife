@@ -11,11 +11,73 @@ export const INBOX_FILTER_FIELDS = [
 export type InboxFilterKey = (typeof INBOX_FILTER_FIELDS)[number]['key']
 export type InboxFilter = { key: InboxFilterKey; values: string[] }
 
-function normalizeValue(key: InboxFilterKey, value: string) {
+export function normalizeInboxFilterValue(key: InboxFilterKey, value: string) {
   const trimmed = value.trim()
   return key === 'task'
-    ? trimmed.replace(/^#/, '').toLocaleLowerCase()
-    : trimmed.toLocaleLowerCase()
+    ? trimmed.replace(/^#/, '').toLowerCase()
+    : trimmed.toLowerCase()
+}
+
+function splitClauses(query: string) {
+  const clauses: string[] = []
+  let start = 0
+  let quoted = false
+  let escaped = false
+
+  for (let index = 0; index < query.length; index += 1) {
+    const character = query[index]
+    if (escaped) {
+      escaped = false
+    } else if (character === '\\' && quoted) {
+      escaped = true
+    } else if (character === '"') {
+      quoted = !quoted
+    } else if (
+      character !== undefined &&
+      /\s/.test(character) &&
+      !quoted &&
+      /\s+(?:project|kind|task|repo|engine):/i.test(query.slice(index))
+    ) {
+      const whitespace = query.slice(index).match(/^\s+/)?.[0].length ?? 0
+      clauses.push(query.slice(start, index).trim())
+      start = index + whitespace
+      index = start - 1
+    }
+  }
+
+  clauses.push(query.slice(start).trim())
+  return clauses.filter((clause) => clause.length > 0)
+}
+
+function splitValues(valueList: string) {
+  const values: string[] = []
+  let value = ''
+  let quoted = false
+  let escaped = false
+
+  for (const character of valueList) {
+    if (escaped) {
+      value += character
+      escaped = false
+    } else if (character === '\\' && quoted) {
+      escaped = true
+    } else if (character === '"') {
+      quoted = !quoted
+    } else if (character === ',' && !quoted) {
+      values.push(value.trim())
+      value = ''
+    } else {
+      value += character
+    }
+  }
+  values.push(value.trim())
+  return values.filter((candidate) => candidate.length > 0)
+}
+
+function formatValue(value: string) {
+  return /[\s,"]/.test(value)
+    ? `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`
+    : value
 }
 
 function sessionValue(session: Session, key: InboxFilterKey): string | null {
@@ -35,9 +97,7 @@ function sessionValue(session: Session, key: InboxFilterKey): string | null {
 
 export function parseInboxFilterQuery(query: string): InboxFilter[] {
   const conditions = new Map<InboxFilterKey, string[]>()
-  const clauses = query
-    .trim()
-    .split(/\s+(?=(?:project|kind|task|repo|engine):)/i)
+  const clauses = splitClauses(query.trim())
 
   for (const clause of clauses) {
     const colonIndex = clause.indexOf(':')
@@ -48,11 +108,7 @@ export function parseInboxFilterQuery(query: string): InboxFilter[] {
     )
     if (field === undefined) continue
 
-    const values = clause
-      .slice(colonIndex + 1)
-      .split(',')
-      .map((value) => value.trim())
-      .filter((value) => value.length > 0)
+    const values = splitValues(clause.slice(colonIndex + 1))
     if (values.length === 0) continue
 
     const currentValues = conditions.get(field.key) ?? []
@@ -60,8 +116,8 @@ export function parseInboxFilterQuery(query: string): InboxFilter[] {
       if (
         !currentValues.some(
           (current) =>
-            normalizeValue(field.key, current) ===
-            normalizeValue(field.key, value),
+            normalizeInboxFilterValue(field.key, current) ===
+            normalizeInboxFilterValue(field.key, value),
         )
       ) {
         currentValues.push(value)
@@ -79,7 +135,9 @@ export function parseInboxFilterQuery(query: string): InboxFilter[] {
 export function formatInboxFilterQuery(filters: readonly InboxFilter[]) {
   return INBOX_FILTER_FIELDS.flatMap(({ key }) => {
     const values = filters.find((filter) => filter.key === key)?.values ?? []
-    return values.length === 0 ? [] : [`${key}:${values.join(',')}`]
+    return values.length === 0
+      ? []
+      : [`${key}:${values.map(formatValue).join(',')}`]
   }).join(' ')
 }
 
@@ -96,8 +154,8 @@ export function filterInboxSessions(
         value !== null &&
         filter.values.some(
           (candidate) =>
-            normalizeValue(filter.key, candidate) ===
-            normalizeValue(filter.key, value),
+            normalizeInboxFilterValue(filter.key, candidate) ===
+            normalizeInboxFilterValue(filter.key, value),
         )
       )
     }),
@@ -116,7 +174,7 @@ export function getInboxFilterOptions(
   for (const session of matchingSessions) {
     const value = sessionValue(session, key)
     if (value === null) continue
-    const normalized = normalizeValue(key, value)
+    const normalized = normalizeInboxFilterValue(key, value)
     const existing = counts.get(normalized)
     counts.set(normalized, {
       value: existing?.value ?? value,
