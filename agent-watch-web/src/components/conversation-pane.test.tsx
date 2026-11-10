@@ -233,20 +233,26 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
       ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
     ),
   )
-  await act(async () => {
+  let copyCallsAtClickReturn = 0
+  act(() => {
     copyButton.click()
+    copyCallsAtClickReturn = copyCommand.mock.calls.length
+  })
+  await act(async () => {
     await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
 
   const snapshot = () => ({
     copiedText,
     copyCalls: copyCommand.mock.calls,
+    copyCallsAtClickReturn,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
     buttonText: copyButton.textContent,
   })
   expect(snapshot()).toEqual({
     copiedText: session.id,
     copyCalls: [['copy']],
+    copyCallsAtClickReturn: 1,
     temporaryTextareaCount: 1,
     buttonText: 'Copied',
   })

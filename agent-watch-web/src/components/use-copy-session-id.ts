@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 
-function copyWithExecCommand(text: string): Promise<boolean> {
+function copyWithExecCommand(text: string): boolean {
   const textarea = document.createElement('textarea')
   textarea.value = text
   textarea.setAttribute('readonly', '')
@@ -12,16 +12,13 @@ function copyWithExecCommand(text: string): Promise<boolean> {
   textarea.select()
   textarea.setSelectionRange(0, text.length)
 
-  return Promise.resolve()
-    .then(() => {
-      const execCommand: unknown = Reflect.get(document, 'execCommand')
-      if (typeof execCommand !== 'function') return false
-      const result: unknown = Reflect.apply(execCommand, document, ['copy'])
-      return result === true
-    })
-    .finally(() => {
-      textarea.remove()
-    })
+  const execCommand: unknown = Reflect.get(document, 'execCommand')
+  const result: unknown =
+    typeof execCommand === 'function'
+      ? Reflect.apply(execCommand, document, ['copy'])
+      : false
+  textarea.remove()
+  return result === true
 }
 
 function copyTextToClipboard(text: string): Promise<boolean> {
@@ -32,10 +29,7 @@ function copyTextToClipboard(text: string): Promise<boolean> {
       : undefined
 
   if (typeof writeText !== 'function') {
-    return copyWithExecCommand(text).then(
-      (copied) => copied,
-      () => false,
-    )
+    return Promise.resolve(copyWithExecCommand(text))
   }
 
   return Promise.resolve()
@@ -45,11 +39,7 @@ function copyTextToClipboard(text: string): Promise<boolean> {
     })
     .then(
       () => true,
-      () =>
-        copyWithExecCommand(text).then(
-          (copied) => copied,
-          () => false,
-        ),
+      () => Promise.resolve(copyWithExecCommand(text)),
     )
 }
 
