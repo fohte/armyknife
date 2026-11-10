@@ -915,7 +915,7 @@ it('attaches dropped images through the composer and sends their data', async ()
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    targetVisibleDuringDrag: 'Drop images to attach',
+    targetVisibleDuringDrag: 'Drop PNG, JPEG, GIF, or WebP images to attach',
     targetAfterDrop: null,
     dropPrevented: true,
     attachmentNames: [],
@@ -934,6 +934,36 @@ it('attaches dropped images through the composer and sends their data', async ()
         },
       ],
     ],
+  })
+})
+
+it('hides the drop target when a file drag leaves the conversation', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const pane = requireElement(container.querySelector('.conversation-pane'))
+  const dataTransfer = { types: ['Files'], files: [] }
+  const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragEnter, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragEnter)
+  })
+  const targetAfterEnter = container.querySelector(
+    '.conversation-drop-target',
+  )?.textContent
+  const dragLeave = new Event('dragleave', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragLeave, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragLeave)
+  })
+
+  const snapshot = () => ({
+    targetAfterEnter,
+    targetAfterLeave:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    targetAfterEnter: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterLeave: null,
   })
 })
 
