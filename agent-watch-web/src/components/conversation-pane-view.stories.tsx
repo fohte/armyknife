@@ -175,6 +175,63 @@ export const PermissionWaitsForApproval: Story = {
   },
 }
 
+export const PermissionApprovalIsSending: Story = {
+  name: 'The approval button shows that the request is being sent',
+  args: {
+    pendingPermissionAction: {
+      action: 'approve',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
+    messages: [
+      {
+        type: 'permission',
+        tool: 'Shell',
+        description: 'Run the formatter on changed files.',
+      },
+    ],
+  },
+}
+
+export const PermissionRejectionIsSending: Story = {
+  name: 'The rejection button shows that the request is being sent',
+  args: {
+    pendingPermissionAction: {
+      action: 'reject',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
+    messages: [
+      {
+        type: 'permission',
+        tool: 'Shell',
+        description: 'Run the formatter on changed files.',
+      },
+    ],
+  },
+}
+
+export const PermissionApprovalWasSent: Story = {
+  name: 'The permission card confirms that approval was sent',
+  args: {
+    pendingPermissionAction: {
+      action: 'approve',
+      status: 'sent',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
+    messages: [
+      {
+        type: 'permission',
+        tool: 'Shell',
+        description: 'Run the formatter on changed files.',
+      },
+    ],
+  },
+}
+
 export const CritReviewCanOpenBesideTheConversation: Story = {
   name: 'A waiting crit review can open beside the conversation',
   args: {
@@ -247,6 +304,13 @@ export const AMessageIsSending: Story = {
   name: 'The composer shows that the message is sending',
   args: {
     sending: true,
+  },
+}
+
+export const ImagesCanBeDropped: Story = {
+  name: 'The conversation highlights image drops',
+  args: {
+    fileDropActive: true,
   },
 }
 

@@ -22,11 +22,12 @@ export const WorkingWithoutAnActiveTool: Story = {
 }
 
 export const WorkingWithAnActiveTool: Story = {
-  name: 'The active tool and target appear beside the elapsed time',
+  name: 'the long active tool target stays on one line',
   args: {
     activeTool: {
       tool: 'exec',
-      target: 'cargo test --manifest-path fixture/Cargo.toml',
+      target:
+        "printf '%s\\n' 'sample output' | rg --line-number 'sample' src/fixtures/long-named-example-file.rs && cargo test --package sample-package --test integration -- --exact long_command_is_kept_for_display",
     },
   },
 }

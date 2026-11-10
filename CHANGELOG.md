@@ -1,5 +1,67 @@
 # Changelog
 
+## [0.1.555](https://github.com/fohte/armyknife/compare/v0.1.554...v0.1.555) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show permission progress ([#1469](https://github.com/fohte/armyknife/issues/1469)) ([77cda1e](https://github.com/fohte/armyknife/commit/77cda1e944d3004f0a8268412388a2cabcc79749))
+
+## [0.1.554](https://github.com/fohte/armyknife/compare/v0.1.553...v0.1.554) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** link known session IDs ([#1465](https://github.com/fohte/armyknife/issues/1465)) ([f8b76c0](https://github.com/fohte/armyknife/commit/f8b76c0be1fc3213214f76bcb135753d8067b673))
+
+
+### Bug Fixes
+
+* **agent-watch-web:** pin hint to viewport edge ([#1467](https://github.com/fohte/armyknife/issues/1467)) ([970cae8](https://github.com/fohte/armyknife/commit/970cae8b26d7a524f194aa793961f705f54e6b65))
+
+## [0.1.553](https://github.com/fohte/armyknife/compare/v0.1.552...v0.1.553) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** allow copying session IDs ([#1460](https://github.com/fohte/armyknife/issues/1460)) ([0c36560](https://github.com/fohte/armyknife/commit/0c365609af7842a26d099fe24c2f9cc8ff0de8d9))
+
+## [0.1.552](https://github.com/fohte/armyknife/compare/v0.1.551...v0.1.552) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show complete tool commands ([#1461](https://github.com/fohte/armyknife/issues/1461)) ([5f9e763](https://github.com/fohte/armyknife/commit/5f9e763a8ccd9383ca4a51af3ab355deca8bd61a))
+
+## [0.1.551](https://github.com/fohte/armyknife/compare/v0.1.550...v0.1.551) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** restart after binary updates ([#1457](https://github.com/fohte/armyknife/issues/1457)) ([69c20c9](https://github.com/fohte/armyknife/commit/69c20c9a510fd23e976885445c65d7d83e3a434e))
+
+## [0.1.550](https://github.com/fohte/armyknife/compare/v0.1.549...v0.1.550) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** attach dropped images ([#1458](https://github.com/fohte/armyknife/issues/1458)) ([e8fe334](https://github.com/fohte/armyknife/commit/e8fe3346192bd296db150a3a2ba0153781b2678e))
+
+## [0.1.549](https://github.com/fohte/armyknife/compare/v0.1.548...v0.1.549) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** sort sessions newest first ([#1453](https://github.com/fohte/armyknife/issues/1453)) ([183cff7](https://github.com/fohte/armyknife/commit/183cff7b1fbc64595e5663ccb11fb3b2c63c1912))
+
+## [0.1.548](https://github.com/fohte/armyknife/compare/v0.1.547...v0.1.548) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show idle after interrupt ([#1452](https://github.com/fohte/armyknife/issues/1452)) ([87d57aa](https://github.com/fohte/armyknife/commit/87d57aaa35e5e86eba7cf43c745759a81e8b157f))
+* **agent/watch-web:** deliver paused messages ([#1454](https://github.com/fohte/armyknife/issues/1454)) ([6d4e506](https://github.com/fohte/armyknife/commit/6d4e5061bca06f24d0c04dca801d8cff26443b1c))
+
 ## [0.1.547](https://github.com/fohte/armyknife/compare/v0.1.546...v0.1.547) (2026-11-10)
 
 

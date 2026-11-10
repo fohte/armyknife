@@ -431,6 +431,46 @@ function renderApp() {
   })
 }
 
+it('prevents file drags anywhere in the app from navigating away', () => {
+  renderApp()
+  const dispatchFileEvent = (type: 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['Files'], files: [] },
+    })
+    act(() => {
+      document.body.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const snapshot = () => ({
+    dragOverPrevented: dispatchFileEvent('dragover').defaultPrevented,
+    dropPrevented: dispatchFileEvent('drop').defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ dragOverPrevented: true, dropPrevented: true })
+})
+
+it('allows non-file drags to keep their default behavior', () => {
+  renderApp()
+  const dispatchTextEvent = (type: 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['text/plain'], files: [] },
+    })
+    act(() => {
+      document.body.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const snapshot = () => ({
+    dragOverPrevented: dispatchTextEvent('dragover').defaultPrevented,
+    dropPrevented: dispatchTextEvent('drop').defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ dragOverPrevented: false, dropPrevented: false })
+})
+
 function publishSessions(response: SessionsResponse) {
   const onSessions = capturedFeed.onSessions
   if (onSessions === null) {
@@ -3104,6 +3144,62 @@ it('reloads the selected conversation when the session feed updates', async () =
       '/api/sessions/session-a/messages',
       '/api/sessions/session-a/actions',
     ],
+  })
+})
+
+it('opens a known session ID from a conversation message', async () => {
+  const linkedId = '33333333-3333-4333-8333-333333333333'
+  const fetcher = vi.fn<typeof fetch>()
+  fetcher.mockImplementation((input) => {
+    const path = new URL(requestUrl(input), 'http://localhost').pathname
+    const body = path.endsWith('/messages')
+      ? [{ type: 'assistant', text: `Open ${linkedId}` }]
+      : {
+          message: true,
+          answerQuestion: false,
+          interrupt: true,
+          openInTerminal: true,
+        }
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Current session'),
+      session(linkedId, 'Linked session', 'done', 12, 'example toolkit'),
+    ],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const link = container.querySelector<HTMLAnchorElement>(
+    '.chat-assistant-message a',
+  )
+  if (link === null) throw new Error('Expected a link to the known session')
+  const linkTitle = link.title
+  act(() => {
+    link.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    url: window.location.search,
+    linkTitle,
+  })
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Linked session',
+    url: `?session=${linkedId}`,
+    linkTitle: 'Linked session\nexample toolkit\nDone',
   })
 })
 

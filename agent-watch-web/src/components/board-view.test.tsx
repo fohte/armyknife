@@ -61,6 +61,19 @@ function snapshot() {
   }
 }
 
+function overflowHintSnapshot(wrapper: HTMLElement, scroller: HTMLElement) {
+  const hint = wrapper.querySelector<HTMLElement>('.board-overflow-hint')
+  return {
+    hintText: hint?.textContent,
+    hintIsOutsideScroller: hint !== null && !scroller.contains(hint),
+    wrapperPosition: getComputedStyle(wrapper).position,
+    hintPosition: hint === null ? null : getComputedStyle(hint).position,
+    hintIsAlignedWithWrapperRight:
+      hint?.getBoundingClientRect().right ===
+      wrapper.getBoundingClientRect().right,
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -93,5 +106,54 @@ it('shows paused sessions beside the count of other Done sessions', () => {
     badge: 'Paused',
     pausedTitle: 'Prepare the next deployment window',
     summary: 'PausedPrepare the next deployment window · 1 other done',
+  })
+})
+
+it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {
+  container.style.cssText = 'display: flex; width: 320px; height: 320px'
+  renderBoard(
+    [
+      'sample project 1',
+      'sample project 2',
+      'sample project 3',
+      'sample project 4',
+    ].map((project, index) => ({
+      ...completedSession,
+      id: `overflow-session-${String(index)}`,
+      project,
+    })),
+  )
+
+  const wrapper = container.querySelector<HTMLElement>(
+    '.board-projects-container',
+  )
+  const scroller = container.querySelector<HTMLElement>(
+    '.board-projects-scroll',
+  )
+  const projects = Array.from(
+    container.querySelectorAll<HTMLElement>('.board-project'),
+  )
+  if (wrapper === null || scroller === null) {
+    throw new Error('Expected the board projects viewport to render')
+  }
+
+  Object.defineProperties(scroller, {
+    clientWidth: { configurable: true, value: 300 },
+    scrollLeft: { configurable: true, value: 300 },
+  })
+  projects.forEach((project, index) => {
+    Object.defineProperties(project, {
+      offsetLeft: { configurable: true, value: index * 300 },
+      clientWidth: { configurable: true, value: 280 },
+    })
+  })
+  await act(() => Promise.resolve(scroller.dispatchEvent(new Event('scroll'))))
+
+  expect(overflowHintSnapshot(wrapper, scroller)).toEqual({
+    hintText: '2 more →',
+    hintIsOutsideScroller: true,
+    wrapperPosition: 'relative',
+    hintPosition: 'absolute',
+    hintIsAlignedWithWrapperRight: true,
   })
 })
