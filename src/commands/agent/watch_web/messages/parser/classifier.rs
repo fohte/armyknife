@@ -100,7 +100,7 @@ pub(super) fn classify_inbound(
             "system" | "task-notification" => Some(EventKind::System),
             "hook" => Some(EventKind::Hook),
             "human" | "peer" => None,
-            _ => return MessageKind::Hidden,
+            _ => Some(EventKind::System),
         };
         if let Some(kind) = event_kind {
             let text = one_line(text);
