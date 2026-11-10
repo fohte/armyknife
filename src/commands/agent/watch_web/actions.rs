@@ -249,9 +249,6 @@ async fn send_message(
 
     let images = image_attachments::validate(request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
-    let image_paths =
-        run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
-    let content = image_attachments::append_paths_to_message(request.content, &image_paths);
     let marker = if session.engine == Engine::Claude {
         let sessions_dir =
             resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?;
@@ -260,6 +257,9 @@ async fn send_message(
     } else {
         None
     };
+    let image_paths =
+        run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
+    let content = image_attachments::append_paths_to_message(request.content, &image_paths);
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
     let cleanup_paths = image_paths;
     let runtime = state.runtime;
@@ -779,7 +779,10 @@ mod tests {
         action_context.save_session(&session);
         let sessions_dir = action_context.temp_dir.path().join("sessions");
         let marker = marker_enabled.then(|| {
-            store::ensure_watch_web_user_marker_in(&sessions_dir, &session.session_id).unwrap()
+            store::lock_session_for_update(&sessions_dir, &session.session_id)
+                .unwrap()
+                .ensure_watch_web_user_marker()
+                .unwrap()
         });
         let expected_content = match (engine, marker.as_deref()) {
             (Engine::Claude, Some(marker)) => format!("{marker}\ncontinue the investigation"),

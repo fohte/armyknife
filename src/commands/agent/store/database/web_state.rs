@@ -132,13 +132,11 @@ pub(in crate::commands::agent::store) fn watch_web_user_marker(
         .map_err(Into::into)
 }
 
-pub(in crate::commands::agent::store) fn ensure_watch_web_user_marker(
-    sessions_dir: &Path,
+pub(super) fn ensure_watch_web_user_marker_in_transaction(
+    transaction: &Connection,
     session_id: &str,
 ) -> Result<String> {
     super::validate_session_id(session_id)?;
-    let mut connection = open_connection(sessions_dir)?;
-    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let session_exists: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
         [session_id],
@@ -153,7 +151,6 @@ pub(in crate::commands::agent::store) fn ensure_watch_web_user_marker(
         .optional()?
         .flatten();
     if let Some(marker) = marker {
-        transaction.commit()?;
         return Ok(marker);
     }
 
@@ -165,13 +162,12 @@ pub(in crate::commands::agent::store) fn ensure_watch_web_user_marker(
         params![session_id, marker],
     )?;
     if session_exists {
-        let revision = increment_revision(&transaction)?;
+        let revision = increment_revision(transaction)?;
         transaction.execute(
             "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
             params![revision, session_id],
         )?;
     }
-    transaction.commit()?;
     Ok(marker)
 }
 
@@ -291,16 +287,30 @@ mod tests {
         saved_session_dir: TempDir,
         session: crate::commands::agent::types::Session,
     ) {
-        let first = ensure_watch_web_user_marker(saved_session_dir.path(), &session.session_id)
-            .expect("marker should be created");
-        let repeated = ensure_watch_web_user_marker(saved_session_dir.path(), &session.session_id)
-            .expect("marker should be reused");
+        let first = super::super::super::lock_session_for_update(
+            saved_session_dir.path(),
+            &session.session_id,
+        )
+        .expect("session lock should open")
+        .ensure_watch_web_user_marker()
+        .expect("marker should be created");
+        let repeated = super::super::super::lock_session_for_update(
+            saved_session_dir.path(),
+            &session.session_id,
+        )
+        .expect("session lock should open")
+        .ensure_watch_web_user_marker()
+        .expect("marker should be reused");
         let mut other_session = session.clone();
         other_session.session_id = "other-state-session".to_string();
         save_session(saved_session_dir.path(), &other_session).expect("second session should save");
-        let other =
-            ensure_watch_web_user_marker(saved_session_dir.path(), &other_session.session_id)
-                .expect("second marker should be created");
+        let other = super::super::super::lock_session_for_update(
+            saved_session_dir.path(),
+            &other_session.session_id,
+        )
+        .expect("session lock should open")
+        .ensure_watch_web_user_marker()
+        .expect("second marker should be created");
 
         assert_eq!(
             (
@@ -312,6 +322,25 @@ mod tests {
                     .expect("second marker should load"),
             ),
             (first.clone(), Some(first), true, Some(other)),
+        );
+    }
+
+    #[rstest]
+    fn user_marker_can_be_committed_before_session_row_exists(temp_dir: TempDir) {
+        let session_id = "fixture-session-id";
+        let marker = super::super::lock_session_for_update(temp_dir.path(), session_id)
+            .expect("session lock should open")
+            .ensure_watch_web_user_marker()
+            .expect("marker should be created");
+
+        assert_eq!(
+            (
+                watch_web_user_marker(temp_dir.path(), session_id).expect("marker should load"),
+                super::super::load_session(temp_dir.path(), session_id)
+                    .expect("session lookup should succeed")
+                    .map(|session| session.session_id),
+            ),
+            (Some(marker), None),
         );
     }
 }

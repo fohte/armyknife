@@ -282,13 +282,12 @@ fn new_session_record(
 }
 
 fn ensure_watch_web_user_marker(
-    sessions_dir: &Path,
+    session_lock: &store::SessionLock,
     event: HookEvent,
     engine: Engine,
-    session_id: &str,
 ) -> Result<()> {
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        store::ensure_watch_web_user_marker_in(sessions_dir, session_id)?;
+        session_lock.ensure_watch_web_user_marker()?;
     }
     Ok(())
 }
@@ -497,20 +496,20 @@ fn process_hook_event_impl_with_settings(
                 );
                 let metadata_changed = metadata_update
                     .apply(&mut existing_session.model, &mut existing_session.effort);
+                ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
                 if metadata_changed {
                     existing_session.updated_at = Utc::now();
                     session_lock.save(&existing_session)?;
                 }
                 drop(session_lock);
-                ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
                 return Ok(ProcessResult::Skipped);
             }
 
             let Some((model, effort, pr_context, work_type_pinned)) =
                 initialized.captured.flatten()
             else {
+                ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
                 drop(session_lock);
-                ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
                 return Ok(ProcessResult::Skipped);
             };
             let now = Utc::now();
@@ -525,9 +524,9 @@ fn process_hook_event_impl_with_settings(
             );
             session.model = model;
             session.effort = effort;
+            ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
             session_lock.save(&session)?;
             drop(session_lock);
-            ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
             return Ok(ProcessResult::SessionSaved);
         }
 
@@ -876,10 +875,9 @@ fn process_hook_event_impl_with_settings(
 
     // Commit before transcript and tmux work so they do not hold SQLite's
     // database-wide writer lock. `sync_tmux` also reloads this session.
+    ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     session_lock.save(&session)?;
     drop(session_lock);
-
-    ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
 
     if let Some(startup_metadata) = startup_metadata
         && let Err(error) = store::delete_session_from(sessions_dir, &startup_metadata.session_id)

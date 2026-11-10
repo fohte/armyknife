@@ -128,13 +128,6 @@ pub(crate) fn watch_web_user_marker_from(
     database::watch_web_user_marker(sessions_dir, session_id)
 }
 
-pub(crate) fn ensure_watch_web_user_marker_in(
-    sessions_dir: &Path,
-    session_id: &str,
-) -> Result<String> {
-    database::ensure_watch_web_user_marker(sessions_dir, session_id)
-}
-
 /// Acquires the exclusive session lock ahead of a load-mutate-save round
 /// trip (see `SessionLock`).
 pub(crate) fn lock_session_for_update(

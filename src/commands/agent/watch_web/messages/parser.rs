@@ -223,17 +223,19 @@ pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -
     })
 }
 
+fn marked_peer_message_body<'a>(message: &'a str, marker: Option<&str>) -> Option<&'a str> {
+    let marker = marker?;
+    let (_, body) = peer_message_parts(message)?;
+    crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
+}
+
 pub(super) fn append_text_with_user_marker(
     items: &mut Vec<ChatItem>,
     text: String,
     parent: Option<&ParentSession>,
     marker: Option<&str>,
 ) {
-    if let Some(marker) = marker
-        && let Some((_, body)) = peer_message_parts(&text)
-        && let Some(body) =
-            crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
-    {
+    if let Some(body) = marked_peer_message_body(&text, marker) {
         if !body.trim().is_empty() {
             items.push(ChatItem::User {
                 text: body.to_owned(),
@@ -250,11 +252,7 @@ pub(super) fn peer_message_item_with_user_marker(
     parent: Option<&ParentSession>,
     marker: Option<&str>,
 ) -> Option<ChatItem> {
-    if let Some(marker) = marker
-        && let Some((_, body)) = peer_message_parts(message)
-        && let Some(body) =
-            crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
-    {
+    if let Some(body) = marked_peer_message_body(message, marker) {
         return (!body.trim().is_empty()).then(|| ChatItem::User {
             text: body.to_owned(),
             from: None,
