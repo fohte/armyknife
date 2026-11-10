@@ -15,6 +15,7 @@ function session(
   return {
     id,
     category,
+    isPaused: false,
     kind: category === 'needs_action' ? 'Question' : null,
     title: id,
     preview: null,
