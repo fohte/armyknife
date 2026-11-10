@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
-use rusqlite_migration::{M, Migrations};
+use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, Migrations};
 
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
@@ -21,6 +21,7 @@ pub(super) use web_state::{set_watch_web_later, set_watch_web_today, watch_web_s
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
+// Migrations must stay readable by older binaries: add tables or nullable columns only.
 static MIGRATION_ENTRIES: [M<'static>; 2] = [
     M::up(
         "CREATE TABLE sessions (
@@ -82,9 +83,13 @@ pub(crate) fn open_connection(sessions_dir: &Path) -> Result<Connection> {
         .with_context(|| format!("opening session database {}", database_path.display()))?;
     connection.busy_timeout(BUSY_TIMEOUT)?;
     connection.pragma_update(None, "journal_mode", "WAL")?;
-    MIGRATIONS
-        .to_latest(&mut connection)
-        .context("migrating session database")?;
+    let user_version: i64 =
+        connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if user_version < MIGRATION_ENTRIES.len() as i64
+        && let Err(error) = MIGRATIONS.to_latest(&mut connection)
+    {
+        accept_migration_error(&connection, error)?;
+    }
 
     if let Err(error) = migration::import_legacy_json(&mut connection, sessions_dir) {
         tracing::warn!(
@@ -423,9 +428,27 @@ pub(crate) fn validate_session_id(session_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn accept_migration_error(connection: &Connection, error: MigrationError) -> Result<()> {
+    let database_too_far_ahead = matches!(
+        &error,
+        MigrationError::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead)
+    );
+    if database_too_far_ahead {
+        let user_version: i64 =
+            connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
+        if user_version > MIGRATION_ENTRIES.len() as i64 {
+            return Ok(());
+        }
+    }
+
+    Err(error).context("migrating session database")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
+    use serde_json::Value;
 
     #[test]
     fn adds_watch_web_state_without_changing_existing_session_rows() {
@@ -474,5 +497,84 @@ mod tests {
             (preserved, state_table_exists),
             (("preserved-data".to_string(), 7, 7), true),
         );
+    }
+
+    #[rstest]
+    #[case::newer_database(true, MIGRATION_ENTRIES.len() as i64 + 1)]
+    #[case::unmigrated_database(false, MIGRATION_ENTRIES.len() as i64)]
+    fn opens_database_and_reads_and_writes_sessions(
+        #[case] has_newer_schema: bool,
+        #[case] expected_user_version: i64,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path().join("sessions");
+        fs::create_dir_all(&sessions_dir).expect("sessions directory should be created");
+
+        if has_newer_schema {
+            let database_path = sessions_dir.join("sessions.db");
+            let mut connection =
+                Connection::open(database_path).expect("temporary session database should open");
+            MIGRATIONS
+                .to_latest(&mut connection)
+                .expect("known migrations should create the base schema");
+            connection
+                .execute_batch("CREATE TABLE future_data (value TEXT);")
+                .expect("future schema table should be created");
+            connection
+                .pragma_update(None, "user_version", expected_user_version)
+                .expect("future migration version should be stored");
+        }
+
+        let expected: Session = serde_json::from_value(serde_json::json!({
+            "session_id": "sample-session",
+            "cwd": "/sample/worktree",
+            "transcript_path": null,
+            "tmux_info": null,
+            "status": "stopped",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": null,
+        }))
+        .expect("test session should deserialize");
+        super::super::save_session_to(&sessions_dir, &expected)
+            .expect("session should save to the temporary database");
+        let actual = super::super::load_session_from(&sessions_dir, &expected.session_id)
+            .expect("session should load from the temporary database")
+            .expect("saved session should exist");
+        let actual: Value = serde_json::to_value(actual).expect("loaded session should serialize");
+        let expected: Value =
+            serde_json::to_value(expected).expect("expected session should serialize");
+        let connection = Connection::open(sessions_dir.join("sessions.db"))
+            .expect("temporary session database should open");
+        let actual_user_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("database migration version should be readable");
+
+        assert_eq!(
+            (actual, actual_user_version),
+            (expected, expected_user_version),
+        );
+    }
+
+    #[rstest]
+    #[case::database_advanced_after_check(true, MIGRATION_ENTRIES.len() as i64 + 1)]
+    #[case::database_not_advanced(false, MIGRATION_ENTRIES.len() as i64 - 1)]
+    fn accepts_only_a_migration_error_for_a_newer_database(
+        #[case] has_newer_version: bool,
+        #[case] user_version: i64,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let database_path = temp_dir.path().join("sessions.db");
+        let connection =
+            Connection::open(database_path).expect("temporary session database should open");
+        connection
+            .pragma_update(None, "user_version", user_version)
+            .expect("database migration version should be set");
+        let error =
+            MigrationError::MigrationDefinition(MigrationDefinitionError::DatabaseTooFarAhead);
+
+        let result = accept_migration_error(&connection, error);
+
+        assert_eq!(result.is_ok(), has_newer_version);
     }
 }
