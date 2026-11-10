@@ -1,3 +1,4 @@
+import { Result } from 'neverthrow'
 import { useEffect, useRef, useState } from 'react'
 
 function copyWithExecCommand(text: string): boolean {
@@ -12,13 +13,20 @@ function copyWithExecCommand(text: string): boolean {
   textarea.select()
   textarea.setSelectionRange(0, text.length)
 
-  const execCommand: unknown = Reflect.get(document, 'execCommand')
-  const result: unknown =
-    typeof execCommand === 'function'
-      ? Reflect.apply(execCommand, document, ['copy'])
-      : false
+  const copied = Result.fromThrowable(
+    () => {
+      const execCommand: unknown = Reflect.get(document, 'execCommand')
+      if (typeof execCommand !== 'function') return false
+      const result: unknown = Reflect.apply(execCommand, document, ['copy'])
+      return result === true
+    },
+    (error: unknown) => error,
+  )().match(
+    (didCopy) => didCopy,
+    () => false,
+  )
   textarea.remove()
-  return result === true
+  return copied
 }
 
 function copyTextToClipboard(text: string): Promise<boolean> {

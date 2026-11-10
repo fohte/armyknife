@@ -347,6 +347,51 @@ it('announces when neither clipboard method can copy the session ID', async () =
   })
 })
 
+it('announces copy failure and removes the textarea when execCommand throws', async () => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: undefined,
+  })
+  const copyCommand = vi.fn(() => {
+    throw new Error('copy unavailable')
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: copyCommand,
+  })
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [question],
+    actions,
+    true,
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  await act(async () => {
+    copyButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    copyCalls: copyCommand.mock.calls,
+    temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
+    buttonText: copyButton.textContent,
+    liveStatus: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    copyCalls: [['copy']],
+    temporaryTextareaCount: 1,
+    buttonText: 'Copy failed',
+    liveStatus: 'Could not copy session ID',
+  })
+})
+
 it('answers a question from a number key or a choice click', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
