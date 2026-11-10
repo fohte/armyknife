@@ -747,8 +747,12 @@ mod tests {
     }
 
     #[rstest]
+    #[case::custom_message("Inspect this image")]
+    #[case::empty_message("")]
+    #[case::whitespace_message("   ")]
     #[tokio::test]
     async fn send_message_stores_image_and_forwards_its_absolute_path(
+        #[case] content: &str,
         action_context: ActionContext,
     ) {
         action_context.save_session(&session("sample-session"));
@@ -757,7 +761,7 @@ mod tests {
             .oneshot(post(
                 "/sessions/sample-session/messages",
                 json!({
-                    "content": "Inspect this image",
+                    "content": content,
                     "images": [{
                         "mimeType": "image/gif",
                         "size": 6,
@@ -797,13 +801,26 @@ mod tests {
                 },
             })
         };
-        let expected_message = indoc::indoc! {"
-            Inspect this image
+        let expected_message = if content.trim().is_empty() {
+            indoc::indoc! {"
+                Please inspect the attached image(s):
+                - <attachment-path>
+            "}
+            .trim_end()
+            .to_string()
+        } else {
+            format!(
+                indoc::indoc! {"
+                    {}
 
-            Attached image(s):
-            - <attachment-path>
-        "}
-        .trim_end();
+                    Attached image(s):
+                    - <attachment-path>
+                "},
+                content
+            )
+            .trim_end()
+            .to_string()
+        };
         assert_eq!(
             snapshot(),
             json!({
@@ -900,6 +917,10 @@ mod tests {
     #[case::oversized(
         vec![("image/png", image_attachments::MAX_IMAGE_BYTES + 1)],
         "image attachments exceed the 10 MiB limit"
+    )]
+    #[case::too_many_images(
+        vec![("image/gif", 0); image_attachments::MAX_IMAGES_PER_MESSAGE + 1],
+        "a message cannot include more than 16 image attachments"
     )]
     #[case::cumulative_size(
         vec![("image/png", 6 * 1024 * 1024), ("image/png", 6 * 1024 * 1024)],

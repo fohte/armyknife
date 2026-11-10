@@ -1091,12 +1091,7 @@ fn write_file_with_permissions(path: &PathBuf, content: &str) -> io::Result<()> 
     Ok(())
 }
 
-/// Returns the directory for storing error logs.
-///
-/// Path: ~/.cache/armyknife/cc/logs/
-///
-/// Note: Ideally logs should go to XDG_STATE_HOME (~/.local/state/), but the `dirs` crate
-/// doesn't support state_dir() on macOS. Using cache dir for cross-platform consistency.
+/// Hook logs are optional diagnostics and do not need to survive cache cleanup.
 fn logs_dir() -> Option<PathBuf> {
     cache::base_dir().map(|d| d.join("cc").join("logs"))
 }

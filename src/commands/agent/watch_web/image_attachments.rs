@@ -11,7 +11,9 @@ use serde::Deserialize;
 use thiserror::Error;
 
 pub(super) const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+pub(super) const MAX_IMAGES_PER_MESSAGE: usize = 16;
 const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
+const STORAGE_FILE_OVERHEAD_BYTES: u64 = 64 * 1024;
 const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 static STORAGE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -31,6 +33,8 @@ pub(super) struct Image {
 
 #[derive(Debug, Error)]
 pub(super) enum ValidationError {
+    #[error("a message cannot include more than 16 image attachments")]
+    TooManyImages,
     #[error("image attachments exceed the 10 MiB limit")]
     TooLarge,
     #[error("unsupported image type: {0}")]
@@ -40,6 +44,9 @@ pub(super) enum ValidationError {
 }
 
 pub(super) fn validate(images: Vec<Request>) -> Result<Vec<Image>, ValidationError> {
+    if images.len() > MAX_IMAGES_PER_MESSAGE {
+        return Err(ValidationError::TooManyImages);
+    }
     let total_size = images.iter().try_fold(0_usize, |total, image| {
         total
             .checked_add(image.size)
@@ -89,9 +96,15 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
     );
     create_private_directory(&directory)?;
     prune_expired(&directory)?;
-    let existing_size = directory_size(&directory)?;
-    let incoming_size = images.iter().map(|image| image.bytes.len() as u64).sum();
-    if existing_size.saturating_add(incoming_size) > MAX_STORAGE_BYTES {
+    let existing_usage = directory_usage_bytes(&directory)?;
+    let incoming_usage = images.iter().try_fold(0_u64, |total, image| {
+        let image_usage = (image.bytes.len() as u64).checked_add(STORAGE_FILE_OVERHEAD_BYTES)?;
+        total.checked_add(image_usage)
+    });
+    let Some(incoming_usage) = incoming_usage else {
+        anyhow::bail!("image attachment storage size overflow");
+    };
+    if existing_usage.saturating_add(incoming_usage) > MAX_STORAGE_BYTES {
         anyhow::bail!("image attachment storage is full");
     }
     let mut paths = Vec::with_capacity(images.len());
@@ -99,7 +112,7 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
         match save_one(&directory, image) {
             Ok(path) => paths.push(path),
             Err(error) => {
-                remove(&paths);
+                remove_files_unlocked(&paths);
                 return Err(error);
             }
         }
@@ -108,6 +121,14 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
 }
 
 pub(super) fn remove(paths: &[PathBuf]) {
+    let _guard = STORAGE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    remove_files_unlocked(paths);
+}
+
+fn remove_files_unlocked(paths: &[PathBuf]) {
     for path in paths {
         let _ = fs::remove_file(path);
     }
@@ -157,13 +178,20 @@ fn prune_expired(directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-fn directory_size(directory: &Path) -> std::io::Result<u64> {
+fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
     fs::read_dir(directory)?.try_fold(0_u64, |size, entry| {
         let entry = entry?;
         if !entry.file_type()?.is_file() {
             return Ok(size);
         }
-        size.checked_add(entry.metadata()?.len()).ok_or_else(|| {
+        let file_usage = entry
+            .metadata()?
+            .len()
+            .checked_add(STORAGE_FILE_OVERHEAD_BYTES)
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "directory size overflow")
+            })?;
+        size.checked_add(file_usage).ok_or_else(|| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, "directory size overflow")
         })
     })
@@ -278,7 +306,7 @@ mod tests {
             .write(true)
             .open(&occupied_path)
             .unwrap()
-            .set_len(super::MAX_STORAGE_BYTES)
+            .set_len(super::MAX_STORAGE_BYTES - super::STORAGE_FILE_OVERHEAD_BYTES - 1)
             .unwrap();
 
         let error = super::save(
