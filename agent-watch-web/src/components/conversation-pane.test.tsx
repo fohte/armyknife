@@ -84,6 +84,7 @@ function renderView(
   viewMessages: readonly ChatItem[] = [question],
   viewActions: SessionActions | null = actions,
   isMobile = false,
+  viewSessions: readonly Session[] = [],
   pendingPermissionAction?: {
     action: 'approve' | 'reject'
     status: 'sending' | 'sent'
@@ -94,6 +95,7 @@ function renderView(
     root?.render(
       <ConversationPaneView
         session={viewSession}
+        sessions={viewSessions}
         messages={viewMessages}
         actions={viewActions}
         pendingPermissionAction={pendingPermissionAction}
@@ -166,10 +168,13 @@ afterEach(() => {
 
 it('shows pending and sent permission action feedback', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction, session, undefined, [permission], actions, false, {
-    action: 'approve',
-    status: 'sending',
-  })
+  const renderPermission = (status: 'sending' | 'sent') => {
+    renderView(onAction, session, undefined, [permission], actions, false, [], {
+      action: 'approve',
+      status,
+    })
+  }
+  renderPermission('sending')
   const buttons = () =>
     Array.from(
       container.querySelectorAll<HTMLButtonElement>(
@@ -183,10 +188,7 @@ it('shows pending and sent permission action feedback', () => {
     status: container.querySelector('[role="status"]')?.textContent ?? null,
   }
 
-  renderView(onAction, session, undefined, [permission], actions, false, {
-    action: 'approve',
-    status: 'sent',
-  })
+  renderPermission('sent')
 
   const snapshot = () => ({
     sending,
@@ -717,7 +719,7 @@ it('does not use question shortcuts while typing', () => {
 
 it('selects the parent session from its link', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  const onSelectSession = vi.fn()
+  const onSelectSession = vi.fn<(id: string) => void>()
   renderView(
     onAction,
     { ...session, parent: { id: 'parent-session', title: 'Parent session' } },
@@ -731,6 +733,55 @@ it('selects the parent session from its link', () => {
   })
 
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
+})
+
+it('links known session IDs in user and assistant messages', () => {
+  const linkedSession: Session = {
+    ...session,
+    id: '11111111-1111-4111-8111-111111111111',
+    category: 'done',
+    title: 'Inspect the retry path',
+    project: 'example toolkit',
+  }
+  const onSelectSession = vi.fn<(id: string) => void>()
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    onSelectSession,
+    [
+      { type: 'user', text: `Use ${linkedSession.id}` },
+      { type: 'assistant', text: `I found ${linkedSession.id}` },
+    ],
+    actions,
+    false,
+    [linkedSession],
+  )
+
+  const links = Array.from(
+    container.querySelectorAll<HTMLAnchorElement>(
+      '.chat-user-message a, .chat-assistant-message a',
+    ),
+  )
+  for (const link of links) {
+    act(() => {
+      link.click()
+    })
+  }
+
+  const expected = {
+    messageClasses: ['chat-user-group', 'chat-assistant-message'],
+    linkTitles: [
+      'Inspect the retry path\nexample toolkit\nDone',
+      'Inspect the retry path\nexample toolkit\nDone',
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id],
+  }
+  const getActual = () => ({
+    messageClasses: links.map((link) => link.closest('article')?.className),
+    linkTitles: links.map((link) => link.title),
+    selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  expect(getActual()).toEqual(expected)
 })
 
 it('shows elapsed time while the session is working without an active tool', () => {
@@ -1807,7 +1858,7 @@ it('shows the operation error returned by the server', async () => {
   })
 })
 
-it('keeps a successful permission choice pending until the card disappears', async () => {
+it('keeps a successful permission choice pending until it resolves', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
@@ -1819,6 +1870,10 @@ it('keeps a successful permission choice pending until the card disappears', asy
       throw new Error('Expected a pending action request')
     }
     resolve(response)
+  }
+  const unavailableActions: SessionActions = {
+    ...actions,
+    permission: { approve: false, reject: false },
   }
   const fetcher = vi
     .fn<typeof fetch>()
@@ -1833,19 +1888,9 @@ it('keeps a successful permission choice pending until the card disappears', asy
     .mockResolvedValueOnce(jsonResponse([permission]))
     .mockResolvedValueOnce(jsonResponse(actions))
     .mockResolvedValueOnce(jsonResponse([permission]))
-    .mockResolvedValueOnce(
-      jsonResponse({
-        ...actions,
-        permission: { approve: false, reject: false },
-      }),
-    )
+    .mockResolvedValueOnce(jsonResponse(unavailableActions))
     .mockResolvedValueOnce(jsonResponse([]))
-    .mockResolvedValueOnce(
-      jsonResponse({
-        ...actions,
-        permission: { approve: false, reject: false },
-      }),
-    )
+    .mockResolvedValueOnce(jsonResponse(unavailableActions))
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -1909,7 +1954,6 @@ it('keeps a successful permission choice pending until the card disappears', asy
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
-
   const afterCapabilityDisappears = {
     permissionCard: container.querySelector('.chat-permission-card') !== null,
     permissionButtons: container.querySelectorAll('.permission-actions button')

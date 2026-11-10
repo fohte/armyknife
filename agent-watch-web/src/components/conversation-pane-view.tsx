@@ -1,27 +1,34 @@
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react'
 
+import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
-import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
-import {
-  type PendingPermissionAction,
-  PermissionCard,
-} from '#components/permission-card'
-import { QuestionCard } from '#components/question-card'
+import type { PendingPermissionAction } from '#components/permission-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
-import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
-import type { ChatItem, Session, SessionActions } from '#types'
+import type {
+  ChatItem,
+  Session,
+  SessionActions,
+  SessionLinkTarget,
+} from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
+  sessions?: readonly Session[]
   messages: readonly ChatItem[]
   actions: SessionActions | null
   actionsReady?: boolean
@@ -41,8 +48,41 @@ type ConversationPaneViewProps = {
   onLater?: () => void
 }
 
+function useSessionLinkTargets(
+  sessions: readonly Session[],
+): readonly SessionLinkTarget[] {
+  // Elapsed-time updates replace session objects even when link details are unchanged.
+  const targetsRef = useRef<readonly SessionLinkTarget[]>([])
+  const nextTargets = sessions.map(
+    ({ id, title, project, category, isPaused }) => ({
+      id,
+      title,
+      project,
+      category,
+      isPaused,
+    }),
+  )
+  const targetsAreUnchanged =
+    targetsRef.current.length === nextTargets.length &&
+    targetsRef.current.every((target, index) => {
+      const nextTarget = nextTargets[index]
+      return (
+        nextTarget !== undefined &&
+        target.id === nextTarget.id &&
+        target.title === nextTarget.title &&
+        target.project === nextTarget.project &&
+        target.category === nextTarget.category &&
+        target.isPaused === nextTarget.isPaused
+      )
+    })
+
+  if (!targetsAreUnchanged) targetsRef.current = nextTargets
+  return targetsRef.current
+}
+
 export function ConversationPaneView({
   session,
+  sessions = [],
   messages,
   actions,
   actionsReady = true,
@@ -77,6 +117,13 @@ export function ConversationPaneView({
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
+  const sessionLinkTargets = useSessionLinkTargets(sessions)
+  // Keep memoized message props stable while the App selection callback changes.
+  const onSelectSessionRef = useRef(onSelectSession)
+  onSelectSessionRef.current = onSelectSession
+  const selectLinkedSession = useCallback((id: string) => {
+    onSelectSessionRef.current(id)
+  }, [])
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
   )
@@ -350,89 +397,22 @@ export function ConversationPaneView({
         {!loading && conversationMessages.length === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {conversationMessages.map((message, index) => {
-          if (message.type === 'user') {
-            return (
-              <article
-                className="chat-user-group"
-                key={`user-${String(index)}`}
-              >
-                {message.from != null && message.from !== '' ? (
-                  <div className="chat-from">From {message.from}</div>
-                ) : null}
-                <MarkdownMessage className="chat-user-message">
-                  {message.text}
-                </MarkdownMessage>
-              </article>
-            )
-          }
-          if (message.type === 'assistant')
-            return (
-              <article
-                className="chat-assistant-message"
-                key={`assistant-${String(index)}`}
-              >
-                <MarkdownMessage>{message.text}</MarkdownMessage>
-              </article>
-            )
-          if (message.type === 'tool_summary')
-            return (
-              <ToolSummary
-                key={`tool-${String(index)}`}
-                summary={message.summary}
-                operations={message.operations ?? []}
-              />
-            )
-          if (message.type === 'tool_in_progress')
-            return (
-              <ToolSummary
-                key={`tool-${String(index)}`}
-                summary="1 action"
-                operations={[message]}
-              />
-            )
-          if (message.type === 'question') {
-            const canAnswer =
-              index === activeQuestionIndex &&
-              message.answer === null &&
-              actionsReady &&
-              actions?.answerQuestion === true
-            return (
-              <QuestionCard
-                key={`question-${String(index)}`}
-                question={message.question}
-                choices={message.choices}
-                answer={message.answer}
-                canAnswer={canAnswer}
-                isMobile={isMobile}
-                showTerminalFallback={
-                  session.engine === 'Codex' &&
-                  actions !== null &&
-                  !actions.answerQuestion
-                }
-                canOpenInTerminal={actions?.openInTerminal === true}
-                onAnswer={(choice) => {
-                  void onAction('answer', { choice })
-                }}
-                onOpenInTerminal={openInTerminal}
-              />
-            )
-          }
-          return (
-            <PermissionCard
-              key={`permission-${String(index)}`}
-              message={message}
-              actions={actions}
-              actionsReady={actionsReady}
-              pendingAction={pendingPermissionAction}
-              isCodex={session.engine === 'Codex'}
-              onAction={(action) => {
-                void onAction(action)
-              }}
-              onOpenInTerminal={openInTerminal}
-            />
-          )
-        })}
+        {conversationMessages.map((message, index) =>
+          renderConversationMessage({
+            actions,
+            actionsReady,
+            activeQuestionIndex,
+            index,
+            isMobile,
+            message,
+            onAction,
+            onOpenInTerminal: openInTerminal,
+            onSelectSession: selectLinkedSession,
+            pendingAction: pendingPermissionAction,
+            session,
+            sessions: sessionLinkTargets,
+          }),
+        )}
       </div>
 
       {session.category === 'in_progress' ? (

@@ -450,6 +450,7 @@ export function App() {
       {view === 'inbox' ? (
         <InboxConversationPanes
           inboxProps={inboxProps}
+          sessions={sessionsWithElapsedTime}
           selectedSession={selectedSession}
           refreshKey={sessionsRevision}
           isMobile={isMobile}
