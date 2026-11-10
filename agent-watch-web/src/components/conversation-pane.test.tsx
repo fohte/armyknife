@@ -1823,7 +1823,10 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
-it('shows operation errors for approval and rejection', async () => {
+it.each([
+  { action: 'approve' as const, buttonIndex: 0 },
+  { action: 'reject' as const, buttonIndex: 1 },
+])('shows the $action error independently', async ({ action, buttonIndex }) => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1852,9 +1855,6 @@ it('shows operation errors for approval and rejection', async () => {
     .mockResolvedValueOnce(
       jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
     )
-    .mockResolvedValueOnce(
-      jsonResponse({ error: 'session pane is idle or unavailable' }, 409),
-    )
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
   act(() => {
@@ -1867,43 +1867,27 @@ it('shows operation errors for approval and rejection', async () => {
     )
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
   const permissionButtons = () =>
     container.querySelectorAll<HTMLButtonElement>('.permission-actions button')
   act(() => {
-    requireElement(permissionButtons().item(0)).click()
-  })
-  await act(async () => {
-    for (let index = 0; index < 12; index += 1) await Promise.resolve()
-  })
-  act(() => {
-    requireElement(permissionButtons().item(1)).click()
+    requireElement(permissionButtons().item(buttonIndex)).click()
   })
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
-  const actionRequestUrls = fetcher.mock.calls
-    .slice(2)
-    .map(([request]) =>
-      typeof request === 'string'
-        ? request
-        : request instanceof URL
-          ? request.href
-          : request.url,
-    )
+  const actionRequest = fetcher.mock.calls[2]?.[0]
+  const actionRequestUrl =
+    typeof actionRequest === 'string'
+      ? actionRequest
+      : actionRequest instanceof URL
+        ? actionRequest.href
+        : actionRequest?.url
   const expected = JSON.stringify([
     'session pane is idle or unavailable',
-    [
-      '/api/sessions/sample-session/permission/approve',
-      '/api/sessions/sample-session/permission/reject',
-    ],
+    `/api/sessions/sample-session/permission/${action}`,
     [
       { label: 'Approve', disabled: false },
       { label: 'Reject', disabled: false },
@@ -1913,12 +1897,12 @@ it('shows operation errors for approval and rejection', async () => {
     label: button.textContent,
     disabled: button.disabled,
   }))
-  const actualWithButtonStates = JSON.stringify([
+  const actual = JSON.stringify([
     container.querySelector('[role="alert"]')?.textContent,
-    actionRequestUrls,
+    actionRequestUrl,
     buttonStates,
   ])
-  expect(actualWithButtonStates).toBe(expected)
+  expect(actual).toBe(expected)
 })
 
 it.each([
