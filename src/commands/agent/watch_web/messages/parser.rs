@@ -32,6 +32,14 @@ pub(super) fn for_each_jsonl_record(
     Ok(())
 }
 
+pub(super) fn tool_target(input: Option<&serde_json::Value>) -> Option<String> {
+    let input = input?;
+    let target = ["command", "file_path", "path", "pattern", "url", "query"]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(serde_json::Value::as_str))?;
+    Some(target.chars().take(240).collect())
+}
+
 #[derive(Default)]
 pub(super) struct ToolSummary {
     actions: usize,
@@ -137,22 +145,18 @@ impl ToolSummary {
 }
 
 fn operation_target(name: &str, detail: Option<&serde_json::Value>) -> Option<String> {
-    let target = detail.and_then(|value| {
+    let nested_detail = detail.and_then(|value| {
         value
-            .get("command")
-            .or_else(|| value.get("file_path"))
-            .or_else(|| value.get("path"))
-            .or_else(|| value.get("pattern"))
-            .or_else(|| value.get("url"))
-            .or_else(|| value.get("query"))
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                matches!(name, "exec" | "shell" | "CommandExecution")
-                    .then(|| value.as_str())
-                    .flatten()
-            })
+            .get("arguments")
+            .or_else(|| value.get("input"))
+            .or_else(|| value.get("parameters"))
     });
-    if let Some(target) = target {
+    if let Some(target) = tool_target(detail).or_else(|| tool_target(nested_detail)) {
+        return Some(target);
+    }
+    if matches!(name, "exec" | "shell" | "CommandExecution")
+        && let Some(target) = detail.and_then(serde_json::Value::as_str)
+    {
         return Some(target.chars().take(240).collect());
     }
 

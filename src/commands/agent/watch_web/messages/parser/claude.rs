@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record, peer_message_item};
+use super::super::parser::{
+    ToolSummary, append_text, for_each_jsonl_record, peer_message_item, tool_target,
+};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
@@ -217,18 +219,10 @@ fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
-    let detail = ["command", "file_path", "path", "pattern", "url", "query"]
-        .into_iter()
-        .find_map(|key| {
-            input
-                .and_then(|value| value.get(key))
-                .and_then(Value::as_str)
-        });
-    let Some(detail) = detail else {
+    let Some(target) = tool_target(input) else {
         return name.to_owned();
     };
-    let detail = detail.chars().take(240).collect::<String>();
-    format!("{name}: {detail}")
+    format!("{name}: {target}")
 }
 
 fn user_text(message: &Value) -> String {

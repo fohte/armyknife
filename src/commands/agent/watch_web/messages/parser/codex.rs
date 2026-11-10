@@ -143,9 +143,10 @@ fn value_text(value: &Value) -> Option<String> {
 
 fn parse_tool_input(input: Option<&Value>) -> Option<Value> {
     match input {
-        Some(Value::String(raw)) => {
-            Some(serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.clone())))
-        }
+        Some(Value::String(raw)) => match serde_json::from_str(raw) {
+            Ok(Value::Object(value)) => Some(Value::Object(value)),
+            _ => Some(Value::String(raw.clone())),
+        },
         Some(value) => Some(value.clone()),
         None => None,
     }
@@ -328,6 +329,45 @@ mod tests {
                     operation("CommandExecution", Some("printf fixture")),
                     operation("FileChange", Some("src/fixture.rs")),
                 ],
+            }]
+        );
+    }
+
+    #[rstest]
+    #[case::plain_command("echo fixture")]
+    #[case::json_boolean_literal("true")]
+    fn raw_exec_input_is_preserved_as_a_command_target(#[case] command: &str) {
+        let transcript = serde_json::to_string(&json!({
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "fixture-command-call",
+                "name": "exec",
+                "input": command,
+            },
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "1 action".to_string(),
+                operations: vec![operation("exec", Some(command))],
+            }]
+        );
+    }
+
+    #[test]
+    fn parses_mcp_tool_calls_with_their_name_and_target() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"McpToolCall","tool":"read_resource","arguments":{"path":"fixture/resource.json"}}}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "1 action".to_string(),
+                operations: vec![operation("read_resource", Some("fixture/resource.json"))],
             }]
         );
     }
