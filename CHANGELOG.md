@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.536](https://github.com/fohte/armyknife/compare/v0.1.535...v0.1.536) (2026-11-10)
+
+
+### Features
+
+* **agent-watch:** resize panes, full-screen Crit ([#1426](https://github.com/fohte/armyknife/issues/1426)) ([b36bb5a](https://github.com/fohte/armyknife/commit/b36bb5a10ac5a8b92d1b2363f8baa545e823cab9))
+
 ## [0.1.535](https://github.com/fohte/armyknife/compare/v0.1.534...v0.1.535) (2026-11-10)
 
 
