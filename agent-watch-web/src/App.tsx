@@ -99,7 +99,7 @@ export function App() {
       orderedSessions.filter(
         (session) => laterExpanded || session.category !== 'later',
       ),
-    [laterExpanded, orderedSessions, selectedId],
+    [laterExpanded, orderedSessions],
   )
   const {
     openConversation,
