@@ -50,7 +50,11 @@ export function renderConversationMessage({
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
-  if (message.type === 'user' || message.type === 'user_with_content') {
+  if (
+    message.type === 'user' ||
+    message.type === 'queued_user' ||
+    message.type === 'user_with_content'
+  ) {
     return (
       <UserWithContent
         key={`user-${String(index)}`}

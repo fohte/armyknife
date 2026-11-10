@@ -19,6 +19,7 @@ use super::super::parser::{
     classifier::{self, MessageKind},
     for_each_jsonl_record, tool_target,
 };
+use crate::commands::agent::store::WatchWebQueuedPrompt;
 use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
@@ -60,8 +61,9 @@ fn parse_with_image_directory(
         user_marker,
         Utc::now(),
         image_directory,
+        &[],
     )
-    .map(|(messages, _)| messages)
+    .map(|(messages, _, _)| messages)
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
@@ -71,6 +73,18 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
     user_marker: Option<&str>,
     now: DateTime<Utc>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
+    parse_with_queued_prompts(reader, parent, pending_tool, user_marker, now, &[])
+        .map(|(messages, background_tasks, _)| (messages, background_tasks))
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    queued_prompts: &[WatchWebQueuedPrompt],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
     parse_with_background_tasks_and_image_directory(
         reader,
@@ -79,6 +93,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
         user_marker,
         now,
         image_directory.as_deref(),
+        queued_prompts,
     )
 }
 
@@ -89,10 +104,13 @@ fn parse_with_background_tasks_and_image_directory(
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     image_directory: Option<&Path>,
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
+    queued_prompts: &[WatchWebQueuedPrompt],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
+    let mut queue = super::queue::Queue::new(queued_prompts);
     for_each_jsonl_record(&mut reader, |record| {
+        queue.observe(&record);
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
             return;
         };
@@ -137,6 +155,9 @@ fn parse_with_background_tasks_and_image_directory(
             {
                 return;
             }
+        }
+        if queued_prompt_delivery_is_on_active_branch(&record, &mut transcript_nodes) {
+            queue.observe_queued_prompt_delivery(&record, user_marker);
         }
         match record.get("type").and_then(Value::as_str) {
             _ if record
@@ -341,8 +362,32 @@ fn parse_with_background_tasks_and_image_directory(
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
+    let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
+    items.extend(queue.pending_items(parent, user_marker, image_directory));
     let background_tasks = background_tasks.into_api_tasks(now);
-    Ok((items, background_tasks))
+    Ok((items, background_tasks, resolved_queued_prompt_ids))
+}
+
+fn queued_prompt_delivery_is_on_active_branch(
+    record: &Value,
+    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
+) -> bool {
+    if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
+        return transcript_nodes
+            .get(uuid)
+            .is_some_and(|node| node.membership == BranchMembership::Active);
+    }
+    let Some(parent_uuid) = record
+        .get("parentUuid")
+        .and_then(Value::as_str)
+        .or_else(|| record.get("logicalParentUuid").and_then(Value::as_str))
+    else {
+        return true;
+    };
+    let Some(node) = transcript_nodes.get(parent_uuid) else {
+        return false;
+    };
+    node.membership == BranchMembership::Active
 }
 
 struct ToolUse {
@@ -479,6 +524,54 @@ mod tests {
                 ],
                 from: None,
             }]
+        );
+    }
+
+    #[test]
+    fn pending_queued_message_resolves_saved_image_references() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000001.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(
+            &image_path,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
+        let content = formatdoc! {"
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "content": content,
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::QueuedUser {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }],
         );
     }
 

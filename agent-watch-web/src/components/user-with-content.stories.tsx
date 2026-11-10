@@ -55,6 +55,33 @@ export const TextOnlyMessageIsDisplayed: Story = {
   },
 }
 
+export const QueuedPromptIsDimmed: Story = {
+  name: 'A queued prompt is labeled and dimmed',
+  args: {
+    message: {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'Please rerun the fixture check.' }],
+    },
+  },
+}
+
+export const QueuedPromptShowsItsImage: Story = {
+  name: 'A queued prompt shows its dimmed image attachment',
+  args: {
+    message: {
+      type: 'queued_user',
+      content: [
+        { type: 'text', text: 'Inspect this screenshot: ' },
+        {
+          type: 'image',
+          source: 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+          available: true,
+        },
+      ],
+    },
+  },
+}
+
 export const NonImageAttachmentNameAppears: Story = {
   name: 'The user message shows the name of a document attachment',
   args: {

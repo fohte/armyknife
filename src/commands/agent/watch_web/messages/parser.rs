@@ -1,6 +1,7 @@
 pub(super) mod classifier;
 pub(super) mod claude;
 pub(super) mod codex;
+pub(super) mod queue;
 
 use std::collections::BTreeSet;
 use std::io::BufRead;

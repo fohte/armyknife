@@ -849,6 +849,51 @@ it('links known session IDs in user, rich user, and assistant messages', () => {
   expect(getActual()).toEqual(expected)
 })
 
+it('marks a queued prompt below the delivered conversation', () => {
+  renderView(vi.fn().mockResolvedValue(true), session, undefined, [
+    { type: 'user', text: 'Please summarize the current changes.' },
+    { type: 'assistant', text: 'I am reviewing the current changes.' },
+    {
+      type: 'queued_user',
+      content: [{ type: 'text', text: 'Also check the error handling.' }],
+    },
+  ])
+
+  const actual = Array.from(
+    container.querySelectorAll<HTMLElement>(
+      '.chat-user-group, .chat-assistant-message',
+    ),
+  ).map((message) => ({
+    className: message.className,
+    label: message.querySelector('.chat-queued-label')?.textContent ?? null,
+    text: message.querySelector('.markdown-message')?.textContent ?? null,
+    bubbleClassName:
+      message.querySelector('.chat-user-message')?.className ?? null,
+  }))
+
+  expect(actual).toEqual([
+    {
+      className: 'chat-user-group',
+      label: null,
+      text: 'Please summarize the current changes.',
+      bubbleClassName: 'markdown-message chat-user-message',
+    },
+    {
+      className: 'chat-assistant-message',
+      label: null,
+      text: 'I am reviewing the current changes.',
+      bubbleClassName: null,
+    },
+    {
+      className: 'chat-user-group chat-user-group-queued',
+      label: 'Queued',
+      text: 'Also check the error handling.',
+      bubbleClassName:
+        'markdown-message chat-user-message chat-user-message-queued',
+    },
+  ])
+})
+
 it('shows peer images and supports keyboard navigation', () => {
   const linkedSession: Session = {
     ...session,

@@ -18,11 +18,17 @@ use crate::shared::cache;
 
 mod archive;
 mod database;
+mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    SessionLock, SessionStoreChanges, WakeLock, WatchWebSessionState, serialize_session,
+    SessionLock, SessionStoreChanges, WakeLock, WatchWebQueuedPrompt, WatchWebSessionState,
+    serialize_session,
+};
+pub(crate) use queued_prompts::{
+    delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
+    insert_watch_web_queued_prompt_from, watch_web_queued_prompts_from,
 };
 
 /// Threshold in seconds for sort stability.

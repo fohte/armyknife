@@ -363,7 +363,7 @@ fn is_hidden_legacy_row(record: &Value, text: &str) -> bool {
         || (text.trim_start().starts_with("<command-message>") && !text.contains("<command-name>"))
 }
 
-fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
+pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
     let marker = marker?;
     if let Some(body) = crate::commands::agent::watch_web_user_marker::strip_message(marker, text) {
         return Some(body.to_owned());

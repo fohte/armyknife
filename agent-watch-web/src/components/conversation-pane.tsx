@@ -39,6 +39,7 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'user':
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'queued_user':
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
