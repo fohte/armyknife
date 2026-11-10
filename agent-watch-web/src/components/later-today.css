@@ -177,6 +177,12 @@
   background: var(--muted-foreground-ghost);
 }
 
+.later-menu-reset {
+  grid-template-columns: minmax(0, 1fr);
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
 .later-menu-when,
 .later-menu-option kbd {
   color: var(--muted-foreground-strong);

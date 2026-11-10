@@ -17,7 +17,9 @@ mod wake;
 mod web_state;
 
 pub(crate) use web_state::WatchWebSessionState;
-pub(super) use web_state::{set_watch_web_later, set_watch_web_today, watch_web_session_states};
+pub(super) use web_state::{
+    clear_watch_web_later, set_watch_web_later, set_watch_web_today, watch_web_session_states,
+};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

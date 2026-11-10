@@ -259,6 +259,32 @@ it('disables a PM row when its project has no PM session', () => {
   })
 })
 
+const laterPresetTimes = {
+  one_hour: '16:00',
+  this_evening: '19:00',
+  tomorrow: 'Tue 9:00',
+  next_week: 'Mon 3/11',
+  until_it_changes: 'next activity',
+}
+
+function requestUrl(input: RequestInfo | URL) {
+  if (typeof input === 'string') {
+    return input
+  }
+  return input instanceof URL ? input.href : input.url
+}
+
+function mockSessionActionFetch(input: RequestInfo | URL) {
+  const response =
+    requestUrl(input) === '/api/sessions/later-options'
+      ? new Response(JSON.stringify(laterPresetTimes), { status: 200 })
+      : new Response(null, { status: 204 })
+  return Promise.resolve(response)
+}
+
+function flushAsyncState() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+}
 function readSelectedTitle() {
   return (
     container.querySelector<HTMLElement>(
@@ -384,7 +410,7 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
 it('opens Later with L and selects a preset with its number key', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
-    .mockResolvedValue(new Response(null, { status: 204 }))
+    .mockImplementation(mockSessionActionFetch)
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -393,8 +419,8 @@ it('opens Later with L and selects a preset with its number key', async () => {
   })
 
   await act(async () => {
-    dispatchKey(window, 'L')
-    await Promise.resolve()
+    dispatchKey(window, 'l')
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
   const menuItems = Array.from(
     container.querySelectorAll<HTMLElement>('[role="menuitem"]'),
@@ -402,20 +428,21 @@ it('opens Later with L and selects a preset with its number key', async () => {
   )
   await act(async () => {
     dispatchKey(window, '3')
-    await Promise.resolve()
+    await flushAsyncState()
   })
 
   const snapshot = () => ({ menuItems, requests: fetchMock.mock.calls })
 
   expect(snapshot()).toEqual({
     menuItems: [
-      'In 1 hour1h1',
+      'In 1 hour16:001',
       'This evening19:002',
-      'Tomorrow9:003',
-      'Next weekMon 11:004',
+      'TomorrowTue 9:003',
+      'Next weekMon 3/114',
       'Until it changesnext activity5',
     ],
     requests: [
+      ['/api/sessions/later-options'],
       [
         '/api/sessions/session-a/later',
         {
@@ -426,6 +453,60 @@ it('opens Later with L and selects a preset with its number key', async () => {
       ],
     ],
   })
+})
+
+it('returns a Later session immediately from the menu', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-11T09:00:00.000Z',
+      },
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-collapsed-row')?.click()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Back now: Deferred session"]')
+          ?.textContent,
+      ).toEqual('Back now')
+    })
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Back now: Deferred session"]',
+      )
+      ?.click()
+    await flushAsyncState()
+  })
+
+  expect(fetchMock.mock.calls).toEqual([
+    ['/api/sessions/later-options'],
+    [
+      '/api/sessions/session-later/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"back_now"}',
+      },
+    ],
+  ])
 })
 
 it('saves a TODAY star from the session row', async () => {
@@ -444,7 +525,7 @@ it('saves a TODAY star from the session row', async () => {
   )
   await act(async () => {
     todayButton?.click()
-    await Promise.resolve()
+    await flushAsyncState()
   })
 
   const snapshot = () => fetchMock.mock.calls
@@ -489,8 +570,10 @@ it('skips collapsed Later sessions during keyboard navigation', () => {
   })
 })
 
-it('closes Later when its target session disappears', () => {
-  const fetchMock = vi.fn<typeof fetch>()
+it('closes Later when its target session disappears', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -501,8 +584,9 @@ it('closes Later when its target session disappears', () => {
     ],
   })
 
-  act(() => {
-    dispatchKey(window, 'L')
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
   })
   publishSessions({
     revision: 2,
@@ -525,7 +609,7 @@ it('closes Later when its target session disappears', () => {
     menu: null,
     selectedTitle: 'Remaining session',
     numberKeyPrevented: false,
-    requests: [],
+    requests: [['/api/sessions/later-options']],
   })
 })
 

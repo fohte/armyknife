@@ -9,19 +9,19 @@ export type SessionShortcutAction =
   | null
 
 export const LATER_PRESET_OPTIONS = [
-  { preset: 'one_hour', label: 'In 1 hour', when: '1h', key: '1' },
-  { preset: 'this_evening', label: 'This evening', when: '19:00', key: '2' },
-  { preset: 'tomorrow', label: 'Tomorrow', when: '9:00', key: '3' },
-  { preset: 'next_week', label: 'Next week', when: 'Mon 11:00', key: '4' },
+  { preset: 'one_hour', label: 'In 1 hour', key: '1' },
+  { preset: 'this_evening', label: 'This evening', key: '2' },
+  { preset: 'tomorrow', label: 'Tomorrow', key: '3' },
+  { preset: 'next_week', label: 'Next week', key: '4' },
   {
     preset: 'until_it_changes',
     label: 'Until it changes',
-    when: 'next activity',
     key: '5',
   },
 ] as const
 
 export type LaterPreset = (typeof LATER_PRESET_OPTIONS)[number]['preset']
+export type LaterPresetTimes = Record<LaterPreset, string>
 
 export function getSessionShortcutAction(
   key: string,
@@ -35,7 +35,7 @@ export function getSessionShortcutAction(
     }
   }
 
-  if (key === 'L' || (shiftKey && key === 'l')) {
+  if (key.toLowerCase() === 'l') {
     return { type: 'later' }
   }
 

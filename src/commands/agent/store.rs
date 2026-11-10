@@ -378,6 +378,14 @@ pub(crate) fn set_watch_web_later_in(
     )
 }
 
+pub(crate) fn clear_watch_web_later(session_id: &str) -> Result<bool> {
+    database::clear_watch_web_later(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn clear_watch_web_later_in(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    database::clear_watch_web_later(sessions_dir, session_id)
+}
+
 pub(crate) fn set_watch_web_today(session_id: &str, is_today: bool) -> Result<bool> {
     database::set_watch_web_today(&sessions_dir()?, session_id, is_today)
 }

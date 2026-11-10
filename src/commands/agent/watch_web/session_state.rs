@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use axum::extract::{Path as RoutePath, State};
 use axum::http::StatusCode;
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::{Json, Router};
-use chrono::{DateTime, Datelike, Days, Local, LocalResult, NaiveTime, TimeZone, Utc};
-use serde::Deserialize;
+use chrono::{DateTime, Datelike, Days, Local, LocalResult, NaiveTime, TimeZone, Timelike, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::commands::agent::store;
 
@@ -41,14 +41,16 @@ pub(super) fn router() -> Router {
 
 fn router_with_store(store: SessionStateStore) -> Router {
     Router::new()
+        .route("/sessions/later-options", get(later_options))
         .route("/sessions/{id}/later", post(set_later))
         .route("/sessions/{id}/today", post(set_today))
         .with_state(store)
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum LaterPreset {
+    BackNow,
     OneHour,
     ThisEvening,
     Tomorrow,
@@ -68,12 +70,30 @@ struct TodayRequest {
     is_today: bool,
 }
 
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct LaterPresetTimes {
+    one_hour: String,
+    this_evening: String,
+    tomorrow: String,
+    next_week: String,
+    until_it_changes: String,
+}
+
+async fn later_options(State(state): State<SessionStateStore>) -> Json<LaterPresetTimes> {
+    Json(later_preset_times(state.clock.now()))
+}
+
 async fn set_later(
     State(state): State<SessionStateStore>,
     RoutePath(id): RoutePath<String>,
     Json(request): Json<LaterRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let session = load_session(&state, &id)?;
+    if matches!(request.preset, LaterPreset::BackNow) {
+        clear_later(&state, &id)?;
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
     let now = state.clock.now();
     let until_activity = matches!(request.preset, LaterPreset::UntilItChanges);
     let later_until = (!until_activity)
@@ -124,6 +144,15 @@ fn save_later(
     updated.then_some(()).ok_or(StatusCode::NOT_FOUND)
 }
 
+fn clear_later(state: &SessionStateStore, id: &str) -> Result<(), StatusCode> {
+    let updated = if let Some(dir) = &state.sessions_dir {
+        store::clear_watch_web_later_in(dir, id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    } else {
+        store::clear_watch_web_later(id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    updated.then_some(()).ok_or(StatusCode::NOT_FOUND)
+}
+
 fn save_today(state: &SessionStateStore, id: &str, is_today: bool) -> Result<(), StatusCode> {
     let updated = if let Some(dir) = &state.sessions_dir {
         store::set_watch_web_today_in(dir, id, is_today)
@@ -132,6 +161,57 @@ fn save_today(state: &SessionStateStore, id: &str, is_today: bool) -> Result<(),
         store::set_watch_web_today(id, is_today).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     };
     updated.then_some(()).ok_or(StatusCode::NOT_FOUND)
+}
+
+fn later_preset_times(now: DateTime<Utc>) -> LaterPresetTimes {
+    LaterPresetTimes {
+        one_hour: later_preset_when(LaterPreset::OneHour, now),
+        this_evening: later_preset_when(LaterPreset::ThisEvening, now),
+        tomorrow: later_preset_when(LaterPreset::Tomorrow, now),
+        next_week: later_preset_when(LaterPreset::NextWeek, now),
+        until_it_changes: later_preset_when(LaterPreset::UntilItChanges, now),
+    }
+}
+
+fn later_preset_when(preset: LaterPreset, now: DateTime<Utc>) -> String {
+    if matches!(preset, LaterPreset::UntilItChanges) {
+        return "next activity".to_string();
+    }
+    if matches!(preset, LaterPreset::BackNow) {
+        return "now".to_string();
+    }
+    let Some(deadline) = later_deadline(preset, now) else {
+        return "Unavailable".to_string();
+    };
+    let deadline = deadline.with_timezone(&Local);
+    let today = now.with_timezone(&Local).date_naive();
+
+    match preset {
+        LaterPreset::OneHour => format!("{:02}:{:02}", deadline.hour(), deadline.minute()),
+        LaterPreset::ThisEvening if deadline.date_naive() == today => {
+            format!("{:02}:{:02}", deadline.hour(), deadline.minute())
+        }
+        LaterPreset::ThisEvening => format!(
+            "{} {:02}:{:02}",
+            deadline.format("%a"),
+            deadline.hour(),
+            deadline.minute()
+        ),
+        LaterPreset::Tomorrow => format!(
+            "{} {}:{:02}",
+            deadline.format("%a"),
+            deadline.hour(),
+            deadline.minute()
+        ),
+        LaterPreset::NextWeek => format!(
+            "{} {}/{}",
+            deadline.format("%a"),
+            deadline.month(),
+            deadline.day()
+        ),
+        LaterPreset::UntilItChanges => "next activity".to_string(),
+        LaterPreset::BackNow => "now".to_string(),
+    }
 }
 
 fn later_deadline(preset: LaterPreset, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -147,10 +227,10 @@ fn later_deadline(preset: LaterPreset, now: DateTime<Utc>) -> Option<DateTime<Ut
             let days_until_monday = 7 - local_now.weekday().num_days_from_monday();
             (
                 today + Days::new(u64::from(days_until_monday)),
-                NaiveTime::from_hms_opt(11, 0, 0)?,
+                NaiveTime::from_hms_opt(9, 0, 0)?,
             )
         }
-        LaterPreset::UntilItChanges => return None,
+        LaterPreset::UntilItChanges | LaterPreset::BackNow => return None,
     };
     match Local.from_local_datetime(&date.and_time(time)) {
         LocalResult::Single(deadline) => Some(deadline.with_timezone(&Utc)),
@@ -164,7 +244,7 @@ mod tests {
     use super::*;
     use crate::commands::agent::store;
     use crate::commands::agent::types::{Engine, Session, SessionStatus};
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::header::{HOST, ORIGIN};
     use axum::http::{Request, StatusCode};
     use axum::middleware::from_fn;
@@ -317,6 +397,57 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[tokio::test]
+    async fn back_now_clears_later_state_and_preserves_today(
+        saved_session_dir: TempDir,
+        session: Session,
+    ) {
+        let dir = saved_session_dir.path();
+        store::set_watch_web_today_in(dir, &session.session_id, true).unwrap();
+        store::set_watch_web_later_in(
+            dir,
+            &session.session_id,
+            Some(session.updated_at + chrono::Duration::hours(1)),
+            session.updated_at,
+            false,
+        )
+        .unwrap();
+        let before_revision = store::session_store_revision_from(dir).unwrap();
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(dir.to_path_buf()),
+            clock: SessionClock::System,
+        });
+        let response = app
+            .oneshot(
+                Request::post("/sessions/test-session/later")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"preset":"back_now"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response.status(),
+                store::watch_web_session_states_from(dir).unwrap(),
+                store::session_store_revision_from(dir).unwrap(),
+            ),
+            (
+                StatusCode::NO_CONTENT,
+                vec![store::WatchWebSessionState {
+                    session_id: session.session_id,
+                    later_until: None,
+                    activity_snapshot: None,
+                    until_activity: false,
+                    is_today: true,
+                }],
+                before_revision + 1,
+            ),
+        );
+    }
+
     fn local_time_as_utc(
         (year, month, day, hour, minute): (i32, u32, u32, u32, u32),
     ) -> DateTime<Utc> {
@@ -327,11 +458,53 @@ mod tests {
     }
 
     #[rstest]
+    #[case::before_evening((2030, 3, 4, 15, 0), "16:00", "19:00", "Tue 9:00")]
+    #[case::after_evening((2030, 3, 4, 20, 0), "21:00", "Tue 19:00", "Tue 9:00")]
+    #[tokio::test]
+    async fn later_options_show_server_calculated_return_times(
+        temp_dir: TempDir,
+        #[case] now_local: (i32, u32, u32, u32, u32),
+        #[case] one_hour: &str,
+        #[case] this_evening: &str,
+        #[case] tomorrow: &str,
+    ) {
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(temp_dir.path().to_path_buf()),
+            clock: SessionClock::Fixed(local_time_as_utc(now_local)),
+        });
+        let response = app
+            .oneshot(
+                Request::get("/sessions/later-options")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let options = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+
+        assert_eq!(
+            (status, options),
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "one_hour": one_hour,
+                    "this_evening": this_evening,
+                    "tomorrow": tomorrow,
+                    "next_week": "Mon 3/11",
+                    "until_it_changes": "next activity",
+                }),
+            ),
+        );
+    }
+
+    #[rstest]
     #[case::one_hour("one_hour", (2030, 3, 4, 15, 0), Some((2030, 3, 4, 16, 0)), false)]
     #[case::this_evening("this_evening", (2030, 3, 4, 15, 0), Some((2030, 3, 4, 19, 0)), false)]
     #[case::evening_already_passed("this_evening", (2030, 3, 4, 20, 0), Some((2030, 3, 5, 19, 0)), false)]
     #[case::tomorrow("tomorrow", (2030, 3, 4, 15, 0), Some((2030, 3, 5, 9, 0)), false)]
-    #[case::next_week("next_week", (2030, 3, 4, 15, 0), Some((2030, 3, 11, 11, 0)), false)]
+    #[case::next_week("next_week", (2030, 3, 4, 15, 0), Some((2030, 3, 11, 9, 0)), false)]
     #[case::until_it_changes("until_it_changes", (2030, 3, 4, 15, 0), None, true)]
     #[tokio::test]
     async fn later_presets_store_expected_deadlines_through_the_route(

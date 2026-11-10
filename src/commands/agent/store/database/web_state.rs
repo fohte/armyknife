@@ -77,6 +77,25 @@ pub(in crate::commands::agent::store) fn set_watch_web_later(
     })
 }
 
+pub(in crate::commands::agent::store) fn clear_watch_web_later(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    update_session_state(sessions_dir, session_id, |transaction| {
+        transaction.execute(
+            "INSERT INTO watch_web_session_state
+                (session_id, later_until, activity_snapshot, until_activity)
+             VALUES (?1, NULL, NULL, 0)
+             ON CONFLICT(session_id) DO UPDATE SET
+                later_until = NULL,
+                activity_snapshot = NULL,
+                until_activity = 0",
+            [session_id],
+        )?;
+        Ok(())
+    })
+}
+
 pub(in crate::commands::agent::store) fn set_watch_web_today(
     sessions_dir: &Path,
     session_id: &str,

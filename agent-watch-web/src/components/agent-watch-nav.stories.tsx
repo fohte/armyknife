@@ -13,6 +13,9 @@ const todaySession: Session = {
   unread: true,
   task: null,
   repo: 'example/service',
+  project: 'sample project',
+  parent: null,
+  ancestorSessionIds: [],
   pullRequest: null,
   isToday: true,
 }

@@ -1,15 +1,21 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
-import { setSessionLater, setSessionToday } from '#session-actions'
+import {
+  getLaterPresetTimes,
+  setSessionBackNow,
+  setSessionLater,
+  setSessionToday,
+} from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import {
   getLaterPresetShortcut,
   getSessionShortcutAction,
+  type LaterPresetTimes,
   moveSelection,
   type SessionView,
 } from '#session-navigation'
@@ -25,6 +31,7 @@ export function App() {
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
+  const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -98,6 +105,14 @@ export function App() {
       }),
     [projects],
   )
+
+  const openLater = useCallback((id: string) => {
+    setLaterTimes(null)
+    setLaterSessionId(id)
+    void getLaterPresetTimes().match(setLaterTimes, () => {
+      setError('Could not load Later return times.')
+    })
+  }, [])
 
   useEffect(
     () =>
@@ -215,7 +230,7 @@ export function App() {
         view === 'inbox'
       ) {
         event.preventDefault()
-        setLaterSessionId(selectedId)
+        openLater(selectedId)
       }
     }
 
@@ -223,16 +238,14 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [laterSessionId, navigableSessions, selectedId, view])
+  }, [laterSessionId, navigableSessions, openLater, selectedId, view])
 
   const needsActionCount = sessionsWithElapsedTime.filter(
     (session) => session.category === 'needs_action',
   ).length
-  const laterSession = sessions.find((session) => session.id === laterSessionId)
-
-  const openLater = (id: string) => {
-    setLaterSessionId(id)
-  }
+  const laterSession = sessionsWithElapsedTime.find(
+    (session) => session.id === laterSessionId,
+  )
 
   const toggleToday = (id: string, isToday: boolean) => {
     void setSessionToday(id, isToday).match(
@@ -298,8 +311,21 @@ export function App() {
       {laterSession !== undefined ? (
         <LaterMenu
           sessionTitle={laterSession.title}
+          isLater={laterSession.category === 'later'}
+          laterTimes={laterTimes}
           onClose={() => {
             setLaterSessionId(null)
+          }}
+          onBackNow={() => {
+            void setSessionBackNow(laterSession.id).match(
+              () => {
+                setLaterSessionId(null)
+                setError(null)
+              },
+              () => {
+                setError('Could not return the session now.')
+              },
+            )
           }}
           onSelect={(preset) => {
             void setSessionLater(laterSession.id, preset).match(

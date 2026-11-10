@@ -47,7 +47,7 @@ it('moves the selected row with j and k and keeps selection in bounds', () => {
   ])
 })
 
-it('toggles views with shifted B and maps unshifted j and k to row movement', () => {
+it('maps Later and Board shortcuts separately from row movement', () => {
   const getShortcutResults = () => [
     getSessionShortcutAction('B', true, 'inbox'),
     getSessionShortcutAction('B', true, 'board'),
@@ -67,7 +67,7 @@ it('toggles views with shifted B and maps unshifted j and k to row movement', ()
     { type: 'later' },
     { type: 'later' },
     { type: 'later' },
-    null,
+    { type: 'later' },
   ])
 })
 

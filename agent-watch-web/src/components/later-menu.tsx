@@ -2,15 +2,29 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 
-import { LATER_PRESET_OPTIONS, type LaterPreset } from '#session-navigation'
+import {
+  LATER_PRESET_OPTIONS,
+  type LaterPreset,
+  type LaterPresetTimes,
+} from '#session-navigation'
 
 type LaterMenuProps = {
   sessionTitle: string
+  isLater: boolean
+  laterTimes: LaterPresetTimes | null
   onSelect: (preset: LaterPreset) => void
+  onBackNow: () => void
   onClose: () => void
 }
 
-export function LaterMenu({ sessionTitle, onSelect, onClose }: LaterMenuProps) {
+export function LaterMenu({
+  sessionTitle,
+  isLater,
+  laterTimes,
+  onSelect,
+  onBackNow,
+  onClose,
+}: LaterMenuProps) {
   return (
     <div className="later-menu-overlay" onClick={onClose}>
       <section
@@ -34,10 +48,24 @@ export function LaterMenu({ sessionTitle, onSelect, onClose }: LaterMenuProps) {
             }}
           >
             <span>{option.label}</span>
-            <span className="later-menu-when">{option.when}</span>
+            <span className="later-menu-when">
+              {laterTimes?.[option.preset] ?? 'Loading…'}
+            </span>
             <kbd>{option.key}</kbd>
           </Button>
         ))}
+        {isLater ? (
+          <Button
+            type="button"
+            variant="plain"
+            role="menuitem"
+            aria-label={`Back now: ${sessionTitle}`}
+            className="later-menu-option later-menu-reset cursor-pointer"
+            onClick={onBackNow}
+          >
+            Back now
+          </Button>
+        ) : null}
         <p className="later-menu-note">
           New activity in the session also brings it back.
         </p>
