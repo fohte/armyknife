@@ -98,6 +98,24 @@ export const DesktopShowsTheInboxAndConversation: Story = {
   name: 'The desktop shows the inbox beside the selected conversation',
 }
 
+export const NarrowDesktopOverlaysTheStatusPanel: Story = {
+  name: 'A narrow desktop overlays the status panel while keeping the Inbox open',
+  args: {
+    statusPanelOpen: true,
+    selectedSession: {
+      ...session,
+      critUrl: '/review/sample',
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '620px', height: '800px', display: 'flex' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const IPhoneShowsTheInboxBeforeSelection: Story = {
   name: 'The iPhone shows the inbox before a conversation is selected',
   args: {

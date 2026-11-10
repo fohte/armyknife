@@ -20,6 +20,7 @@ mod archive;
 mod database;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
+pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     SessionLock, SessionStoreChanges, WakeLock, WatchWebSessionState, serialize_session,
 };

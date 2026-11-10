@@ -63,7 +63,9 @@ function taskLabel(session: BoardProject['sessions'][number]) {
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  return `${priority} #${String(session.task.number)} · ${session.task.title}`
+  const taskCount = session.tasks?.length ?? 1
+  const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+  return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
 }
 
 function ProjectCard({

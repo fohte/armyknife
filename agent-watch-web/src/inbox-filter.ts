@@ -80,18 +80,26 @@ function formatValue(value: string) {
     : value
 }
 
-function sessionValue(session: Session, key: InboxFilterKey): string | null {
+function sessionValues(session: Session, key: InboxFilterKey): string[] {
   switch (key) {
     case 'project':
-      return session.project
+      return [session.project]
     case 'kind':
-      return session.kind
-    case 'task':
-      return session.task === null ? null : String(session.task.number)
+      return session.kind === null ? [] : [session.kind]
+    case 'task': {
+      const linkedTasks = session.tasks ?? []
+      const tasks =
+        linkedTasks.length > 0
+          ? linkedTasks
+          : session.task === null
+            ? []
+            : [session.task]
+      return tasks.map((task) => String(task.number))
+    }
     case 'repo':
-      return session.repo
+      return [session.repo]
     case 'engine':
-      return session.engine ?? null
+      return session.engine === undefined ? [] : [session.engine]
   }
 }
 
@@ -149,13 +157,15 @@ export function filterInboxSessions(
 
   return sessions.filter((session) =>
     filters.every((filter) => {
-      const value = sessionValue(session, filter.key)
+      const values = sessionValues(session, filter.key)
       return (
-        value !== null &&
-        filter.values.some(
-          (candidate) =>
-            normalizeInboxFilterValue(filter.key, candidate) ===
-            normalizeInboxFilterValue(filter.key, value),
+        values.length > 0 &&
+        filter.values.some((candidate) =>
+          values.some(
+            (value) =>
+              normalizeInboxFilterValue(filter.key, candidate) ===
+              normalizeInboxFilterValue(filter.key, value),
+          ),
         )
       )
     }),
@@ -172,14 +182,14 @@ export function getInboxFilterOptions(
   const counts = new Map<string, { value: string; count: number }>()
 
   for (const session of matchingSessions) {
-    const value = sessionValue(session, key)
-    if (value === null) continue
-    const normalized = normalizeInboxFilterValue(key, value)
-    const existing = counts.get(normalized)
-    counts.set(normalized, {
-      value: existing?.value ?? value,
-      count: (existing?.count ?? 0) + 1,
-    })
+    for (const value of sessionValues(session, key)) {
+      const normalized = normalizeInboxFilterValue(key, value)
+      const existing = counts.get(normalized)
+      counts.set(normalized, {
+        value: existing?.value ?? value,
+        count: (existing?.count ?? 0) + 1,
+      })
+    }
   }
 
   return [...counts.values()].sort((left, right) =>

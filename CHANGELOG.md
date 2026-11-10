@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.562](https://github.com/fohte/armyknife/compare/v0.1.561...v0.1.562) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent:** choose the highest-priority open task ([#1481](https://github.com/fohte/armyknife/issues/1481)) ([b07a27f](https://github.com/fohte/armyknife/commit/b07a27f3db44f316a23c424ab89ca02ef70d3198))
+
+## [0.1.561](https://github.com/fohte/armyknife/compare/v0.1.560...v0.1.561) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add a session status panel ([#1479](https://github.com/fohte/armyknife/issues/1479)) ([fb3db9c](https://github.com/fohte/armyknife/commit/fb3db9cd84642831feea6cd10336d6e889cf9cd4))
+
+## [0.1.560](https://github.com/fohte/armyknife/compare/v0.1.559...v0.1.560) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show compaction status ([#1475](https://github.com/fohte/armyknife/issues/1475)) ([19d0e65](https://github.com/fohte/armyknife/commit/19d0e65748540456f3f70f4ac9bb4047aafc31eb))
+
+## [0.1.559](https://github.com/fohte/armyknife/compare/v0.1.558...v0.1.559) (2026-11-10)
+
+
+### Bug Fixes
+
+* **watch-web:** show sent messages and images ([#1471](https://github.com/fohte/armyknife/issues/1471)) ([62a9118](https://github.com/fohte/armyknife/commit/62a91181da78e9aa4388f4484e01c87d61f3a681))
+
 ## [0.1.558](https://github.com/fohte/armyknife/compare/v0.1.557...v0.1.558) (2026-11-10)
 
 

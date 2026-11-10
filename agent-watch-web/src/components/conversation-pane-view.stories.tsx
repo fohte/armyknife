@@ -232,16 +232,9 @@ export const PermissionApprovalWasSent: Story = {
   },
 }
 
-export const CritReviewCanOpenBesideTheConversation: Story = {
-  name: 'A waiting crit review can open beside the conversation',
-  args: {
-    session: {
-      ...session,
-      category: 'needs_action',
-      kind: 'Review',
-      critUrl: 'http://127.0.0.1:5000/review/sample',
-    },
-  },
+export const StatusPanelToggleIsActive: Story = {
+  name: 'The conversation header shows an active status panel toggle',
+  args: { statusPanelOpen: true },
 }
 
 export const ReviewGuidanceFitsAnIPhone: Story = {
