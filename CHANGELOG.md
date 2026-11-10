@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.559](https://github.com/fohte/armyknife/compare/v0.1.558...v0.1.559) (2026-11-10)
+
+
+### Bug Fixes
+
+* **watch-web:** show sent messages and images ([#1471](https://github.com/fohte/armyknife/issues/1471)) ([62a9118](https://github.com/fohte/armyknife/commit/62a91181da78e9aa4388f4484e01c87d61f3a681))
+
 ## [0.1.558](https://github.com/fohte/armyknife/compare/v0.1.557...v0.1.558) (2026-11-10)
 
 
