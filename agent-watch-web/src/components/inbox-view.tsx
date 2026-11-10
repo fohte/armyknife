@@ -39,6 +39,11 @@ type InboxViewProps = {
   onFilterQueryChange?: (query: string) => void
   filterDialogOpen?: boolean
   onFilterDialogOpenChange?: (open: boolean) => void
+  saveViewOpen?: boolean
+  saveViewName?: string
+  onSaveViewOpenChange?: (open: boolean) => void
+  onSaveViewNameChange?: (name: string) => void
+  onSaveView?: (name: string) => void
 }
 
 function renderSessionSection({
@@ -110,6 +115,11 @@ export function InboxView({
   onFilterQueryChange,
   filterDialogOpen: controlledFilterDialogOpen,
   onFilterDialogOpenChange,
+  saveViewOpen = false,
+  saveViewName = '',
+  onSaveViewOpenChange,
+  onSaveViewNameChange,
+  onSaveView,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -269,6 +279,57 @@ export function InboxView({
             <span className="inbox-filter-result-count">
               {needsAction.length} of {allNeedsActionCount}
             </span>
+            {onSaveView !== undefined ? (
+              saveViewOpen ? (
+                <form
+                  className="inbox-save-view-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    onSaveView(saveViewName)
+                  }}
+                >
+                  <input
+                    aria-label="Saved view name"
+                    autoFocus
+                    maxLength={60}
+                    onChange={(event) => {
+                      onSaveViewNameChange?.(event.currentTarget.value)
+                    }}
+                    placeholder="Name this view"
+                    value={saveViewName}
+                  />
+                  <Button
+                    type="submit"
+                    variant="plain"
+                    className="inbox-save-view-submit cursor-pointer"
+                    disabled={saveViewName.trim().length === 0}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="plain"
+                    className="inbox-save-view-cancel cursor-pointer"
+                    onClick={() => {
+                      onSaveViewOpenChange?.(false)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
+                <Button
+                  type="button"
+                  variant="plain"
+                  className="inbox-save-view cursor-pointer"
+                  onClick={() => {
+                    onSaveViewOpenChange?.(true)
+                  }}
+                >
+                  Save view
+                </Button>
+              )
+            ) : null}
           </>
         )}
       </div>

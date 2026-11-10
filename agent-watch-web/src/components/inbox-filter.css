@@ -86,6 +86,52 @@
   white-space: nowrap;
 }
 
+.inbox-save-view,
+.inbox-save-view-submit,
+.inbox-save-view-cancel {
+  flex: 0 0 auto;
+  border-radius: 5px;
+  padding: 4px 7px;
+  color: #a1a1aa;
+  font-size: 10.5px;
+}
+
+.inbox-save-view:hover,
+.inbox-save-view-submit:not(:disabled):hover,
+.inbox-save-view-cancel:hover {
+  background: #252529;
+  color: #f4f4f5;
+}
+
+.inbox-save-view-form {
+  display: flex;
+  flex: 1 1 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 3px;
+}
+
+.inbox-filter-bar:has(.inbox-save-view-form) {
+  flex-wrap: wrap;
+}
+
+.inbox-save-view-form input {
+  width: 132px;
+  min-width: 0;
+  border: 1px solid #38383e;
+  border-radius: 5px;
+  padding: 5px 7px;
+  background: #111113;
+  color: #f4f4f5;
+  font: inherit;
+  font-size: 10.5px;
+}
+
+.inbox-save-view-submit:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .inbox-filter-overlay {
   position: fixed;
   z-index: 50;

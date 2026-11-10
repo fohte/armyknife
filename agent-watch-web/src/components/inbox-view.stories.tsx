@@ -132,6 +132,9 @@ const meta = {
     onToggleInProgress: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
+    onSaveView: () => undefined,
+    onSaveViewOpenChange: () => undefined,
+    onSaveViewNameChange: () => undefined,
   },
   decorators: [
     (Story) => (
@@ -157,6 +160,20 @@ export const InboxHasNoFilters: Story = {
 export const InboxFiltersSessionsByProjectAndKind: Story = {
   name: 'The inbox shows project and kind filters as removable chips',
   args: { filterQuery: 'project:sample project kind:question,review' },
+}
+
+export const InboxFiltersCanBeSavedAsAView: Story = {
+  name: 'The filtered inbox offers a button to save its view',
+  args: { filterQuery: 'project:sample project kind:question,review' },
+}
+
+export const InboxNamesASavedView: Story = {
+  name: 'The filtered inbox shows the saved view name field',
+  args: {
+    filterQuery: 'project:sample project kind:question,review',
+    saveViewOpen: true,
+    saveViewName: 'Sample questions',
+  },
 }
 
 export const InboxFilterDialogIsOpen: Story = {

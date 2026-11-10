@@ -10,6 +10,10 @@ let root: Root | null = null
 function renderNav(
   workTypeNavGroups: ComponentProps<typeof AgentWatchNav>['workTypeNavGroups'],
   onSelectSession: (id: string) => void = () => undefined,
+  savedViews: ComponentProps<typeof AgentWatchNav>['savedViews'] = [],
+  selectedSavedViewId: string | null = null,
+  onSelectSavedView: (id: string) => void = () => undefined,
+  onDeleteSavedView: (id: string) => void = () => undefined,
 ) {
   root = createRoot(container)
   act(() => {
@@ -17,8 +21,12 @@ function renderNav(
       <AgentWatchNav
         activeView="inbox"
         needsActionCount={0}
+        savedViews={savedViews}
+        selectedSavedViewId={selectedSavedViewId}
         workTypeNavGroups={workTypeNavGroups}
         onViewChange={() => undefined}
+        onSelectSavedView={onSelectSavedView}
+        onDeleteSavedView={onDeleteSavedView}
         todaySessions={[]}
         onSelectToday={() => undefined}
         onSelectSession={onSelectSession}
@@ -93,4 +101,72 @@ it('renders no work type sections without configured groups', () => {
       (section) => section.getAttribute('aria-labelledby'),
     ),
   ).toEqual([])
+})
+
+it('selects and deletes saved views and hides the section when it is empty', () => {
+  const onSelectSavedView = vi.fn<(id: string) => void>()
+  const onDeleteSavedView = vi.fn<(id: string) => void>()
+  renderNav(
+    [],
+    () => undefined,
+    [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    'reviews',
+    onSelectSavedView,
+    onDeleteSavedView,
+  )
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    heading: container.querySelector('#saved-views-title')?.textContent,
+    selected: container
+      .querySelector<HTMLButtonElement>('.saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    countTone: container.querySelector('.saved-view-count')?.className,
+    selectedIds: onSelectSavedView.mock.calls,
+    deletedIds: onDeleteSavedView.mock.calls,
+  })
+
+  expect(snapshot()).toEqual({
+    heading: 'VIEWS',
+    selected: 'true',
+    countTone: 'saved-view-count is-needs-action',
+    selectedIds: [['reviews']],
+    deletedIds: [['reviews']],
+  })
+
+  act(() => {
+    root?.render(
+      <AgentWatchNav
+        activeView="inbox"
+        needsActionCount={0}
+        savedViews={[]}
+        selectedSavedViewId={null}
+        workTypeNavGroups={[]}
+        onViewChange={() => undefined}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
+        todaySessions={[]}
+        onSelectToday={() => undefined}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  expect(container.querySelector('#saved-views-title')).toBeNull()
 })
