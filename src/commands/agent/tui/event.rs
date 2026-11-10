@@ -383,7 +383,7 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
 
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if let Ok(event) = res
-            && extract_session_store_change(&event)
+            && crate::commands::agent::session_store_event::is_session_store_change(&event)
         {
             let _ = tx.send(AppEvent::SessionStoreChanged);
         }
@@ -394,33 +394,9 @@ fn setup_file_watcher(tx: Sender<AppEvent>) -> Result<Option<RecommendedWatcher>
     Ok(Some(watcher))
 }
 
-/// Returns whether a filesystem event may reflect a session database update.
-fn extract_session_store_change(event: &notify::Event) -> bool {
-    let is_database_file = |path: &Path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "sessions.db" || name == "sessions.db-wal")
-    };
-
-    match event.kind {
-        notify::EventKind::Modify(
-            notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Any,
-        ) => event.paths.iter().any(|path| is_database_file(path)),
-        notify::EventKind::Create(
-            notify::event::CreateKind::File | notify::event::CreateKind::Any,
-        ) => event
-            .paths
-            .iter()
-            .any(|path| path.file_name().and_then(|name| name.to_str()) == Some("sessions.db")),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rstest::rstest;
-    use std::path::PathBuf;
 
     #[test]
     fn test_app_event_enum() {
@@ -431,76 +407,6 @@ mod tests {
         });
         let _store_changed = AppEvent::SessionStoreChanged;
         let _tick = AppEvent::Tick;
-    }
-
-    #[rstest]
-    #[case::database_data(
-        "/sessions/sessions.db",
-        notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any
-        )),
-        true
-    )]
-    #[case::wal_data(
-        "/sessions/sessions.db-wal",
-        notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any
-        )),
-        true
-    )]
-    #[case::database_create(
-        "/sessions/sessions.db",
-        notify::EventKind::Create(notify::event::CreateKind::File),
-        true
-    )]
-    #[case::wal_create_ignored(
-        "/sessions/sessions.db-wal",
-        notify::EventKind::Create(notify::event::CreateKind::File),
-        false
-    )]
-    #[case::wal_remove_ignored(
-        "/sessions/sessions.db-wal",
-        notify::EventKind::Remove(notify::event::RemoveKind::File),
-        false
-    )]
-    #[case::database_remove_ignored(
-        "/sessions/sessions.db",
-        notify::EventKind::Remove(notify::event::RemoveKind::File),
-        false
-    )]
-    #[case::shared_memory_ignored(
-        "/sessions/sessions.db-shm",
-        notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any
-        )),
-        false
-    )]
-    #[case::legacy_json_ignored(
-        "/sessions/old-session.json",
-        notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any
-        )),
-        false
-    )]
-    #[case::unrelated_file_ignored(
-        "/sessions/notes.txt",
-        notify::EventKind::Modify(notify::event::ModifyKind::Data(
-            notify::event::DataChange::Any
-        )),
-        false
-    )]
-    fn test_extract_session_store_change(
-        #[case] path: &str,
-        #[case] kind: notify::EventKind,
-        #[case] expected: bool,
-    ) {
-        let event = notify::Event {
-            kind,
-            paths: vec![PathBuf::from(path)],
-            attrs: Default::default(),
-        };
-
-        assert_eq!(extract_session_store_change(&event), expected);
     }
 
     #[test]
@@ -570,19 +476,5 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 5);
-    }
-
-    #[test]
-    fn test_extract_session_store_change_accepts_database_paths_in_batch_events() {
-        let event = notify::Event {
-            kind: notify::EventKind::Modify(notify::event::ModifyKind::Any),
-            paths: vec![
-                PathBuf::from("/sessions/old-session.json"),
-                PathBuf::from("/sessions/sessions.db-wal"),
-            ],
-            attrs: Default::default(),
-        };
-
-        assert!(extract_session_store_change(&event));
     }
 }

@@ -13,6 +13,7 @@ use tokio::sync::watch;
 use tokio::time::{self, Interval};
 
 use super::EnrichmentUpdates;
+use crate::commands::agent::session_store_event::is_session_store_change;
 use crate::commands::agent::store;
 
 const REVISION_POLL_INTERVAL: Duration = Duration::from_secs(2);
@@ -45,7 +46,7 @@ async fn create_watcher(
         let sessions_dir = store::sessions_dir()?;
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok() {
+                if event.is_ok_and(|event| is_session_store_change(&event)) {
                     let _ = signal_tx.send(());
                 }
             })?;
