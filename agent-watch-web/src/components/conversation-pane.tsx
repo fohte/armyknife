@@ -2,7 +2,10 @@ import { err, ok, Result, ResultAsync } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import type { PendingPermissionAction } from '#components/permission-card'
+import type {
+  PendingPermissionAction,
+  PermissionRequestIdentity,
+} from '#components/permission-card'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -184,7 +187,10 @@ export function ConversationPane({
           const permissionDisappeared =
             messagesResult.isOk() &&
             !messagesResult.value.some(
-              (message) => message.type === 'permission',
+              (message) =>
+                message.type === 'permission' &&
+                message.tool === pending.tool &&
+                message.description === pending.description,
             )
           const permissionUnavailable =
             actionsResult.isOk() &&
@@ -218,25 +224,31 @@ export function ConversationPane({
     setPendingPermissionAction(null)
   }, [session.id])
 
-  const onAction = (action: string, payload?: Record<string, unknown>) => {
+  const onAction = (
+    action: string,
+    payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
+  ) => {
     const permissionAction =
       action === 'permission/approve'
         ? 'approve'
         : action === 'permission/reject'
           ? 'reject'
           : null
-    if (permissionAction !== null) {
+    if (permissionAction !== null && permissionIdentity !== undefined) {
       setPendingPermissionAction({
         action: permissionAction,
         status: 'sending',
+        ...permissionIdentity,
       })
     }
     return requestAction(session.id, action, payload).match(
       () => {
-        if (permissionAction !== null) {
+        if (permissionAction !== null && permissionIdentity !== undefined) {
           setPendingPermissionAction({
             action: permissionAction,
             status: 'sent',
+            ...permissionIdentity,
           })
         }
         setError(null)
@@ -244,7 +256,9 @@ export function ConversationPane({
         return true
       },
       (requestError) => {
-        if (permissionAction !== null) setPendingPermissionAction(null)
+        if (permissionAction !== null && permissionIdentity !== undefined) {
+          setPendingPermissionAction(null)
+        }
         setError(requestError.message)
         return false
       },

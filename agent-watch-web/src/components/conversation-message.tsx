@@ -4,6 +4,7 @@ import { MarkdownMessage } from '#components/markdown-message'
 import {
   type PendingPermissionAction,
   PermissionCard,
+  type PermissionRequestIdentity,
 } from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { ToolSummary } from '#components/tool-summary'
@@ -25,6 +26,7 @@ type RenderConversationMessageOptions = {
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
@@ -127,8 +129,8 @@ export function renderConversationMessage({
       actionsReady={actionsReady}
       pendingAction={pendingAction}
       isCodex={session.engine === 'Codex'}
-      onAction={(action) => {
-        void onAction(action)
+      onAction={(action, permissionIdentity) => {
+        void onAction(action, undefined, permissionIdentity)
       }}
       onOpenInTerminal={onOpenInTerminal}
     />

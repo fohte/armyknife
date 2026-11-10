@@ -5,7 +5,14 @@ import type { ChatItem, SessionActions } from '#types'
 export type PendingPermissionAction = {
   action: 'approve' | 'reject'
   status: 'sending' | 'sent'
+  tool: string
+  description: string
 } | null
+
+export type PermissionRequestIdentity = {
+  tool: string
+  description: string
+}
 
 type PermissionCardProps = {
   message: Extract<ChatItem, { type: 'permission' }>
@@ -13,7 +20,10 @@ type PermissionCardProps = {
   actionsReady: boolean
   pendingAction: PendingPermissionAction
   isCodex: boolean
-  onAction: (action: 'permission/approve' | 'permission/reject') => void
+  onAction: (
+    action: 'permission/approve' | 'permission/reject',
+    permission: PermissionRequestIdentity,
+  ) => void
   onOpenInTerminal: () => void
 }
 
@@ -29,6 +39,11 @@ export function PermissionCard({
   const canApprove = actions?.permission?.approve === true
   const canReject = actions?.permission?.reject === true
   const hasPermissionActions = canApprove || canReject
+  const matchingPendingAction =
+    pendingAction?.tool === message.tool &&
+    pendingAction.description === message.description
+      ? pendingAction
+      : null
 
   return (
     <article className="chat-permission-card">
@@ -40,34 +55,38 @@ export function PermissionCard({
           <Button
             type="button"
             variant="plain"
-            disabled={!actionsReady || !canApprove || pendingAction !== null}
+            disabled={
+              !actionsReady || !canApprove || matchingPendingAction !== null
+            }
             aria-busy={
-              pendingAction?.action === 'approve' &&
-              pendingAction.status === 'sending'
+              matchingPendingAction?.action === 'approve' &&
+              matchingPendingAction.status === 'sending'
             }
             onClick={() => {
-              onAction('permission/approve')
+              onAction('permission/approve', message)
             }}
           >
-            {pendingAction?.action === 'approve' &&
-            pendingAction.status === 'sending'
+            {matchingPendingAction?.action === 'approve' &&
+            matchingPendingAction.status === 'sending'
               ? 'Approving…'
               : 'Approve'}
           </Button>
           <Button
             type="button"
             variant="plain"
-            disabled={!actionsReady || !canReject || pendingAction !== null}
+            disabled={
+              !actionsReady || !canReject || matchingPendingAction !== null
+            }
             aria-busy={
-              pendingAction?.action === 'reject' &&
-              pendingAction.status === 'sending'
+              matchingPendingAction?.action === 'reject' &&
+              matchingPendingAction.status === 'sending'
             }
             onClick={() => {
-              onAction('permission/reject')
+              onAction('permission/reject', message)
             }}
           >
-            {pendingAction?.action === 'reject' &&
-            pendingAction.status === 'sending'
+            {matchingPendingAction?.action === 'reject' &&
+            matchingPendingAction.status === 'sending'
               ? 'Rejecting…'
               : 'Reject'}
           </Button>
@@ -82,9 +101,9 @@ export function PermissionCard({
           ) : null}
         </div>
       ) : null}
-      {pendingAction?.status === 'sent' ? (
+      {matchingPendingAction?.status === 'sent' ? (
         <p className="permission-action-status" role="status">
-          {pendingAction.action === 'approve'
+          {matchingPendingAction.action === 'approve'
             ? 'Approval sent. Session is resuming…'
             : 'Rejection sent. Session is resuming…'}
         </p>

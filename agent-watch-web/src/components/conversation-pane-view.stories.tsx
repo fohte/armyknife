@@ -178,7 +178,12 @@ export const PermissionWaitsForApproval: Story = {
 export const PermissionApprovalIsSending: Story = {
   name: 'The approval button shows that the request is being sent',
   args: {
-    pendingPermissionAction: { action: 'approve', status: 'sending' },
+    pendingPermissionAction: {
+      action: 'approve',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
     messages: [
       {
         type: 'permission',
@@ -192,7 +197,12 @@ export const PermissionApprovalIsSending: Story = {
 export const PermissionRejectionIsSending: Story = {
   name: 'The rejection button shows that the request is being sent',
   args: {
-    pendingPermissionAction: { action: 'reject', status: 'sending' },
+    pendingPermissionAction: {
+      action: 'reject',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
     messages: [
       {
         type: 'permission',
@@ -206,7 +216,12 @@ export const PermissionRejectionIsSending: Story = {
 export const PermissionApprovalWasSent: Story = {
   name: 'The permission card confirms that approval was sent',
   args: {
-    pendingPermissionAction: { action: 'approve', status: 'sent' },
+    pendingPermissionAction: {
+      action: 'approve',
+      status: 'sent',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
     messages: [
       {
         type: 'permission',

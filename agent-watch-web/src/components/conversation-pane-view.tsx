@@ -13,7 +13,10 @@ import { ConversationWorkingStatus } from '#components/conversation-working-stat
 import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MessageComposer } from '#components/message-composer'
-import type { PendingPermissionAction } from '#components/permission-card'
+import type {
+  PendingPermissionAction,
+  PermissionRequestIdentity,
+} from '#components/permission-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { useComposerDraft } from '#components/use-composer-draft'
@@ -40,6 +43,7 @@ type ConversationPaneViewProps = {
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
   isMobile?: boolean

@@ -44,27 +44,47 @@ export const WaitingForDecision: Story = {
 export const ApprovalIsSending: Story = {
   name: 'The approval button shows that the request is being sent',
   args: {
-    pendingAction: { action: 'approve', status: 'sending' },
+    pendingAction: {
+      action: 'approve',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
   },
 }
 
 export const RejectionIsSending: Story = {
   name: 'The rejection button shows that the request is being sent',
   args: {
-    pendingAction: { action: 'reject', status: 'sending' },
+    pendingAction: {
+      action: 'reject',
+      status: 'sending',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
   },
 }
 
 export const ApprovalWasSent: Story = {
   name: 'The card confirms that approval was sent',
   args: {
-    pendingAction: { action: 'approve', status: 'sent' },
+    pendingAction: {
+      action: 'approve',
+      status: 'sent',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
   },
 }
 
 export const RejectionWasSent: Story = {
   name: 'The card confirms that rejection was sent',
   args: {
-    pendingAction: { action: 'reject', status: 'sent' },
+    pendingAction: {
+      action: 'reject',
+      status: 'sent',
+      tool: 'Shell',
+      description: 'Run the formatter on changed files.',
+    },
   },
 }
