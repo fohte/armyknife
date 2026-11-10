@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -11,9 +11,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::claude_messaging;
-use super::super::claude_registry;
-use super::super::codex_steer;
+use super::super::peer::notify;
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
@@ -74,19 +72,9 @@ struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
     fn send_message(&self, session: &Session, content: &str) -> Result<()> {
-        match session.engine {
-            Engine::Claude => {
-                let connection = claude_registry::load_peer_connection(&session.session_id)
-                    .context("no active Claude Code session registry entry")?;
-                let socket_path = connection
-                    .messaging_socket_path
-                    .context("Claude Code session does not expose a messaging socket")?;
-                claude_messaging::send_message(&socket_path, connection.pid, content)
-            }
-            Engine::Codex => {
-                codex_steer::send_message(&session.session_id, content).map_err(anyhow::Error::from)
-            }
-        }
+        send_via_peer_notify(session, content, |session_id, content| {
+            notify::notify(session_id, content, None, None)
+        })
     }
 
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -138,6 +126,15 @@ impl ActionRuntime for LiveActionRuntime {
         )
         .map_err(anyhow::Error::from)
     }
+}
+
+fn send_via_peer_notify(
+    session: &Session,
+    content: &str,
+    deliver: impl FnOnce(&str, &str) -> Result<notify::Delivery>,
+) -> Result<()> {
+    deliver(&session.session_id, content)?;
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -214,7 +211,7 @@ async fn actions(
     let has_tmux = session.tmux_info.is_some();
     let has_live_session = session.status != SessionStatus::Ended;
     Ok(Json(ActionCapabilities {
-        message: true,
+        message: has_live_session,
         answer_question: has_live_session
             && session.engine == Engine::Claude
             && is_ask_user_question(&session),
@@ -243,6 +240,9 @@ async fn send_message(
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
     if request.content.trim().is_empty() && request.images.is_empty() {
         return Err(ApiError::bad_request("message must not be empty"));
     }
@@ -1255,6 +1255,32 @@ mod tests {
         );
     }
 
+    #[test]
+    fn live_message_adapter_forwards_session_and_content_to_peer_notify() {
+        let session = session("sample-session");
+        let mut calls = Vec::new();
+
+        let result = send_via_peer_notify(
+            &session,
+            "continue the investigation",
+            |session_id, content| {
+                calls.push((session_id.to_string(), content.to_string()));
+                Ok(notify::Delivery::Sent)
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), calls),
+            (
+                Ok(()),
+                vec![(
+                    "sample-session".to_string(),
+                    "continue the investigation".to_string(),
+                )],
+            ),
+        );
+    }
+
     #[rstest]
     #[case::not_registered("not-stored")]
     #[case::invalid_id("bad..id")]
@@ -1564,7 +1590,15 @@ mod tests {
             .await
             .unwrap();
         let interrupt = app
+            .clone()
             .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+        let message = app
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "continue the investigation" }),
+            ))
             .await
             .unwrap();
 
@@ -1574,16 +1608,22 @@ mod tests {
                 response_snapshot(answer, &action_context).await,
                 response_snapshot(permission, &action_context).await,
                 response_snapshot(interrupt, &action_context).await,
+                response_snapshot(message, &action_context).await,
             ),
             (
                 json!({
                     "status": StatusCode::OK.as_u16(),
                     "body": {
-                        "message": true,
+                        "message": false,
                         "answerQuestion": false,
                         "interrupt": false,
                         "openInTerminal": true,
                     },
+                    "calls": [],
+                }),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "session has ended" },
                     "calls": [],
                 }),
                 json!({

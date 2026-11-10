@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
+use super::super::claude_content_text as content_text;
 use super::super::parser::{
     ToolSummary, append_text, append_text_with_user_marker, for_each_jsonl_record,
     peer_message_item_with_user_marker, tool_target,
@@ -496,19 +497,6 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
 
 fn user_text(message: &Value) -> String {
     content_text(message.get("content"))
-}
-
-fn content_text(content: Option<&Value>) -> String {
-    match content {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) != Some("tool_result"))
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
 }
 
 fn content_blocks(content: &Value) -> Vec<&Value> {
