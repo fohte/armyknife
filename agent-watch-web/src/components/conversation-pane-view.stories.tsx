@@ -36,6 +36,8 @@ const actions: SessionActions = {
 const callbacks = {
   onAction: () => Promise.resolve(true),
   onSelectSession: () => undefined,
+  onBack: () => undefined,
+  onLater: () => undefined,
 }
 
 const meta = {
@@ -109,6 +111,36 @@ export const CritReviewCanOpenBesideTheConversation: Story = {
       critUrl: 'http://127.0.0.1:5000/review/sample',
     },
   },
+}
+
+export const ReviewGuidanceFitsAnIPhone: Story = {
+  name: 'A review directs iPhone users to their Mac',
+  args: {
+    isMobile: true,
+    session: {
+      ...session,
+      category: 'needs_action',
+      kind: 'Review',
+      critUrl: 'http://127.0.0.1:5000/review/sample',
+    },
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The implementation is ready for review.',
+      },
+    ],
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const CodexOnlyOpensInTerminal: Story = {

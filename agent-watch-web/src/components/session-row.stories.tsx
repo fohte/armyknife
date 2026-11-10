@@ -142,3 +142,23 @@ export const WorkIsDone: Story = {
     },
   },
 }
+
+export const RepositoryNameIsCompactOnIPhone: Story = {
+  name: 'The repository name fits on an iPhone row',
+  args: {
+    compactRepo: true,
+    onLater: () => undefined,
+    onToggleToday: () => undefined,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', minHeight: '180px' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}

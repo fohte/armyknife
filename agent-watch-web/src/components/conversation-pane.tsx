@@ -114,12 +114,18 @@ type ConversationPaneProps = {
   session: Session
   refreshKey: number
   onSelectSession: (id: string) => void
+  isMobile?: boolean
+  onBack?: () => void
+  onLater?: () => void
 }
 
 export function ConversationPane({
   session,
   refreshKey,
   onSelectSession,
+  isMobile = false,
+  onBack = () => undefined,
+  onLater = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
   const [actions, setActions] = useState<SessionActions | null>(null)
@@ -195,6 +201,9 @@ export function ConversationPane({
       error={error}
       onAction={onAction}
       onSelectSession={onSelectSession}
+      isMobile={isMobile}
+      onBack={onBack}
+      onLater={onLater}
     />
   )
 }

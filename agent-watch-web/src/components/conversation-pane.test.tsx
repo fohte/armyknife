@@ -67,6 +67,7 @@ function renderView(
   onSelectSession: (id: string) => void = () => undefined,
   viewMessages: readonly ChatItem[] = [question],
   viewActions: SessionActions | null = actions,
+  isMobile = false,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -79,6 +80,7 @@ function renderView(
         error={null}
         onAction={onAction}
         onSelectSession={onSelectSession}
+        isMobile={isMobile}
       />,
     )
   })
@@ -202,6 +204,47 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
     false,
   ])
   expect(actual).toBe(expected)
+})
+
+it('keeps Enter for newlines and exposes mobile conversation actions', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [question], actions, true)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+
+  const enterEvent = dispatchKeyInAct(textarea, 'Enter')
+  const shiftEnterEvent = dispatchKeyInAct(textarea, 'Enter', {
+    shiftKey: true,
+  })
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.mobile-interrupt-button'),
+    ).click()
+  })
+
+  const snapshot = () => ({
+    actions: onAction.mock.calls,
+    defaultPrevented: [
+      enterEvent.defaultPrevented,
+      shiftEnterEvent.defaultPrevented,
+    ],
+    keyboardHint: container.querySelector('.composer-footer > span')
+      ?.textContent,
+    choiceLabels: Array.from(
+      container.querySelectorAll('.chat-question-choices kbd'),
+      (element) => element.textContent,
+    ),
+    interruptLabel: container.querySelector('.mobile-interrupt-button')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    actions: [['interrupt']],
+    defaultPrevented: [false, false],
+    keyboardHint: undefined,
+    choiceLabels: [],
+    interruptLabel: 'Interrupt',
+  })
 })
 
 it('does not send while Enter confirms an IME composition', () => {

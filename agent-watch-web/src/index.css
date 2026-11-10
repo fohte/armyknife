@@ -4,6 +4,7 @@
 @import '@fohte/ui/tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
 @import './components/conversation-pane.css';
+@import './components/mobile-layout.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 
 @source '../node_modules/@fohte/ui/src';
@@ -59,6 +60,12 @@
 .brand-mark {
   margin-right: 7px;
   color: var(--primary);
+}
+
+.mobile-inbox-brand,
+.mobile-today-strip,
+.mobile-collapse-row {
+  display: none;
 }
 
 .view-switch {
@@ -395,29 +402,4 @@ kbd {
   margin: 0;
   padding: 48px 0 0;
   background: #0c0c0c;
-}
-
-@media (max-width: 760px) {
-  .agent-watch-nav {
-    flex-basis: 148px;
-  }
-
-  .inbox-view,
-  .board-placeholder {
-    width: calc(100vw - 148px);
-    flex-basis: calc(100vw - 148px);
-  }
-
-  .session-row {
-    gap: 7px;
-    padding-right: 10px;
-  }
-
-  .session-title-line {
-    gap: 6px;
-  }
-
-  .sort-description {
-    font-size: 10.5px;
-  }
 }

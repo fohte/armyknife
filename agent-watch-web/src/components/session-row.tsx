@@ -12,6 +12,7 @@ type SessionRowProps = {
   onSelect: (id: string) => void
   onLater?: (id: string) => void
   onToggleToday?: (id: string, isToday: boolean) => void
+  compactRepo?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -68,6 +69,7 @@ export function SessionRow({
   onSelect,
   onLater,
   onToggleToday,
+  compactRepo = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
 
@@ -114,7 +116,11 @@ export function SessionRow({
             ) : null}
             <span className="session-meta-line">
               <span className="session-task">{sessionTaskLabel(session)}</span>
-              <span className="session-repo">{session.repo || '—'}</span>
+              <span className="session-repo">
+                {compactRepo
+                  ? session.repo.split('/').at(-1)
+                  : session.repo || '—'}
+              </span>
             </span>
           </span>
         </Button>
