@@ -197,6 +197,7 @@ enum ChatItem {
     },
     ToolSummary {
         summary: String,
+        operations: Vec<ToolOperation>,
     },
     Question {
         question: String,
@@ -206,6 +207,13 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+struct ToolOperation {
+    tool: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<String>,
 }
 
 struct ParentSession {

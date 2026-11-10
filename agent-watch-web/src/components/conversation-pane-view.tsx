@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
+import { ToolSummary } from '#components/tool-summary'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -340,12 +341,11 @@ export function ConversationPaneView({
             )
           if (message.type === 'tool_summary')
             return (
-              <details
-                className="chat-tool-summary"
+              <ToolSummary
                 key={`tool-${String(index)}`}
-              >
-                <summary>▸ {message.summary}</summary>
-              </details>
+                summary={message.summary}
+                operations={message.operations ?? []}
+              />
             )
           if (message.type === 'question') {
             const canAnswer =
