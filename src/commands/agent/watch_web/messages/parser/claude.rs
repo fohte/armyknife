@@ -22,10 +22,10 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         };
         latest_uuid = Some(uuid.to_owned());
         let parent_uuid = match record.get("parentUuid") {
-            Some(Value::String(parent)) => Some(Some(parent.clone())),
+            Some(Value::String(parent)) => Some(parent.clone()),
             Some(Value::Null) => match record.get("logicalParentUuid") {
-                None | Some(Value::Null) => Some(None),
-                Some(Value::String(parent)) => Some(Some(parent.clone())),
+                None | Some(Value::Null) => None,
+                Some(Value::String(parent)) => Some(parent.clone()),
                 _ => None,
             },
             _ => None,
@@ -172,7 +172,7 @@ enum BranchMembership {
 }
 
 struct TranscriptNode {
-    parent_uuid: Option<Option<String>>,
+    parent_uuid: Option<String>,
     membership: BranchMembership,
 }
 
@@ -192,7 +192,7 @@ fn mark_active_branch(
             return;
         }
         node.membership = BranchMembership::Active;
-        let Some(Some(parent_uuid)) = &node.parent_uuid else {
+        let Some(parent_uuid) = &node.parent_uuid else {
             return;
         };
         let parent_uuid = parent_uuid.clone();
@@ -216,7 +216,7 @@ fn is_inactive_branch(uuid: &str, transcript_nodes: &mut BTreeMap<String, Transc
             BranchMembership::Unknown => node.membership = BranchMembership::Visiting,
         }
         path.push(current_uuid.clone());
-        let Some(Some(parent_uuid)) = &node.parent_uuid else {
+        let Some(parent_uuid) = &node.parent_uuid else {
             break false;
         };
         current_uuid = parent_uuid.clone();
