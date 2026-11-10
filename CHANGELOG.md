@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.540](https://github.com/fohte/armyknife/compare/v0.1.539...v0.1.540) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** filter the Inbox ([#1433](https://github.com/fohte/armyknife/issues/1433)) ([ce4c5b3](https://github.com/fohte/armyknife/commit/ce4c5b3d6bf0129901ae98d70b1baf535fb9d5bf))
+
 ## [0.1.539](https://github.com/fohte/armyknife/compare/v0.1.538...v0.1.539) (2026-11-10)
 
 
