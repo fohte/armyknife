@@ -54,6 +54,18 @@ export function useSessionKeyboardNavigation({
         return
       }
 
+      if (
+        !isMobile &&
+        event.metaKey &&
+        event.key === '.' &&
+        selectedId !== null &&
+        view === 'inbox'
+      ) {
+        event.preventDefault()
+        toggleStatusPanel()
+        return
+      }
+
       if (laterSessionId !== null) {
         if (event.key === 'Escape') {
           event.preventDefault()
@@ -65,6 +77,7 @@ export function useSessionKeyboardNavigation({
         if (isMobile) {
           return
         }
+        if (event.ctrlKey || event.metaKey) return
         const preset = getLaterPresetShortcut(event.key)
         if (preset !== null) {
           event.preventDefault()
@@ -74,17 +87,6 @@ export function useSessionKeyboardNavigation({
       }
 
       if (isMobile) return
-
-      if (
-        event.metaKey &&
-        event.key === '.' &&
-        selectedId !== null &&
-        view === 'inbox'
-      ) {
-        event.preventDefault()
-        toggleStatusPanel()
-        return
-      }
 
       if (event.ctrlKey || event.metaKey) return
 

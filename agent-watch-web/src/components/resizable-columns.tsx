@@ -47,7 +47,6 @@ function saveStoredSize(storageKey: string | null, size: number) {
     () => undefined,
   )
 }
-
 function getMaximumFirstSize(
   containerWidth: number,
   firstMinSize: number,
@@ -212,22 +211,5 @@ export function ResizableColumns({
         </>
       )}
     </div>
-  )
-}
-
-export function renderConversationCritColumns(
-  conversation: ReactNode,
-  crit: ReactNode,
-) {
-  return (
-    <ResizableColumns
-      first={conversation}
-      second={crit}
-      storageKey="agent-watch:conversation-width"
-      firstSize={560}
-      firstMinSize={240}
-      secondMinSize={300}
-      label="Resize conversation and crit"
-    />
   )
 }

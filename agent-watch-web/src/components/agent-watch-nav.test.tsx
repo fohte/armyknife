@@ -240,6 +240,11 @@ it('toggles the Inbox from the navigation and marks the collapsed state', () => 
     root?.render(
       <AgentWatchNav
         activeView="inbox"
+        paletteShortcut={{
+          modifier: 'ctrlKey',
+          label: 'Ctrl K',
+          ariaLabel: 'Control K',
+        }}
         needsActionCount={0}
         savedViews={[]}
         selectedSavedViewId={null}

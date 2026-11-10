@@ -1292,6 +1292,56 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
   })
 })
 
+it('updates the crit frame when keyboard navigation selects another review', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-review-first', 'First review'),
+        kind: 'Review',
+        critUrl: 'https://example.test/review/first',
+      },
+      {
+        ...session('session-review-second', 'Second review'),
+        kind: 'Review',
+        critUrl: 'https://example.test/review/second',
+      },
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-status-panel-toggle')
+      ?.click()
+  })
+  const firstSrc = container
+    .querySelector<HTMLIFrameElement>('.crit-pane iframe')
+    ?.getAttribute('src')
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+
+  const snapshot = () => ({
+    firstSrc,
+    secondSrc: container
+      .querySelector<HTMLIFrameElement>('.crit-pane iframe')
+      ?.getAttribute('src'),
+    selectedTitle: readSelectedTitle(),
+    panelOpen: container
+      .querySelector('.conversation-status-panel-toggle')
+      ?.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    firstSrc: 'https://example.test/review/first',
+    secondSrc: 'https://example.test/review/second',
+    selectedTitle: 'Second review',
+    panelOpen: 'true',
+  })
+})
+
 it('auto-collapses the Inbox for the status panel unless manually overridden', () => {
   renderApp()
   publishSessions({
@@ -2299,6 +2349,40 @@ it('opens Later with L and selects a preset with its number key', async () => {
         },
       ],
     ],
+  })
+})
+
+it('ignores modified number shortcuts in the Later menu', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  let modifiedEvent: KeyboardEvent | undefined
+  act(() => {
+    modifiedEvent = dispatchKey(window, '1', { metaKey: true })
+  })
+
+  const snapshot = () => ({
+    menuOpen: container.querySelector('.later-menu') !== null,
+    modifiedShortcutPrevented: modifiedEvent?.defaultPrevented,
+    laterRequests: fetchMock.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/later')),
+  })
+  expect(snapshot()).toEqual({
+    menuOpen: true,
+    modifiedShortcutPrevented: false,
+    laterRequests: [],
   })
 })
 

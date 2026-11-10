@@ -189,6 +189,8 @@ it('shows pending and sent permission action feedback', () => {
       actions,
       false,
       [],
+      false,
+      undefined,
       {
         action: 'approve',
         status,

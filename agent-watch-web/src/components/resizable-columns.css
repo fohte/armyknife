@@ -77,23 +77,3 @@
 .resizable-columns-separator:focus-visible {
   outline: none;
 }
-
-@media (max-width: 1279px) {
-  .resizable-columns:has(
-      > .resizable-columns-second-pane > .crit-pane:not(.is-fullscreen)
-    )
-    > .resizable-columns-separator,
-  .resizable-columns:has(
-      > .resizable-columns-second-pane > .crit-pane:not(.is-fullscreen)
-    )
-    > .resizable-columns-second-pane {
-    display: none;
-  }
-
-  .resizable-columns:has(
-      > .resizable-columns-second-pane > .crit-pane:not(.is-fullscreen)
-    )
-    > .resizable-columns-first-pane {
-    flex: 1 1 auto;
-  }
-}
