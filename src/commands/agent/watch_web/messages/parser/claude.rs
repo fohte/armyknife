@@ -19,6 +19,23 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
 
     for_each_jsonl_record(reader, |record| {
         match record.get("type").and_then(Value::as_str) {
+            _ if record
+                .get("attachment")
+                .and_then(|attachment| attachment.get("type"))
+                .and_then(Value::as_str)
+                == Some("queued_command") =>
+            {
+                if let Some(prompt) = record
+                    .get("attachment")
+                    .and_then(|attachment| attachment.get("prompt"))
+                {
+                    let text = content_text(Some(prompt));
+                    if !text.is_empty() {
+                        tools.flush_into(&mut items);
+                        append_text(&mut items, text, true, parent);
+                    }
+                }
+            }
             Some("user") => {
                 if let Some(message) = record.get("message") {
                     for id in tool_result_ids(message) {
@@ -226,7 +243,11 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
 }
 
 fn user_text(message: &Value) -> String {
-    match message.get("content") {
+    content_text(message.get("content"))
+}
+
+fn content_text(content: Option<&Value>) -> String {
+    match content {
         Some(Value::String(text)) => text.clone(),
         Some(Value::Array(blocks)) => blocks
             .iter()
@@ -277,9 +298,81 @@ mod tests {
     use std::io::Cursor;
 
     use indoc::indoc;
+    use rstest::rstest;
 
     use super::parse;
     use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
+
+    #[rstest]
+    #[case::prompt_array(
+        indoc! {r#"
+            {"type":"user","message":{"content":"Before the queued prompt."}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-tool-id","name":"Read","input":{}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-id","content":"Synthetic result."}]}}
+            {"type":"queue-operation","operation":"enqueue","content":"Show this prompt once."}
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"Show this prompt once."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"c3ludGhldGlj"}}]}}
+            {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Show this prompt once."}
+            {"type":"user","message":{"content":"After the queued prompt."}}
+        "#},
+        "Show this prompt once."
+    )]
+    #[case::prompt_string(
+        indoc! {r#"
+            {"type":"user","message":{"content":"Before the queued prompt."}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-tool-id","name":"Read","input":{}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-id","content":"Synthetic result."}]}}
+            {"type":"queue-operation","operation":"enqueue","content":"Show this prompt once."}
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":"Show this prompt once."}}
+            {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Show this prompt once."}
+            {"type":"user","message":{"content":"After the queued prompt."}}
+        "#},
+        "Show this prompt once."
+    )]
+    fn queued_commands_are_shown_once_in_transcript_order(
+        #[case] transcript: &str,
+        #[case] queued_text: &str,
+    ) {
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Before the queued prompt.".to_string(),
+                    from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Read", None)],
+                },
+                ChatItem::User {
+                    text: queued_text.to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "After the queued prompt.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn queued_peer_messages_use_the_existing_sender_label() {
+        let transcript = indoc! {r#"
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"<peer-message>\n- From session_id: fixture-parent-id\n- Sender engine: fixture-engine\n\nPlease group these fictional events.\n</peer-message>"}]}}
+        "#};
+        let parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "fixture-parent-title".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            vec![ChatItem::User {
+                text: "Please group these fictional events.".to_string(),
+                from: Some("fixture-parent-title".to_string()),
+            }]
+        );
+    }
 
     #[test]
     fn parses_messages_tools_questions_and_skips_unknown_rows() {
