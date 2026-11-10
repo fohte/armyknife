@@ -5,6 +5,7 @@ import type { ComposerAttachment } from '#components/message-composer'
 
 const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 const MAX_ATTACHMENTS_PER_MESSAGE = 16
+const BASE64_CHUNK_BYTES = 0x6000
 const PREVIEW_MIME_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -25,20 +26,29 @@ type ComposerMessageOptions = {
   ) => Promise<boolean>
 }
 
-function encodeAttachment(file: File) {
-  return file.arrayBuffer().then((buffer) => {
-    const bytes = new Uint8Array(buffer)
+async function encodeAttachment(file: File) {
+  let data = ''
+  for (let offset = 0; offset < file.size; offset += BASE64_CHUNK_BYTES) {
+    const bytes = new Uint8Array(
+      await file.slice(offset, offset + BASE64_CHUNK_BYTES).arrayBuffer(),
+    )
     let binary = ''
-    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+    for (
+      let chunkOffset = 0;
+      chunkOffset < bytes.length;
+      chunkOffset += 0x8000
+    ) {
+      binary += String.fromCharCode(
+        ...bytes.subarray(chunkOffset, chunkOffset + 0x8000),
+      )
     }
-    return {
-      name: file.name || 'Pasted file',
-      mimeType: file.type || 'application/octet-stream',
-      size: file.size,
-      data: window.btoa(binary),
-    }
-  })
+    data += window.btoa(binary)
+  }
+  return {
+    name: file.name || 'Pasted file',
+    size: file.size,
+    data,
+  }
 }
 
 function attachmentLimitError(attachments: readonly SelectedAttachment[]) {

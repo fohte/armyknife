@@ -25,6 +25,14 @@ pub(super) struct Request {
     pub(super) data: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct LegacyImageRequest {
+    pub(super) mime_type: String,
+    pub(super) size: usize,
+    pub(super) data: String,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Attachment {
     pub(super) name: String,
@@ -37,24 +45,33 @@ pub(super) enum ValidationError {
     TooManyAttachments,
     #[error("file attachments exceed the 50 MiB limit")]
     TooLarge,
+    #[error("unsupported image type: {0}")]
+    UnsupportedImageType(String),
     #[error("file attachment data is invalid")]
     InvalidData,
 }
 
-pub(super) fn validate(attachments: Vec<Request>) -> Result<Vec<Attachment>, ValidationError> {
-    if attachments.len() > MAX_ATTACHMENTS_PER_MESSAGE {
+pub(super) fn validate(
+    attachments: Vec<Request>,
+    legacy_images: Vec<LegacyImageRequest>,
+) -> Result<Vec<Attachment>, ValidationError> {
+    if attachments.len() + legacy_images.len() > MAX_ATTACHMENTS_PER_MESSAGE {
         return Err(ValidationError::TooManyAttachments);
     }
-    let total_size = attachments.iter().try_fold(0_usize, |total, attachment| {
-        total
-            .checked_add(attachment.size)
-            .filter(|size| *size <= MAX_ATTACHMENT_BYTES)
-            .ok_or(ValidationError::TooLarge)
-    })?;
+    let total_size = attachments
+        .iter()
+        .map(|attachment| attachment.size)
+        .chain(legacy_images.iter().map(|image| image.size))
+        .try_fold(0_usize, |total, size| {
+            total
+                .checked_add(size)
+                .filter(|size| *size <= MAX_ATTACHMENT_BYTES)
+                .ok_or(ValidationError::TooLarge)
+        })?;
     if total_size > MAX_ATTACHMENT_BYTES {
         return Err(ValidationError::TooLarge);
     }
-    attachments
+    let attachments = attachments
         .into_iter()
         .map(|attachment| {
             let bytes = STANDARD
@@ -68,7 +85,35 @@ pub(super) fn validate(attachments: Vec<Request>) -> Result<Vec<Attachment>, Val
                 bytes,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    let legacy_images = legacy_images
+        .into_iter()
+        .map(validate_legacy_image)
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(attachments.into_iter().chain(legacy_images).collect())
+}
+
+fn validate_legacy_image(image: LegacyImageRequest) -> Result<Attachment, ValidationError> {
+    let (name, signature) = match image.mime_type.as_str() {
+        "image/png" => ("legacy-image.png", &[137, 80, 78, 71, 13, 10, 26, 10][..]),
+        "image/jpeg" => ("legacy-image.jpg", &[255, 216, 255][..]),
+        "image/gif" => ("legacy-image.gif", b"GIF8" as &[u8]),
+        "image/webp" => ("legacy-image.webp", b"RIFF" as &[u8]),
+        _ => return Err(ValidationError::UnsupportedImageType(image.mime_type)),
+    };
+    let bytes = STANDARD
+        .decode(image.data)
+        .map_err(|_| ValidationError::InvalidData)?;
+    if bytes.len() != image.size
+        || !bytes.starts_with(signature)
+        || (image.mime_type == "image/webp" && bytes.get(8..12) != Some(b"WEBP"))
+    {
+        return Err(ValidationError::InvalidData);
+    }
+    Ok(Attachment {
+        name: name.to_string(),
+        bytes,
+    })
 }
 
 pub(super) fn save(
@@ -270,11 +315,14 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use rstest::rstest;
 
-    use super::{Attachment, MAX_ATTACHMENT_BYTES, Request, ValidationError, validate};
+    use super::{
+        Attachment, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request, ValidationError, validate,
+    };
 
     #[test]
     fn accepts_non_image_files_and_preserves_their_names() {
-        let attachments = validate(vec![request("design.html", b"<main>Mock</main>")]).unwrap();
+        let attachments =
+            validate(vec![request("design.html", b"<main>Mock</main>")], vec![]).unwrap();
 
         assert_eq!(
             attachments,
@@ -301,8 +349,29 @@ mod tests {
         #[case] expected: ValidationError,
     ) {
         assert_eq!(
-            validate(attachments).unwrap_err().to_string(),
+            validate(attachments, vec![]).unwrap_err().to_string(),
             expected.to_string()
+        );
+    }
+
+    #[test]
+    fn validates_legacy_image_payloads_during_page_restarts() {
+        let attachments = validate(
+            vec![],
+            vec![LegacyImageRequest {
+                mime_type: "image/gif".to_string(),
+                size: 6,
+                data: STANDARD.encode(b"GIF89a"),
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            attachments,
+            vec![Attachment {
+                name: "legacy-image.gif".to_string(),
+                bytes: b"GIF89a".to_vec(),
+            }]
         );
     }
 

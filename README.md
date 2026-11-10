@@ -1106,6 +1106,17 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 
+Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, byte size, and base64-encoded data:
+
+```json
+{
+  "content": "Inspect this file",
+  "attachments": [{ "name": "sample.txt", "size": 5, "data": "aGVsbG8=" }]
+}
+```
+
+The server stores attachments for 30 days, subject to a 1 GiB storage cap, and appends their absolute paths to the message sent to the session.
+
 For example, send a message with:
 
 ```sh

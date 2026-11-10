@@ -241,6 +241,39 @@ it('shows the size of a non-image attachment', () => {
   })
   expect(snapshot()).toEqual({
     name: 'design-mock.html',
-    size: '12 MB',
+    size: '12 MiB',
   })
+})
+
+it('shows the byte size of a small non-image attachment', () => {
+  act(() => {
+    root?.render(
+      <MessageComposer
+        draft=""
+        placeholder="Message session"
+        disabled={false}
+        isSending={false}
+        isMobile={false}
+        canInterrupt={false}
+        attachments={[
+          {
+            id: 'attachment-1',
+            name: 'sample.txt',
+            size: 512,
+            previewUrl: null,
+          },
+        ]}
+        onDraftChange={() => undefined}
+        onKeyDown={() => undefined}
+        onPasteFiles={() => undefined}
+        onRemoveAttachment={() => undefined}
+        onSend={() => undefined}
+        onInterrupt={() => undefined}
+      />,
+    )
+  })
+
+  const snapshot = () =>
+    container.querySelector('.composer-attachment small')?.textContent
+  expect(snapshot()).toEqual('512 B')
 })

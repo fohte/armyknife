@@ -232,6 +232,8 @@ struct MessageRequest {
     content: String,
     #[serde(default)]
     attachments: Vec<attachments::Request>,
+    #[serde(default)]
+    images: Vec<attachments::LegacyImageRequest>,
 }
 
 async fn send_message(
@@ -243,11 +245,14 @@ async fn send_message(
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
     }
-    if request.content.trim().is_empty() && request.attachments.is_empty() {
+    if request.content.trim().is_empty()
+        && request.attachments.is_empty()
+        && request.images.is_empty()
+    {
         return Err(ApiError::bad_request("message must not be empty"));
     }
 
-    let attachments = attachments::validate(request.attachments)
+    let attachments = attachments::validate(request.attachments, request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let marker = if session.engine == Engine::Claude {
         let sessions_dir =
@@ -905,6 +910,73 @@ mod tests {
                     "isAbsolute": true,
                     "bytes": [77, 111, 99, 107, 32, 72, 84, 77, 76],
                 },
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn send_message_accepts_legacy_image_payloads_during_page_restarts(
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": "",
+                    "images": [{
+                        "mimeType": "image/gif",
+                        "size": 6,
+                        "data": "R0lGODlh",
+                    }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let directory = action_context.temp_dir.path().join("attachments");
+        let path = std::fs::read_dir(&directory)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+        let mut response = response_snapshot(response, &action_context).await;
+        let path_string = path.display().to_string();
+        response["calls"][0]["content"] = response["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .replace(&path_string, "<attachment-path>")
+            .into();
+        let filename = path.file_name().unwrap().to_string_lossy();
+        let snapshot = || {
+            json!({
+                "response": response,
+                "pathIsAbsolute": path.is_absolute(),
+                "filename": filename.split_once('_').unwrap().1,
+                "bytes": std::fs::read(&path).unwrap(),
+            })
+        };
+
+        assert_eq!(
+            snapshot(),
+            json!({
+                "response": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": "Please inspect the attached file(s):\n- <attachment-path>",
+                    }],
+                },
+                "pathIsAbsolute": true,
+                "filename": "legacy-image.gif",
+                "bytes": [71, 73, 70, 56, 57, 97],
             }),
         );
     }

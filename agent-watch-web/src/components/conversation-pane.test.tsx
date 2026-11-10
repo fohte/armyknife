@@ -1135,9 +1135,6 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   const file = new File(['payload'], 'clipboard.bin', {
     type: 'application/octet-stream',
   })
-  Object.defineProperty(file, 'arrayBuffer', {
-    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
-  })
   const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
   Object.defineProperty(pasteEvent, 'clipboardData', {
     value: { files: [file] },
@@ -1149,7 +1146,7 @@ it('sends pasted file data with the message and keeps it when sending fails', as
     void dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
   })
 
   const snapshot = () => ({
@@ -1168,7 +1165,6 @@ it('sends pasted file data with the message and keeps it when sending fails', as
           attachments: [
             {
               name: 'clipboard.bin',
-              mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1184,9 +1180,6 @@ it('attaches dropped files through the composer and sends their data', async () 
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)
   const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
-  Object.defineProperty(file, 'arrayBuffer', {
-    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
-  })
   const pane = requireElement(container.querySelector('.conversation-pane'))
   const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
   const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
@@ -1209,7 +1202,7 @@ it('attaches dropped files through the composer and sends their data', async () 
     dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
   })
 
   const snapshot = () => ({
@@ -1236,7 +1229,6 @@ it('attaches dropped files through the composer and sends their data', async () 
           attachments: [
             {
               name: 'dropped.png',
-              mimeType: 'image/png',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1283,9 +1275,6 @@ it('clears pasted attachments after a successful send', async () => {
   const file = new File(['payload'], 'clipboard.bin', {
     type: 'application/octet-stream',
   })
-  Object.defineProperty(file, 'arrayBuffer', {
-    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
-  })
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
@@ -1319,7 +1308,6 @@ it('clears pasted attachments after a successful send', async () => {
           attachments: [
             {
               name: 'clipboard.bin',
-              mimeType: 'application/octet-stream',
               size: 7,
               data: 'cGF5bG9hZA==',
             },
@@ -1375,6 +1363,60 @@ it('names the attachment that crosses the message size limit before sending', ()
   })
 })
 
+it('names and blocks the attachment that crosses the attachment count limit', () => {
+  const onAction = vi.fn(() => Promise.resolve(false))
+  renderView(onAction)
+  const files = Array.from(
+    { length: 17 },
+    (_, index) => new File(['x'], `file-${String(index + 1)}.txt`),
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('[role="alert"]')?.textContent ?? null,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    error: 'file-17.txt exceeds the limit of 16 attachments per message',
+    attachmentNames: [
+      'file-1.txt',
+      'file-2.txt',
+      'file-3.txt',
+      'file-4.txt',
+      'file-5.txt',
+      'file-6.txt',
+      'file-7.txt',
+      'file-8.txt',
+      'file-9.txt',
+      'file-10.txt',
+      'file-11.txt',
+      'file-12.txt',
+      'file-13.txt',
+      'file-14.txt',
+      'file-15.txt',
+      'file-16.txt',
+      'file-17.txt',
+    ],
+    actionCalls: [],
+  })
+})
+
 it('shows a server attachment validation error and retains the rejected attachment', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
@@ -1413,10 +1455,6 @@ it('shows a server attachment validation error and retains the rejected attachme
   const file = new File(['not an image'], 'document.pdf', {
     type: 'application/pdf',
   })
-  Object.defineProperty(file, 'arrayBuffer', {
-    value: () =>
-      Promise.resolve(new TextEncoder().encode('not an image').buffer),
-  })
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
@@ -1431,7 +1469,7 @@ it('shows a server attachment validation error and retains the rejected attachme
     void dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await new Promise((resolve) => setTimeout(resolve, 10))
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
 
@@ -1449,7 +1487,6 @@ it('shows a server attachment validation error and retains the rejected attachme
       attachments: [
         {
           name: 'document.pdf',
-          mimeType: 'application/pdf',
           size: 12,
           data: 'bm90IGFuIGltYWdl',
         },
