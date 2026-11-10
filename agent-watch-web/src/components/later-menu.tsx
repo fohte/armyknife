@@ -2,25 +2,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 
-import type { LaterPreset } from '#session-navigation'
-
-const options: readonly {
-  preset: LaterPreset
-  label: string
-  when: string
-  key: string
-}[] = [
-  { preset: 'one_hour', label: 'In 1 hour', when: '1h', key: '1' },
-  { preset: 'this_evening', label: 'This evening', when: '19:00', key: '2' },
-  { preset: 'tomorrow', label: 'Tomorrow', when: '9:00', key: '3' },
-  { preset: 'next_week', label: 'Next week', when: 'Mon 11:00', key: '4' },
-  {
-    preset: 'until_it_changes',
-    label: 'Until it changes',
-    when: 'next activity',
-    key: '5',
-  },
-]
+import { LATER_PRESET_OPTIONS, type LaterPreset } from '#session-navigation'
 
 type LaterMenuProps = {
   sessionTitle: string
@@ -40,7 +22,7 @@ export function LaterMenu({ sessionTitle, onSelect, onClose }: LaterMenuProps) {
         }}
       >
         <p className="later-menu-title">Later: {sessionTitle}</p>
-        {options.map((option) => (
+        {LATER_PRESET_OPTIONS.map((option) => (
           <Button
             key={option.preset}
             type="button"

@@ -64,6 +64,13 @@ export function App() {
     ],
     [sessionsWithElapsedTime],
   )
+  const navigableSessions = useMemo(
+    () =>
+      orderedSessions.filter(
+        (session) => laterExpanded || session.category !== 'later',
+      ),
+    [laterExpanded, orderedSessions],
+  )
 
   useEffect(
     () =>
@@ -95,10 +102,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!orderedSessions.some((session) => session.id === selectedId)) {
-      setSelectedId(orderedSessions[0]?.id ?? null)
+    if (!navigableSessions.some((session) => session.id === selectedId)) {
+      setSelectedId(navigableSessions[0]?.id ?? null)
     }
-  }, [orderedSessions, selectedId])
+  }, [navigableSessions, selectedId])
 
   useEffect(() => {
     const hiddenProgress = orderedSessions.filter(
@@ -108,6 +115,15 @@ export function App() {
       setShowAllInProgress(true)
     }
   }, [orderedSessions, selectedId])
+
+  useEffect(() => {
+    if (
+      laterSessionId !== null &&
+      !sessions.some((session) => session.id === laterSessionId)
+    ) {
+      setLaterSessionId(null)
+    }
+  }, [laterSessionId, sessions])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -164,7 +180,7 @@ export function App() {
       } else if (action?.type === 'move' && view === 'inbox') {
         event.preventDefault()
         setSelectedId((current) =>
-          moveSelection(orderedSessions, current, action.key),
+          moveSelection(navigableSessions, current, action.key),
         )
       } else if (
         action?.type === 'later' &&
@@ -180,7 +196,7 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [laterSessionId, orderedSessions, selectedId, view])
+  }, [laterSessionId, navigableSessions, selectedId, view])
 
   const needsActionCount = sessionsWithElapsedTime.filter(
     (session) => session.category === 'needs_action',

@@ -151,10 +151,6 @@ pub(crate) fn touch_session(session_id: &str) -> Result<()> {
     database::touch_session(&sessions_dir()?, session_id)
 }
 
-pub(crate) fn touch_session_in(sessions_dir: &Path, session_id: &str) -> Result<()> {
-    database::touch_session(sessions_dir, session_id)
-}
-
 /// Atomically marks a `Stopped` session as read by setting `read_at = Some(now)`.
 /// A no-op when the session is missing, corrupted, no longer `Stopped`, or
 /// already marked read — `mark-read` only flips unread→read, never
@@ -356,7 +352,7 @@ pub(crate) fn set_watch_web_later(
     later_until: Option<DateTime<Utc>>,
     activity_snapshot: DateTime<Utc>,
     until_activity: bool,
-) -> Result<()> {
+) -> Result<bool> {
     database::set_watch_web_later(
         &sessions_dir()?,
         session_id,
@@ -372,7 +368,7 @@ pub(crate) fn set_watch_web_later_in(
     later_until: Option<DateTime<Utc>>,
     activity_snapshot: DateTime<Utc>,
     until_activity: bool,
-) -> Result<()> {
+) -> Result<bool> {
     database::set_watch_web_later(
         sessions_dir,
         session_id,
@@ -382,7 +378,7 @@ pub(crate) fn set_watch_web_later_in(
     )
 }
 
-pub(crate) fn set_watch_web_today(session_id: &str, is_today: bool) -> Result<()> {
+pub(crate) fn set_watch_web_today(session_id: &str, is_today: bool) -> Result<bool> {
     database::set_watch_web_today(&sessions_dir()?, session_id, is_today)
 }
 
@@ -390,7 +386,7 @@ pub(crate) fn set_watch_web_today_in(
     sessions_dir: &Path,
     session_id: &str,
     is_today: bool,
-) -> Result<()> {
+) -> Result<bool> {
     database::set_watch_web_today(sessions_dir, session_id, is_today)
 }
 

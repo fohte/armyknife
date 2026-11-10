@@ -404,7 +404,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
     use tower::ServiceExt;
 
@@ -482,6 +482,7 @@ mod tests {
     struct TestSessionSource {
         revision: i64,
         sessions: Vec<Session>,
+        web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
         task_links: HashMap<String, LinkedSessionTask>,
@@ -496,7 +497,7 @@ mod tests {
             Ok(SessionSnapshot {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
-                web_states: Vec::new(),
+                web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 agent_config: AgentConfig::default(),
@@ -523,7 +524,8 @@ mod tests {
         }
     }
 
-    fn test_source() -> TestSessionSource {
+    #[fixture]
+    fn source() -> TestSessionSource {
         let mut session = session(SessionStatus::Stopped);
         session.session_id = "child-session".to_string();
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
@@ -539,6 +541,13 @@ mod tests {
         TestSessionSource {
             revision: 7,
             sessions: vec![session],
+            web_states: vec![store::WatchWebSessionState {
+                session_id: "child-session".to_string(),
+                later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
+                activity_snapshot: Some(Utc.timestamp_opt(1_000, 0).unwrap()),
+                until_activity: false,
+                is_today: true,
+            }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
                 ("parent-session".to_string(), "parent title".to_string()),
@@ -572,10 +581,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn sessions_route_returns_the_complete_inbox_response() {
+    async fn sessions_response(source: TestSessionSource) -> (StatusCode, serde_json::Value) {
         let response = Router::new()
-            .nest("/api", router_with_source(test_source()))
+            .nest("/api", router_with_source(source))
             .oneshot(
                 Request::builder()
                     .uri("/api/sessions")
@@ -587,43 +595,114 @@ mod tests {
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        (status, value)
+    }
 
+    fn expected_response(
+        category: &str,
+        later_until: Option<&str>,
+        is_today: bool,
+        updated_at: &str,
+        elapsed_seconds: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "revision": 7,
+            "sessions": [{
+                "id": "child-session",
+                "engine": "claude",
+                "category": category,
+                "categoryWhenNotLater": "needs_action",
+                "kind": "Stopped",
+                "title": "child title",
+                "preview": "last message",
+                "updatedAt": updated_at,
+                "elapsedSeconds": elapsed_seconds,
+                "unread": true,
+                "task": {
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1
+                },
+                "repo": "example-org/example-repo",
+                "parent": {
+                    "id": "parent-session",
+                    "title": "parent title"
+                },
+                "pullRequest": {
+                    "number": 42,
+                    "state": "Open"
+                },
+                "laterUntil": later_until,
+                "isToday": is_today
+            }]
+        })
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_saved_later_and_today_state(source: TestSessionSource) {
         assert_eq!(
-            (status, value),
+            sessions_response(source).await,
             (
                 StatusCode::OK,
-                serde_json::json!({
-                    "revision": 7,
-                    "sessions": [{
-                        "id": "child-session",
-                        "engine": "claude",
-                        "category": "needs_action",
-                        "categoryWhenNotLater": "needs_action",
-                        "kind": "Stopped",
-                        "title": "child title",
-                        "preview": "last message",
-                        "updatedAt": "1970-01-01T00:16:40Z",
-                        "elapsedSeconds": 100,
-                        "unread": true,
-                        "task": {
-                            "id": "task-id",
-                            "number": 17,
-                            "title": "task title",
-                            "priority": 1
-                        },
-                        "repo": "example-org/example-repo",
-                        "parent": {
-                            "id": "parent-session",
-                            "title": "parent title"
-                        },
-                        "pullRequest": {
-                            "number": 42,
-                            "state": "Open"
-                        },
-                        "laterUntil": null,
-                        "isToday": false
-                    }]
-                }),
+                expected_response(
+                    "later",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    "1970-01-01T00:16:40Z",
+                    100,
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_restores_expired_later_sessions_to_their_category(
+        mut source: TestSessionSource,
+    ) {
+        source.now = Utc.timestamp_opt(4_700, 0).unwrap();
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "needs_action",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    "1970-01-01T00:16:40Z",
+                    3_700,
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_keeps_until_activity_later_until_the_session_changes(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].until_activity = true;
+        source.web_states[0].later_until = None;
+        let before_change = source.clone();
+        source.sessions[0].updated_at = Utc.timestamp_opt(1_001, 0).unwrap();
+
+        assert_eq!(
+            (
+                sessions_response(before_change).await,
+                sessions_response(source).await,
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    expected_response("later", None, true, "1970-01-01T00:16:40Z", 100,),
+                ),
+                (
+                    StatusCode::OK,
+                    expected_response("needs_action", None, true, "1970-01-01T00:16:41Z", 99,),
+                ),
             ),
         );
     }
@@ -711,47 +790,6 @@ mod tests {
         #[case] expected: SessionCategory,
     ) {
         assert_eq!(category_for(&session(status), turn), expected);
-    }
-
-    #[test]
-    fn later_expires_at_its_deadline_or_after_session_activity() {
-        let now = Utc.timestamp_opt(10_000, 0).unwrap();
-        let mut session = session(SessionStatus::Stopped);
-        session.updated_at = now;
-        let timed_later = store::WatchWebSessionState {
-            session_id: session.session_id.clone(),
-            later_until: Some(now + chrono::Duration::hours(1)),
-            activity_snapshot: Some(now),
-            until_activity: false,
-            is_today: false,
-        };
-        let until_activity = store::WatchWebSessionState {
-            later_until: None,
-            until_activity: true,
-            ..timed_later.clone()
-        };
-        let mut changed_session = session.clone();
-        changed_session.updated_at += chrono::Duration::seconds(1);
-
-        assert_eq!(
-            (
-                category_for_with_later(&session, None, Some(&timed_later), now),
-                category_for_with_later(
-                    &session,
-                    None,
-                    Some(&timed_later),
-                    now + chrono::Duration::hours(1),
-                ),
-                category_for_with_later(&session, None, Some(&until_activity), now),
-                category_for_with_later(&changed_session, None, Some(&until_activity), now),
-            ),
-            (
-                SessionCategory::Later,
-                SessionCategory::NeedsAction,
-                SessionCategory::Later,
-                SessionCategory::NeedsAction,
-            ),
-        );
     }
 
     #[rstest]

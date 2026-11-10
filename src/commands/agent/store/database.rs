@@ -6,7 +6,6 @@ use std::sync::LazyLock;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, ensure};
-use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use rusqlite_migration::{M, Migrations};
 
@@ -15,6 +14,10 @@ use crate::commands::agent::types::Session;
 
 mod migration;
 mod wake;
+mod web_state;
+
+pub(crate) use web_state::WatchWebSessionState;
+pub(super) use web_state::{set_watch_web_later, set_watch_web_today, watch_web_session_states};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -50,15 +53,6 @@ pub(crate) struct SessionStoreChanges {
     pub(crate) changed_sessions: Vec<Session>,
     pub(crate) existing_session_ids: HashSet<String>,
     pub(crate) revision: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct WatchWebSessionState {
-    pub(crate) session_id: String,
-    pub(crate) later_until: Option<DateTime<Utc>>,
-    pub(crate) activity_snapshot: Option<DateTime<Utc>>,
-    pub(crate) until_activity: bool,
-    pub(crate) is_today: bool,
 }
 
 /// Holds the database write transaction across a session read-modify-write.
@@ -265,88 +259,6 @@ pub(crate) fn all_sessions(sessions_dir: &Path) -> Result<Vec<Session>> {
         }
     }
     Ok(sessions)
-}
-
-pub(crate) fn watch_web_session_states(sessions_dir: &Path) -> Result<Vec<WatchWebSessionState>> {
-    if !sessions_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let connection = open_connection(sessions_dir)?;
-    let mut statement = connection.prepare(
-        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today
-         FROM watch_web_session_state",
-    )?;
-    let rows = statement.query_map([], |row| {
-        let later_until: Option<String> = row.get(1)?;
-        let activity_snapshot: Option<String> = row.get(2)?;
-        Ok((
-            row.get::<_, String>(0)?,
-            later_until,
-            activity_snapshot,
-            row.get::<_, bool>(3)?,
-            row.get::<_, bool>(4)?,
-        ))
-    })?;
-    rows.map(|row| {
-        let (session_id, later_until, activity_snapshot, until_activity, is_today) = row?;
-        Ok(WatchWebSessionState {
-            session_id,
-            later_until: later_until
-                .map(|value| {
-                    DateTime::parse_from_rfc3339(&value).map(|value| value.with_timezone(&Utc))
-                })
-                .transpose()?,
-            activity_snapshot: activity_snapshot
-                .map(|value| {
-                    DateTime::parse_from_rfc3339(&value).map(|value| value.with_timezone(&Utc))
-                })
-                .transpose()?,
-            until_activity,
-            is_today,
-        })
-    })
-    .collect()
-}
-
-pub(crate) fn set_watch_web_later(
-    sessions_dir: &Path,
-    session_id: &str,
-    later_until: Option<DateTime<Utc>>,
-    activity_snapshot: DateTime<Utc>,
-    until_activity: bool,
-) -> Result<()> {
-    let connection = open_connection(sessions_dir)?;
-    connection.execute(
-        "INSERT INTO watch_web_session_state
-            (session_id, later_until, activity_snapshot, until_activity)
-         VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT(session_id) DO UPDATE SET
-            later_until = excluded.later_until,
-            activity_snapshot = excluded.activity_snapshot,
-            until_activity = excluded.until_activity",
-        params![
-            session_id,
-            later_until.map(|value| value.to_rfc3339()),
-            activity_snapshot.to_rfc3339(),
-            until_activity,
-        ],
-    )?;
-    Ok(())
-}
-
-pub(crate) fn set_watch_web_today(
-    sessions_dir: &Path,
-    session_id: &str,
-    is_today: bool,
-) -> Result<()> {
-    let connection = open_connection(sessions_dir)?;
-    connection.execute(
-        "INSERT INTO watch_web_session_state (session_id, is_today)
-         VALUES (?1, ?2)
-         ON CONFLICT(session_id) DO UPDATE SET is_today = excluded.is_today",
-        params![session_id, is_today],
-    )?;
-    Ok(())
 }
 
 pub(crate) fn session_store_revision(sessions_dir: &Path) -> Result<i64> {

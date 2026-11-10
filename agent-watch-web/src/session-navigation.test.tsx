@@ -51,6 +51,7 @@ it('maps shifted B to Board and unshifted j and k to row movement', () => {
     getSessionShortcutAction('k', false),
     getSessionShortcutAction('L', false),
     getSessionShortcutAction('L', true),
+    getSessionShortcutAction('l', true),
     getSessionShortcutAction('l', false),
   ]
 
@@ -58,6 +59,7 @@ it('maps shifted B to Board and unshifted j and k to row movement', () => {
     { type: 'view', view: 'board' },
     { type: 'move', key: 'j' },
     { type: 'move', key: 'k' },
+    { type: 'later' },
     { type: 'later' },
     { type: 'later' },
     null,

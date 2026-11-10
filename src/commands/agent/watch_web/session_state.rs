@@ -12,10 +12,31 @@ use crate::commands::agent::store;
 #[derive(Clone)]
 struct SessionStateStore {
     sessions_dir: Option<PathBuf>,
+    clock: SessionClock,
+}
+
+#[derive(Clone)]
+enum SessionClock {
+    System,
+    #[cfg(test)]
+    Fixed(DateTime<Utc>),
+}
+
+impl SessionClock {
+    fn now(&self) -> DateTime<Utc> {
+        match self {
+            Self::System => Utc::now(),
+            #[cfg(test)]
+            Self::Fixed(now) => *now,
+        }
+    }
 }
 
 pub(super) fn router() -> Router {
-    router_with_store(SessionStateStore { sessions_dir: None })
+    router_with_store(SessionStateStore {
+        sessions_dir: None,
+        clock: SessionClock::System,
+    })
 }
 
 fn router_with_store(store: SessionStateStore) -> Router {
@@ -53,7 +74,7 @@ async fn set_later(
     Json(request): Json<LaterRequest>,
 ) -> Result<StatusCode, StatusCode> {
     let session = load_session(&state, &id)?;
-    let now = Utc::now();
+    let now = state.clock.now();
     let until_activity = matches!(request.preset, LaterPreset::UntilItChanges);
     let later_until = (!until_activity)
         .then(|| later_deadline(request.preset, now))
@@ -93,26 +114,24 @@ fn save_later(
     activity_snapshot: DateTime<Utc>,
     until_activity: bool,
 ) -> Result<(), StatusCode> {
-    if let Some(dir) = &state.sessions_dir {
+    let updated = if let Some(dir) = &state.sessions_dir {
         store::set_watch_web_later_in(dir, id, later_until, activity_snapshot, until_activity)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store::touch_session_in(dir, id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
         store::set_watch_web_later(id, later_until, activity_snapshot, until_activity)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store::touch_session(id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-    }
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    updated.then_some(()).ok_or(StatusCode::NOT_FOUND)
 }
 
 fn save_today(state: &SessionStateStore, id: &str, is_today: bool) -> Result<(), StatusCode> {
-    if let Some(dir) = &state.sessions_dir {
+    let updated = if let Some(dir) = &state.sessions_dir {
         store::set_watch_web_today_in(dir, id, is_today)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store::touch_session_in(dir, id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
     } else {
-        store::set_watch_web_today(id, is_today).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-        store::touch_session(id).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
-    }
+        store::set_watch_web_today(id, is_today).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
+    };
+    updated.then_some(()).ok_or(StatusCode::NOT_FOUND)
 }
 
 fn later_deadline(preset: LaterPreset, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -150,12 +169,20 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use axum::middleware::from_fn;
     use chrono::TimeZone;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
+    use tempfile::TempDir;
     use tower::ServiceExt;
 
-    fn session(id: &str) -> Session {
+    #[fixture]
+    fn temp_dir() -> TempDir {
+        TempDir::new().expect("temporary directory should be created")
+    }
+
+    #[fixture]
+    fn session() -> Session {
         Session {
-            session_id: id.to_string(),
+            session_id: "test-session".to_string(),
             archived_at: None,
             pr_context: None,
             crit_urls: Vec::new(),
@@ -191,14 +218,21 @@ mod tests {
         }
     }
 
+    #[fixture]
+    fn saved_session_dir(temp_dir: TempDir, session: Session) -> TempDir {
+        store::save_session_to(temp_dir.path(), &session).expect("session should save");
+        temp_dir
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn state_updates_require_origin_and_missing_sessions_return_not_found() {
-        let temp = tempfile::tempdir().unwrap();
+    async fn state_updates_require_origin_and_missing_sessions_return_not_found(temp_dir: TempDir) {
         let app = axum::Router::new()
             .nest(
                 "/api",
                 router_with_store(SessionStateStore {
-                    sessions_dir: Some(temp.path().to_path_buf()),
+                    sessions_dir: Some(temp_dir.path().to_path_buf()),
+                    clock: SessionClock::System,
                 }),
             )
             .layer(from_fn(super::super::security::validate_request));
@@ -224,19 +258,22 @@ mod tests {
         );
     }
 
+    #[rstest]
     #[tokio::test]
-    async fn state_routes_persist_later_and_today_without_changing_the_session() {
-        let temp = tempfile::tempdir().unwrap();
-        let existing = session("session");
-        store::save_session_to(temp.path(), &existing).unwrap();
+    async fn state_routes_persist_later_and_today_without_changing_the_session(
+        saved_session_dir: TempDir,
+        session: Session,
+    ) {
+        let before_revision = store::session_store_revision_from(saved_session_dir.path()).unwrap();
         let app = router_with_store(SessionStateStore {
-            sessions_dir: Some(temp.path().to_path_buf()),
+            sessions_dir: Some(saved_session_dir.path().to_path_buf()),
+            clock: SessionClock::System,
         });
 
         let later_response = app
             .clone()
             .oneshot(
-                Request::post("/sessions/session/later")
+                Request::post("/sessions/test-session/later")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"preset":"until_it_changes"}"#))
                     .unwrap(),
@@ -245,7 +282,7 @@ mod tests {
             .unwrap();
         let today_response = app
             .oneshot(
-                Request::post("/sessions/session/today")
+                Request::post("/sessions/test-session/today")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"isToday":true}"#))
                     .unwrap(),
@@ -257,8 +294,9 @@ mod tests {
             (
                 later_response.status(),
                 today_response.status(),
-                store::watch_web_session_states_from(temp.path()).unwrap(),
-                store::load_session_from(temp.path(), "session")
+                store::watch_web_session_states_from(saved_session_dir.path()).unwrap(),
+                store::session_store_revision_from(saved_session_dir.path()).unwrap(),
+                store::load_session_from(saved_session_dir.path(), "test-session")
                     .unwrap()
                     .unwrap()
                     .updated_at,
@@ -267,56 +305,88 @@ mod tests {
                 StatusCode::NO_CONTENT,
                 StatusCode::NO_CONTENT,
                 vec![store::WatchWebSessionState {
-                    session_id: "session".to_string(),
+                    session_id: "test-session".to_string(),
                     later_until: None,
-                    activity_snapshot: Some(existing.updated_at),
+                    activity_snapshot: Some(session.updated_at),
                     until_activity: true,
                     is_today: true,
                 }],
-                existing.updated_at,
+                before_revision + 2,
+                session.updated_at,
             ),
         );
     }
 
-    #[test]
-    fn later_presets_calculate_local_return_times() {
-        let local_now = Local.with_ymd_and_hms(2030, 3, 4, 15, 0, 0).unwrap();
-        let now = local_now.with_timezone(&Utc);
-        let local_deadline =
-            |preset| later_deadline(preset, now).map(|deadline| deadline.with_timezone(&Local));
+    fn local_time_as_utc(
+        (year, month, day, hour, minute): (i32, u32, u32, u32, u32),
+    ) -> DateTime<Utc> {
+        Local
+            .with_ymd_and_hms(year, month, day, hour, minute, 0)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    #[rstest]
+    #[case::one_hour("one_hour", (2030, 3, 4, 15, 0), Some((2030, 3, 4, 16, 0)), false)]
+    #[case::this_evening("this_evening", (2030, 3, 4, 15, 0), Some((2030, 3, 4, 19, 0)), false)]
+    #[case::evening_already_passed("this_evening", (2030, 3, 4, 20, 0), Some((2030, 3, 5, 19, 0)), false)]
+    #[case::tomorrow("tomorrow", (2030, 3, 4, 15, 0), Some((2030, 3, 5, 9, 0)), false)]
+    #[case::next_week("next_week", (2030, 3, 4, 15, 0), Some((2030, 3, 11, 11, 0)), false)]
+    #[case::until_it_changes("until_it_changes", (2030, 3, 4, 15, 0), None, true)]
+    #[tokio::test]
+    async fn later_presets_store_expected_deadlines_through_the_route(
+        saved_session_dir: TempDir,
+        session: Session,
+        #[case] preset: &str,
+        #[case] now_local: (i32, u32, u32, u32, u32),
+        #[case] expected_local_deadline: Option<(i32, u32, u32, u32, u32)>,
+        #[case] until_activity: bool,
+    ) {
+        let now = local_time_as_utc(now_local);
+        let expected_later_until = expected_local_deadline.map(local_time_as_utc);
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(saved_session_dir.path().to_path_buf()),
+            clock: SessionClock::Fixed(now),
+        });
+        let response = app
+            .oneshot(
+                Request::post("/sessions/test-session/later")
+                    .header("content-type", "application/json")
+                    .body(Body::from(format!(r#"{{"preset":"{preset}"}}"#)))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(
             (
-                local_deadline(LaterPreset::OneHour),
-                local_deadline(LaterPreset::ThisEvening),
-                local_deadline(LaterPreset::Tomorrow),
-                local_deadline(LaterPreset::NextWeek),
-                later_deadline(LaterPreset::UntilItChanges, now),
+                response.status(),
+                store::watch_web_session_states_from(saved_session_dir.path()).unwrap()
             ),
             (
-                Some(Local.with_ymd_and_hms(2030, 3, 4, 16, 0, 0).unwrap()),
-                Some(Local.with_ymd_and_hms(2030, 3, 4, 19, 0, 0).unwrap()),
-                Some(Local.with_ymd_and_hms(2030, 3, 5, 9, 0, 0).unwrap()),
-                Some(Local.with_ymd_and_hms(2030, 3, 11, 11, 0, 0).unwrap()),
-                None,
+                StatusCode::NO_CONTENT,
+                vec![store::WatchWebSessionState {
+                    session_id: session.session_id,
+                    later_until: expected_later_until,
+                    activity_snapshot: Some(session.updated_at),
+                    until_activity,
+                    is_today: false,
+                }],
             ),
         );
     }
 
-    #[test]
-    fn later_updates_preserve_today_state() {
-        let temp = tempfile::tempdir().unwrap();
-        let dir = temp.path();
-        let existing = session("session");
-        store::save_session_to(dir, &existing).unwrap();
-        store::set_watch_web_today_in(dir, "session", true).unwrap();
-        store::set_watch_web_later_in(dir, "session", None, existing.updated_at, true).unwrap();
+    #[rstest]
+    fn later_updates_preserve_today_state(saved_session_dir: TempDir, session: Session) {
+        let dir = saved_session_dir.path();
+        store::set_watch_web_today_in(dir, "test-session", true).unwrap();
+        store::set_watch_web_later_in(dir, "test-session", None, session.updated_at, true).unwrap();
         assert_eq!(
             store::watch_web_session_states_from(dir).unwrap(),
             vec![store::WatchWebSessionState {
-                session_id: "session".to_string(),
+                session_id: "test-session".to_string(),
                 later_until: None,
-                activity_snapshot: Some(existing.updated_at),
+                activity_snapshot: Some(session.updated_at),
                 until_activity: true,
                 is_today: true,
             }]

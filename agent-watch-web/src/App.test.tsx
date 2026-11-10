@@ -187,7 +187,7 @@ it('opens Later with L and selects a preset with its number key', async () => {
     await Promise.resolve()
   })
 
-  const snapshot = () => ({ menuItems, request: fetchMock.mock.calls[0] })
+  const snapshot = () => ({ menuItems, requests: fetchMock.mock.calls })
 
   expect(snapshot()).toEqual({
     menuItems: [
@@ -197,13 +197,15 @@ it('opens Later with L and selects a preset with its number key', async () => {
       'Next weekMon 11:004',
       'Until it changesnext activity5',
     ],
-    request: [
-      '/api/sessions/session-a/later',
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: '{"preset":"tomorrow"}',
-      },
+    requests: [
+      [
+        '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"tomorrow"}',
+        },
+      ],
     ],
   })
 })
@@ -227,15 +229,132 @@ it('saves a TODAY star from the session row', async () => {
     await Promise.resolve()
   })
 
-  const snapshot = () => fetchMock.mock.calls[0]
+  const snapshot = () => fetchMock.mock.calls
   expect(snapshot()).toEqual([
-    '/api/sessions/session-a/today',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: '{"isToday":true}',
-    },
+    [
+      '/api/sessions/session-a/today',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"isToday":true}',
+      },
+    ],
   ])
+})
+
+it('skips collapsed Later sessions during keyboard navigation', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Needs action session'),
+      session('session-later', 'Later session', 'later'),
+      session('session-work', 'In-progress session', 'in_progress'),
+    ],
+  })
+
+  let event: KeyboardEvent | null = null
+  act(() => {
+    event = dispatchKey(window, 'j')
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    defaultPrevented: event?.defaultPrevented,
+    laterRowsVisible: container.querySelector('.later-session-list') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    selectedTitle: 'In-progress session',
+    defaultPrevented: true,
+    laterRowsVisible: false,
+  })
+})
+
+it('closes Later when its target session disappears', () => {
+  const fetchMock = vi.fn<typeof fetch>()
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Later target'),
+      session('session-b', 'Remaining session'),
+    ],
+  })
+
+  act(() => {
+    dispatchKey(window, 'L')
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [session('session-b', 'Remaining session')],
+  })
+
+  let numberKeyEvent: KeyboardEvent | null = null
+  act(() => {
+    numberKeyEvent = dispatchKey(window, '3')
+  })
+
+  const snapshot = () => ({
+    menu: container.querySelector('[role="menu"]'),
+    selectedTitle: readSelectedTitle(),
+    numberKeyPrevented: numberKeyEvent?.defaultPrevented,
+    requests: fetchMock.mock.calls,
+  })
+
+  expect(snapshot()).toEqual({
+    menu: null,
+    selectedTitle: 'Remaining session',
+    numberKeyPrevented: false,
+    requests: [],
+  })
+})
+
+it('returns a Later session after its deadline without a feed update', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: new Date(Date.now() + 1_000).toISOString(),
+      },
+    ],
+  })
+  const before = {
+    needsActionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.needs-action-section .session-title',
+      ),
+      (element) => element.textContent,
+    ),
+    laterCount: container.querySelector('.later-section-count')?.textContent,
+  }
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const after = {
+    needsActionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.needs-action-section .session-title',
+      ),
+      (element) => element.textContent,
+    ),
+    laterCount: container.querySelector('.later-section-count')?.textContent,
+  }
+
+  const snapshot = () => ({ before, after })
+
+  expect(snapshot()).toEqual({
+    before: { needsActionTitles: [], laterCount: '1' },
+    after: { needsActionTitles: ['Deferred session'], laterCount: '0' },
+  })
 })
 
 it('ignores shortcuts from input fields and events with modifiers', () => {
