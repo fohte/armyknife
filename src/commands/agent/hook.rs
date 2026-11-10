@@ -109,11 +109,21 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
 
     input.engine = args.engine;
+    let session_id = input.session_id.clone();
     let result = process_hook_event(event, input)?;
     let block_reason = match result {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
+    if event == HookEvent::SessionStart
+        && args.engine == Engine::Claude
+        && let Some(marker) = store::watch_web_user_marker(&session_id)?
+    {
+        return stop::write_session_start_response(
+            &super::watch_web_user_marker::session_start_context(&marker),
+            &mut io::stdout().lock(),
+        );
+    }
     write_stop_response(args.engine, event, block_reason.as_deref())
 }
 
@@ -269,6 +279,18 @@ fn new_session_record(
         model: None,
         effort: None,
     }
+}
+
+fn ensure_watch_web_user_marker(
+    sessions_dir: &Path,
+    event: HookEvent,
+    engine: Engine,
+    session_id: &str,
+) -> Result<()> {
+    if event == HookEvent::SessionStart && engine == Engine::Claude {
+        store::ensure_watch_web_user_marker_in(sessions_dir, session_id)?;
+    }
+    Ok(())
 }
 
 fn startup_metadata_for_resume(sessions_dir: &Path, input: &HookInput) -> Result<Option<Session>> {
@@ -473,17 +495,22 @@ fn process_hook_event_impl_with_settings(
                     existing_session.model.as_deref(),
                     transcript_path,
                 );
-                if metadata_update.apply(&mut existing_session.model, &mut existing_session.effort)
-                {
+                let metadata_changed = metadata_update
+                    .apply(&mut existing_session.model, &mut existing_session.effort);
+                if metadata_changed {
                     existing_session.updated_at = Utc::now();
                     session_lock.save(&existing_session)?;
                 }
+                drop(session_lock);
+                ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
                 return Ok(ProcessResult::Skipped);
             }
 
             let Some((model, effort, pr_context, work_type_pinned)) =
                 initialized.captured.flatten()
             else {
+                drop(session_lock);
+                ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
                 return Ok(ProcessResult::Skipped);
             };
             let now = Utc::now();
@@ -499,6 +526,8 @@ fn process_hook_event_impl_with_settings(
             session.model = model;
             session.effort = effort;
             session_lock.save(&session)?;
+            drop(session_lock);
+            ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
             return Ok(ProcessResult::SessionSaved);
         }
 
@@ -849,6 +878,8 @@ fn process_hook_event_impl_with_settings(
     // database-wide writer lock. `sync_tmux` also reloads this session.
     session_lock.save(&session)?;
     drop(session_lock);
+
+    ensure_watch_web_user_marker(sessions_dir, event, input.engine, &input.session_id)?;
 
     if let Some(startup_metadata) = startup_metadata
         && let Err(error) = store::delete_session_from(sessions_dir, &startup_metadata.session_id)
@@ -1609,6 +1640,40 @@ mod tests {
             tool_name, tool_input
         );
         serde_json::from_str(&json).expect("valid JSON")
+    }
+
+    #[test]
+    fn session_start_persists_the_marker_across_resume() {
+        let temp_dir = tempfile::TempDir::new().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path();
+        let input = create_test_input_with_session_and_source("fixture-session-id", None, None);
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("SessionStart should save the session and marker");
+        let marker = store::watch_web_user_marker_from(sessions_dir, "fixture-session-id")
+            .expect("marker should load");
+        let resume_input =
+            create_test_input_with_session_and_source("fixture-session-id", None, Some("resume"));
+        process_hook_event_impl(
+            HookEvent::SessionStart,
+            resume_input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("resume should preserve the marker");
+
+        assert_eq!(
+            (
+                marker.clone().is_some(),
+                store::watch_web_user_marker_from(sessions_dir, "fixture-session-id")
+                    .expect("resumed marker should load"),
+            ),
+            (true, marker),
+        );
     }
 
     #[rstest]

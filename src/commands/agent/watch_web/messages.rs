@@ -20,21 +20,30 @@ use crate::commands::agent::types::{Engine, Session};
 mod parser;
 
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
+type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 
 pub(super) fn routes_with(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/messages", get(get_messages))
-        .with_state(Arc::new(load_session) as SessionLoader)
+        .with_state((
+            Arc::new(load_session) as SessionLoader,
+            Arc::new(load_user_marker) as UserMarkerLoader,
+        ))
 }
 
 async fn get_messages(
-    State(load_session): State<SessionLoader>,
+    State((load_session, load_user_marker)): State<(SessionLoader, UserMarkerLoader)>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
     match tokio::task::spawn_blocking(move || {
-        load_messages_with(&session_id, |id| load_session(id))
+        load_messages_with_marker(
+            &session_id,
+            |id| load_session(id),
+            |id| load_user_marker(id),
+        )
     })
     .await
     {
@@ -62,12 +71,26 @@ async fn get_messages(
     }
 }
 
+#[cfg(test)]
 fn load_messages_with(
     session_id: &str,
+    load_session: impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<Option<Vec<ChatItem>>> {
+    load_messages_with_marker(session_id, load_session, |_| Ok(None))
+}
+
+fn load_messages_with_marker(
+    session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
+    load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
 ) -> Result<Option<Vec<ChatItem>>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
+    };
+    let user_marker = if session.engine == Engine::Claude {
+        load_user_marker(session_id)?
+    } else {
+        None
     };
     let parent = parent_session(&session, &mut load_session)?;
     let pending_permission = session.has_pending_permission_requests();
@@ -77,7 +100,15 @@ fn load_messages_with(
     let mut messages = session
         .transcript_path
         .as_deref()
-        .map(|path| parse_session_transcript(path, session.engine, parent.as_ref(), pending_tool))
+        .map(|path| {
+            parse_session_transcript(
+                path,
+                session.engine,
+                parent.as_ref(),
+                pending_tool,
+                user_marker.as_deref(),
+            )
+        })
         .transpose()?
         .unwrap_or_default();
 
@@ -133,12 +164,18 @@ fn parse_session_transcript(
     engine: Engine,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
+    watch_web_user_marker: Option<&str>,
 ) -> Result<Vec<ChatItem>> {
     let Some(reader) = open_transcript(path, engine == Engine::Codex)? else {
         return Ok(Vec::new());
     };
     match engine {
-        Engine::Claude => Ok(parser::claude::parse(reader, parent, pending_tool)?),
+        Engine::Claude => Ok(parser::claude::parse(
+            reader,
+            parent,
+            pending_tool,
+            watch_web_user_marker,
+        )?),
         Engine::Codex => Ok(parser::codex::parse(reader, parent)?),
     }
 }
@@ -298,13 +335,16 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with(move |id| {
-            Ok(match id {
-                "fixture-child-id" => Some(child.clone()),
-                "fixture-parent-id" => Some(parent.clone()),
-                _ => None,
-            })
-        });
+        let router = routes_with(
+            move |id| {
+                Ok(match id {
+                    "fixture-child-id" => Some(child.clone()),
+                    "fixture-parent-id" => Some(parent.clone()),
+                    _ => None,
+                })
+            },
+            |_| Ok(None),
+        );
         let response = router
             .oneshot(
                 Request::builder()

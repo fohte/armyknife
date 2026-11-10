@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, TransactionBehavior, params};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use super::{increment_revision, open_connection};
 
@@ -110,6 +110,69 @@ pub(in crate::commands::agent::store) fn set_watch_web_today(
         )?;
         Ok(())
     })
+}
+
+pub(in crate::commands::agent::store) fn watch_web_user_marker(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Option<String>> {
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(None);
+    }
+    let connection = open_connection(sessions_dir)?;
+    connection
+        .query_row(
+            "SELECT watch_web_user_marker FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map(Option::flatten)
+        .map_err(Into::into)
+}
+
+pub(in crate::commands::agent::store) fn ensure_watch_web_user_marker(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<String> {
+    super::validate_session_id(session_id)?;
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let session_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    let marker: Option<String> = transaction
+        .query_row(
+            "SELECT watch_web_user_marker FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    if let Some(marker) = marker {
+        transaction.commit()?;
+        return Ok(marker);
+    }
+
+    let marker = crate::commands::agent::watch_web_user_marker::generate();
+    transaction.execute(
+        "INSERT INTO watch_web_session_state (session_id, watch_web_user_marker)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET watch_web_user_marker = excluded.watch_web_user_marker",
+        params![session_id, marker],
+    )?;
+    if session_exists {
+        let revision = increment_revision(&transaction)?;
+        transaction.execute(
+            "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+            params![revision, session_id],
+        )?;
+    }
+    transaction.commit()?;
+    Ok(marker)
 }
 
 fn update_session_state(
@@ -220,6 +283,35 @@ mod tests {
                 watch_web_session_states(temp_dir.path()).expect("state should load")
             ),
             (false, Vec::new()),
+        );
+    }
+
+    #[rstest]
+    fn user_markers_are_stable_and_unique_per_session(
+        saved_session_dir: TempDir,
+        session: crate::commands::agent::types::Session,
+    ) {
+        let first = ensure_watch_web_user_marker(saved_session_dir.path(), &session.session_id)
+            .expect("marker should be created");
+        let repeated = ensure_watch_web_user_marker(saved_session_dir.path(), &session.session_id)
+            .expect("marker should be reused");
+        let mut other_session = session.clone();
+        other_session.session_id = "other-state-session".to_string();
+        save_session(saved_session_dir.path(), &other_session).expect("second session should save");
+        let other =
+            ensure_watch_web_user_marker(saved_session_dir.path(), &other_session.session_id)
+                .expect("second marker should be created");
+
+        assert_eq!(
+            (
+                repeated,
+                watch_web_user_marker(saved_session_dir.path(), &session.session_id)
+                    .expect("first marker should load"),
+                first != other,
+                watch_web_user_marker(saved_session_dir.path(), &other_session.session_id)
+                    .expect("second marker should load"),
+            ),
+            (first.clone(), Some(first), true, Some(other)),
         );
     }
 }
