@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.557](https://github.com/fohte/armyknife/compare/v0.1.556...v0.1.557) (2026-11-10)
+
+
+### Features
+
+* **agent/watch-web:** show all linked tq tasks ([#1466](https://github.com/fohte/armyknife/issues/1466)) ([4f0fd94](https://github.com/fohte/armyknife/commit/4f0fd9433e2d615f9da231940a71ed0ca46883c2))
+
+## [0.1.556](https://github.com/fohte/armyknife/compare/v0.1.555...v0.1.556) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** preserve macOS Ctrl-K ([#1451](https://github.com/fohte/armyknife/issues/1451)) ([97ae3f1](https://github.com/fohte/armyknife/commit/97ae3f1ea1dbb3046527cd5332a5904bd95a0408))
+
 ## [0.1.555](https://github.com/fohte/armyknife/compare/v0.1.554...v0.1.555) (2026-11-10)
 
 
