@@ -86,6 +86,8 @@ struct SessionView {
     task: Option<TqTaskView>,
     tasks: Vec<TqTaskView>,
     repo: String,
+    branch: Option<String>,
+    can_open_in_terminal: bool,
     project: String,
     parent: Option<ParentSessionView>,
     ancestor_session_ids: Vec<String>,
@@ -281,6 +283,11 @@ async fn list_sessions<S: SessionSource>(
                 task,
                 tasks,
                 repo: repo.clone(),
+                branch: session
+                    .pr_context
+                    .as_ref()
+                    .map(|context| context.branch.clone()),
+                can_open_in_terminal: session.tmux_info.is_some(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
@@ -743,6 +750,8 @@ mod tests {
             task: task.clone(),
             tasks: task.into_iter().collect(),
             repo: String::new(),
+            branch: None,
+            can_open_in_terminal: false,
             project: "Unsorted".to_string(),
             parent: None,
             ancestor_session_ids: Vec::new(),
@@ -823,6 +832,13 @@ mod tests {
     fn source() -> TestSessionSource {
         let mut session = session(SessionStatus::Stopped);
         session.session_id = "child-session".to_string();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "example-session".to_string(),
+            window_name: "example-window".to_string(),
+            window_index: 0,
+            pane_id: "%1".to_string(),
+            socket_path: None,
+        });
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
         session.last_message = Some("last message".to_string());
         session.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -970,6 +986,7 @@ mod tests {
         work_type_nav_labels: serde_json::Value,
         updated_at: &'a str,
         elapsed_seconds: u64,
+        can_open_in_terminal: bool,
     }
 
     fn expected_response(
@@ -1010,6 +1027,8 @@ mod tests {
                     "isClosed": false
                 }],
                 "repo": "example-org/example-repo",
+                "branch": "feature-example",
+                "canOpenInTerminal": response.can_open_in_terminal,
                 "project": "parent project",
                 "parent": {
                     "id": "parent-session",
@@ -1061,6 +1080,7 @@ mod tests {
                         work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
+                        can_open_in_terminal: true,
                     },
                 ),
             ),
@@ -1092,6 +1112,7 @@ mod tests {
                 work_type_nav_labels: serde_json::json!({}),
                 updated_at: "1970-01-01T00:16:40Z",
                 elapsed_seconds: 100,
+                can_open_in_terminal: true,
             },
         );
         expected["sessions"][0]["isCompacting"] = serde_json::json!(true);
@@ -1187,6 +1208,7 @@ mod tests {
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
+                        can_open_in_terminal: true,
                     },
                 ),
             ),
@@ -1284,6 +1306,7 @@ mod tests {
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
+                        can_open_in_terminal: true,
                     },
                 ),
             ),
@@ -1291,8 +1314,17 @@ mod tests {
     }
 
     #[rstest]
+    #[case::with_terminal(true)]
+    #[case::without_terminal(false)]
     #[tokio::test]
-    async fn sessions_route_returns_saved_later_and_today_state(source: TestSessionSource) {
+    async fn sessions_route_returns_saved_later_and_today_state(
+        mut source: TestSessionSource,
+        #[case] can_open_in_terminal: bool,
+    ) {
+        if !can_open_in_terminal {
+            source.sessions[0].tmux_info = None;
+        }
+
         assert_eq!(
             sessions_response(source).await,
             (
@@ -1314,6 +1346,7 @@ mod tests {
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 100,
+                        can_open_in_terminal,
                     },
                 ),
             ),
@@ -1348,6 +1381,7 @@ mod tests {
                         work_type_nav_labels: serde_json::json!({}),
                         updated_at: "1970-01-01T00:16:40Z",
                         elapsed_seconds: 3_700,
+                        can_open_in_terminal: true,
                     },
                 ),
             ),
@@ -1389,6 +1423,7 @@ mod tests {
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:40Z",
                             elapsed_seconds: 100,
+                            can_open_in_terminal: true,
                         },
                     ),
                 ),
@@ -1411,6 +1446,7 @@ mod tests {
                             work_type_nav_labels: serde_json::json!({}),
                             updated_at: "1970-01-01T00:16:41Z",
                             elapsed_seconds: 99,
+                            can_open_in_terminal: true,
                         },
                     ),
                 ),

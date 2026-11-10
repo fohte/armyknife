@@ -54,7 +54,7 @@ async fn get_messages(
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
     match tokio::task::spawn_blocking(move || {
-        load_messages_with_marker(
+        load_conversation_with_marker(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
@@ -62,7 +62,7 @@ async fn get_messages(
     })
     .await
     {
-        Ok(Ok(Some(messages))) => match serde_json::to_vec(&messages) {
+        Ok(Ok(Some(conversation))) => match serde_json::to_vec(&conversation) {
             Ok(body) => (
                 StatusCode::OK,
                 [(CONTENT_TYPE, "application/json")],
@@ -91,14 +91,17 @@ fn load_messages_with(
     session_id: &str,
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
 ) -> Result<Option<Vec<ChatItem>>> {
-    load_messages_with_marker(session_id, load_session, |_| Ok(None))
+    Ok(
+        load_conversation_with_marker(session_id, load_session, |_| Ok(None))?
+            .map(|conversation| conversation.messages),
+    )
 }
 
-fn load_messages_with_marker(
+fn load_conversation_with_marker(
     session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-) -> Result<Option<Vec<ChatItem>>> {
+) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
     };
@@ -115,7 +118,7 @@ fn load_messages_with_marker(
     let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
-    let mut messages = session
+    let mut conversation = session
         .transcript_path
         .as_deref()
         .map(|path| {
@@ -130,6 +133,7 @@ fn load_messages_with_marker(
         .transpose()?
         .unwrap_or_default();
 
+    let messages = &mut conversation.messages;
     if main_permission_pending
         && !main_permission_is_question
         && !messages
@@ -159,7 +163,7 @@ fn load_messages_with_marker(
         });
     }
 
-    Ok(Some(messages))
+    Ok(Some(conversation))
 }
 
 fn parent_session(
@@ -195,24 +199,32 @@ fn parse_session_transcript(
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     watch_web_user_marker: Option<&str>,
-) -> Result<Vec<ChatItem>> {
+) -> Result<ConversationResponse> {
     match engine {
         Engine::Claude => {
             let Some(reader) = open_seekable_transcript(path)? else {
-                return Ok(Vec::new());
+                return Ok(ConversationResponse::default());
             };
-            Ok(parser::claude::parse(
+            let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
                 reader,
                 parent,
                 pending_tool,
                 watch_web_user_marker,
-            )?)
+                chrono::Utc::now(),
+            )?;
+            Ok(ConversationResponse {
+                messages,
+                background_tasks,
+            })
         }
         Engine::Codex => {
             let Some(reader) = open_transcript(path, true)? else {
-                return Ok(Vec::new());
+                return Ok(ConversationResponse::default());
             };
-            Ok(parser::codex::parse(reader, parent)?)
+            Ok(ConversationResponse {
+                messages: parser::codex::parse(reader, parent)?,
+                background_tasks: Vec::new(),
+            })
         }
     }
 }
@@ -314,6 +326,21 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConversationResponse {
+    messages: Vec<ChatItem>,
+    background_tasks: Vec<BackgroundTask>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct BackgroundTask {
+    pub(super) id: String,
+    pub(super) description: String,
+    pub(super) elapsed_seconds: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -527,9 +554,96 @@ mod tests {
             (
                 axum::http::StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}]"#
+                r#"{"messages":[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}],"backgroundTasks":[]}"#
                     .to_string(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_returns_running_background_tasks() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let records = [
+            json!({
+                "uuid": "fixture-prompt-row",
+                "parentUuid": null,
+                "type": "user",
+                "message": {"content": "Watch the fixture build."},
+            }),
+            json!({
+                "uuid": "fixture-bash-call-row",
+                "parentUuid": "fixture-prompt-row",
+                "type": "assistant",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-bash-tool-use-id",
+                    "name": "Bash",
+                    "input": {
+                        "command": "watch fixture build",
+                        "description": "Watch the synthetic build",
+                        "run_in_background": true,
+                    },
+                }]},
+            }),
+            json!({
+                "uuid": "fixture-bash-result-row",
+                "parentUuid": "fixture-bash-call-row",
+                "type": "user",
+                "sourceToolAssistantUUID": "fixture-bash-call-row",
+                "toolUseResult": {},
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-bash-tool-use-id",
+                    "content": "Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log",
+                }]},
+            }),
+        ];
+        std::fs::write(
+            &transcript_path,
+            records
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n"),
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with(move |_| Ok(Some(session.clone())), |_| Ok(None));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        body["backgroundTasks"][0]["elapsedSeconds"] = json!(0);
+
+        assert_eq!(
+            body,
+            json!({
+                "messages": [
+                    {"type": "user", "text": "Watch the fixture build."},
+                    {
+                        "type": "tool_summary",
+                        "summary": "1 action",
+                        "operations": [{"tool": "Bash", "target": "watch fixture build"}],
+                    },
+                ],
+                "backgroundTasks": [{
+                    "id": "fixture-task-id",
+                    "description": "Watch the synthetic build",
+                    "elapsedSeconds": 0,
+                }],
+            }),
         );
     }
 
@@ -579,7 +693,7 @@ mod tests {
             (
                 axum::http::StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}]"#.to_string(),
+                r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[]}"#.to_string(),
             )
         );
     }

@@ -6,7 +6,13 @@ import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
 } from '#components/permission-card'
-import type { ChatItem, Session, SessionActions } from '#types'
+import type {
+  BackgroundTask,
+  ChatItem,
+  ConversationResponse,
+  Session,
+  SessionActions,
+} from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
@@ -72,8 +78,23 @@ function isChatItem(value: unknown): value is ChatItem {
   }
 }
 
-function isChatItems(value: unknown): value is ChatItem[] {
-  return Array.isArray(value) && value.every(isChatItem)
+function isBackgroundTask(value: unknown): value is BackgroundTask {
+  return (
+    isRecord(value) &&
+    typeof value['id'] === 'string' &&
+    typeof value['description'] === 'string' &&
+    typeof value['elapsedSeconds'] === 'number'
+  )
+}
+
+function isConversationResponse(value: unknown): value is ConversationResponse {
+  return (
+    isRecord(value) &&
+    Array.isArray(value['messages']) &&
+    value['messages'].every(isChatItem) &&
+    Array.isArray(value['backgroundTasks']) &&
+    value['backgroundTasks'].every(isBackgroundTask)
+  )
 }
 
 function isSessionActions(value: unknown): value is SessionActions {
@@ -176,6 +197,8 @@ export function ConversationPane({
   onLater = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
+  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
+  const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -190,7 +213,7 @@ export function ConversationPane({
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
     const messagesRequest = requestJson(
       `${sessionPath}/messages`,
-      isChatItems,
+      isConversationResponse,
     ).match(
       (value) => ok(value),
       (requestError) => err(requestError),
@@ -205,13 +228,17 @@ export function ConversationPane({
     void Promise.all([messagesRequest, actionsRequest]).then(
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
-        if (messagesResult.isOk()) setMessages(messagesResult.value)
+        if (messagesResult.isOk()) {
+          setMessages(messagesResult.value.messages)
+          setBackgroundTasks(messagesResult.value.backgroundTasks)
+          setMessagesLoadedAt(Date.now())
+        }
         if (actionsResult.isOk()) setActions(actionsResult.value)
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =
             messagesResult.isOk() &&
-            !messagesResult.value.some(
+            !messagesResult.value.messages.some(
               (message) =>
                 message.type === 'permission' &&
                 message.tool === pending.tool &&
@@ -290,11 +317,20 @@ export function ConversationPane({
     )
   }
 
+  const backgroundTaskElapsedOffset =
+    messagesLoadedAt === null
+      ? 0
+      : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
+
   return (
     <ConversationPaneView
       session={session}
       sessions={sessions}
       messages={messages}
+      backgroundTasks={backgroundTasks.map((task) => ({
+        ...task,
+        elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
+      }))}
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}

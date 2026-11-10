@@ -2090,17 +2090,10 @@ it('shows Ctrl-K in the navigation on other platforms', () => {
   })
 })
 
-it('filters the Inbox from a task command in the palette', async () => {
+it('keeps Inbox filters out of the command palette', async () => {
   setPlatform('MacIntel')
-  const taskSession = session('session-task', 'Review alert settings')
-  taskSession.task = {
-    id: 'task-alerts',
-    number: 42,
-    title: 'Improve notifications',
-    priority: 1,
-  }
   renderApp()
-  publishSessions({ revision: 1, sessions: [taskSession] })
+  publishSessions({ revision: 1, sessions: [] })
   act(() => {
     dispatchKey(window, 'k', { metaKey: true })
   })
@@ -2110,21 +2103,12 @@ it('filters the Inbox from a task command in the palette', async () => {
   if (input === null) throw new Error('Palette input was not rendered')
 
   await act(async () => {
-    await userEvent.type(input, '>Filter inbox by task #42')
-    await userEvent.keyboard('{Enter}')
+    await userEvent.type(input, '>Filter inbox')
   })
 
-  const snapshot = () => ({
-    activeView: readActiveView(),
-    activeFilter: container.querySelector('[aria-label="Active inbox filters"]')
-      ?.textContent,
-    visibleSessions: readSessionTitles(),
-  })
-  expect(snapshot()).toEqual({
-    activeView: 'Inbox',
-    activeFilter: 'tq task #42×',
-    visibleSessions: ['Review alert settings'],
-  })
+  expect(
+    container.querySelector('.command-palette-empty')?.textContent,
+  ).toEqual('No results found')
 })
 
 it('opens a session in the Inbox when selected from the palette on Board', async () => {
@@ -3318,15 +3302,18 @@ it('reloads the selected conversation when the session feed updates', async () =
           ? input.pathname
           : new URL(input.url).pathname
     const body = path.endsWith('/messages')
-      ? [
-          {
-            type: 'assistant',
-            text:
-              messageReadCount++ === 0
-                ? 'Before feed update'
-                : 'After feed update',
-          },
-        ]
+      ? {
+          messages: [
+            {
+              type: 'assistant',
+              text:
+                messageReadCount++ === 0
+                  ? 'Before feed update'
+                  : 'After feed update',
+            },
+          ],
+          backgroundTasks: [],
+        }
       : {
           message: true,
           answerQuestion: false,
@@ -3385,7 +3372,10 @@ it('opens a known session ID from a conversation message', async () => {
   fetcher.mockImplementation((input) => {
     const path = new URL(requestUrl(input), 'http://localhost').pathname
     const body = path.endsWith('/messages')
-      ? [{ type: 'assistant', text: `Open ${linkedId}` }]
+      ? {
+          messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
+          backgroundTasks: [],
+        }
       : {
           message: true,
           answerQuestion: false,
@@ -3452,14 +3442,17 @@ it('answers an Inbox question with a number key when the pane is not focused', a
   fetcher.mockImplementation((input) => {
     const path = requestPath(input)
     const body = path.endsWith('/messages')
-      ? [
-          {
-            type: 'question',
-            question: 'Which retry policy should be used?',
-            choices: ['Retry three times', 'Retry once'],
-            answer: null,
-          },
-        ]
+      ? {
+          messages: [
+            {
+              type: 'question',
+              question: 'Which retry policy should be used?',
+              choices: ['Retry three times', 'Retry once'],
+              answer: null,
+            },
+          ],
+          backgroundTasks: [],
+        }
       : path.endsWith('/actions')
         ? {
             message: true,

@@ -164,11 +164,10 @@ export function App() {
     openConversation,
     openSessionInInbox,
     openTodaySession,
+    focusSession,
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
-    inboxFilterQuery,
-    setInboxFilterQuery,
     navigate,
     setError,
     setFocusedProjectName,
@@ -540,9 +539,16 @@ export function App() {
       ) : null}
       {commandPaletteOpen ? (
         <CommandPalette
-          inboxFilterQuery={inboxFilterQuery}
           onClose={() => {
             setCommandPaletteOpen(false)
+          }}
+          onLater={(id) => {
+            setCommandPaletteOpen(false)
+            openLater(id)
+          }}
+          onOpenInTerminal={(id) => {
+            setCommandPaletteOpen(false)
+            focusSession(id)
           }}
           onOpenProject={(project) => {
             setCommandPaletteOpen(false)

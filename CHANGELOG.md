@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.563](https://github.com/fohte/armyknife/compare/v0.1.562...v0.1.563) (2026-11-10)
+
+
+### Features
+
+* **agent/watch-web:** show background tasks ([#1484](https://github.com/fohte/armyknife/issues/1484)) ([db7bef0](https://github.com/fohte/armyknife/commit/db7bef04c826328bc4a14cdc02dfd3406c1f5814))
+
 ## [0.1.562](https://github.com/fohte/armyknife/compare/v0.1.561...v0.1.562) (2026-11-10)
 
 

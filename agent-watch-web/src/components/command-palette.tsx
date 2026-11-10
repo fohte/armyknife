@@ -7,16 +7,20 @@ import {
   type PaletteItem,
   type PaletteScope,
 } from '#command-palette-model'
+import { useCopySessionId } from '#components/use-copy-session-id'
+import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
 type CommandPaletteProps = {
   sessions: readonly Session[]
   recentSessionIds: readonly string[]
-  inboxFilterQuery: string
   initialQuery?: string
   initialScope?: PaletteScope
+  initialActionItemId?: string
   onClose: () => void
   onOpenSession: (id: string) => void
+  onLater: (id: string) => void
+  onOpenInTerminal: (id: string) => void
   onOpenProject: (project: string) => void
   onRunCommand: (command: Extract<PaletteItem, { type: 'command' }>) => void
 }
@@ -45,12 +49,14 @@ function itemTitle(item: PaletteItem) {
 function itemSubtitle(item: PaletteItem) {
   switch (item.type) {
     case 'session': {
-      const taskCount = item.session.tasks?.length ?? 1
-      const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+      const linkedTaskCount = formatLinkedTaskCount(item.session.tasks)
       const task = item.session.task
         ? `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title}${linkedTaskCount} · `
         : ''
-      return `${task}${item.session.project} · ${item.session.repo}`
+      const branch = item.session.branch?.trim()
+      const branchLabel =
+        branch === undefined || branch.length === 0 ? '' : `${branch} · `
+      return `${task}${branchLabel}${item.session.project} · ${item.session.repo}`
     }
     case 'task':
       return aggregateSubtitle(item.sessions)
@@ -95,34 +101,71 @@ function itemColor(item: PaletteItem) {
 export function CommandPalette({
   sessions,
   recentSessionIds,
-  inboxFilterQuery,
   initialQuery = '',
   initialScope = 'all',
+  initialActionItemId,
   onClose,
   onOpenSession,
+  onLater,
+  onOpenInTerminal,
   onOpenProject,
   onRunCommand,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState(initialQuery)
   const [scope, setScope] = useState<PaletteScope>(initialScope)
   const [activeIndex, setActiveIndex] = useState(0)
+  const [actionsFor, setActionsFor] = useState<PaletteItem | null>(
+    () =>
+      sessions
+        .filter((session) => session.id === initialActionItemId)
+        .map((session) => ({
+          type: 'session' as const,
+          id: session.id,
+          session,
+        }))[0] ?? null,
+  )
+  const [activeActionIndex, setActiveActionIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const groups = useMemo(
-    () =>
-      buildCommandPaletteGroups(
-        sessions,
-        query,
-        scope,
-        recentSessionIds,
-        inboxFilterQuery.length > 0,
-      ),
-    [inboxFilterQuery.length, query, recentSessionIds, scope, sessions],
+    () => buildCommandPaletteGroups(sessions, query, scope, recentSessionIds),
+    [query, recentSessionIds, scope, sessions],
   )
   const items = groups.flatMap((group) => group.items)
+  const actions =
+    actionsFor?.type === 'session'
+      ? [
+          { id: 'open', label: 'Open session' },
+          { id: 'later', label: 'Later' },
+          { id: 'copy', label: 'Copy session ID' },
+          ...(actionsFor.session.canOpenInTerminal === true
+            ? [{ id: 'terminal', label: 'Open in terminal' }]
+            : []),
+        ]
+      : actionsFor?.type === 'command'
+        ? [{ id: 'command', label: 'Run command' }]
+        : actionsFor === null
+          ? []
+          : [{ id: 'destination', label: 'Show in Board' }]
+  const action = actions[activeActionIndex]
+  const { status: copyStatus, copySessionId } = useCopySessionId(
+    actionsFor?.type === 'session' ? actionsFor.session.id : '',
+  )
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  useEffect(() => {
+    if (actionsFor === null) {
+      inputRef.current?.focus()
+      return
+    }
+    document
+      .querySelector<HTMLButtonElement>(
+        '[data-palette-action-active="true"] button',
+      )
+      ?.focus()
+  }, [actionsFor, activeActionIndex])
 
   useEffect(() => {
     setActiveIndex((index) => Math.min(index, Math.max(0, items.length - 1)))
@@ -156,6 +199,36 @@ export function CommandPalette({
     onRunCommand(item)
   }
 
+  function activateAction(action: (typeof actions)[number] | undefined) {
+    if (action === undefined || actionsFor === null) return
+    switch (action.id) {
+      case 'open':
+        if (actionsFor.type === 'session') onOpenSession(actionsFor.session.id)
+        setActionsFor(null)
+        return
+      case 'later':
+        if (actionsFor.type === 'session') onLater(actionsFor.session.id)
+        setActionsFor(null)
+        return
+      case 'copy':
+        copySessionId()
+        return
+      case 'terminal':
+        if (actionsFor.type === 'session') {
+          onOpenInTerminal(actionsFor.session.id)
+        }
+        setActionsFor(null)
+        return
+      case 'destination':
+        activate(actionsFor)
+        setActionsFor(null)
+        return
+      case 'command':
+        if (actionsFor.type === 'command') onRunCommand(actionsFor)
+        setActionsFor(null)
+    }
+  }
+
   function selectScope(nextScope: PaletteScope) {
     setScope(nextScope)
     setQuery((current) => current.trimStart().replace(/^[#@>]\s*/, ''))
@@ -173,6 +246,30 @@ export function CommandPalette({
           event.stopPropagation()
         }}
         onKeyDown={(event) => {
+          if (actionsFor !== null) {
+            if (event.key === 'Escape' || event.key === 'ArrowLeft') {
+              event.preventDefault()
+              setActionsFor(null)
+              return
+            }
+            if (event.key === 'ArrowDown') {
+              event.preventDefault()
+              setActiveActionIndex((index) =>
+                Math.min(actions.length - 1, index + 1),
+              )
+              return
+            }
+            if (event.key === 'ArrowUp') {
+              event.preventDefault()
+              setActiveActionIndex((index) => Math.max(0, index - 1))
+              return
+            }
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              activateAction(action)
+              return
+            }
+          }
           if (event.key === 'Escape') {
             event.preventDefault()
             onClose()
@@ -191,6 +288,21 @@ export function CommandPalette({
           } else if (event.key === 'Enter') {
             event.preventDefault()
             activate(items[activeIndex])
+          } else if (event.key === 'ArrowRight') {
+            const input = inputRef.current
+            if (
+              event.target === input &&
+              (input.selectionStart !== input.value.length ||
+                input.selectionStart !== input.selectionEnd)
+            ) {
+              return
+            }
+            event.preventDefault()
+            const item = items[activeIndex]
+            if (item !== undefined) {
+              setActionsFor(item)
+              setActiveActionIndex(0)
+            }
           } else if (event.key === 'Tab') {
             event.preventDefault()
             const currentIndex = SCOPES.findIndex((item) => item.key === scope)
@@ -255,7 +367,47 @@ export function CommandPalette({
           className="command-palette-results"
           role="listbox"
         >
-          {groups.length === 0 ? (
+          {actionsFor !== null ? (
+            <section
+              aria-label={`${itemTitle(actionsFor)} actions`}
+              className="command-palette-group"
+              role="menu"
+            >
+              <h2>{itemTitle(actionsFor)}</h2>
+              {actions.map((action, index) => (
+                <div
+                  key={action.id}
+                  aria-current={
+                    index === activeActionIndex ? 'true' : undefined
+                  }
+                  className={`command-palette-action${index === activeActionIndex ? ' is-active' : ''}`}
+                  data-palette-action-active={
+                    index === activeActionIndex ? 'true' : 'false'
+                  }
+                  role="none"
+                  onMouseEnter={() => {
+                    setActiveActionIndex(index)
+                  }}
+                >
+                  <button
+                    role="menuitem"
+                    type="button"
+                    onClick={() => {
+                      activateAction(action)
+                    }}
+                  >
+                    {action.id === 'copy'
+                      ? copyStatus === 'copied'
+                        ? 'Copied'
+                        : copyStatus === 'failed'
+                          ? 'Copy failed'
+                          : 'Copy session ID'
+                      : action.label}
+                  </button>
+                </div>
+              ))}
+            </section>
+          ) : groups.length === 0 ? (
             <p className="command-palette-empty">No results found</p>
           ) : (
             groups.map((group) => (
@@ -317,15 +469,35 @@ export function CommandPalette({
           )}
         </div>
         <footer className="command-palette-hints">
-          <span>
-            <kbd>↵</kbd> Open
-          </span>
-          <span>
-            <kbd>Tab</kbd> Scope
-          </span>
-          <span>
-            <kbd>#</kbd> task · <kbd>@</kbd> project · <kbd>&gt;</kbd> command
-          </span>
+          {actionsFor !== null ? (
+            <>
+              <span>
+                <kbd>↵</kbd> Select
+              </span>
+              <span>
+                <kbd>←</kbd> Back
+              </span>
+              <span>
+                <kbd>↑↓</kbd> Navigate
+              </span>
+            </>
+          ) : (
+            <>
+              <span>
+                <kbd>↵</kbd> Open
+              </span>
+              <span>
+                <kbd>Tab</kbd> Scope
+              </span>
+              <span>
+                <kbd>→</kbd> Actions
+              </span>
+              <span>
+                <kbd>#</kbd> task · <kbd>@</kbd> project · <kbd>&gt;</kbd>{' '}
+                command
+              </span>
+            </>
+          )}
         </footer>
       </section>
     </div>
