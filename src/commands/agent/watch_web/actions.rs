@@ -957,7 +957,7 @@ mod tests {
             json!({
                 "response": response,
                 "pathIsAbsolute": path.is_absolute(),
-                "filename": filename.split_once('_').unwrap().1,
+                "filename": filename.split_once("~image~").unwrap().1,
                 "bytes": std::fs::read(&path).unwrap(),
             })
         };

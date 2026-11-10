@@ -1107,7 +1107,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 
-Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. Supported image types keep their conversation previews:
+Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 
 ```json
 {

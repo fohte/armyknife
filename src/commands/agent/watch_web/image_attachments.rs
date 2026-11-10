@@ -181,7 +181,7 @@ fn read_image(directory: &Path, filename: &str) -> anyhow::Result<Option<(&'stat
     if bytes.len() > MAX_SAVED_IMAGE_BYTES {
         return Ok(None);
     }
-    let Some(mime_type) = image_mime_type_from_bytes(&bytes) else {
+    let Some((mime_type, _)) = super::attachments::image_format_from_bytes(&bytes) else {
         return Ok(None);
     };
     Ok(Some((mime_type, bytes)))
@@ -201,7 +201,26 @@ fn image_file_is_safe(directory: &Path, filename: &str) -> bool {
             && path
                 .canonicalize()
                 .is_ok_and(|canonical| canonical.parent() == Some(directory))
+            && image_file_has_supported_signature(&path)
     })
+}
+
+fn image_file_has_supported_signature(path: &Path) -> bool {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let Ok(file) = options.open(path) else {
+        return false;
+    };
+    let mut signature = [0; 12];
+    let Ok(bytes_read) = file.take(signature.len() as u64).read(&mut signature) else {
+        return false;
+    };
+    super::attachments::image_format_from_bytes(&signature[..bytes_read]).is_some()
 }
 
 fn is_valid_image_filename(filename: &str) -> bool {
@@ -212,16 +231,34 @@ fn is_valid_image_filename(filename: &str) -> bool {
     if image_mime_type(filename).is_none() {
         return false;
     }
+    if let Some((stem, kind_and_name)) = filename.split_once('~')
+        && is_uuid(stem)
+    {
+        if let Some(name) = kind_and_name.strip_prefix("image~") {
+            return is_valid_sanitized_name(name) && image_mime_type(name).is_some();
+        }
+        if kind_and_name.starts_with("file~") {
+            return false;
+        }
+    }
     let Some((stem, original_name)) = filename.split_once('_') else {
         let Some((stem, _)) = filename.rsplit_once('.') else {
             return false;
         };
         return is_uuid(stem);
     };
-    is_uuid(stem) && is_valid_sanitized_name(original_name)
+    is_uuid(stem)
+        && is_valid_sanitized_name(original_name)
+        && image_mime_type(original_name).is_some()
 }
 
 fn original_filename(filename: &str) -> Option<&str> {
+    if let Some((prefix, kind_and_name)) = filename.split_once('~')
+        && is_uuid(prefix)
+        && let Some(name) = kind_and_name.strip_prefix("file~")
+    {
+        return is_valid_sanitized_name(name).then_some(name);
+    }
     let (prefix, name) = filename.split_once('_')?;
     (is_uuid(prefix) && is_valid_sanitized_name(name)).then_some(name)
 }
@@ -255,20 +292,6 @@ fn image_mime_type(filename: &str) -> Option<&'static str> {
     }
 }
 
-fn image_mime_type_from_bytes(bytes: &[u8]) -> Option<&'static str> {
-    if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
-        Some("image/png")
-    } else if bytes.starts_with(&[255, 216, 255]) {
-        Some("image/jpeg")
-    } else if bytes.starts_with(b"GIF8") {
-        Some("image/gif")
-    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
-        Some("image/webp")
-    } else {
-        None
-    }
-}
-
 fn is_expired(modified: SystemTime, now: SystemTime) -> bool {
     now.duration_since(modified)
         .is_ok_and(|age| age >= ATTACHMENT_RETENTION)
@@ -289,12 +312,21 @@ mod tests {
 
     use axum::body::{Body, to_bytes};
     use axum::http::{Request as HttpRequest, StatusCode};
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use tower::ServiceExt;
 
     use super::{
         ATTACHMENT_RETENTION, Reference, extract_references, is_known_expired, routes_with,
     };
+
+    const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    #[fixture]
+    fn attachment_directory() -> (tempfile::TempDir, std::path::PathBuf) {
+        let directory = tempfile::tempdir().unwrap();
+        let directory_path = directory.path().canonicalize().unwrap();
+        (directory, directory_path)
+    }
 
     #[rstest]
     #[case::expired(
@@ -322,7 +354,7 @@ mod tests {
         let directory_path = directory.path().canonicalize().unwrap();
         let image_name = "00000000-0000-4000-8000-000000000001.png";
         let image_path = directory_path.join(image_name);
-        fs::write(&image_path, b"fixture image bytes").unwrap();
+        fs::write(&image_path, PNG_SIGNATURE).unwrap();
         let missing_name = "00000000-0000-4000-8000-000000000002.webp";
         let expired_name = "00000000-0000-4000-8000-000000000004.gif";
         let expired_path = directory_path.join(expired_name);
@@ -397,7 +429,7 @@ mod tests {
     #[case::new_file_section(
         "Attached file(s):",
         "Inspect the attachment.",
-        "00000000-0000-4000-8000-000000000003_design-mock.html",
+        "00000000-0000-4000-8000-000000000003~file~design-mock.html",
         Reference::File {
             name: "design-mock.html".to_string(),
         },
@@ -406,23 +438,37 @@ mod tests {
     #[case::new_empty_file_header(
         "Please inspect the attached file(s):",
         "",
-        "00000000-0000-4000-8000-000000000004_design-mock.html",
+        "00000000-0000-4000-8000-000000000004~file~design-mock.html",
         Reference::File {
             name: "design-mock.html".to_string(),
         },
         "",
     )]
+    #[case::image_named_file_is_not_rendered_as_a_preview(
+        "Attached file(s):",
+        "Inspect the attachment.",
+        "00000000-0000-4000-8000-000000000005~file~design-mock.png",
+        Reference::File {
+            name: "design-mock.png".to_string(),
+        },
+        "Inspect the attachment.",
+    )]
     fn extracts_legacy_and_generic_attachment_headings(
+        attachment_directory: (tempfile::TempDir, std::path::PathBuf),
         #[case] header: &str,
         #[case] visible_text: &str,
         #[case] filename: &str,
         #[case] expected_reference: Reference,
         #[case] expected_text: &str,
     ) {
-        let directory = tempfile::tempdir().unwrap();
-        let directory_path = directory.path().canonicalize().unwrap();
+        let (_directory, directory_path) = attachment_directory;
         let image_path = directory_path.join(filename);
-        fs::write(&image_path, b"attachment bytes").unwrap();
+        let bytes = if matches!(&expected_reference, Reference::Image { .. }) {
+            PNG_SIGNATURE
+        } else {
+            b"attachment bytes"
+        };
+        fs::write(&image_path, bytes).unwrap();
         let content = if visible_text.is_empty() {
             indoc::formatdoc! {"
                 {header}
@@ -443,23 +489,28 @@ mod tests {
         );
     }
 
-    #[test]
-    fn extracts_images_and_files_from_a_generic_attachment_section() {
-        let directory = tempfile::tempdir().unwrap();
-        let directory_path = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000005_screenshot.jpeg";
-        let file_name = "00000000-0000-4000-8000-000000000006_design-mock.html";
-        fs::write(directory_path.join(image_name), b"image bytes").unwrap();
+    #[rstest]
+    fn extracts_images_and_files_from_a_generic_attachment_section(
+        attachment_directory: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, directory_path) = attachment_directory;
+        let image_name = "00000000-0000-4000-8000-000000000005~image~screenshot.jpeg";
+        let file_name = "00000000-0000-4000-8000-000000000006~file~design-mock.html";
+        let png_name = "00000000-0000-4000-8000-000000000007~file~design-mock.png";
+        fs::write(directory_path.join(image_name), b"\xff\xd8\xfffixture").unwrap();
         fs::write(directory_path.join(file_name), b"<main>Mock</main>").unwrap();
+        fs::write(directory_path.join(png_name), b"<main>Mock</main>").unwrap();
         let content = indoc::formatdoc! {"
             Inspect the attachments.
 
             Attached file(s):
             - {}
             - {}
+            - {}
         ",
             directory_path.join(image_name).display(),
             directory_path.join(file_name).display(),
+            directory_path.join(png_name).display(),
         };
 
         assert_eq!(
@@ -474,8 +525,61 @@ mod tests {
                     Reference::File {
                         name: "design-mock.html".to_string(),
                     },
+                    Reference::File {
+                        name: "design-mock.png".to_string(),
+                    },
                 ],
             )),
+        );
+    }
+
+    #[rstest]
+    #[case::gif(
+        "00000000-0000-4000-8000-000000000008~image~preview.gif",
+        b"GIF89a",
+        "image/gif"
+    )]
+    #[case::webp(
+        "00000000-0000-4000-8000-000000000009~image~preview.webp",
+        b"RIFF0000WEBP",
+        "image/webp"
+    )]
+    #[tokio::test]
+    async fn image_route_serves_generic_gif_and_webp_attachments(
+        attachment_directory: (tempfile::TempDir, std::path::PathBuf),
+        #[case] filename: &str,
+        #[case] bytes: &[u8],
+        #[case] expected_mime_type: &str,
+    ) {
+        let (_directory, directory_path) = attachment_directory;
+        fs::write(directory_path.join(filename), bytes).unwrap();
+        let route_directory = directory_path.clone();
+        let router = routes_with(move || Some(route_directory.clone()));
+        let response = router
+            .oneshot(
+                HttpRequest::builder()
+                    .uri(format!("/images/{filename}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let actual = (
+            response.status(),
+            response.headers().get("content-type").cloned(),
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        );
+
+        assert_eq!(
+            actual,
+            (
+                StatusCode::OK,
+                Some(expected_mime_type.parse().unwrap()),
+                bytes.to_vec(),
+            ),
         );
     }
 
@@ -486,14 +590,14 @@ mod tests {
         let image_name = "00000000-0000-4000-8000-000000000001.png";
         let image_bytes = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
         fs::write(directory_path.join(image_name), image_bytes).unwrap();
-        let uploaded_image_name = "00000000-0000-4000-8000-000000000004_uploaded.jpeg";
+        let uploaded_image_name = "00000000-0000-4000-8000-000000000004~image~uploaded.jpeg";
         let uploaded_image_bytes = b"\xff\xd8\xfffixture";
         fs::write(
             directory_path.join(uploaded_image_name),
             uploaded_image_bytes,
         )
         .unwrap();
-        let invalid_image_name = "00000000-0000-4000-8000-000000000007_invalid.png";
+        let invalid_image_name = "00000000-0000-4000-8000-000000000007~image~invalid.png";
         fs::write(directory_path.join(invalid_image_name), b"plain text").unwrap();
         let expired_name = "00000000-0000-4000-8000-000000000003.png";
         let expired_path = directory_path.join(expired_name);

@@ -39,6 +39,13 @@ pub(super) struct LegacyImageRequest {
 pub(super) struct Attachment {
     pub(super) name: String,
     pub(super) bytes: Vec<u8>,
+    kind: AttachmentKind,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum AttachmentKind {
+    Image,
+    File,
 }
 
 #[derive(Debug, Error)]
@@ -82,14 +89,16 @@ pub(super) fn validate(
             if bytes.len() != attachment.size {
                 return Err(ValidationError::InvalidData);
             }
-            let name = if let Some(extension) =
-                preview_extension(attachment.mime_type.as_deref(), &bytes)
-            {
-                ensure_image_extension(attachment.name, extension)
+            let extension = preview_extension(attachment.mime_type.as_deref(), &bytes);
+            let (name, kind) = if let Some(extension) = extension {
+                (
+                    ensure_image_extension(attachment.name, extension),
+                    AttachmentKind::Image,
+                )
             } else {
-                attachment.name
+                (attachment.name, AttachmentKind::File)
             };
-            Ok(Attachment { name, bytes })
+            Ok(Attachment { name, bytes, kind })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let legacy_images = legacy_images
@@ -100,15 +109,30 @@ pub(super) fn validate(
 }
 
 fn preview_extension(mime_type: Option<&str>, bytes: &[u8]) -> Option<&'static str> {
-    match mime_type? {
-        "image/png" if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) => Some("png"),
-        "image/jpeg" if bytes.starts_with(&[255, 216, 255]) => Some("jpg"),
-        "image/gif" if bytes.starts_with(b"GIF8") => Some("gif"),
-        "image/webp" if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") => {
-            Some("webp")
-        }
-        _ => None,
-    }
+    let (detected_mime_type, extension) = image_format_from_bytes(bytes)?;
+    (mime_type? == detected_mime_type).then_some(extension)
+}
+
+pub(super) fn image_format_from_bytes(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    let mime_type = if bytes.starts_with(&[137, 80, 78, 71, 13, 10, 26, 10]) {
+        "image/png"
+    } else if bytes.starts_with(&[255, 216, 255]) {
+        "image/jpeg"
+    } else if bytes.starts_with(b"GIF8") {
+        "image/gif"
+    } else if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP") {
+        "image/webp"
+    } else {
+        return None;
+    };
+    let extension = match mime_type {
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => return None,
+    };
+    Some((mime_type, extension))
 }
 
 fn ensure_image_extension(name: String, extension: &str) -> String {
@@ -116,7 +140,9 @@ fn ensure_image_extension(name: String, extension: &str) -> String {
     if image_extension_from_name(&name) == Some(extension) {
         name
     } else {
-        format!("{name}.{extension}")
+        let stem_length = 180 - extension.len() - 1;
+        let stem = name.chars().take(stem_length).collect::<String>();
+        format!("{}.{extension}", stem.trim_end_matches('.'))
     }
 }
 
@@ -136,25 +162,25 @@ fn image_extension_from_name(name: &str) -> Option<&'static str> {
 }
 
 fn validate_legacy_image(image: LegacyImageRequest) -> Result<Attachment, ValidationError> {
-    let (name, signature) = match image.mime_type.as_str() {
-        "image/png" => ("legacy-image.png", &[137, 80, 78, 71, 13, 10, 26, 10][..]),
-        "image/jpeg" => ("legacy-image.jpg", &[255, 216, 255][..]),
-        "image/gif" => ("legacy-image.gif", b"GIF8" as &[u8]),
-        "image/webp" => ("legacy-image.webp", b"RIFF" as &[u8]),
-        _ => return Err(ValidationError::UnsupportedImageType(image.mime_type)),
-    };
+    if !matches!(
+        image.mime_type.as_str(),
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
+    ) {
+        return Err(ValidationError::UnsupportedImageType(image.mime_type));
+    }
     let bytes = STANDARD
         .decode(image.data)
         .map_err(|_| ValidationError::InvalidData)?;
-    if bytes.len() != image.size
-        || !bytes.starts_with(signature)
-        || (image.mime_type == "image/webp" && bytes.get(8..12) != Some(b"WEBP"))
-    {
+    let Some((detected_mime_type, extension)) = image_format_from_bytes(&bytes) else {
+        return Err(ValidationError::InvalidData);
+    };
+    if bytes.len() != image.size || detected_mime_type != image.mime_type {
         return Err(ValidationError::InvalidData);
     }
     Ok(Attachment {
-        name: name.to_string(),
+        name: format!("legacy-image.{extension}"),
         bytes,
+        kind: AttachmentKind::Image,
     })
 }
 
@@ -280,10 +306,14 @@ fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
 }
 
 fn save_one(directory: &Path, attachment: Attachment) -> anyhow::Result<PathBuf> {
+    let kind = match attachment.kind {
+        AttachmentKind::Image => "image",
+        AttachmentKind::File => "file",
+    };
     let path = directory.join(format!(
-        "{}_{}",
+        "{}~{kind}~{}",
         uuid::Uuid::new_v4(),
-        sanitize_filename(&attachment.name)
+        sanitize_filename(&attachment.name),
     ));
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -358,10 +388,13 @@ mod tests {
     use rstest::rstest;
 
     use super::{
-        Attachment, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request, ValidationError, validate,
+        Attachment, AttachmentKind, LegacyImageRequest, MAX_ATTACHMENT_BYTES, Request,
+        ValidationError, validate,
     };
 
     const PNG_SIGNATURE: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    const GIF_SIGNATURE: &[u8] = b"GIF89a";
+    const WEBP_SIGNATURE: &[u8] = b"RIFF0000WEBP";
 
     #[test]
     fn accepts_non_image_files_and_preserves_their_names() {
@@ -373,6 +406,7 @@ mod tests {
             vec![Attachment {
                 name: "design.html".to_string(),
                 bytes: b"<main>Mock</main>".to_vec(),
+                kind: AttachmentKind::File,
             }]
         );
     }
@@ -385,6 +419,8 @@ mod tests {
         b"\xff\xd8\xff",
         "diagram.png.jpg"
     )]
+    #[case::gif("image/gif", "Pasted file", GIF_SIGNATURE, "Pasted_file.gif")]
+    #[case::webp("image/webp", "Pasted file", WEBP_SIGNATURE, "Pasted_file.webp")]
     fn retains_previewable_image_types_in_saved_names(
         #[case] mime_type: &str,
         #[case] name: &str,
@@ -399,6 +435,26 @@ mod tests {
             vec![Attachment {
                 name: expected_name.to_string(),
                 bytes: bytes.to_vec(),
+                kind: AttachmentKind::Image,
+            }]
+        );
+    }
+
+    #[test]
+    fn retains_the_image_extension_when_the_original_name_is_long() {
+        let name = "a".repeat(180);
+        let attachments = validate(
+            vec![request_with_mime_type(&name, "image/png", PNG_SIGNATURE)],
+            vec![],
+        )
+        .unwrap();
+
+        assert_eq!(
+            attachments,
+            vec![Attachment {
+                name: format!("{}.png", "a".repeat(176)),
+                bytes: PNG_SIGNATURE.to_vec(),
+                kind: AttachmentKind::Image,
             }]
         );
     }
@@ -443,6 +499,7 @@ mod tests {
             vec![Attachment {
                 name: "legacy-image.gif".to_string(),
                 bytes: b"GIF89a".to_vec(),
+                kind: AttachmentKind::Image,
             }]
         );
     }
@@ -455,10 +512,12 @@ mod tests {
                 Attachment {
                     name: "../design mock.html".to_string(),
                     bytes: b"one".to_vec(),
+                    kind: AttachmentKind::File,
                 },
                 Attachment {
                     name: "../design mock.html".to_string(),
                     bytes: b"two".to_vec(),
+                    kind: AttachmentKind::File,
                 },
             ],
             Some(directory.path().to_path_buf()),
@@ -469,7 +528,7 @@ mod tests {
             .iter()
             .map(|path| {
                 let filename = path.file_name().unwrap().to_string_lossy();
-                let sanitized_name = filename.split_once('_').unwrap().1.to_string();
+                let sanitized_name = filename.split_once("~file~").unwrap().1.to_string();
                 (
                     path.is_absolute(),
                     path.parent() == Some(canonical_directory.as_path()),
@@ -507,6 +566,7 @@ mod tests {
             vec![Attachment {
                 name: "sample.bin".to_string(),
                 bytes: b"data".to_vec(),
+                kind: AttachmentKind::File,
             }],
             Some(directory.path().to_path_buf()),
         )

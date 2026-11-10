@@ -415,6 +415,8 @@ fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use indoc::formatdoc;
     use rstest::{fixture, rstest};
 
@@ -425,16 +427,17 @@ mod tests {
     };
 
     #[fixture]
-    fn saved_image_directory() -> tempfile::TempDir {
+    fn saved_image_directory() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(
             directory
                 .path()
                 .join("00000000-0000-4000-8000-000000000001.png"),
-            b"fixture image",
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
         )
         .unwrap();
-        directory
+        let image_directory = directory.path().canonicalize().unwrap();
+        (directory, image_directory)
     }
     #[rstest]
     #[case::singular(1, "1 action")]
@@ -465,10 +468,10 @@ mod tests {
     #[case::transcript_user(false)]
     #[case::queued_user(true)]
     fn extracts_saved_images_from_unmarked_user_paths(
-        saved_image_directory: tempfile::TempDir,
+        saved_image_directory: (tempfile::TempDir, PathBuf),
         #[case] is_queued: bool,
     ) {
-        let image_directory = saved_image_directory.path().canonicalize().unwrap();
+        let (_directory, image_directory) = saved_image_directory;
         let image_path = image_directory.join("00000000-0000-4000-8000-000000000001.png");
         let text = formatdoc! {"
             Inspect this image.
@@ -508,13 +511,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn extracts_images_and_file_names_from_generic_user_paths() {
-        let directory = tempfile::tempdir().unwrap();
-        let image_directory = directory.path().canonicalize().unwrap();
-        let image_name = "00000000-0000-4000-8000-000000000005_screenshot.png";
-        let file_name = "00000000-0000-4000-8000-000000000006_design-mock.html";
-        std::fs::write(image_directory.join(image_name), b"image bytes").unwrap();
+    #[rstest]
+    fn extracts_images_and_file_names_from_generic_user_paths(
+        saved_image_directory: (tempfile::TempDir, PathBuf),
+    ) {
+        let (_directory, image_directory) = saved_image_directory;
+        let image_name = "00000000-0000-4000-8000-000000000005~image~screenshot.png";
+        let file_name = "00000000-0000-4000-8000-000000000006~file~design-mock.html";
+        std::fs::write(
+            image_directory.join(image_name),
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
         std::fs::write(image_directory.join(file_name), b"<main>Mock</main>").unwrap();
         let text = formatdoc! {"
             Inspect the attachments.
