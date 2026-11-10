@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.562](https://github.com/fohte/armyknife/compare/v0.1.561...v0.1.562) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent:** choose the highest-priority open task ([#1481](https://github.com/fohte/armyknife/issues/1481)) ([b07a27f](https://github.com/fohte/armyknife/commit/b07a27f3db44f316a23c424ab89ca02ef70d3198))
+
 ## [0.1.561](https://github.com/fohte/armyknife/compare/v0.1.560...v0.1.561) (2026-11-10)
 
 
