@@ -13,22 +13,15 @@ import {
   setSessionLater,
 } from '#session-actions'
 import { startSessionFeed } from '#session-feed'
-import {
-  getLaterPresetShortcut,
-  getSessionShortcutAction,
-  type LaterPreset,
-  type LaterPresetTimes,
-  moveSelection,
-  type SessionView,
-} from '#session-navigation'
+import { useSessionHistory } from '#session-history'
+import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
+import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
 import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
 
 export function App() {
   const {
     isMobile,
-    conversationOpen: mobileConversationOpen,
-    setConversationOpen: setMobileConversationOpen,
     inProgressExpanded,
     setInProgressExpanded,
     doneExpanded,
@@ -41,8 +34,13 @@ export function App() {
   const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [view, setView] = useState<SessionView>('inbox')
+  const {
+    selectedId,
+    view,
+    conversationOpen: mobileConversationOpen,
+    backToInbox,
+    navigate,
+  } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
@@ -111,9 +109,7 @@ export function App() {
     toggleToday,
   } = createSessionNavigationActions({
     sessions: sessionsWithElapsedTime,
-    setSelectedId,
-    setView,
-    setConversationOpen: setMobileConversationOpen,
+    navigate,
     setLaterExpanded,
     setError,
   })
@@ -178,7 +174,16 @@ export function App() {
           closeLater()
           if (isMobile) {
             setLaterExpanded(false)
-            setMobileConversationOpen(false)
+            navigate(
+              (current) => ({
+                ...current,
+                selectedId:
+                  navigableSessions.find((session) => session.id !== sessionId)
+                    ?.id ?? null,
+                conversationOpen: false,
+              }),
+              'push',
+            )
           }
           setError(null)
         },
@@ -195,8 +200,9 @@ export function App() {
       finishLaterMutation,
       isMobile,
       laterTimes,
+      navigableSessions,
+      navigate,
       openLater,
-      setMobileConversationOpen,
     ],
   )
   const submitBackNow = useCallback(
@@ -282,80 +288,22 @@ export function App() {
 
   useEffect(() => {
     if (isMobile && view !== 'inbox') {
-      setView('inbox')
+      navigate((current) => ({ ...current, view: 'inbox' }), 'replace')
     }
-  }, [isMobile, view])
+  }, [isMobile, navigate, view])
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        (event.target instanceof HTMLElement &&
-          (event.target.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)))
-      ) {
-        return
-      }
-
-      if (laterSessionId !== null) {
-        if (event.key === 'Escape') {
-          event.preventDefault()
-          if (!laterSubmissionInFlight.current) {
-            closeLater()
-          }
-          return
-        }
-        if (isMobile) {
-          return
-        }
-        const preset = getLaterPresetShortcut(event.key)
-        if (preset !== null) {
-          event.preventDefault()
-          submitLater(laterSessionId, preset)
-        }
-        return
-      }
-
-      if (isMobile) {
-        return
-      }
-
-      const action = getSessionShortcutAction(event.key, event.shiftKey, view)
-      if (action?.type === 'view') {
-        event.preventDefault()
-        setView(action.view)
-      } else if (action?.type === 'move' && view === 'inbox') {
-        event.preventDefault()
-        setSelectedId((current) =>
-          moveSelection(navigableSessions, current, action.key),
-        )
-      } else if (
-        action?.type === 'later' &&
-        selectedId !== null &&
-        view === 'inbox'
-      ) {
-        event.preventDefault()
-        openLater(selectedId)
-      }
-    }
-
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [
-    closeLater,
+  useSessionKeyboardNavigation({
     isMobile,
     laterSessionId,
+    laterSubmissionInFlight,
+    closeLater,
+    submitLater,
     navigableSessions,
     openLater,
     selectedId,
-    submitLater,
     view,
-  ])
+    navigate,
+  })
 
   const needsActionCount = sessionsWithElapsedTime.filter(
     (session) => session.category === 'needs_action',
@@ -366,14 +314,31 @@ export function App() {
   const selectedSession = sessionsWithElapsedTime.find(
     (session) => session.id === selectedId,
   )
+  useEffect(() => {
+    if (selectedSession?.category === 'later') {
+      setLaterExpanded(true)
+    }
+  }, [selectedSession?.category])
+  const setSelectedId = useCallback(
+    (id: string | null) => {
+      navigate((current) => ({ ...current, selectedId: id }), 'replace')
+    },
+    [navigate],
+  )
+  const setConversationOpen = useCallback(
+    (open: boolean) => {
+      navigate((current) => ({ ...current, conversationOpen: open }), 'replace')
+    },
+    [navigate],
+  )
   const { showConversation: showMobileConversation } = useMobileNavigation({
     isMobile,
     conversationOpen: mobileConversationOpen,
     navigableSessions,
-    selectedId,
     selectedSessionExists: selectedSession !== undefined,
+    sessionsLoaded: loaded,
     setSelectedId,
-    setConversationOpen: setMobileConversationOpen,
+    setConversationOpen,
   })
 
   return (
@@ -388,11 +353,10 @@ export function App() {
           needsActionCount={needsActionCount}
           todaySessions={todaySessions}
           workTypeNavGroups={workTypeNavGroups}
-          onViewChange={setView}
-          onSelectToday={(id) => {
-            setView('inbox')
-            openTodaySession(id)
+          onViewChange={(nextView) => {
+            navigate((current) => ({ ...current, view: nextView }))
           }}
+          onSelectToday={openSessionInInbox}
           onSelectSession={openSessionInInbox}
         />
       ) : null}
@@ -433,15 +397,13 @@ export function App() {
                 session={selectedSession}
                 refreshKey={sessionsRevision}
                 isMobile={isMobile}
-                onBack={() => {
-                  setMobileConversationOpen(false)
-                }}
+                onBack={backToInbox}
                 onLater={() => {
                   openLater(selectedSession.id)
                 }}
                 onSelectSession={(id) => {
                   if (orderedSessions.some((session) => session.id === id)) {
-                    setSelectedId(id)
+                    navigate((current) => ({ ...current, selectedId: id }))
                   }
                 }}
               />
