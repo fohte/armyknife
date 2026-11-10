@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
-    SessionTask, build_watch_web_tasks_by_session, fetch_session_tasks_with_parents,
+    SessionTask, build_all_tasks_by_session, fetch_session_tasks_with_parents,
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
@@ -218,7 +218,7 @@ async fn fetch_task_metadata(
         return Ok(previous);
     };
     let tq_sessions = fetch_session_tasks_with_parents(&client, &session_ids).await?;
-    let links = build_watch_web_tasks_by_session(tq_sessions, &session_ids);
+    let links = build_all_tasks_by_session(tq_sessions, &session_ids);
     let task_ids = links
         .values()
         .flatten()
