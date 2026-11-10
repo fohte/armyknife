@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -11,9 +11,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use super::super::claude_messaging;
-use super::super::claude_registry;
-use super::super::codex_steer;
+use super::super::peer::notify;
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
@@ -74,19 +72,8 @@ struct LiveActionRuntime;
 
 impl ActionRuntime for LiveActionRuntime {
     fn send_message(&self, session: &Session, content: &str) -> Result<()> {
-        match session.engine {
-            Engine::Claude => {
-                let connection = claude_registry::load_peer_connection(&session.session_id)
-                    .context("no active Claude Code session registry entry")?;
-                let socket_path = connection
-                    .messaging_socket_path
-                    .context("Claude Code session does not expose a messaging socket")?;
-                claude_messaging::send_message(&socket_path, connection.pid, content)
-            }
-            Engine::Codex => {
-                codex_steer::send_message(&session.session_id, content).map_err(anyhow::Error::from)
-            }
-        }
+        notify::notify(&session.session_id, content, None, None)?;
+        Ok(())
     }
 
     fn pane_current_command(&self, tmux_info: &TmuxInfo) -> Option<String> {
@@ -243,6 +230,9 @@ async fn send_message(
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
+    if session.status == SessionStatus::Ended {
+        return Err(ApiError::conflict("session has ended"));
+    }
     if request.content.trim().is_empty() && request.images.is_empty() {
         return Err(ApiError::bad_request("message must not be empty"));
     }
@@ -1564,7 +1554,15 @@ mod tests {
             .await
             .unwrap();
         let interrupt = app
+            .clone()
             .oneshot(post_empty("/sessions/sample-session/interrupt"))
+            .await
+            .unwrap();
+        let message = app
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({ "content": "continue the investigation" }),
+            ))
             .await
             .unwrap();
 
@@ -1574,6 +1572,7 @@ mod tests {
                 response_snapshot(answer, &action_context).await,
                 response_snapshot(permission, &action_context).await,
                 response_snapshot(interrupt, &action_context).await,
+                response_snapshot(message, &action_context).await,
             ),
             (
                 json!({
@@ -1584,6 +1583,11 @@ mod tests {
                         "interrupt": false,
                         "openInTerminal": true,
                     },
+                    "calls": [],
+                }),
+                json!({
+                    "status": StatusCode::CONFLICT.as_u16(),
+                    "body": { "error": "session has ended" },
                     "calls": [],
                 }),
                 json!({
