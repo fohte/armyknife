@@ -19,6 +19,7 @@ import type {
 } from '#components/permission-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
+import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
@@ -145,6 +146,8 @@ export function ConversationPaneView({
     isReview && session.category === 'needs_action' ? session.critUrl : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
+  const linkedTasks =
+    session.tasks ?? (session.task === null ? [] : [session.task])
 
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
@@ -276,15 +279,8 @@ export function ConversationPaneView({
             </Button>
             <div className="mobile-conversation-heading">
               <div className="mobile-conversation-context">
-                {session.task ? (
-                  <span>
-                    {session.task.priority != null
-                      ? `P${String(session.task.priority)} `
-                      : ''}
-                    #{session.task.number} {session.task.title}
-                  </span>
-                ) : null}
-                {session.task ? <span aria-hidden="true"> · </span> : null}
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                {session.task ? <span aria-hidden="true">·</span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
               <SessionHeading
@@ -306,19 +302,7 @@ export function ConversationPaneView({
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
-                {session.task ? (
-                  <a
-                    className="conversation-task-link"
-                    href={`https://tq.fohte.net/tasks/${encodeURIComponent(session.task.id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {session.task.priority != null ? (
-                      <span>P{session.task.priority}</span>
-                    ) : null}{' '}
-                    #{session.task.number} {session.task.title}
-                  </a>
-                ) : null}
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}
