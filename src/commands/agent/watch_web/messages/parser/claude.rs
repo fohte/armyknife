@@ -46,10 +46,13 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
 
     for_each_jsonl_record(&mut reader, |record| {
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
-            let Some(node) = transcript_nodes.get(uuid) else {
+            let membership = transcript_nodes.get(uuid).map(|node| node.membership);
+            let is_tool_result_only = is_tool_result_only_user_record(&record);
+            if membership.is_none() && !is_tool_result_only {
                 return;
-            };
-            if node.membership == BranchMembership::Unknown
+            }
+            if membership == Some(BranchMembership::Unknown)
+                && !is_tool_result_only
                 && is_inactive_branch(uuid, &mut transcript_nodes)
             {
                 return;
@@ -251,6 +254,20 @@ fn tool_result_ids(message: &Value) -> Vec<String> {
         .filter_map(|block| block.get("tool_use_id").and_then(Value::as_str))
         .map(str::to_owned)
         .collect()
+}
+
+fn is_tool_result_only_user_record(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("user")
+        && record
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks.iter().all(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    })
+            })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -643,6 +660,37 @@ mod tests {
                 ChatItem::User {
                     text: "Keep this replacement message.".to_string(),
                     from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_parallel_tool_results_from_sibling_branches() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Update the fixture."}}
+            {"uuid":"fixture-tool-use-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read-id","name":"Read","input":{"file_path":"fixture/plan.md"}},{"type":"tool_use","id":"fixture-edit-id","name":"Edit","input":{"file_path":"fixture/plan.md"}}]}}
+            {"uuid":"fixture-read-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-id","content":"Fictional source text."}]}}
+            {"uuid":"fixture-edit-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-edit-id","content":"Fictional edit result."}]}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-tool-use-id","type":"assistant","message":{"content":[{"type":"text","text":"The fixture is updated."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Update the fixture.".to_string(),
+                    from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "2 actions · 1 file edited".to_string(),
+                    operations: vec![
+                        operation("Read", Some("fixture/plan.md")),
+                        operation("Edit", Some("fixture/plan.md")),
+                    ],
+                },
+                ChatItem::Assistant {
+                    text: "The fixture is updated.".to_string(),
                 },
             ]
         );
