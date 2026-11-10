@@ -49,6 +49,7 @@ struct TqTaskView {
     number: u32,
     title: String,
     priority: Option<i32>,
+    is_closed: bool,
     #[serde(skip)]
     priority_order: Option<usize>,
 }
@@ -83,6 +84,7 @@ struct SessionView {
     elapsed_seconds: u64,
     unread: bool,
     task: Option<TqTaskView>,
+    tasks: Vec<TqTaskView>,
     repo: String,
     project: String,
     parent: Option<ParentSessionView>,
@@ -203,9 +205,11 @@ async fn list_sessions<S: SessionSource>(
         .sessions
         .iter()
         .map(|session| {
-            let task = task_metadata
+            let tasks = task_metadata
                 .links
                 .get(&session.session_id)
+                .into_iter()
+                .flatten()
                 .map(|task| TqTaskView {
                     id: task.task_id.clone(),
                     number: task.task_number,
@@ -215,8 +219,11 @@ async fn list_sessions<S: SessionSource>(
                         .get(&task.task_id)
                         .copied()
                         .flatten(),
+                    is_closed: task.is_closed,
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
-                });
+                })
+                .collect::<Vec<_>>();
+            let task = tasks.first().cloned();
             let parent = session
                 .ancestor_session_ids
                 .last()
@@ -272,6 +279,7 @@ async fn list_sessions<S: SessionSource>(
                     .max(0) as u64,
                 unread: session.is_unread_stopped(),
                 task,
+                tasks,
                 repo: repo.clone(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
@@ -390,6 +398,7 @@ fn resolve_parent_project<'a>(
         task_metadata
             .links
             .get(ancestor_id)
+            .and_then(|tasks| tasks.first())
             .and_then(|task| task_metadata.task_projects.get(&task.task_id))
             .map(String::as_str)
             .filter(|project| !project.trim().is_empty())
@@ -416,13 +425,13 @@ mod project_tests {
                 .map(|(session_id, task_id)| {
                     (
                         (*session_id).to_string(),
-                        SessionTask {
+                        vec![SessionTask {
                             task_id: (*task_id).to_string(),
                             task_number: 1,
                             task_title: "Sample task".to_string(),
                             parent_task_id: None,
                             is_closed: false,
-                        },
+                        }],
                     )
                 })
                 .collect(),
@@ -710,6 +719,14 @@ mod tests {
         task: Option<(Option<i32>, Option<usize>, u32)>,
         updated_at: i64,
     ) -> SessionView {
+        let task = task.map(|(priority, priority_order, number)| TqTaskView {
+            id: format!("task-{number}"),
+            number,
+            title: id.to_string(),
+            priority,
+            is_closed: false,
+            priority_order,
+        });
         SessionView {
             id: id.to_string(),
             engine: Engine::Claude,
@@ -723,13 +740,8 @@ mod tests {
             updated_at: Utc.timestamp_opt(updated_at, 0).unwrap(),
             elapsed_seconds: 0,
             unread: false,
-            task: task.map(|(priority, priority_order, number)| TqTaskView {
-                id: format!("task-{number}"),
-                number,
-                title: id.to_string(),
-                priority,
-                priority_order,
-            }),
+            task: task.clone(),
+            tasks: task.into_iter().collect(),
             repo: String::new(),
             project: "Unsorted".to_string(),
             parent: None,
@@ -749,7 +761,7 @@ mod tests {
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
-        task_links: HashMap<String, LinkedSessionTask>,
+        task_links: HashMap<String, Vec<LinkedSessionTask>>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
@@ -849,23 +861,23 @@ mod tests {
             task_links: HashMap::from([
                 (
                     "child-session".to_string(),
-                    LinkedSessionTask {
+                    vec![LinkedSessionTask {
                         task_id: "task-id".to_string(),
                         task_number: 17,
                         task_title: "task title".to_string(),
                         parent_task_id: None,
                         is_closed: false,
-                    },
+                    }],
                 ),
                 (
                     "parent-session".to_string(),
-                    LinkedSessionTask {
+                    vec![LinkedSessionTask {
                         task_id: "parent-task-id".to_string(),
                         task_number: 18,
                         task_title: "parent task".to_string(),
                         parent_task_id: None,
                         is_closed: false,
-                    },
+                    }],
                 ),
             ]),
             task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
@@ -987,8 +999,16 @@ mod tests {
                     "id": "task-id",
                     "number": 17,
                     "title": "task title",
-                    "priority": 1
+                    "priority": 1,
+                    "isClosed": false
                 },
+                "tasks": [{
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1,
+                    "isClosed": false
+                }],
                 "repo": "example-org/example-repo",
                 "project": "parent project",
                 "parent": {
@@ -1169,6 +1189,68 @@ mod tests {
                         elapsed_seconds: 100,
                     },
                 ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_all_tasks_with_the_newest_open_task_as_primary(
+        mut source: TestSessionSource,
+    ) {
+        source.task_links.insert(
+            "child-session".to_string(),
+            vec![
+                LinkedSessionTask {
+                    task_id: "open-task".to_string(),
+                    task_number: 20,
+                    task_title: "open task".to_string(),
+                    parent_task_id: None,
+                    is_closed: false,
+                },
+                LinkedSessionTask {
+                    task_id: "completed-task".to_string(),
+                    task_number: 19,
+                    task_title: "completed task".to_string(),
+                    parent_task_id: None,
+                    is_closed: true,
+                },
+            ],
+        );
+        source.task_priorities = HashMap::from([
+            ("completed-task".to_string(), Some(2)),
+            ("open-task".to_string(), Some(1)),
+        ]);
+
+        let (_, response) = sessions_response(source).await;
+        let session = &response["sessions"][0];
+
+        assert_eq!(
+            (session["task"].clone(), session["tasks"].clone()),
+            (
+                serde_json::json!({
+                    "id": "open-task",
+                    "number": 20,
+                    "title": "open task",
+                    "priority": 1,
+                    "isClosed": false,
+                }),
+                serde_json::json!([
+                    {
+                        "id": "open-task",
+                        "number": 20,
+                        "title": "open task",
+                        "priority": 1,
+                        "isClosed": false,
+                    },
+                    {
+                        "id": "completed-task",
+                        "number": 19,
+                        "title": "completed task",
+                        "priority": 2,
+                        "isClosed": true,
+                    },
+                ]),
             ),
         );
     }
@@ -1469,6 +1551,7 @@ mod tests {
                 number,
                 title: "task".to_string(),
                 priority,
+                is_closed: false,
                 priority_order,
             })
         };

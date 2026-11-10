@@ -2,6 +2,10 @@ import { err, ok, Result, ResultAsync } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import type {
+  PendingPermissionAction,
+  PermissionRequestIdentity,
+} from '#components/permission-card'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,6 +155,8 @@ export function ConversationPane({
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [pendingPermissionAction, setPendingPermissionAction] =
+    useState<PendingPermissionAction>(null)
   const requestGeneration = useRef(0)
 
   const refresh = useCallback(() => {
@@ -176,6 +182,23 @@ export function ConversationPane({
         if (requestGeneration.current !== generation) return
         if (messagesResult.isOk()) setMessages(messagesResult.value)
         if (actionsResult.isOk()) setActions(actionsResult.value)
+        setPendingPermissionAction((pending) => {
+          if (pending === null) return null
+          const permissionDisappeared =
+            messagesResult.isOk() &&
+            !messagesResult.value.some(
+              (message) =>
+                message.type === 'permission' &&
+                message.tool === pending.tool &&
+                message.description === pending.description,
+            )
+          const permissionUnavailable =
+            actionsResult.isOk() &&
+            (actionsResult.value.permission == null ||
+              (!actionsResult.value.permission.approve &&
+                !actionsResult.value.permission.reject))
+          return permissionDisappeared || permissionUnavailable ? null : pending
+        })
         const firstError = messagesResult.isErr()
           ? messagesResult.error
           : actionsResult.isErr()
@@ -197,18 +220,50 @@ export function ConversationPane({
     }
   }, [refresh, refreshKey])
 
-  const onAction = (action: string, payload?: Record<string, unknown>) =>
-    requestAction(session.id, action, payload).match(
+  useEffect(() => {
+    setPendingPermissionAction(null)
+  }, [session.id])
+
+  const onAction = (
+    action: string,
+    payload?: Record<string, unknown>,
+    permissionIdentity?: PermissionRequestIdentity,
+  ) => {
+    const permissionAction =
+      action === 'permission/approve'
+        ? 'approve'
+        : action === 'permission/reject'
+          ? 'reject'
+          : null
+    if (permissionAction !== null && permissionIdentity !== undefined) {
+      setPendingPermissionAction({
+        action: permissionAction,
+        status: 'sending',
+        ...permissionIdentity,
+      })
+    }
+    return requestAction(session.id, action, payload).match(
       () => {
+        if (permissionAction !== null && permissionIdentity !== undefined) {
+          setPendingPermissionAction({
+            action: permissionAction,
+            status: 'sent',
+            ...permissionIdentity,
+          })
+        }
         setError(null)
         refresh()
         return true
       },
       (requestError) => {
+        if (permissionAction !== null && permissionIdentity !== undefined) {
+          setPendingPermissionAction(null)
+        }
         setError(requestError.message)
         return false
       },
     )
+  }
 
   return (
     <ConversationPaneView
@@ -217,6 +272,7 @@ export function ConversationPane({
       messages={messages}
       actions={actions}
       actionsReady={actionsReady}
+      pendingPermissionAction={pendingPermissionAction}
       loading={loading}
       error={error}
       onClearError={() => {

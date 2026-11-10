@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use crate::commands::agent::claude_sessions::normalize_title;
-use crate::infra::tq::{SessionTasks, TqClient, TqTaskStatus};
+use crate::infra::tq::{SessionTasks, TqClient, TqTask, TqTaskStatus};
 
 /// A tq task linked to a session, as needed by session list views. `parent_task_id`
 /// is `None` both when the task has no parent and when an older `tq` binary
@@ -86,21 +86,6 @@ where
     Ok(parent_sessions)
 }
 
-/// Reduces tq's session -> tasks listing to one task per locally known session.
-/// It prefers session-specific tasks, then open tasks, then newer links.
-pub(super) fn build_task_by_session(
-    sessions: Vec<SessionTasks>,
-    local_session_ids: &HashSet<String>,
-) -> HashMap<String, SessionTask> {
-    build_all_tasks_by_session(sessions, local_session_ids)
-        .into_iter()
-        .filter_map(|(session_id, tasks)| {
-            let task = tasks.into_iter().next()?;
-            Some((session_id, task))
-        })
-        .collect()
-}
-
 /// Builds the task order shared by the TUI and Web UI. Filtering by local IDs
 /// also handles older `tq` binaries that ignore the session ID argument.
 pub(super) fn build_all_tasks_by_session(
@@ -143,17 +128,171 @@ pub(super) fn build_all_tasks_by_session(
                     })
                     .then_with(|| right.linked_at.cmp(&left.linked_at))
             });
-            let tasks = tasks
-                .into_iter()
-                .map(|task| SessionTask {
-                    task_id: task.id,
-                    task_number: task.number,
-                    task_title: normalize_title(&task.title),
-                    parent_task_id: task.parent_id,
-                    is_closed: task.status == TqTaskStatus::Completed,
-                })
-                .collect();
+            let tasks = tasks.into_iter().map(to_session_task).collect();
             (session.session_id, tasks)
         })
         .collect()
+}
+
+fn to_session_task(task: TqTask) -> SessionTask {
+    SessionTask {
+        task_id: task.id,
+        task_number: task.number,
+        task_title: normalize_title(&task.title),
+        parent_task_id: task.parent_id,
+        is_closed: task.status == TqTaskStatus::Completed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionTask;
+    use super::build_all_tasks_by_session;
+    use crate::infra::tq::{SessionTasks, TqTask, TqTaskStatus};
+    use chrono::{DateTime, Utc};
+    use rstest::rstest;
+    use std::collections::{HashMap, HashSet};
+
+    fn task(
+        id: &str,
+        number: u32,
+        title: &str,
+        linked_at: Option<&str>,
+        status: TqTaskStatus,
+    ) -> TqTask {
+        TqTask {
+            id: id.to_string(),
+            number,
+            title: title.to_string(),
+            linked_at: linked_at.map(|value| {
+                DateTime::parse_from_rfc3339(value)
+                    .expect("valid timestamp")
+                    .with_timezone(&Utc)
+            }),
+            parent_id: None,
+            status,
+        }
+    }
+
+    fn task_with_parent(
+        id: &str,
+        number: u32,
+        title: &str,
+        parent_id: &str,
+        status: TqTaskStatus,
+    ) -> TqTask {
+        TqTask {
+            parent_id: Some(parent_id.to_string()),
+            ..task(id, number, title, None, status)
+        }
+    }
+
+    fn view_task(id: &str, number: u32, title: &str, is_closed: bool) -> SessionTask {
+        SessionTask {
+            task_id: id.to_string(),
+            task_number: number,
+            task_title: title.to_string(),
+            parent_task_id: None,
+            is_closed,
+        }
+    }
+
+    fn session(
+        session_id: &str,
+        parent_session_id: Option<&str>,
+        tasks: Vec<TqTask>,
+    ) -> SessionTasks {
+        SessionTasks {
+            session_id: session_id.to_string(),
+            parent_session_id: parent_session_id.map(String::from),
+            tasks,
+        }
+    }
+
+    #[rstest]
+    #[case::open_links_precede_completed_links(
+        vec![session("session-a", None, vec![
+            task("completed-newest", 1, "Completed newest", Some("2026-01-03T00:00:00Z"), TqTaskStatus::Completed),
+            task("open-oldest", 2, "Open oldest", Some("2026-01-01T00:00:00Z"), TqTaskStatus::Todo),
+            task("open-newest", 3, "Open newest", Some("2026-01-02T00:00:00Z"), TqTaskStatus::Todo),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![
+            view_task("open-newest", 3, "Open newest", false),
+            view_task("open-oldest", 2, "Open oldest", false),
+            view_task("completed-newest", 1, "Completed newest", true),
+        ])]),
+    )]
+    #[case::newest_link_wins_when_all_tasks_are_completed(
+        vec![session("session-a", None, vec![
+            task("older", 1, "Older", Some("2026-01-01T00:00:00Z"), TqTaskStatus::Completed),
+            task("newer", 2, "Newer", Some("2026-01-02T00:00:00Z"), TqTaskStatus::Completed),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![
+            view_task("newer", 2, "Newer", true),
+            view_task("older", 1, "Older", true),
+        ])]),
+    )]
+    #[case::session_specific_task_precedes_inherited_task(
+        vec![
+            session("child-session", Some("parent-session"), vec![
+                task("inherited", 1, "Inherited task", Some("2026-01-02T00:00:00Z"), TqTaskStatus::Todo),
+                task("session-specific", 2, "Session task", Some("2026-01-01T00:00:00Z"), TqTaskStatus::Completed),
+            ]),
+            session("parent-session", None, vec![
+                task("inherited", 1, "Inherited task", Some("2026-01-02T00:00:00Z"), TqTaskStatus::Todo),
+            ]),
+        ],
+        HashMap::from([("child-session".to_string(), vec![
+            view_task("session-specific", 2, "Session task", true),
+            view_task("inherited", 1, "Inherited task", false),
+        ])]),
+    )]
+    #[case::preserves_tq_order_for_missing_timestamps(
+        vec![session("session-a", None, vec![
+            task("first", 1, "First task", None, TqTaskStatus::Todo),
+            task("second", 2, "Second task", None, TqTaskStatus::Todo),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![
+            view_task("first", 1, "First task", false),
+            view_task("second", 2, "Second task", false),
+        ])]),
+    )]
+    #[case::preserves_tq_order_for_equal_timestamps(
+        vec![session("session-a", None, vec![
+            task("first", 1, "First task", Some("2026-01-01T00:00:00Z"), TqTaskStatus::Todo),
+            task("second", 2, "Second task", Some("2026-01-01T00:00:00Z"), TqTaskStatus::Todo),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![
+            view_task("first", 1, "First task", false),
+            view_task("second", 2, "Second task", false),
+        ])]),
+    )]
+    #[case::preserves_parent_task_id(
+        vec![session("session-a", None, vec![
+            task_with_parent("child-task", 1, "Child task", "parent-task", TqTaskStatus::Todo),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![SessionTask {
+            parent_task_id: Some("parent-task".to_string()),
+            ..view_task("child-task", 1, "Child task", false)
+        }])]),
+    )]
+    #[case::drops_unrequested_sessions(
+        vec![
+            session("session-a", None, vec![task("requested", 1, "Requested", None, TqTaskStatus::Todo)]),
+            session("session-b", None, vec![task("unrequested", 2, "Unrequested", None, TqTaskStatus::Todo)]),
+        ],
+        HashMap::from([("session-a".to_string(), vec![view_task("requested", 1, "Requested", false)])]),
+    )]
+    fn builds_all_tasks_by_session(
+        #[case] sessions: Vec<SessionTasks>,
+        #[case] expected: HashMap<String, Vec<SessionTask>>,
+    ) {
+        assert_eq!(
+            build_all_tasks_by_session(
+                sessions,
+                &HashSet::from(["session-a".to_string(), "child-session".to_string()]),
+            ),
+            expected,
+        );
+    }
 }

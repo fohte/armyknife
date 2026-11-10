@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::EnrichmentUpdates;
 use crate::commands::agent::tq_session_tasks::{
-    SessionTask, build_task_by_session, fetch_session_tasks_with_parents,
+    SessionTask, build_all_tasks_by_session, fetch_session_tasks_with_parents,
 };
 use crate::commands::agent::types::Session;
 use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
@@ -120,7 +120,7 @@ impl SessionEnrichmentCache {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct SessionTaskMetadata {
-    pub(super) links: HashMap<String, SessionTask>,
+    pub(super) links: HashMap<String, Vec<SessionTask>>,
     pub(super) priorities: HashMap<String, Option<i32>>,
     pub(super) priority_order: HashMap<String, usize>,
     pub(super) task_projects: HashMap<String, String>,
@@ -218,9 +218,10 @@ async fn fetch_task_metadata(
         return Ok(previous);
     };
     let tq_sessions = fetch_session_tasks_with_parents(&client, &session_ids).await?;
-    let links = build_task_by_session(tq_sessions, &session_ids);
+    let links = build_all_tasks_by_session(tq_sessions, &session_ids);
     let task_ids = links
         .values()
+        .flatten()
         .map(|task| task.task_id.clone())
         .collect::<HashSet<_>>();
     if task_ids.is_empty() {
@@ -414,13 +415,13 @@ mod tests {
                 let task_id = format!("task-{session_id}");
                 (
                     session_id,
-                    SessionTask {
+                    vec![SessionTask {
                         task_id,
                         task_number: 7,
                         task_title: "Example task".to_string(),
                         parent_task_id: None,
                         is_closed: false,
-                    },
+                    }],
                 )
             })
             .collect();

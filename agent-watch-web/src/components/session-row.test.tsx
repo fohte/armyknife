@@ -18,6 +18,7 @@ const session: Session = {
   elapsedSeconds: 120,
   unread: false,
   task: null,
+  tasks: [],
   repo: 'example/service',
   project: 'sample project',
   parent: null,
@@ -44,6 +45,7 @@ function snapshot() {
   return {
     badge: container.querySelector('[data-slot="chip"]')?.textContent,
     age: container.querySelector('.session-age')?.textContent,
+    task: container.querySelector('.session-task')?.textContent,
   }
 }
 
@@ -63,7 +65,11 @@ afterEach(() => {
 it('labels a paused session while keeping its elapsed time visible', () => {
   renderRow(session)
 
-  expect(snapshot()).toEqual({ badge: 'Paused', age: '2m' })
+  expect(snapshot()).toEqual({
+    badge: 'Paused',
+    age: '2m',
+    task: '— No task',
+  })
 })
 
 it('keeps the merged pull request label on a paused row', () => {
@@ -75,5 +81,39 @@ it('keeps the merged pull request label on a paused row', () => {
   expect(snapshot()).toEqual({
     badge: 'Paused',
     age: 'Merged #2049 · 2m',
+    task: '— No task',
   })
+})
+
+it('shows the primary tq task and the number of other linked tasks', () => {
+  renderRow({
+    ...session,
+    task: {
+      id: 'open-task',
+      number: 2048,
+      title: 'Improve request reliability',
+      priority: 1,
+      isClosed: false,
+    },
+    tasks: [
+      {
+        id: 'open-task',
+        number: 2048,
+        title: 'Improve request reliability',
+        priority: 1,
+        isClosed: false,
+      },
+      {
+        id: 'completed-task',
+        number: 2047,
+        title: 'Document retry behavior',
+        priority: null,
+        isClosed: true,
+      },
+    ],
+  })
+
+  expect(container.querySelector('.session-task')?.textContent).toBe(
+    'P1 #2048 · Improve request reliability +1',
+  )
 })
