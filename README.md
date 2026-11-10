@@ -1088,9 +1088,10 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary, including an Inbox grouped by session status and a Board grouped by project. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `GET /api/sessions/{id}/actions`
+- `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"choice":1}`
 - `POST /api/sessions/{id}/permission/approve`
@@ -1099,6 +1100,8 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`
 - `POST /api/sessions/{id}/archive`
+- `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
+- `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 
 For example, send a message with:
 

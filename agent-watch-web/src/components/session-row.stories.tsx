@@ -47,6 +47,15 @@ export const NeedsActionIsUnread: Story = {
   name: 'An unread question waits for a response',
 }
 
+export const SessionIsStarredForToday: Story = {
+  name: 'A starred session stays on the TODAY list',
+  args: {
+    session: { ...session, isToday: true },
+    onLater: () => undefined,
+    onToggleToday: () => undefined,
+  },
+}
+
 export const NeedsActionShowsApproval: Story = {
   name: 'An approval request waits for a response',
   args: {

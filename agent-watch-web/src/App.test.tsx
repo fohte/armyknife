@@ -259,6 +259,43 @@ it('disables a PM row when its project has no PM session', () => {
   })
 })
 
+const laterPresetTimes = {
+  one_hour: { when: '16:00', deadline: '2030-03-04T16:00:00Z' },
+  this_evening: { when: '19:00', deadline: '2030-03-04T19:00:00Z' },
+  tomorrow: { when: 'Tue 9:00', deadline: '2030-03-05T09:00:00Z' },
+  next_week: { when: 'Mon 3/11', deadline: '2030-03-11T09:00:00Z' },
+  until_it_changes: { when: 'next activity', deadline: null },
+}
+
+function requestUrl(input: RequestInfo | URL) {
+  if (typeof input === 'string') {
+    return input
+  }
+  return input instanceof URL ? input.href : input.url
+}
+
+function isConversationPaneRequest(input: RequestInfo | URL) {
+  const url = requestUrl(input)
+  return url.endsWith('/messages') || url.endsWith('/actions')
+}
+
+function mockPendingResponse() {
+  return new Promise<Response>(() => undefined)
+}
+
+function mockSessionActionFetch(input: RequestInfo | URL) {
+  const response =
+    requestUrl(input) === '/api/sessions/later-options'
+      ? new Response(JSON.stringify(laterPresetTimes), { status: 200 })
+      : new Response(null, { status: 204 })
+  return isConversationPaneRequest(input)
+    ? mockPendingResponse()
+    : Promise.resolve(response)
+}
+
+function flushAsyncState() {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+}
 function readSelectedTitle() {
   return (
     container.querySelector<HTMLElement>(
@@ -379,6 +416,681 @@ it('moves the selected App row with j and k and scrolls it into view', () => {
     afterK: 'First session',
     defaultPrevented: [true, true],
     scrollOptions: [{ block: 'nearest' }, { block: 'nearest' }],
+  })
+})
+
+it('opens Later with L and selects a preset with its number key', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  const menuItems = Array.from(
+    container.querySelectorAll<HTMLElement>('[role="menuitem"]'),
+    (item) => item.textContent,
+  )
+  await act(async () => {
+    dispatchKey(window, '3')
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    menuItems,
+    requests: fetchMock.mock.calls.filter(([input]) =>
+      ['/api/sessions/later-options', '/api/sessions/session-a/later'].includes(
+        requestUrl(input),
+      ),
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menuItems: [
+      'In 1 hour16:001',
+      'This evening19:002',
+      'TomorrowTue 9:003',
+      'Next weekMon 3/114',
+      'Until it changesnext activity5',
+    ],
+    requests: [
+      ['/api/sessions/later-options'],
+      [
+        '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"tomorrow","expectedDeadline":"2030-03-05T09:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('ignores further Later shortcuts while a preset request is pending', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input) === '/api/sessions/session-a/later'
+        ? mockPendingResponse()
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+    dispatchKey(window, '2')
+  })
+
+  const snapshot = () => ({
+    menuOpen:
+      container.querySelector('[aria-label="Later: First session"]') !== null,
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menuOpen: true,
+    requests: [
+      [
+        '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('disables Back now and preset shortcuts while a Later request is pending', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input) === '/api/sessions/session-later/later'
+        ? mockPendingResponse()
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-11T09:00:00.000Z',
+      },
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-collapsed-row')?.click()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const backNow = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Back now: Deferred session"]',
+  )
+  act(() => {
+    backNow?.click()
+    dispatchKey(window, '2')
+  })
+
+  const snapshot = () => ({
+    menuItemsDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (button) => button.disabled,
+    ),
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-later/later',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menuItemsDisabled: [true, true, true, true, true, true],
+    requests: [
+      [
+        '/api/sessions/session-later/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('accepts a new Later preset after the previous request settles', async () => {
+  let resolveFirstRequest: ((response: Response) => void) | undefined
+  let shouldHoldFirstRequest = true
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (
+      requestUrl(input) === '/api/sessions/session-a/later' &&
+      shouldHoldFirstRequest
+    ) {
+      shouldHoldFirstRequest = false
+      return new Promise<Response>((resolve) => {
+        resolveFirstRequest = resolve
+      })
+    }
+    return mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const resolveSuccess = resolveFirstRequest
+  if (resolveSuccess === undefined) {
+    throw new Error('The first Later request did not start')
+  }
+  await act(async () => {
+    resolveSuccess(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  await act(async () => {
+    dispatchKey(window, '2')
+    await flushAsyncState()
+  })
+
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    )
+
+  expect(snapshot()).toEqual([
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+      },
+    ],
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"this_evening","expectedDeadline":"2030-03-04T19:00:00Z"}',
+      },
+    ],
+  ])
+})
+
+it('accepts a new Later preset after a failed request reloads its menu', async () => {
+  let resolveFirstRequest: ((response: Response) => void) | undefined
+  let resolveReloadRequest: ((response: Response) => void) | undefined
+  let laterOptionsRequestCount = 0
+  let shouldHoldFirstRequest = true
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (requestUrl(input) === '/api/sessions/later-options') {
+      laterOptionsRequestCount += 1
+      if (laterOptionsRequestCount === 2) {
+        return new Promise<Response>((resolve) => {
+          resolveReloadRequest = resolve
+        })
+      }
+    }
+    if (
+      requestUrl(input) === '/api/sessions/session-a/later' &&
+      shouldHoldFirstRequest
+    ) {
+      shouldHoldFirstRequest = false
+      return new Promise<Response>((resolve) => {
+        resolveFirstRequest = resolve
+      })
+    }
+    return mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const resolveFailure = resolveFirstRequest
+  if (resolveFailure === undefined) {
+    throw new Error('The first Later request did not start')
+  }
+  await act(async () => {
+    resolveFailure(new Response(null, { status: 500 }))
+    await flushAsyncState()
+  })
+  const resolveReload = resolveReloadRequest
+  if (resolveReload === undefined) {
+    throw new Error('The Later return times were not reloaded')
+  }
+  await act(async () => {
+    resolveReload(
+      new Response(JSON.stringify(laterPresetTimes), { status: 200 }),
+    )
+    await flushAsyncState()
+  })
+  const menuSnapshot = () => ({
+    isOpen:
+      container.querySelector('[aria-label="Later: First session"]') !== null,
+    disabledItems: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (item) => item.disabled,
+    ),
+  })
+  expect(menuSnapshot()).toEqual({
+    isOpen: true,
+    disabledItems: [false, false, false, false, false],
+  })
+  await act(async () => {
+    dispatchKey(window, '2')
+    await flushAsyncState()
+  })
+
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    )
+
+  expect(snapshot()).toEqual([
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+      },
+    ],
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"this_evening","expectedDeadline":"2030-03-04T19:00:00Z"}',
+      },
+    ],
+  ])
+})
+
+it('returns a Later session immediately from the menu', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-11T09:00:00.000Z',
+      },
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-collapsed-row')?.click()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await vi.waitFor(() => {
+      expect(
+        container.querySelector('[aria-label="Back now: Deferred session"]')
+          ?.textContent,
+      ).toEqual('Back now')
+    })
+  })
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Back now: Deferred session"]',
+      )
+      ?.click()
+    await flushAsyncState()
+  })
+
+  expect(
+    fetchMock.mock.calls.filter(([input]) =>
+      [
+        '/api/sessions/later-options',
+        '/api/sessions/session-later/later',
+      ].includes(requestUrl(input)),
+    ),
+  ).toEqual([
+    ['/api/sessions/later-options'],
+    [
+      '/api/sessions/session-later/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"back_now"}',
+      },
+    ],
+  ])
+})
+
+it.each([
+  {
+    scenario: 'a failed request',
+    response: new Response(null, { status: 503 }),
+  },
+  {
+    scenario: 'an invalid response',
+    response: new Response('{', { status: 200 }),
+  },
+])('disables Later presets after $scenario', async ({ response }) => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      isConversationPaneRequest(input)
+        ? mockPendingResponse()
+        : Promise.resolve(response),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.later-menu-error')?.textContent,
+    disabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (button) => button.disabled,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not load return times.',
+    disabled: [true, true, true, true, true],
+  })
+})
+
+it('ignores return times from an earlier Later menu request', async () => {
+  let resolveFirst!: (response: Response) => void
+  let resolveSecond!: (response: Response) => void
+  const firstResponse = new Promise<Response>((resolve) => {
+    resolveFirst = resolve
+  })
+  const secondResponse = new Promise<Response>((resolve) => {
+    resolveSecond = resolve
+  })
+  const optionResponses = [firstResponse, secondResponse]
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (isConversationPaneRequest(input)) {
+      return mockPendingResponse()
+    }
+    if (requestUrl(input) === '/api/sessions/later-options') {
+      return (
+        optionResponses.shift() ??
+        Promise.resolve(new Response(null, { status: 500 }))
+      )
+    }
+    return Promise.resolve(new Response(null, { status: 204 }))
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+
+  act(() => {
+    dispatchKey(window, 'l')
+  })
+  act(() => {
+    dispatchKey(window, 'Escape')
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  act(() => {
+    dispatchKey(window, 'l')
+  })
+  await act(async () => {
+    resolveSecond(
+      new Response(
+        JSON.stringify({
+          ...laterPresetTimes,
+          one_hour: { when: '22:00', deadline: '2030-03-04T22:00:00Z' },
+        }),
+        { status: 200 },
+      ),
+    )
+    await flushAsyncState()
+  })
+  await act(async () => {
+    resolveFirst(
+      new Response(
+        JSON.stringify({
+          ...laterPresetTimes,
+          one_hour: { when: '14:00', deadline: '2030-03-04T14:00:00Z' },
+        }),
+        { status: 200 },
+      ),
+    )
+    await flushAsyncState()
+  })
+
+  const returnTime = container.querySelector('.later-menu-when')?.textContent
+  expect(returnTime).toEqual('22:00')
+})
+
+it('saves a TODAY star from the session row', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      isConversationPaneRequest(input)
+        ? mockPendingResponse()
+        : Promise.resolve(new Response(null, { status: 204 })),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  const todayButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add to TODAY"]',
+  )
+  await act(async () => {
+    todayButton?.click()
+    await flushAsyncState()
+  })
+
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/today'),
+    )
+  expect(snapshot()).toEqual([
+    [
+      '/api/sessions/session-a/today',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"isToday":true}',
+      },
+    ],
+  ])
+})
+
+it('skips collapsed Later sessions during keyboard navigation', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Needs action session'),
+      session('session-later', 'Later session', 'later'),
+      session('session-work', 'In-progress session', 'in_progress'),
+    ],
+  })
+
+  let event: KeyboardEvent | null = null
+  act(() => {
+    event = dispatchKey(window, 'j')
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    defaultPrevented: event?.defaultPrevented,
+    laterRowsVisible: container.querySelector('.later-session-list') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    selectedTitle: 'In-progress session',
+    defaultPrevented: true,
+    laterRowsVisible: false,
+  })
+})
+
+it('closes Later when its target session disappears', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'Later target'),
+      session('session-b', 'Remaining session'),
+    ],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  publishSessions({
+    revision: 2,
+    sessions: [session('session-b', 'Remaining session')],
+  })
+
+  let numberKeyEvent: KeyboardEvent | null = null
+  act(() => {
+    numberKeyEvent = dispatchKey(window, '3')
+  })
+
+  const snapshot = () => ({
+    menu: container.querySelector('[role="menu"]'),
+    selectedTitle: readSelectedTitle(),
+    numberKeyPrevented: numberKeyEvent?.defaultPrevented,
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/later-options',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menu: null,
+    selectedTitle: 'Remaining session',
+    numberKeyPrevented: false,
+    requests: [['/api/sessions/later-options']],
+  })
+})
+
+it('returns a Later session after its deadline without a feed update', async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(new Date('2026-11-10T00:00:00.000Z'))
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: new Date(Date.now() + 1_000).toISOString(),
+      },
+    ],
+  })
+  const before = {
+    needsActionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.needs-action-section .session-title',
+      ),
+      (element) => element.textContent,
+    ),
+    laterCount: container.querySelector('.later-section-count')?.textContent,
+  }
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1_000)
+  })
+
+  const after = {
+    needsActionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.needs-action-section .session-title',
+      ),
+      (element) => element.textContent,
+    ),
+    laterCount: container.querySelector('.later-section-count')?.textContent,
+  }
+
+  const snapshot = () => ({ before, after })
+
+  expect(snapshot()).toEqual({
+    before: { needsActionTitles: [], laterCount: '1' },
+    after: { needsActionTitles: ['Deferred session'], laterCount: '0' },
   })
 })
 

@@ -25,6 +25,7 @@ use crate::shared::config::{self, AgentConfig};
 #[serde(rename_all = "snake_case")]
 enum SessionCategory {
     NeedsAction,
+    Later,
     InProgress,
     Done,
 }
@@ -71,6 +72,7 @@ struct SessionView {
     id: String,
     engine: Engine,
     category: SessionCategory,
+    category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
     preview: Option<String>,
@@ -84,6 +86,8 @@ struct SessionView {
     ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
     crit_url: Option<String>,
+    later_until: Option<DateTime<Utc>>,
+    is_today: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,6 +100,7 @@ struct SessionsResponse {
 struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
+    web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
     agent_config: AgentConfig,
@@ -169,6 +174,11 @@ async fn list_sessions<S: SessionSource>(
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
         .collect::<HashMap<_, _>>();
     let now = source.now();
+    let state_by_id = snapshot
+        .web_states
+        .into_iter()
+        .map(|state| (state.session_id.clone(), state))
+        .collect::<HashMap<_, _>>();
 
     let mut sessions = snapshot
         .sessions
@@ -216,17 +226,16 @@ async fn list_sessions<S: SessionSource>(
                     state: info.state.clone(),
                 });
 
+            let turn = turn_kinds.get(session.session_id.as_str()).copied();
+            let category_when_not_later = category_for(session, turn);
+            let state = state_by_id.get(&session.session_id);
+            let category = category_for_with_later(session, turn, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
-                category: category_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
-                kind: kind_for(
-                    session,
-                    turn_kinds.get(session.session_id.as_str()).copied(),
-                ),
+                category,
+                category_when_not_later,
+                kind: kind_for(session, turn),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
@@ -252,6 +261,8 @@ async fn list_sessions<S: SessionSource>(
                 } else {
                     None
                 },
+                later_until: state.and_then(|state| state.later_until),
+                is_today: state.is_some_and(|state| state.is_today),
             }
         })
         .collect::<Vec<_>>();
@@ -277,6 +288,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     Ok(SessionSnapshot {
         revision,
         sessions,
+        web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
         agent_config: config::load_config_or_default().agent,
@@ -498,6 +510,28 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
     }
 }
 
+fn category_for_with_later(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> SessionCategory {
+    let still_unchanged = state.is_some_and(|state| {
+        state
+            .activity_snapshot
+            .is_none_or(|snapshot| session.updated_at <= snapshot)
+    });
+    let later_is_active = still_unchanged
+        && state.is_some_and(|state| {
+            state.until_activity || state.later_until.is_some_and(|deadline| now < deadline)
+        });
+    if later_is_active {
+        SessionCategory::Later
+    } else {
+        category_for(session, turn)
+    }
+}
+
 fn kind_for(session: &Session, turn: Option<UserTurnKind>) -> Option<SessionKind> {
     if session
         .current_tool
@@ -575,7 +609,7 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
-    use rstest::rstest;
+    use rstest::{fixture, rstest};
     use std::path::PathBuf;
     use tower::ServiceExt;
 
@@ -627,6 +661,7 @@ mod tests {
             id: id.to_string(),
             engine: Engine::Claude,
             category,
+            category_when_not_later: category,
             kind: None,
             title: id.to_string(),
             preview: None,
@@ -646,6 +681,8 @@ mod tests {
             ancestor_session_ids: Vec::new(),
             pull_request: None,
             crit_url: None,
+            later_until: None,
+            is_today: false,
         }
     }
 
@@ -653,6 +690,7 @@ mod tests {
     struct TestSessionSource {
         revision: i64,
         sessions: Vec<Session>,
+        web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
         task_links: HashMap<String, LinkedSessionTask>,
@@ -668,6 +706,7 @@ mod tests {
             Ok(SessionSnapshot {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
+                web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
                 agent_config: AgentConfig::default(),
@@ -695,13 +734,13 @@ mod tests {
         }
     }
 
-    fn test_source() -> TestSessionSource {
-        let mut session = session(SessionStatus::WaitingInput);
+    #[fixture]
+    fn source() -> TestSessionSource {
+        let mut session = session(SessionStatus::Stopped);
         session.session_id = "child-session".to_string();
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
         session.last_message = Some("last message".to_string());
         session.ancestor_session_ids = vec!["parent-session".to_string()];
-        session.crit_urls = vec!["http://127.0.0.1:52413".to_string()];
         session.pr_context = Some(crate::commands::agent::types::SessionPrContext {
             owner: "example-org".to_string(),
             repo: "example-repo".to_string(),
@@ -712,6 +751,13 @@ mod tests {
         TestSessionSource {
             revision: 7,
             sessions: vec![session],
+            web_states: vec![store::WatchWebSessionState {
+                session_id: "child-session".to_string(),
+                later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
+                activity_snapshot: Some(Utc.timestamp_opt(1_000, 0).unwrap()),
+                until_activity: false,
+                is_today: true,
+            }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
                 ("parent-session".to_string(), "parent title".to_string()),
@@ -767,6 +813,23 @@ mod tests {
         }
     }
 
+    async fn sessions_response(source: TestSessionSource) -> (StatusCode, serde_json::Value) {
+        let response = Router::new()
+            .nest("/api", router_with_source(source))
+            .oneshot(
+                Request::builder()
+                    .uri("/api/sessions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        (status, value)
+    }
+
     #[test]
     fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
         let mut active = session(SessionStatus::Running);
@@ -806,58 +869,181 @@ mod tests {
         );
     }
 
+    struct ExpectedSessionDetails<'a> {
+        kind: &'a str,
+        unread: bool,
+        crit_url: Option<&'a str>,
+    }
+
+    fn expected_response(
+        category: &str,
+        later_until: Option<&str>,
+        is_today: bool,
+        details: ExpectedSessionDetails<'_>,
+        updated_at: &str,
+        elapsed_seconds: u64,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "revision": 7,
+            "sessions": [{
+                "id": "child-session",
+                "engine": "claude",
+                "category": category,
+                "categoryWhenNotLater": "needs_action",
+                "kind": details.kind,
+                "title": "child title",
+                "preview": "last message",
+                "updatedAt": updated_at,
+                "elapsedSeconds": elapsed_seconds,
+                "unread": details.unread,
+                "task": {
+                    "id": "task-id",
+                    "number": 17,
+                    "title": "task title",
+                    "priority": 1
+                },
+                "repo": "example-org/example-repo",
+                "project": "parent project",
+                "parent": {
+                    "id": "parent-session",
+                    "title": "parent title"
+                },
+                "ancestorSessionIds": ["parent-session"],
+                "pullRequest": {
+                    "number": 42,
+                    "state": "Open"
+                },
+                "laterUntil": later_until,
+                "isToday": is_today,
+                "critUrl": details.crit_url
+            }]
+        })
+    }
+
+    #[rstest]
     #[tokio::test]
-    async fn sessions_route_returns_the_complete_inbox_response() {
-        let response = Router::new()
-            .nest("/api", router_with_source(test_source()))
-            .oneshot(
-                Request::builder()
-                    .uri("/api/sessions")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let status = response.status();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+    async fn sessions_route_returns_the_complete_inbox_response(mut source: TestSessionSource) {
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_today = false;
+        source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
 
         assert_eq!(
-            (status, value),
+            sessions_response(source).await,
             (
                 StatusCode::OK,
-                serde_json::json!({
-                    "revision": 7,
-                    "sessions": [{
-                        "id": "child-session",
-                        "engine": "claude",
-                        "category": "needs_action",
-                        "kind": "Review",
-                        "title": "child title",
-                        "preview": "last message",
-                        "updatedAt": "1970-01-01T00:16:40Z",
-                        "elapsedSeconds": 100,
-                        "unread": false,
-                        "task": {
-                            "id": "task-id",
-                            "number": 17,
-                            "title": "task title",
-                            "priority": 1
+                expected_response(
+                    "needs_action",
+                    None,
+                    false,
+                    ExpectedSessionDetails {
+                        kind: "Review",
+                        unread: false,
+                        crit_url: Some("http://127.0.0.1:6000"),
+                    },
+                    "1970-01-01T00:16:40Z",
+                    100,
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_returns_saved_later_and_today_state(source: TestSessionSource) {
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "later",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
+                    "1970-01-01T00:16:40Z",
+                    100,
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_restores_expired_later_sessions_to_their_category(
+        mut source: TestSessionSource,
+    ) {
+        source.now = Utc.timestamp_opt(4_700, 0).unwrap();
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "needs_action",
+                    Some("1970-01-01T01:18:20Z"),
+                    true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
+                    "1970-01-01T00:16:40Z",
+                    3_700,
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_keeps_until_activity_later_until_the_session_changes(
+        mut source: TestSessionSource,
+    ) {
+        source.web_states[0].until_activity = true;
+        source.web_states[0].later_until = None;
+        let before_change = source.clone();
+        source.sessions[0].updated_at = Utc.timestamp_opt(1_001, 0).unwrap();
+
+        assert_eq!(
+            (
+                sessions_response(before_change).await,
+                sessions_response(source).await,
+            ),
+            (
+                (
+                    StatusCode::OK,
+                    expected_response(
+                        "later",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
                         },
-                        "repo": "example-org/example-repo",
-                        "project": "parent project",
-                        "parent": {
-                            "id": "parent-session",
-                            "title": "parent title"
+                        "1970-01-01T00:16:40Z",
+                        100,
+                    ),
+                ),
+                (
+                    StatusCode::OK,
+                    expected_response(
+                        "needs_action",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
                         },
-                        "ancestorSessionIds": ["parent-session"],
-                        "pullRequest": {
-                            "number": 42,
-                            "state": "Open"
-                        },
-                        "critUrl": "http://127.0.0.1:52413"
-                    }]
-                }),
+                        "1970-01-01T00:16:41Z",
+                        99,
+                    ),
+                ),
             ),
         );
     }

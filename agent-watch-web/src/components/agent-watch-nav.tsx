@@ -1,9 +1,11 @@
 import '#components/agent-watch-nav.css'
+import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
 
 import { cn } from '#lib/utils'
+import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
 type PmProject = {
@@ -18,6 +20,8 @@ type AgentWatchNavProps = {
   needsActionCount: number
   pmProjects: readonly PmProject[]
   onViewChange: (view: View) => void
+  todaySessions: readonly Session[]
+  onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
 }
 
@@ -26,6 +30,8 @@ export function AgentWatchNav({
   needsActionCount,
   pmProjects,
   onViewChange,
+  todaySessions,
+  onSelectToday,
   onSelectSession,
 }: AgentWatchNavProps) {
   return (
@@ -69,6 +75,46 @@ export function AgentWatchNav({
           Board
         </Button>
       </div>
+      <section className="today-nav" aria-labelledby="today-nav-title">
+        <h2 id="today-nav-title">TODAY</h2>
+        {todaySessions.map((session) => (
+          <div key={session.id} className="today-nav-item">
+            <Button
+              type="button"
+              variant="plain"
+              className="today-nav-link cursor-pointer"
+              onClick={() => {
+                onSelectToday(session.id)
+              }}
+            >
+              <span className="today-star" aria-hidden="true">
+                ★
+              </span>
+              <span
+                className={cn(
+                  'today-session-title',
+                  session.category === 'needs_action' && 'is-needs-action',
+                )}
+              >
+                {session.title}
+              </span>
+              {session.category === 'needs_action' ? (
+                <span
+                  className={`today-indicator kind-${(session.kind ?? '').toLowerCase()}`}
+                  aria-hidden="true"
+                />
+              ) : (
+                <span className="today-start">Start</span>
+              )}
+            </Button>
+            {session.task !== null ? (
+              <span className="today-session-meta">
+                #{String(session.task.number)} · {session.repo}
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </section>
       <section className="pm-project-list" aria-labelledby="pm-projects-title">
         <h2 id="pm-projects-title">PM</h2>
         <ul>

@@ -5,6 +5,23 @@ import type { Session } from '#types'
 
 const sessions: Session[] = [
   {
+    id: 'sample-later',
+    category: 'later',
+    categoryWhenNotLater: 'needs_action',
+    kind: 'Question',
+    title: 'Review the service retry policy',
+    preview: 'Can retries also use backoff?',
+    elapsedSeconds: 120,
+    unread: true,
+    task: null,
+    repo: 'example/service',
+    project: 'sample project',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+    laterUntil: '2030-01-02T09:00:00.000Z',
+  },
+  {
     id: 'sample-question',
     category: 'needs_action',
     kind: 'Question',
@@ -96,6 +113,10 @@ const meta = {
     showAllInProgress: false,
     onShowMore: () => undefined,
     onSelect: () => undefined,
+    laterExpanded: true,
+    onToggleLater: () => undefined,
+    onLater: () => undefined,
+    onToggleToday: () => undefined,
   },
   decorators: [
     (Story) => (

@@ -14,12 +14,19 @@ use crate::commands::agent::types::Session;
 
 mod migration;
 mod wake;
+mod web_state;
+
+pub(crate) use web_state::WatchWebSessionState;
+pub(super) use web_state::{
+    clear_watch_web_later, set_watch_web_later, set_watch_web_today, watch_web_session_states,
+};
 
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 1] = [M::up(
-    "CREATE TABLE sessions (
+static MIGRATION_ENTRIES: [M<'static>; 2] = [
+    M::up(
+        "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
             data TEXT NOT NULL,
             rev INTEGER NOT NULL
@@ -29,7 +36,17 @@ static MIGRATION_ENTRIES: [M<'static>; 1] = [M::up(
             value TEXT NOT NULL
         );
         INSERT INTO session_store_meta (key, value) VALUES ('revision', '0');",
-)];
+    ),
+    M::up(
+        "CREATE TABLE watch_web_session_state (
+        session_id TEXT PRIMARY KEY,
+        later_until TEXT,
+        activity_snapshot TEXT,
+        until_activity INTEGER NOT NULL DEFAULT 0,
+        is_today INTEGER NOT NULL DEFAULT 0
+    );",
+    ),
+];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =
     LazyLock::new(|| Migrations::from_slice(&MIGRATION_ENTRIES));
@@ -393,6 +410,10 @@ fn read_revision(connection: &Connection) -> Result<i64> {
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
     let changed = connection.execute("DELETE FROM sessions WHERE session_id = ?1", [session_id])?;
     if changed > 0 {
+        connection.execute(
+            "DELETE FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+        )?;
         increment_revision(connection)?;
     }
     Ok(changed > 0)
@@ -430,6 +451,55 @@ mod tests {
     use super::*;
     use rstest::rstest;
     use serde_json::Value;
+
+    #[test]
+    fn adds_watch_web_state_without_changing_existing_session_rows() {
+        let temp = tempfile::tempdir().unwrap();
+        let database_path = temp.path().join("sessions.db");
+        let connection = Connection::open(&database_path).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE sessions (
+                    session_id TEXT PRIMARY KEY,
+                    data TEXT NOT NULL,
+                    rev INTEGER NOT NULL
+                );
+                CREATE TABLE session_store_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT INTO session_store_meta (key, value) VALUES ('revision', '7');
+                INSERT INTO sessions (session_id, data, rev)
+                    VALUES ('legacy-session', 'preserved-data', 7);
+                PRAGMA user_version = 1;",
+            )
+            .unwrap();
+        drop(connection);
+
+        let connection = open_connection(temp.path()).unwrap();
+        let preserved: (String, i64, i64) = connection
+            .query_row(
+                "SELECT data, rev, (SELECT CAST(value AS INTEGER)
+                 FROM session_store_meta WHERE key = 'revision')
+                 FROM sessions WHERE session_id = 'legacy-session'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        let state_table_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'watch_web_session_state')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        assert_eq!(
+            (preserved, state_table_exists),
+            (("preserved-data".to_string(), 7, 7), true),
+        );
+    }
 
     #[rstest]
     #[case::newer_database(true, MIGRATION_ENTRIES.len() as i64 + 1)]

@@ -1,3 +1,5 @@
+import '#components/later-today.css'
+
 import { Button } from '@fohte/ui/button'
 
 import { SessionRow } from '#components/session-row'
@@ -11,6 +13,10 @@ type InboxViewProps = {
   showAllInProgress: boolean
   onShowMore: () => void
   onSelect: (id: string) => void
+  laterExpanded: boolean
+  onToggleLater: () => void
+  onLater: (id: string) => void
+  onToggleToday: (id: string, isToday: boolean) => void
 }
 
 function renderSessionSection({
@@ -19,6 +25,8 @@ function renderSessionSection({
   count = sessions.length,
   selectedId,
   onSelect,
+  onLater,
+  onToggleToday,
   className = '',
 }: {
   title: string
@@ -26,6 +34,8 @@ function renderSessionSection({
   count?: number
   selectedId: string | null
   onSelect: (id: string) => void
+  onLater: (id: string) => void
+  onToggleToday: (id: string, isToday: boolean) => void
   className?: string
 }) {
   return (
@@ -42,6 +52,8 @@ function renderSessionSection({
               session={session}
               selected={session.id === selectedId}
               onSelect={onSelect}
+              onLater={onLater}
+              onToggleToday={onToggleToday}
             />
           ))}
         </ul>
@@ -58,6 +70,10 @@ export function InboxView({
   showAllInProgress,
   onShowMore,
   onSelect,
+  laterExpanded,
+  onToggleLater,
+  onLater,
+  onToggleToday,
 }: InboxViewProps) {
   const needsAction = sessions.filter(
     (session) => session.category === 'needs_action',
@@ -66,6 +82,7 @@ export function InboxView({
     (session) => session.category === 'in_progress',
   )
   const done = sessions.filter((session) => session.category === 'done')
+  const later = sessions.filter((session) => session.category === 'later')
   const visibleInProgress = showAllInProgress
     ? inProgress
     : inProgress.slice(0, 2)
@@ -97,7 +114,38 @@ export function InboxView({
           sessions: needsAction,
           selectedId,
           onSelect,
+          onLater,
+          onToggleToday,
         })}
+        <Button
+          type="button"
+          variant="plain"
+          className="later-collapsed-row cursor-pointer"
+          aria-expanded={laterExpanded}
+          onClick={onToggleLater}
+        >
+          <span>◷ Later</span>
+          <span className="later-section-count">{later.length}</span>
+          {later.length > 0 ? (
+            <span className="later-next-return">
+              {nextReturnLabel(later)} {laterExpanded ? '▾' : '▸'}
+            </span>
+          ) : null}
+        </Button>
+        {laterExpanded && later.length > 0 ? (
+          <ul className="session-list later-session-list">
+            {later.map((session) => (
+              <SessionRow
+                key={session.id}
+                session={session}
+                selected={session.id === selectedId}
+                onSelect={onSelect}
+                onLater={onLater}
+                onToggleToday={onToggleToday}
+              />
+            ))}
+          </ul>
+        ) : null}
         {renderSessionSection({
           title: 'In progress',
           className: 'in-progress-section',
@@ -105,6 +153,8 @@ export function InboxView({
           count: inProgress.length,
           selectedId,
           onSelect,
+          onLater,
+          onToggleToday,
         })}
         {hiddenInProgressCount > 0 ? (
           <Button
@@ -123,6 +173,8 @@ export function InboxView({
           sessions: done,
           selectedId,
           onSelect,
+          onLater,
+          onToggleToday,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
@@ -130,9 +182,42 @@ export function InboxView({
           <kbd>j</kbd> <kbd>k</kbd> Move
         </span>
         <span>
+          <kbd>L</kbd> Later
+        </span>
+        <span>
           <kbd>⇧B</kbd> Board
         </span>
       </footer>
     </section>
   )
+}
+
+function nextReturnLabel(sessions: readonly Session[]) {
+  const timed = sessions
+    .map((session) => session.laterUntil)
+    .filter((value): value is string => value !== null && value !== undefined)
+    .sort((left, right) => Date.parse(left) - Date.parse(right))[0]
+  if (timed === undefined) {
+    return 'Next activity'
+  }
+  const deadline = new Date(timed)
+  const time = new Intl.DateTimeFormat('en', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(deadline)
+  const tomorrow = new Date()
+  tomorrow.setDate(tomorrow.getDate() + 1)
+  if (deadline.toDateString() === tomorrow.toDateString()) {
+    return `Next back tomorrow ${time}`
+  }
+  if (deadline.getTime() - Date.now() > 86_400_000) {
+    const date = new Intl.DateTimeFormat('en', {
+      weekday: 'short',
+      month: 'numeric',
+      day: 'numeric',
+    }).format(deadline)
+    return `Next back ${date} ${time}`
+  }
+  return `Next back ${time}`
 }

@@ -1,13 +1,23 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
+import { LaterMenu } from '#components/later-menu'
+import {
+  getLaterPresetTimes,
+  setSessionBackNow,
+  setSessionLater,
+  setSessionToday,
+} from '#session-actions'
 import { startSessionFeed } from '#session-feed'
 import {
+  getLaterPresetShortcut,
   getSessionShortcutAction,
+  type LaterPreset,
+  type LaterPresetTimes,
   moveSelection,
   type SessionView,
 } from '#session-navigation'
@@ -22,27 +32,60 @@ export function App() {
   const [view, setView] = useState<SessionView>('inbox')
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
+  const [laterExpanded, setLaterExpanded] = useState(false)
+  const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
+  const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
+  const [laterTimesError, setLaterTimesError] = useState(false)
+  const [laterMutationPending, setLaterMutationPending] = useState(false)
+  const laterSubmissionInFlight = useRef(false)
+  const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
-  const orderedSessions = useMemo(
-    () => [
-      ...sessions.filter((session) => session.category === 'needs_action'),
-      ...sessions.filter((session) => session.category === 'in_progress'),
-      ...sessions.filter((session) => session.category === 'done'),
-    ],
-    [sessions],
-  )
   const elapsedOffsetSeconds = Math.floor(
     Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
   )
   const sessionsWithElapsedTime = useMemo(
     () =>
-      sessions.map((session) => ({
-        ...session,
-        elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
-      })),
+      sessions.map((session) => {
+        const deadlinePassed =
+          session.category === 'later' &&
+          session.laterUntil !== null &&
+          session.laterUntil !== undefined &&
+          Date.parse(session.laterUntil) <= nowMs
+        return {
+          ...session,
+          category: deadlinePassed
+            ? (session.categoryWhenNotLater ?? 'needs_action')
+            : session.category,
+          elapsedSeconds: session.elapsedSeconds + elapsedOffsetSeconds,
+        }
+      }),
     [elapsedOffsetSeconds, sessions],
+  )
+  const orderedSessions = useMemo(
+    () => [
+      ...sessionsWithElapsedTime.filter(
+        (session) => session.category === 'needs_action',
+      ),
+      ...sessionsWithElapsedTime.filter(
+        (session) => session.category === 'later',
+      ),
+      ...sessionsWithElapsedTime.filter(
+        (session) => session.category === 'in_progress',
+      ),
+      ...sessionsWithElapsedTime.filter(
+        (session) => session.category === 'done',
+      ),
+    ],
+    [sessionsWithElapsedTime],
+  )
+  const navigableSessions = useMemo(
+    () =>
+      orderedSessions.filter(
+        (session) => laterExpanded || session.category !== 'later',
+      ),
+    [laterExpanded, orderedSessions],
   )
   const projects = useMemo(
     () => buildBoardProjects(sessionsWithElapsedTime),
@@ -70,6 +113,93 @@ export function App() {
     [projects],
   )
 
+  const openLater = useCallback((id: string) => {
+    const requestId = ++laterRequestId.current
+    setLaterTimes(null)
+    setLaterTimesError(false)
+    setLaterSessionId(id)
+    setError(null)
+    void getLaterPresetTimes().match(
+      (times) => {
+        if (requestId === laterRequestId.current) {
+          setLaterTimes(times)
+        }
+      },
+      () => {
+        if (requestId === laterRequestId.current) {
+          setLaterTimesError(true)
+          setError('Could not load Later return times.')
+        }
+      },
+    )
+  }, [])
+  const closeLater = useCallback(() => {
+    laterRequestId.current += 1
+    setLaterSessionId(null)
+  }, [])
+  const beginLaterMutation = useCallback(() => {
+    if (laterSubmissionInFlight.current) {
+      return false
+    }
+    laterSubmissionInFlight.current = true
+    setLaterMutationPending(true)
+    return true
+  }, [])
+  const finishLaterMutation = useCallback(() => {
+    laterSubmissionInFlight.current = false
+    setLaterMutationPending(false)
+  }, [])
+  const submitLater = useCallback(
+    (sessionId: string, preset: LaterPreset) => {
+      const expectedDeadline = laterTimes?.[preset].deadline
+      if (expectedDeadline === undefined) {
+        return
+      }
+      if (!beginLaterMutation()) {
+        return
+      }
+
+      void setSessionLater(sessionId, preset, expectedDeadline).match(
+        () => {
+          finishLaterMutation()
+          closeLater()
+          setError(null)
+        },
+        () => {
+          finishLaterMutation()
+          openLater(sessionId)
+          setError('Could not move the session to Later.')
+        },
+      )
+    },
+    [
+      beginLaterMutation,
+      closeLater,
+      finishLaterMutation,
+      laterTimes,
+      openLater,
+    ],
+  )
+  const submitBackNow = useCallback(
+    (sessionId: string) => {
+      if (!beginLaterMutation()) {
+        return
+      }
+      void setSessionBackNow(sessionId).match(
+        () => {
+          finishLaterMutation()
+          closeLater()
+          setError(null)
+        },
+        () => {
+          finishLaterMutation()
+          setError('Could not return the session now.')
+        },
+      )
+    },
+    [beginLaterMutation, closeLater, finishLaterMutation],
+  )
+
   useEffect(
     () =>
       startSessionFeed((response) => {
@@ -78,6 +208,7 @@ export function App() {
           response.sessions.filter(
             (session) =>
               session.category === 'needs_action' ||
+              session.category === 'later' ||
               session.category === 'in_progress' ||
               session.category === 'done',
           ),
@@ -100,10 +231,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (!orderedSessions.some((session) => session.id === selectedId)) {
-      setSelectedId(orderedSessions[0]?.id ?? null)
+    if (!navigableSessions.some((session) => session.id === selectedId)) {
+      setSelectedId(navigableSessions[0]?.id ?? null)
     }
-  }, [orderedSessions, selectedId])
+  }, [navigableSessions, selectedId])
 
   useEffect(() => {
     const hiddenProgress = orderedSessions.filter(
@@ -113,6 +244,15 @@ export function App() {
       setShowAllInProgress(true)
     }
   }, [orderedSessions, selectedId])
+
+  useEffect(() => {
+    if (
+      laterSessionId !== null &&
+      !sessions.some((session) => session.id === laterSessionId)
+    ) {
+      closeLater()
+    }
+  }, [closeLater, laterSessionId, sessions])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -140,6 +280,22 @@ export function App() {
         return
       }
 
+      if (laterSessionId !== null) {
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          if (!laterSubmissionInFlight.current) {
+            closeLater()
+          }
+          return
+        }
+        const preset = getLaterPresetShortcut(event.key)
+        if (preset !== null) {
+          event.preventDefault()
+          submitLater(laterSessionId, preset)
+        }
+        return
+      }
+
       const action = getSessionShortcutAction(event.key, event.shiftKey, view)
       if (action?.type === 'view') {
         event.preventDefault()
@@ -147,8 +303,15 @@ export function App() {
       } else if (action?.type === 'move' && view === 'inbox') {
         event.preventDefault()
         setSelectedId((current) =>
-          moveSelection(orderedSessions, current, action.key),
+          moveSelection(navigableSessions, current, action.key),
         )
+      } else if (
+        action?.type === 'later' &&
+        selectedId !== null &&
+        view === 'inbox'
+      ) {
+        event.preventDefault()
+        openLater(selectedId)
       }
     }
 
@@ -156,14 +319,36 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [orderedSessions, view])
+  }, [
+    closeLater,
+    laterSessionId,
+    navigableSessions,
+    openLater,
+    selectedId,
+    submitLater,
+    view,
+  ])
 
-  const needsActionCount = sessions.filter(
+  const needsActionCount = sessionsWithElapsedTime.filter(
     (session) => session.category === 'needs_action',
   ).length
+  const laterSession = sessionsWithElapsedTime.find(
+    (session) => session.id === laterSessionId,
+  )
   const selectedSession = sessionsWithElapsedTime.find(
     (session) => session.id === selectedId,
   )
+
+  const toggleToday = (id: string, isToday: boolean) => {
+    void setSessionToday(id, isToday).match(
+      () => {
+        setError(null)
+      },
+      () => {
+        setError('Could not update TODAY.')
+      },
+    )
+  }
   const openSessionInInbox = (sessionId: string) => {
     setSelectedId(sessionId)
     setView('inbox')
@@ -174,8 +359,15 @@ export function App() {
       <AgentWatchNav
         activeView={view}
         needsActionCount={needsActionCount}
+        todaySessions={sessionsWithElapsedTime.filter(
+          (session) => session.isToday === true,
+        )}
         pmProjects={pmProjects}
         onViewChange={setView}
+        onSelectToday={(id) => {
+          setView('inbox')
+          setSelectedId(id)
+        }}
         onSelectSession={openSessionInInbox}
       />
       <main className="agent-watch-main">
@@ -191,6 +383,12 @@ export function App() {
                 setShowAllInProgress(true)
               }}
               onSelect={setSelectedId}
+              laterExpanded={laterExpanded}
+              onToggleLater={() => {
+                setLaterExpanded((expanded) => !expanded)
+              }}
+              onLater={openLater}
+              onToggleToday={toggleToday}
             />
             {selectedSession ? (
               <ConversationPane
@@ -216,6 +414,26 @@ export function App() {
           />
         )}
       </main>
+      {laterSession !== undefined ? (
+        <LaterMenu
+          sessionTitle={laterSession.title}
+          isLater={laterSession.category === 'later'}
+          laterTimes={laterTimes}
+          laterTimesError={laterTimesError}
+          isSubmitting={laterMutationPending}
+          onClose={() => {
+            if (!laterSubmissionInFlight.current) {
+              closeLater()
+            }
+          }}
+          onBackNow={() => {
+            submitBackNow(laterSession.id)
+          }}
+          onSelect={(preset) => {
+            submitLater(laterSession.id, preset)
+          }}
+        />
+      ) : null}
     </div>
   )
 }

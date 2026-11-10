@@ -1,4 +1,5 @@
-type SessionCategory = 'needs_action' | 'in_progress' | 'done' | (string & {})
+type SessionCategory =
+  'needs_action' | 'later' | 'in_progress' | 'done' | (string & {})
 
 type SessionKind =
   | 'Question'
@@ -30,6 +31,7 @@ export type Session = {
   id: string
   engine?: 'Claude' | 'Codex' | (string & {})
   category: SessionCategory
+  categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
   preview: string | null
@@ -42,6 +44,8 @@ export type Session = {
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
+  laterUntil?: string | null
+  isToday?: boolean
 }
 
 export type ChatItem =

@@ -1,3 +1,5 @@
+import '#components/later-today.css'
+
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
 
@@ -8,6 +10,8 @@ type SessionRowProps = {
   session: Session
   selected: boolean
   onSelect: (id: string) => void
+  onLater?: (id: string) => void
+  onToggleToday?: (id: string, isToday: boolean) => void
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -58,55 +62,94 @@ function sessionKind(session: Session) {
   return session.kind ?? 'Stopped'
 }
 
-export function SessionRow({ session, selected, onSelect }: SessionRowProps) {
+export function SessionRow({
+  session,
+  selected,
+  onSelect,
+  onLater,
+  onToggleToday,
+}: SessionRowProps) {
   const kind = sessionKind(session)
 
   return (
     <li className="session-list-item">
-      <Button
-        type="button"
-        variant="plain"
-        className={cn(
-          'session-row cursor-pointer',
-          `category-${session.category}`,
-          selected && 'is-selected',
-        )}
-        data-session-row=""
-        aria-current={selected ? 'true' : undefined}
-        onClick={() => {
-          onSelect(session.id)
-        }}
-      >
-        <span className="session-status-dot" aria-hidden="true" />
-        <span className="session-content">
-          <span className="session-title-line">
-            <span
-              className={`session-title${session.unread ? ' is-unread' : ''}`}
-            >
-              {session.title}
-            </span>
-            <span className="session-age">{sessionStatus(session)}</span>
-          </span>
-          {session.category === 'needs_action' ? (
-            <span className="session-preview">
-              <Chip
-                data-session-kind={kind.toLowerCase()}
-                size="sm"
-                tone="strong"
+      <div className="session-row-layout">
+        <Button
+          type="button"
+          variant="plain"
+          className={cn(
+            'session-row cursor-pointer',
+            `category-${session.category}`,
+            selected && 'is-selected',
+          )}
+          data-session-row=""
+          aria-current={selected ? 'true' : undefined}
+          onClick={() => {
+            onSelect(session.id)
+          }}
+        >
+          <span className="session-status-dot" aria-hidden="true" />
+          <span className="session-content">
+            <span className="session-title-line">
+              <span
+                className={`session-title${session.unread ? ' is-unread' : ''}`}
               >
-                {kind}
-              </Chip>
-              {session.preview !== null && session.preview.length > 0 ? (
-                <span> · {session.preview}</span>
-              ) : null}
+                {session.title}
+              </span>
+              <span className="session-age">{sessionStatus(session)}</span>
             </span>
-          ) : null}
-          <span className="session-meta-line">
-            <span className="session-task">{sessionTaskLabel(session)}</span>
-            <span className="session-repo">{session.repo || '—'}</span>
+            {session.category === 'needs_action' ? (
+              <span className="session-preview">
+                <Chip
+                  data-session-kind={kind.toLowerCase()}
+                  size="sm"
+                  tone="strong"
+                >
+                  {kind}
+                </Chip>
+                {session.preview !== null && session.preview.length > 0 ? (
+                  <span> · {session.preview}</span>
+                ) : null}
+              </span>
+            ) : null}
+            <span className="session-meta-line">
+              <span className="session-task">{sessionTaskLabel(session)}</span>
+              <span className="session-repo">{session.repo || '—'}</span>
+            </span>
           </span>
-        </span>
-      </Button>
+        </Button>
+        <div className="session-row-actions">
+          {onToggleToday ? (
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={
+                session.isToday === true ? 'Remove from TODAY' : 'Add to TODAY'
+              }
+              aria-pressed={session.isToday ?? false}
+              className="session-action-button cursor-pointer"
+              onClick={() => {
+                onToggleToday(session.id, session.isToday !== true)
+              }}
+            >
+              {session.isToday === true ? '★' : '☆'}
+            </Button>
+          ) : null}
+          {onLater ? (
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={`Later: ${session.title}`}
+              className="session-action-button cursor-pointer"
+              onClick={() => {
+                onLater(session.id)
+              }}
+            >
+              ◷
+            </Button>
+          ) : null}
+        </div>
+      </div>
     </li>
   )
 }
