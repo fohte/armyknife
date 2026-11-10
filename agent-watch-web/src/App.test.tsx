@@ -661,8 +661,18 @@ it('accepts a new Later preset after the previous request settles', async () => 
 
 it('accepts a new Later preset after a failed request reloads its menu', async () => {
   let resolveFirstRequest: ((response: Response) => void) | undefined
+  let resolveReloadRequest: ((response: Response) => void) | undefined
+  let laterOptionsRequestCount = 0
   let shouldHoldFirstRequest = true
   const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (requestUrl(input) === '/api/sessions/later-options') {
+      laterOptionsRequestCount += 1
+      if (laterOptionsRequestCount === 2) {
+        return new Promise<Response>((resolve) => {
+          resolveReloadRequest = resolve
+        })
+      }
+    }
     if (
       requestUrl(input) === '/api/sessions/session-a/later' &&
       shouldHoldFirstRequest
@@ -695,14 +705,28 @@ it('accepts a new Later preset after a failed request reloads its menu', async (
   await act(async () => {
     resolveFailure(new Response(null, { status: 500 }))
     await flushAsyncState()
-    await vi.waitFor(() => {
-      const menuItems = Array.from(
-        container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
-      )
-      if (menuItems.length !== 5 || menuItems.some((item) => item.disabled)) {
-        throw new Error('The Later menu has not reloaded')
-      }
-    })
+  })
+  const resolveReload = resolveReloadRequest
+  if (resolveReload === undefined) {
+    throw new Error('The Later return times were not reloaded')
+  }
+  await act(async () => {
+    resolveReload(
+      new Response(JSON.stringify(laterPresetTimes), { status: 200 }),
+    )
+    await flushAsyncState()
+  })
+  const menuSnapshot = () => ({
+    isOpen:
+      container.querySelector('[aria-label="Later: First session"]') !== null,
+    disabledItems: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (item) => item.disabled,
+    ),
+  })
+  expect(menuSnapshot()).toEqual({
+    isOpen: true,
+    disabledItems: [false, false, false, false, false],
   })
   await act(async () => {
     dispatchKey(window, '2')
