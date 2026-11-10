@@ -11,6 +11,7 @@ type SessionEventSource = {
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
+  reloadPage?: () => void
   requestRetryDelayMs?: number
 }
 
@@ -104,6 +105,9 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
+    reloadPage = () => {
+      window.location.reload()
+    },
     requestRetryDelayMs = 2_000,
   }: SessionFeedDependencies = {},
 ) {
@@ -112,6 +116,7 @@ export function startSessionFeed(
   let refreshQueued = false
   let requestError = false
   let streamError = false
+  let restartPending = false
   let requestRetryTimer: ReturnType<typeof setTimeout> | null = null
   let reconnectPollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -196,17 +201,27 @@ export function startSessionFeed(
       reconnectPollTimer = setInterval(refresh, requestRetryDelayMs)
     }
   }
+  const onServerRestart: EventListener = () => {
+    restartPending = true
+  }
   const onConnectionOpen: EventListener = () => {
+    const restartDetected = restartPending
+    restartPending = false
     streamError = false
     if (reconnectPollTimer !== null) {
       clearInterval(reconnectPollTimer)
       reconnectPollTimer = null
     }
     reportStatus()
+    if (restartDetected) {
+      reloadPage()
+      return
+    }
     refresh()
   }
 
   eventSource.addEventListener('sessions', onSessionsEvent)
+  eventSource.addEventListener('restart', onServerRestart)
   eventSource.addEventListener('error', onConnectionError)
   eventSource.addEventListener('open', onConnectionOpen)
   refresh()
@@ -219,6 +234,7 @@ export function startSessionFeed(
       reconnectPollTimer = null
     }
     eventSource.removeEventListener('sessions', onSessionsEvent)
+    eventSource.removeEventListener('restart', onServerRestart)
     eventSource.removeEventListener('error', onConnectionError)
     eventSource.removeEventListener('open', onConnectionOpen)
     eventSource.close()

@@ -40,6 +40,14 @@ const question: ChatItem = {
 
 let container: HTMLDivElement
 let root: Root | null = null
+const originalExecCommand = Object.getOwnPropertyDescriptor(
+  document,
+  'execCommand',
+)
+const originalClipboard = Object.getOwnPropertyDescriptor(
+  navigator,
+  'clipboard',
+)
 type ActionHandler = (
   action: string,
   payload?: Record<string, unknown>,
@@ -133,6 +141,255 @@ afterEach(() => {
   container.remove()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  if (originalExecCommand === undefined) {
+    Reflect.deleteProperty(document, 'execCommand')
+  } else {
+    Object.defineProperty(document, 'execCommand', originalExecCommand)
+  }
+  if (originalClipboard === undefined) {
+    Reflect.deleteProperty(navigator, 'clipboard')
+  } else {
+    Object.defineProperty(navigator, 'clipboard', originalClipboard)
+  }
+})
+
+it('copies the session ID from desktop and mobile headers', async () => {
+  let copiedText = ''
+  const writeText = vi.fn((text: string) => {
+    copiedText = text
+    return Promise.resolve()
+  })
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+
+  const desktopButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-header-actions .conversation-copy-session-id',
+    ),
+  )
+  await act(async () => {
+    desktopButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+  const desktopButtonText = desktopButton.textContent
+
+  renderView(onAction, session, undefined, [question], actions, true)
+  const mobileButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  await act(async () => {
+    mobileButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    copiedText,
+    writeCalls: writeText.mock.calls,
+    desktopButtonText,
+    mobileButtonText: mobileButton.textContent,
+    mobileAccessibleName: mobileButton.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    copiedText: session.id,
+    writeCalls: [[session.id], [session.id]],
+    desktopButtonText: 'Copied',
+    mobileButtonText: 'Copied',
+    mobileAccessibleName: 'Session ID copied',
+  })
+})
+
+it('copies the session ID through the HTTP-compatible clipboard fallback', async () => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: undefined,
+  })
+  let copiedText = ''
+  const copyCommand = vi.fn(() => {
+    copiedText =
+      Array.from(document.body.querySelectorAll('textarea')).at(-1)?.value ?? ''
+    return true
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: copyCommand,
+  })
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [question],
+    actions,
+    true,
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  let copyCallsAtClickReturn = 0
+  act(() => {
+    copyButton.click()
+    copyCallsAtClickReturn = copyCommand.mock.calls.length
+  })
+  await act(async () => {
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    copiedText,
+    copyCalls: copyCommand.mock.calls,
+    copyCallsAtClickReturn,
+    temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
+    buttonText: copyButton.textContent,
+  })
+  expect(snapshot()).toEqual({
+    copiedText: session.id,
+    copyCalls: [['copy']],
+    copyCallsAtClickReturn: 1,
+    temporaryTextareaCount: 1,
+    buttonText: 'Copied',
+  })
+})
+
+it('falls back when the Clipboard API rejects the copy request', async () => {
+  const writeText = vi.fn(() => Promise.reject(new Error('copy denied')))
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  })
+  let copiedText = ''
+  const copyCommand = vi.fn(() => {
+    copiedText =
+      Array.from(document.body.querySelectorAll('textarea')).at(-1)?.value ?? ''
+    return true
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: copyCommand,
+  })
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [question],
+    actions,
+    true,
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  await act(async () => {
+    copyButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    clipboardCalls: writeText.mock.calls,
+    fallbackCalls: copyCommand.mock.calls,
+    copiedText,
+    buttonText: copyButton.textContent,
+  })
+  expect(snapshot()).toEqual({
+    clipboardCalls: [[session.id]],
+    fallbackCalls: [['copy']],
+    copiedText: session.id,
+    buttonText: 'Copied',
+  })
+})
+
+it('announces when neither clipboard method can copy the session ID', async () => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: undefined,
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: vi.fn(() => false),
+  })
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [question],
+    actions,
+    true,
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  await act(async () => {
+    copyButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    buttonText: copyButton.textContent,
+    accessibleName: copyButton.getAttribute('aria-label'),
+    liveStatus: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    buttonText: 'Copy failed',
+    accessibleName: 'Could not copy session ID',
+    liveStatus: 'Could not copy session ID',
+  })
+})
+
+it('announces copy failure and removes the textarea when execCommand throws', async () => {
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: undefined,
+  })
+  const copyCommand = vi.fn(() => {
+    throw new Error('copy unavailable')
+  })
+  Object.defineProperty(document, 'execCommand', {
+    configurable: true,
+    value: copyCommand,
+  })
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [question],
+    actions,
+    true,
+  )
+
+  const copyButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
+    ),
+  )
+  await act(async () => {
+    copyButton.click()
+    await new Promise((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    copyCalls: copyCommand.mock.calls,
+    temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
+    buttonText: copyButton.textContent,
+    liveStatus: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    copyCalls: [['copy']],
+    temporaryTextareaCount: 1,
+    buttonText: 'Copy failed',
+    liveStatus: 'Could not copy session ID',
+  })
 })
 
 it('answers a question from a number key or a choice click', () => {
@@ -868,6 +1125,102 @@ it('sends pasted file data with the message and keeps it when sending fails', as
       ],
     ],
     attachmentNames: ['clipboard.bin'],
+  })
+})
+
+it('attaches dropped images through the composer and sends their data', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const file = new File(['payload'], 'dropped.png', { type: 'image/png' })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
+  })
+  const pane = requireElement(container.querySelector('.conversation-pane'))
+  const dataTransfer = { types: ['Files'], files: [file], dropEffect: 'none' }
+  const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragEnter, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragEnter)
+  })
+  const targetVisibleDuringDrag = container.querySelector(
+    '.conversation-drop-target',
+  )?.textContent
+  const drop = new Event('drop', { bubbles: true, cancelable: true })
+  Object.defineProperty(drop, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(drop)
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    targetVisibleDuringDrag,
+    targetAfterDrop:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+    dropPrevented: drop.defaultPrevented,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    targetVisibleDuringDrag: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterDrop: null,
+    dropPrevented: true,
+    attachmentNames: [],
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          images: [
+            {
+              mimeType: 'image/png',
+              size: 7,
+              data: 'cGF5bG9hZA==',
+            },
+          ],
+        },
+      ],
+    ],
+  })
+})
+
+it('hides the drop target when a file drag leaves the conversation', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const pane = requireElement(container.querySelector('.conversation-pane'))
+  const dataTransfer = { types: ['Files'], files: [] }
+  const dragEnter = new Event('dragenter', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragEnter, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragEnter)
+  })
+  const targetAfterEnter = container.querySelector(
+    '.conversation-drop-target',
+  )?.textContent
+  const dragLeave = new Event('dragleave', { bubbles: true, cancelable: true })
+  Object.defineProperty(dragLeave, 'dataTransfer', { value: dataTransfer })
+  act(() => {
+    pane.dispatchEvent(dragLeave)
+  })
+
+  const snapshot = () => ({
+    targetAfterEnter,
+    targetAfterLeave:
+      container.querySelector('.conversation-drop-target')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    targetAfterEnter: 'Drop PNG, JPEG, GIF, or WebP images to attach',
+    targetAfterLeave: null,
   })
 })
 
