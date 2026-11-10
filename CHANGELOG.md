@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.551](https://github.com/fohte/armyknife/compare/v0.1.550...v0.1.551) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** restart after binary updates ([#1457](https://github.com/fohte/armyknife/issues/1457)) ([69c20c9](https://github.com/fohte/armyknife/commit/69c20c9a510fd23e976885445c65d7d83e3a434e))
+
 ## [0.1.550](https://github.com/fohte/armyknife/compare/v0.1.549...v0.1.550) (2026-11-10)
 
 
