@@ -1,5 +1,8 @@
 import { Button } from '@fohte/ui/button'
-import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import type {
+  DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
@@ -29,6 +32,7 @@ type ConversationPaneViewProps = {
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
   isMobile?: boolean
+  fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
 }
@@ -45,6 +49,7 @@ export function ConversationPaneView({
   onAction,
   onSelectSession,
   isMobile = false,
+  fileDropActive = false,
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
@@ -65,6 +70,8 @@ export function ConversationPaneView({
     onAction,
   })
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
+  const [isFileDragActive, setIsFileDragActive] = useState(false)
+  const fileDragDepth = useRef(0)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
   const activeQuestionIndex = messages.findLastIndex(
@@ -88,6 +95,34 @@ export function ConversationPaneView({
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
     onClearError()
+  }
+
+  const handleDragEnter = (event: ReactDragEvent<HTMLElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return
+    event.preventDefault()
+    fileDragDepth.current += 1
+    setIsFileDragActive(true)
+  }
+
+  const handleDragOver = (event: ReactDragEvent<HTMLElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return
+    event.preventDefault()
+    event.dataTransfer.dropEffect = 'copy'
+  }
+
+  const handleDragLeave = (event: ReactDragEvent<HTMLElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return
+    fileDragDepth.current = Math.max(0, fileDragDepth.current - 1)
+    if (fileDragDepth.current === 0) setIsFileDragActive(false)
+  }
+
+  const handleDrop = (event: ReactDragEvent<HTMLElement>) => {
+    if (!Array.from(event.dataTransfer.types).includes('Files')) return
+    event.preventDefault()
+    fileDragDepth.current = 0
+    setIsFileDragActive(false)
+    const files = Array.from(event.dataTransfer.files)
+    if (files.length > 0) handlePasteFiles(files)
   }
 
   const onComposerKeyDown = (
@@ -195,7 +230,16 @@ export function ConversationPaneView({
       className="conversation-pane"
       data-mobile={isMobile ? 'true' : undefined}
       aria-label={`Conversation with ${session.title}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
+      {fileDropActive || isFileDragActive ? (
+        <div className="conversation-drop-target" role="status">
+          Drop images to attach
+        </div>
+      ) : null}
       <header className="conversation-header">
         {isMobile ? (
           <>
