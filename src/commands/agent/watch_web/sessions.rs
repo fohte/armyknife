@@ -644,7 +644,7 @@ fn sort_session_views(sessions: &mut [SessionView]) {
         left.category
             .cmp(&right.category)
             .then_with(|| compare_tasks(&left.task, &right.task))
-            .then_with(|| left.updated_at.cmp(&right.updated_at))
+            .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.id.cmp(&right.id))
     });
 }
@@ -1456,12 +1456,26 @@ mod tests {
         ],
         vec!["inbox", "deferred"]
     )]
-    #[case::oldest_waiting_first(
+    #[case::newest_same_priority_first(
         vec![
             row("newer", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
             row("older", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 10),
         ],
-        vec!["older", "newer"]
+        vec!["newer", "older"]
+    )]
+    #[case::newest_without_task_first(
+        vec![
+            row("newer", SessionCategory::NeedsAction, None, 20),
+            row("older", SessionCategory::NeedsAction, None, 10),
+        ],
+        vec!["newer", "older"]
+    )]
+    #[case::id_breaks_equal_timestamps(
+        vec![
+            row("session_b", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
+            row("session_a", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 20),
+        ],
+        vec!["session_a", "session_b"]
     )]
     fn orders_session_rows(#[case] mut rows: Vec<SessionView>, #[case] expected_ids: Vec<&str>) {
         sort_session_views(&mut rows);
