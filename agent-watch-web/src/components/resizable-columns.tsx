@@ -76,8 +76,15 @@ export function ResizableColumns({
   } | null>(null)
   const [containerWidth, setContainerWidth] = useState(0)
   const [secondPaneVisible, setSecondPaneVisible] = useState(hasSecond)
-  const [firstSize, setFirstSize] = useState(() =>
+  const [preferredFirstSize, setPreferredFirstSize] = useState(() =>
     readStoredSize(storageKey, initialFirstSize),
+  )
+  const maxSize = secondPaneVisible
+    ? getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize)
+    : undefined
+  const firstSize = Math.min(
+    Math.max(firstMinSize, preferredFirstSize),
+    maxSize ?? Number.POSITIVE_INFINITY,
   )
 
   useLayoutEffect(() => {
@@ -93,20 +100,6 @@ export function ResizableColumns({
         window.getComputedStyle(secondPaneRef.current).display !== 'none'
       setSecondPaneVisible(secondPaneVisible)
       setContainerWidth(containerWidth)
-      const maxSize = secondPaneVisible
-        ? getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize)
-        : undefined
-      setFirstSize((currentSize) => {
-        const minClampedSize = Math.max(firstMinSize, currentSize)
-        const nextSize =
-          maxSize === undefined
-            ? minClampedSize
-            : Math.min(maxSize, minClampedSize)
-        if (nextSize !== currentSize) {
-          saveStoredSize(storageKey, nextSize)
-        }
-        return nextSize
-      })
     }
 
     const observer = new ResizeObserver(fitToContainer)
@@ -118,7 +111,7 @@ export function ResizableColumns({
     return () => {
       observer.disconnect()
     }
-  }, [firstMinSize, hasSecond, secondMinSize, storageKey])
+  }, [firstMinSize, hasSecond, secondMinSize])
 
   const clampSize = (size: number) => {
     const containerWidth =
@@ -132,13 +125,10 @@ export function ResizableColumns({
 
   const updateSize = (size: number) => {
     const nextSize = clampSize(size)
-    setFirstSize(nextSize)
+    if (nextSize === firstSize) return
+    setPreferredFirstSize(nextSize)
     saveStoredSize(storageKey, nextSize)
   }
-
-  const maxSize = secondPaneVisible
-    ? getMaximumFirstSize(containerWidth, firstMinSize, secondMinSize)
-    : undefined
 
   const onSeparatorKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     const step = event.shiftKey ? 40 : 10

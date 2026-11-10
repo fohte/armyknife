@@ -116,27 +116,67 @@ it('stores the width after pointer dragging', () => {
   })
 })
 
-it('clamps a restored width to keep the second pane visible', () => {
-  window.localStorage.setItem('test:columns', '600')
-  renderColumns('test:columns', 800)
-
+it('keeps a user-selected width when a narrow window clamps it', () => {
+  renderColumns('test:columns', 1000)
   const separator =
     container.querySelector<HTMLDivElement>('[role="separator"]')
-  const snapshot = () => ({
-    width: container.querySelector<HTMLDivElement>(
-      '.resizable-columns-first-pane',
-    )?.style.flexBasis,
-    value: separator?.getAttribute('aria-valuenow'),
-    maximum: separator?.getAttribute('aria-valuemax'),
-    saved: window.localStorage.getItem('test:columns'),
+  if (separator === null) throw new Error('Expected a resize separator')
+  vi.spyOn(separator, 'setPointerCapture').mockImplementation(() => undefined)
+
+  act(() => {
+    separator.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        pointerId: 1,
+        clientX: 100,
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+    separator.dispatchEvent(
+      new PointerEvent('pointermove', {
+        pointerId: 1,
+        clientX: 300,
+        bubbles: true,
+      }),
+    )
   })
 
-  expect(snapshot()).toEqual({
-    width: '472px',
-    value: '472',
-    maximum: '472',
-    saved: '472',
+  const snapshot = () => {
+    const currentSeparator =
+      container.querySelector<HTMLDivElement>('[role="separator"]')
+    return {
+      width: container.querySelector<HTMLDivElement>(
+        '.resizable-columns-first-pane',
+      )?.style.flexBasis,
+      value: currentSeparator?.getAttribute('aria-valuenow'),
+      maximum: currentSeparator?.getAttribute('aria-valuemax'),
+      saved: window.localStorage.getItem('test:columns'),
+    }
+  }
+
+  const snapshots = [snapshot()]
+
+  act(() => {
+    root?.unmount()
   })
+  root = null
+  renderColumns('test:columns', 800)
+
+  snapshots.push(snapshot())
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderColumns('test:columns', 1000)
+
+  snapshots.push(snapshot())
+
+  expect(snapshots).toEqual([
+    { width: '600px', value: '600', maximum: '672', saved: '600' },
+    { width: '472px', value: '472', maximum: '472', saved: '600' },
+    { width: '600px', value: '600', maximum: '672', saved: '600' },
+  ])
 })
 
 it('keeps resizing when browser storage is unavailable', () => {
