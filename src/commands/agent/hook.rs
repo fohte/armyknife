@@ -409,6 +409,9 @@ fn process_hook_event_impl_with_settings(
                         side_effects.archive_tq_session(&input.session_id);
                     }
                 }
+                if session.engine == Engine::Claude {
+                    store::set_watch_web_compacting(sessions_dir, &input.session_id, false)?;
+                }
                 // Push the preserved status into the pane option so sweep's
                 // Paused isn't clobbered back to "" by this SessionEnd.
                 let work_type_config = session
@@ -878,6 +881,22 @@ fn process_hook_event_impl_with_settings(
     ensure_watch_web_user_marker(&session_lock, event, input.engine)?;
     session_lock.save(&session)?;
     drop(session_lock);
+
+    if session.engine == Engine::Claude && input.agent_id.is_none() {
+        let compacting = match event {
+            HookEvent::PreCompact => Some(true),
+            HookEvent::Stop | HookEvent::StopFailure => Some(false),
+            HookEvent::SessionStart
+                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
+            {
+                Some(false)
+            }
+            _ => None,
+        };
+        if let Some(compacting) = compacting {
+            store::set_watch_web_compacting(sessions_dir, &session.session_id, compacting)?;
+        }
+    }
 
     if let Some(startup_metadata) = startup_metadata
         && let Err(error) = store::delete_session_from(sessions_dir, &startup_metadata.session_id)
@@ -1370,6 +1389,7 @@ fn determine_status(event: HookEvent, input: &HookInput) -> Option<SessionStatus
         }
         HookEvent::PostModelSwitch => None,
         HookEvent::SessionStart
+        | HookEvent::PreCompact
         | HookEvent::UserPromptSubmit
         | HookEvent::PreToolUse
         | HookEvent::PostToolUse
@@ -1876,6 +1896,7 @@ mod tests {
 
     #[rstest]
     #[case::session_start("session-start", HookEvent::SessionStart)]
+    #[case::pre_compact("pre-compact", HookEvent::PreCompact)]
     #[case::user_prompt_submit("user-prompt-submit", HookEvent::UserPromptSubmit)]
     #[case::pre_tool_use("pre-tool-use", HookEvent::PreToolUse)]
     #[case::post_tool_use("post-tool-use", HookEvent::PostToolUse)]
@@ -1892,6 +1913,109 @@ mod tests {
     #[test]
     fn test_hook_event_parsing_rejects_unknown_event() {
         assert!(HookEvent::from_str("unknown").is_err());
+    }
+
+    #[test]
+    fn pre_compact_marks_session_until_compaction_or_turn_ends() {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(true),
+        );
+
+        process_hook_event_without_instruction(
+            HookEvent::SessionStart,
+            create_test_input_with_source(None, Some("compact")),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("compaction SessionStart hook should succeed");
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(false),
+        );
+    }
+
+    #[rstest]
+    #[case::stop(HookEvent::Stop, None, false)]
+    #[case::stop_failure(HookEvent::StopFailure, None, false)]
+    #[case::session_end(HookEvent::SessionEnd, None, false)]
+    #[case::compaction_start(HookEvent::SessionStart, Some("compact"), false)]
+    #[case::resume(HookEvent::SessionStart, Some("resume"), false)]
+    #[case::startup_preserves_marker(HookEvent::SessionStart, Some("startup"), true)]
+    fn compaction_state_clears_only_for_expected_lifecycle_events(
+        #[case] event: HookEvent,
+        #[case] source: Option<&str>,
+        #[case] expected: bool,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            create_test_input(None),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+
+        process_hook_event_without_instruction(
+            event,
+            create_test_input_with_source(None, source),
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("lifecycle hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load")
+                .first()
+                .map(|state| state.is_compacting),
+            Some(expected),
+        );
+    }
+
+    #[rstest]
+    #[case::claude_subagent(Engine::Claude, Some("fixture-agent"))]
+    #[case::codex_main_thread(Engine::Codex, None)]
+    fn pre_compact_ignores_events_outside_the_claude_main_thread(
+        #[case] engine: Engine,
+        #[case] agent_id: Option<&str>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let mut input = create_test_input(None);
+        input.engine = engine;
+        input.agent_id = agent_id.map(str::to_string);
+
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load"),
+            Vec::new(),
+        );
     }
 
     #[test]

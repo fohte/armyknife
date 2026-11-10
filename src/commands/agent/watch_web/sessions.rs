@@ -93,6 +93,7 @@ struct SessionView {
     crit_url: Option<String>,
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
+    is_compacting: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -293,6 +294,7 @@ async fn list_sessions<S: SessionSource>(
                 },
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
+                is_compacting: state.is_some_and(|state| state.is_compacting),
             }
         })
         .collect::<Vec<_>>();
@@ -748,6 +750,7 @@ mod tests {
             crit_url: None,
             later_until: None,
             is_today: false,
+            is_compacting: false,
         }
     }
 
@@ -839,6 +842,7 @@ mod tests {
                 activity_snapshot: Some(Utc.timestamp_opt(1_000, 0).unwrap()),
                 until_activity: false,
                 is_today: true,
+                is_compacting: false,
             }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
@@ -1018,6 +1022,7 @@ mod tests {
                 },
                 "laterUntil": later_until,
                 "isToday": is_today,
+                "isCompacting": false,
                 "critUrl": details.crit_url
             }]
         })
@@ -1060,6 +1065,38 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_includes_compacting_state(mut source: TestSessionSource) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        source.web_states[0].is_compacting = true;
+
+        let actual = sessions_response(source).await;
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+            },
+        );
+        expected["sessions"][0]["isCompacting"] = serde_json::json!(true);
+
+        assert_eq!(actual, (StatusCode::OK, expected));
     }
 
     #[rstest]
