@@ -76,7 +76,7 @@ async fn get_messages(
     })
     .await
     {
-        Ok(Ok(Some((conversation, _)))) => match serde_json::to_vec(&conversation) {
+        Ok(Ok(Some(conversation))) => match serde_json::to_vec(&conversation) {
             Ok(body) => (
                 StatusCode::OK,
                 [(CONTENT_TYPE, "application/json")],
@@ -112,7 +112,7 @@ fn load_messages_with(
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
     )?
-    .map(|(conversation, _)| conversation.messages))
+    .map(|conversation| conversation.messages))
 }
 
 fn load_conversation_with_queued_prompts(
@@ -121,7 +121,7 @@ fn load_conversation_with_queued_prompts(
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
     delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
-) -> Result<Option<(ConversationResponse, Vec<i64>)>> {
+) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
     };
@@ -191,7 +191,7 @@ fn load_conversation_with_queued_prompts(
             "failed to remove resolved watch-web queued prompts"
         );
     }
-    Ok(Some((conversation, resolved_queued_prompt_ids)))
+    Ok(Some(conversation))
 }
 
 fn parent_session(

@@ -510,12 +510,13 @@ mod tests {
     }
 
     #[test]
-    fn ignores_a_delivery_attachment_on_an_inactive_transcript_branch() {
+    fn keeps_a_saved_prompt_when_attachment_is_on_an_inactive_fork() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
-            {"uuid":"fixture-inactive-root","parentUuid":null,"type":"assistant","message":{"content":[]}}
-            {"parentUuid":"fixture-inactive-root","attachment":{"type":"queued_command","prompt":"⟦armyknife-user:fixture-marker-cobalt⟧\nDelivered request."}}
             {"uuid":"fixture-active-root","parentUuid":null,"type":"assistant","message":{"content":[]}}
+            {"uuid":"fixture-fork-root","parentUuid":"fixture-active-root","type":"assistant","message":{"content":[]}}
+            {"uuid":"fixture-active-tip","parentUuid":"fixture-active-root","type":"assistant","message":{"content":[]}}
+            {"parentUuid":"fixture-fork-root","attachment":{"type":"queued_command","prompt":"⟦armyknife-user:fixture-marker-cobalt⟧\nDelivered request."}}
         "#};
 
         assert_eq!(

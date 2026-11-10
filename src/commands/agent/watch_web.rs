@@ -115,7 +115,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         &assets::DIST,
         store::load_session,
         store::watch_web_user_marker,
-        store::watch_web_queued_prompts,
+        |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
         store::delete_watch_web_queued_prompts,
         restart_signal,
     )

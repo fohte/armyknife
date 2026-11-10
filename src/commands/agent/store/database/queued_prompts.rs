@@ -42,8 +42,7 @@ pub(crate) fn watch_web_queued_prompts(
     let mut statement = connection.prepare(
         "SELECT id, content, sent_at
          FROM watch_web_queued_prompt
-         WHERE session_id = ?1
-         ORDER BY id",
+         WHERE session_id = ?1",
     )?;
     let rows = statement.query_map([session_id], |row| {
         Ok((
@@ -52,15 +51,22 @@ pub(crate) fn watch_web_queued_prompts(
             row.get::<_, String>(2)?,
         ))
     })?;
-    rows.map(|row| {
-        let (id, content, sent_at) = row?;
-        Ok(WatchWebQueuedPrompt {
-            id,
-            content,
-            sent_at: DateTime::parse_from_rfc3339(&sent_at)?.with_timezone(&Utc),
+    let mut prompts = rows
+        .map(|row| {
+            let (id, content, sent_at) = row?;
+            Ok(WatchWebQueuedPrompt {
+                id,
+                content,
+                sent_at: DateTime::parse_from_rfc3339(&sent_at)?.with_timezone(&Utc),
+            })
         })
-    })
-    .collect()
+        .collect::<Result<Vec<_>>>()?;
+    prompts.sort_by(|left, right| {
+        left.sent_at
+            .cmp(&right.sent_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    Ok(prompts)
 }
 
 pub(crate) fn delete_watch_web_queued_prompts(
@@ -166,6 +172,46 @@ mod tests {
                     sent_at: second_sent_at,
                 }],
             ),
+        );
+    }
+
+    #[rstest]
+    fn lists_prompts_by_send_time_when_inserts_finish_out_of_order(sessions_dir: TempDir) {
+        let earlier_sent_at = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 14, 9, 26, 53)
+            .unwrap();
+        let later_sent_at = chrono::Utc
+            .with_ymd_and_hms(2026, 3, 14, 9, 27, 53)
+            .unwrap();
+        let later_id = insert_watch_web_queued_prompt(
+            sessions_dir.path(),
+            "fixture-session-a",
+            "Later dispatched request",
+            later_sent_at,
+        )
+        .unwrap();
+        let earlier_id = insert_watch_web_queued_prompt(
+            sessions_dir.path(),
+            "fixture-session-a",
+            "Earlier dispatched request",
+            earlier_sent_at,
+        )
+        .unwrap();
+
+        assert_eq!(
+            watch_web_queued_prompts(sessions_dir.path(), "fixture-session-a").unwrap(),
+            vec![
+                WatchWebQueuedPrompt {
+                    id: earlier_id,
+                    content: "Earlier dispatched request".to_string(),
+                    sent_at: earlier_sent_at,
+                },
+                WatchWebQueuedPrompt {
+                    id: later_id,
+                    content: "Later dispatched request".to_string(),
+                    sent_at: later_sent_at,
+                },
+            ],
         );
     }
 

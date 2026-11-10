@@ -332,8 +332,10 @@ fn queued_prompt_delivery_is_on_active_branch(
     record: &Value,
     transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
 ) -> bool {
-    if record.get("uuid").and_then(Value::as_str).is_some() {
-        return true;
+    if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
+        return transcript_nodes
+            .get(uuid)
+            .is_some_and(|node| node.membership == BranchMembership::Active);
     }
     let Some(parent_uuid) = record
         .get("parentUuid")
@@ -345,11 +347,7 @@ fn queued_prompt_delivery_is_on_active_branch(
     let Some(node) = transcript_nodes.get(parent_uuid) else {
         return false;
     };
-    match node.membership {
-        BranchMembership::Active | BranchMembership::ReachesActive => true,
-        BranchMembership::Unknown => is_inactive_branch(parent_uuid, transcript_nodes),
-        BranchMembership::Disconnected | BranchMembership::Visiting => false,
-    }
+    node.membership == BranchMembership::Active
 }
 
 struct ToolUse {

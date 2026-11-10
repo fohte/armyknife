@@ -262,7 +262,12 @@ async fn send_message(
     let marker = if let Some(sessions_dir) = sessions_dir.as_ref() {
         let session_id = session.session_id.clone();
         let sessions_dir = sessions_dir.clone();
-        run_blocking(move || store::watch_web_user_marker_from(&sessions_dir, &session_id)).await?
+        Some(
+            run_blocking(move || {
+                store::ensure_watch_web_user_marker_from(&sessions_dir, &session_id)
+            })
+            .await?,
+        )
     } else {
         None
     };
@@ -725,10 +730,22 @@ mod tests {
     async fn response_snapshot(response: Response<Body>, context: &ActionContext) -> Value {
         let status = response.status().as_u16();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let mut calls = context.runtime.calls.lock().unwrap().clone();
+        for call in &mut calls {
+            let Some(content) = call.get("content").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some((marker, body)) = content.split_once('\n') else {
+                continue;
+            };
+            if marker.starts_with("⟦armyknife-user:") && marker.ends_with('⟧') {
+                call["content"] = Value::String(body.to_owned());
+            }
+        }
         json!({
             "status": status,
             "body": serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
-            "calls": context.runtime.calls.lock().unwrap().clone(),
+            "calls": calls,
         })
     }
 
@@ -823,29 +840,25 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude(Engine::Claude, true)]
-    #[case::codex(Engine::Codex, true)]
-    #[case::legacy_claude(Engine::Claude, false)]
+    #[case::claude_with_marker(Engine::Claude, true)]
+    #[case::legacy_claude_without_marker(Engine::Claude, false)]
+    #[case::codex(Engine::Codex, false)]
     #[tokio::test]
-    async fn send_message_adds_marker_only_for_marker_enabled_claude_sessions(
+    async fn send_message_ensures_markers_for_claude_sessions(
         #[case] engine: Engine,
-        #[case] marker_enabled: bool,
+        #[case] marker_exists_before: bool,
         action_context: ActionContext,
     ) {
         let mut session = session("sample-session");
         session.engine = engine;
         action_context.save_session(&session);
         let sessions_dir = action_context.temp_dir.path().join("sessions");
-        let marker = marker_enabled.then(|| {
+        if marker_exists_before {
             store::lock_session_for_update(&sessions_dir, &session.session_id)
                 .unwrap()
                 .ensure_watch_web_user_marker()
-                .unwrap()
-        });
-        let expected_content = match (engine, marker.as_deref()) {
-            (Engine::Claude, Some(marker)) => format!("{marker}\ncontinue the investigation"),
-            _ => "continue the investigation".to_string(),
-        };
+                .unwrap();
+        }
 
         let response = action_context
             .router()
@@ -856,9 +869,23 @@ mod tests {
             .await
             .unwrap();
 
+        let marker = if engine == Engine::Claude {
+            store::watch_web_user_marker_from(&sessions_dir, &session.session_id).unwrap()
+        } else {
+            None
+        };
+        let sent_content = action_context.runtime.calls.lock().unwrap()[0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let marker_was_applied = marker
+            .as_deref()
+            .is_some_and(|marker| sent_content.starts_with(&format!("{marker}\n")));
         let snapshot = (
             response_snapshot(response, &action_context).await,
             normalized_queued_prompts(&action_context, "sample-session", None),
+            marker.is_some(),
+            marker_was_applied,
         );
         let expected_prompts = if engine == Engine::Claude {
             json!([{
@@ -878,10 +905,12 @@ mod tests {
                     "calls": [{
                         "kind": "message",
                         "sessionId": "sample-session",
-                        "content": expected_content,
+                        "content": "continue the investigation",
                     }],
                 }),
                 expected_prompts,
+                engine == Engine::Claude,
+                engine == Engine::Claude,
             ),
         );
     }
