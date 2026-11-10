@@ -377,7 +377,9 @@
   gap: 8px;
 }
 
-.conversation-pane[data-mobile='true'] .mobile-interrupt-button {
+.conversation-pane[data-mobile='true']
+  .composer-footer
+  .mobile-interrupt-button {
   width: auto;
   min-height: 44px;
   padding: 0 12px;
