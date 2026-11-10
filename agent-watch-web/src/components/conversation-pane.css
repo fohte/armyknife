@@ -40,11 +40,115 @@
   gap: 1px;
 }
 
+.session-task-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.session-task-line .conversation-task-link {
+  min-width: 0;
+}
+
+.session-task-links {
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--muted-foreground-strong);
+  font-size: 10px;
+}
+
+.session-task-links summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-task-links summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-task-links[open] {
+  box-sizing: border-box;
+  width: min(240px, 80vw);
+  margin-left: calc(22px - min(240px, 80vw));
+}
+
+.session-task-links[open] summary {
+  position: absolute;
+  right: 0;
+}
+
+.session-task-links ul {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  box-sizing: border-box;
+  width: 100%;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  background: #171717;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  list-style: none;
+}
+
+.session-task-links li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-task-links a {
+  overflow: hidden;
+  color: #e4e4e7;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-task-completed {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-ghost);
+}
+
 .conversation-context-line {
   display: flex;
   min-width: 0;
   align-items: baseline;
   gap: 12px;
+}
+
+.conversation-pane[data-mobile='true'] .mobile-conversation-context {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 5px;
+  overflow: visible;
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-context
+  .session-task-line {
+  flex: 0 1 auto;
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-context
+  .conversation-task-link {
+  font-size: inherit;
+}
+
+.conversation-pane[data-mobile='true']
+  .mobile-conversation-context
+  > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .conversation-header-copy h1 {

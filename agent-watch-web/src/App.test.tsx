@@ -497,6 +497,10 @@ function dispatchKey(
   return event
 }
 
+function setPlatform(platform: string) {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+}
+
 it('restores the previous session with browser back and forward', async () => {
   renderApp()
   publishSessions({
@@ -739,6 +743,7 @@ beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('fetch', () => new Promise(() => undefined))
   vi.stubGlobal('matchMedia', matchMediaMock)
+  setPlatform('Linux x86_64')
   mobileViewportMatches = false
   window.history.replaceState(null, '', '/')
   window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
@@ -1776,7 +1781,7 @@ it('limits keyboard navigation to sessions matching the Inbox filters', () => {
   expect(readSelectedTitle()).toEqual('Worker project session')
 })
 
-it('opens the command palette with Ctrl-K while the inbox filter is focused', () => {
+it('opens the command palette with Ctrl-K on other platforms', () => {
   renderApp()
   publishSessions({
     revision: 1,
@@ -1816,7 +1821,51 @@ it('opens the command palette with Ctrl-K while the inbox filter is focused', ()
   })
 })
 
+it('leaves Ctrl-K available to a focused field on macOS', () => {
+  setPlatform('MacIntel')
+  renderApp()
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null)
+    throw new Error('Inbox filter input was not rendered')
+
+  let defaultPrevented = false
+  act(() => {
+    defaultPrevented = dispatchKey(filterInput, 'k', {
+      ctrlKey: true,
+    }).defaultPrevented
+  })
+
+  const snapshot = () => ({
+    paletteOpen: container.querySelector('[aria-label="Jump to"]') !== null,
+    defaultPrevented,
+    focusedInput: document.activeElement?.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    paletteOpen: false,
+    defaultPrevented: false,
+    focusedInput: 'Inbox filter query',
+  })
+})
+
+it('opens the command palette with Cmd-K on macOS', () => {
+  setPlatform('MacIntel')
+  renderApp()
+  act(() => {
+    dispatchKey(window, 'k', { metaKey: true })
+  })
+
+  expect(container.querySelector('[aria-label="Jump to"]') !== null).toEqual(
+    true,
+  )
+})
+
 it('opens the command palette from the navigation shortcut', async () => {
+  setPlatform('MacIntel')
   renderApp()
   const shortcut = container.querySelector<HTMLButtonElement>(
     '[aria-label="Jump to with Command K"]',
@@ -1840,7 +1889,24 @@ it('opens the command palette from the navigation shortcut', async () => {
   })
 })
 
+it('shows Ctrl-K in the navigation on other platforms', () => {
+  renderApp()
+  const shortcut = container.querySelector<HTMLButtonElement>(
+    '.agent-watch-command-key',
+  )
+  const snapshot = () => ({
+    label: shortcut?.textContent,
+    ariaLabel: shortcut?.getAttribute('aria-label'),
+  })
+
+  expect(snapshot()).toEqual({
+    label: 'Ctrl K',
+    ariaLabel: 'Jump to with Control K',
+  })
+})
+
 it('filters the Inbox from a task command in the palette', async () => {
+  setPlatform('MacIntel')
   const taskSession = session('session-task', 'Review alert settings')
   taskSession.task = {
     id: 'task-alerts',
@@ -1877,6 +1943,7 @@ it('filters the Inbox from a task command in the palette', async () => {
 })
 
 it('opens a session in the Inbox when selected from the palette on Board', async () => {
+  setPlatform('MacIntel')
   renderApp()
   publishSessions({
     revision: 1,
@@ -1907,6 +1974,7 @@ it('opens a session in the Inbox when selected from the palette on Board', async
 })
 
 it('opens a selected project on Board at the mobile breakpoint', async () => {
+  setPlatform('MacIntel')
   renderApp()
   publishSessions({
     revision: 1,
@@ -3122,6 +3190,8 @@ it('opens a known session ID from a conversation message', async () => {
   )
   if (link === null) throw new Error('Expected a link to the known session')
   const linkTitle = link.title
+  const linkClass = link.className
+  const underlineStyle = getComputedStyle(link).textDecorationStyle
   act(() => {
     link.click()
   })
@@ -3133,11 +3203,15 @@ it('opens a known session ID from a conversation message', async () => {
     selectedTitle: readSelectedTitle(),
     url: window.location.search,
     linkTitle,
+    linkClass,
+    underlineStyle,
   })
   expect(snapshot()).toEqual({
     selectedTitle: 'Linked session',
     url: `?session=${linkedId}`,
-    linkTitle: 'Linked session\nexample toolkit\nDone',
+    linkTitle: '',
+    linkClass: 'session-link-trigger',
+    underlineStyle: 'dotted',
   })
 })
 
