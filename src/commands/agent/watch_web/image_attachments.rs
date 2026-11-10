@@ -289,12 +289,11 @@ fn image_file_is_safe(directory: &Path, filename: &str) -> bool {
     }
     let path = directory.join(filename);
     fs::symlink_metadata(&path).is_ok_and(|metadata| {
+        let expired = is_known_expired(metadata.modified(), SystemTime::now());
         metadata.is_file()
             && !metadata.file_type().is_symlink()
             && metadata.len() <= MAX_IMAGE_BYTES as u64
-            && metadata
-                .modified()
-                .is_ok_and(|modified| !is_expired(modified, SystemTime::now()))
+            && !expired
             && path
                 .canonicalize()
                 .is_ok_and(|canonical| canonical.parent() == Some(directory))
@@ -375,6 +374,14 @@ fn is_expired(modified: SystemTime, now: SystemTime) -> bool {
         .is_ok_and(|age| age >= ATTACHMENT_RETENTION)
 }
 
+fn is_known_expired(modified: std::io::Result<SystemTime>, now: SystemTime) -> bool {
+    match modified {
+        Ok(modified) => is_expired(modified, now),
+        // The image route logs modification-time errors after the reference initiates a fetch.
+        Err(_) => false,
+    }
+}
+
 fn directory_usage_bytes(directory: &Path) -> std::io::Result<u64> {
     fs::read_dir(directory)?.try_fold(0_u64, |size, entry| {
         let entry = entry?;
@@ -450,7 +457,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        Image, Reference, Request, ValidationError, extract_references, routes_with, validate,
+        ATTACHMENT_RETENTION, Image, Reference, Request, ValidationError, extract_references,
+        is_known_expired, routes_with, validate,
     };
 
     #[rstest]
@@ -471,6 +479,26 @@ mod tests {
                 bytes
             }]
         );
+    }
+
+    #[rstest]
+    #[case::expired(
+        Ok(SystemTime::UNIX_EPOCH),
+        SystemTime::UNIX_EPOCH + ATTACHMENT_RETENTION,
+        true,
+    )]
+    #[case::fresh(Ok(SystemTime::UNIX_EPOCH), SystemTime::UNIX_EPOCH, false)]
+    #[case::unknown_modification_time(
+        Err(std::io::Error::other("metadata unavailable")),
+        SystemTime::UNIX_EPOCH,
+        false
+    )]
+    fn only_marks_images_expired_when_their_modification_time_is_known(
+        #[case] modified: std::io::Result<SystemTime>,
+        #[case] now: SystemTime,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(is_known_expired(modified, now), expected);
     }
 
     #[rstest]
