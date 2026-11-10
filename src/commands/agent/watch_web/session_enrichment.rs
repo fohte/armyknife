@@ -238,13 +238,7 @@ async fn fetch_task_metadata(
         Ok(tasks) => tasks,
         Err(error) => {
             tracing::warn!(%error, "Failed to fetch agent watch tq task priorities; keeping cached priorities");
-            order_tasks_by_priority(&mut links, &previous.priority_order);
-            return Ok(SessionTaskMetadata {
-                links,
-                priorities: previous.priorities,
-                priority_order: previous.priority_order,
-                task_projects: previous.task_projects,
-            });
+            return Ok(keep_cached_priority_metadata(links, previous));
         }
     };
 
@@ -264,6 +258,14 @@ async fn fetch_task_metadata(
         priority_order,
         task_projects,
     })
+}
+
+fn keep_cached_priority_metadata(
+    mut links: HashMap<String, Vec<SessionTask>>,
+    previous: SessionTaskMetadata,
+) -> SessionTaskMetadata {
+    order_tasks_by_priority(&mut links, &previous.priority_order);
+    SessionTaskMetadata { links, ..previous }
 }
 
 async fn fetch_task_projects<F, Fut>(
@@ -396,6 +398,16 @@ mod tests {
         }
     }
 
+    fn linked_task(id: &str) -> SessionTask {
+        SessionTask {
+            task_id: id.to_string(),
+            task_number: 1,
+            task_title: id.to_string(),
+            parent_task_id: None,
+            is_closed: false,
+        }
+    }
+
     fn metadata(session_ids: HashSet<String>) -> SessionTaskMetadata {
         let links = session_ids
             .into_iter()
@@ -507,6 +519,34 @@ mod tests {
         #[case] expected: (HashMap<String, Option<i32>>, HashMap<String, usize>),
     ) {
         assert_eq!(task_priority_metadata(tasks), expected);
+    }
+
+    #[test]
+    fn cached_priority_metadata_orders_new_links_after_task_lookup_failure() {
+        let previous = SessionTaskMetadata {
+            links: HashMap::new(),
+            priorities: HashMap::from([
+                ("higher".to_string(), Some(0)),
+                ("lower".to_string(), Some(1)),
+            ]),
+            priority_order: HashMap::from([("higher".to_string(), 0), ("lower".to_string(), 1)]),
+            task_projects: HashMap::from([("higher".to_string(), "sample project".to_string())]),
+        };
+        let links = HashMap::from([(
+            "session-a".to_string(),
+            vec![linked_task("lower"), linked_task("higher")],
+        )]);
+
+        assert_eq!(
+            keep_cached_priority_metadata(links, previous.clone()),
+            SessionTaskMetadata {
+                links: HashMap::from([(
+                    "session-a".to_string(),
+                    vec![linked_task("higher"), linked_task("lower")],
+                )]),
+                ..previous
+            },
+        );
     }
 
     #[test]

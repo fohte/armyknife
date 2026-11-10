@@ -7,8 +7,9 @@ use crate::commands::agent::tq_session_tasks::{
     build_all_tasks_by_session, fetch_session_tasks_with_parents, order_tasks_by_priority,
     task_priority_metadata,
 };
-use crate::infra::tq::TqClient;
-use std::collections::HashSet;
+use crate::infra::tq::{TqClient, TqTaskSummary};
+use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 /// Fetches tq task links for local sessions and their missing parent sessions.
 ///
@@ -28,24 +29,42 @@ pub async fn fetch_task_snapshot(
 
     let sessions = fetch_session_tasks_with_parents(&client, &local_session_ids).await?;
     let mut session_tasks = build_all_tasks_by_session(sessions, &local_session_ids);
+    if let Err(error) = order_session_tasks_by_priority(&mut session_tasks, |task_ids| async move {
+        TqClient
+            .list_tasks(&task_ids)
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await
+    {
+        tracing::warn!(%error, "Failed to fetch tq task priorities for agent sessions");
+    }
+
+    Ok(Some(TqSnapshot::new(session_tasks)))
+}
+
+async fn order_session_tasks_by_priority<F, Fut>(
+    session_tasks: &mut HashMap<String, Vec<super::session_rows::SessionTask>>,
+    fetch_task_summaries: F,
+) -> Result<(), String>
+where
+    F: FnOnce(HashSet<String>) -> Fut,
+    Fut: Future<Output = Result<Vec<TqTaskSummary>, String>>,
+{
     let task_ids = session_tasks
         .values()
         .flatten()
         .map(|task| task.task_id.clone())
         .collect::<HashSet<_>>();
-    if !task_ids.is_empty() {
-        match client.list_tasks(&task_ids).await {
-            Ok(tasks) => {
-                let (_, priority_order) = task_priority_metadata(tasks);
-                order_tasks_by_priority(&mut session_tasks, &priority_order);
-            }
-            Err(error) => {
-                tracing::warn!(%error, "Failed to fetch tq task priorities for agent sessions");
-            }
-        }
+    if task_ids.is_empty() {
+        return Ok(());
     }
 
-    Ok(Some(TqSnapshot::new(session_tasks)))
+    let tasks = fetch_task_summaries(task_ids).await?;
+    let (_, priority_order) = task_priority_metadata(tasks);
+    order_tasks_by_priority(session_tasks, &priority_order);
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -53,8 +72,9 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::commands::agent::tq_session_tasks::SessionTask;
     use crate::commands::agent::tq_session_tasks::fetch_missing_parent_sessions;
-    use crate::infra::tq::{SessionTasks, TqTask};
+    use crate::infra::tq::{SessionTasks, TqTask, TqTaskSummary};
 
     fn ids(values: &[&str]) -> HashSet<String> {
         values.iter().map(|s| s.to_string()).collect()
@@ -76,6 +96,26 @@ mod tests {
         SessionTasks {
             parent_session_id: Some(parent_session_id.to_string()),
             ..session(session_id, tasks)
+        }
+    }
+
+    fn linked_task(task_id: &str) -> SessionTask {
+        SessionTask {
+            task_id: task_id.to_string(),
+            task_number: 1,
+            task_title: task_id.to_string(),
+            parent_task_id: None,
+            is_closed: false,
+        }
+    }
+
+    fn task_summary(task_id: &str, priority: Option<i32>) -> TqTaskSummary {
+        TqTaskSummary {
+            id: task_id.to_string(),
+            number: 1,
+            title: task_id.to_string(),
+            priority,
+            project_id: None,
         }
     }
 
@@ -143,5 +183,61 @@ mod tests {
         let result = fetch_task_snapshot(Some(TqClient), HashSet::new()).await;
 
         assert_eq!(result, Ok(None));
+    }
+
+    #[tokio::test]
+    async fn priority_lookup_orders_tasks_using_the_injected_task_list() {
+        let mut session_tasks = HashMap::from([(
+            "session-a".to_string(),
+            vec![linked_task("lower"), linked_task("higher")],
+        )]);
+        let mut requested_ids = None;
+
+        let result = order_session_tasks_by_priority(&mut session_tasks, |task_ids| {
+            requested_ids = Some(task_ids);
+            async {
+                Ok(vec![
+                    task_summary("higher", Some(0)),
+                    task_summary("lower", Some(1)),
+                ])
+            }
+        })
+        .await;
+
+        assert_eq!(
+            (requested_ids, result, session_tasks),
+            (
+                Some(ids(&["lower", "higher"])),
+                Ok(()),
+                HashMap::from([(
+                    "session-a".to_string(),
+                    vec![linked_task("higher"), linked_task("lower")],
+                )]),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_priority_lookup_preserves_the_existing_task_order() {
+        let mut session_tasks = HashMap::from([(
+            "session-a".to_string(),
+            vec![linked_task("first"), linked_task("second")],
+        )]);
+
+        let result = order_session_tasks_by_priority(&mut session_tasks, |_| async {
+            Err::<Vec<TqTaskSummary>, _>("task list unavailable".to_string())
+        })
+        .await;
+
+        assert_eq!(
+            (result, session_tasks),
+            (
+                Err("task list unavailable".to_string()),
+                HashMap::from([(
+                    "session-a".to_string(),
+                    vec![linked_task("first"), linked_task("second")],
+                )]),
+            ),
+        );
     }
 }
