@@ -271,6 +271,8 @@ async fn send_message(
                 "},
                 request.content, paths
             )
+            .trim_end()
+            .to_string()
         }
     };
     let cleanup_paths = image_paths;
@@ -528,6 +530,7 @@ mod tests {
 
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
+        message_error: Mutex<Option<String>>,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -537,6 +540,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                message_error: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -551,6 +555,9 @@ mod tests {
                 "sessionId": session.session_id,
                 "content": content,
             }));
+            if let Some(message) = self.message_error.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(message));
+            }
             Ok(())
         }
 
@@ -637,6 +644,10 @@ mod tests {
 
         fn set_pane_command_matches(&self, matches: bool) {
             *self.runtime.pane_command_matches.lock().unwrap() = matches;
+        }
+
+        fn set_message_error(&self, message: &str) {
+            *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
         }
     }
 
@@ -789,52 +800,153 @@ mod tests {
             .path()
             .canonicalize()
             .unwrap();
-        assert_eq!(
-            response_snapshot(response, &action_context).await,
+        let mut response_snapshot = response_snapshot(response, &action_context).await;
+        let path_string = path.display().to_string();
+        let references_saved_path = response_snapshot["calls"][0]["content"]
+            .as_str()
+            .is_some_and(|content| content.trim_end().ends_with(&path_string));
+        let message = response_snapshot["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .replace(&path_string, "<attachment-path>");
+        response_snapshot["calls"][0]["content"] = message.into();
+        let snapshot = || {
             json!({
-                "status": StatusCode::OK.as_u16(),
-                "body": { "ok": true },
-                "calls": [{
-                    "kind": "message",
-                    "sessionId": "sample-session",
-                    "content": format!(
-                        indoc::indoc! {"
-                            Inspect this image
+                "response": response_snapshot,
+                "referencesSavedPath": references_saved_path,
+                "attachment": {
+                    "isAbsolute": path.is_absolute(),
+                    "bytes": std::fs::read(&path).unwrap(),
+                },
+            })
+        };
+        let expected_message = indoc::indoc! {"
+            Inspect this image
 
-                            Attached image(s):
-                            - {}
-                        "},
-                        path.display()
-                    ),
-                }],
+            Attached image(s):
+            - <attachment-path>
+        "}
+        .trim_end();
+        assert_eq!(
+            snapshot(),
+            json!({
+                "response": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message,
+                    }],
+                },
+                "referencesSavedPath": true,
+                "attachment": {
+                    "isAbsolute": true,
+                    "bytes": [71, 73, 70, 56, 57, 97],
+                },
             }),
         );
-        assert_eq!(std::fs::read(path).unwrap(), b"GIF89a");
     }
 
     #[rstest]
-    #[case::non_image("application/pdf", 0, "unsupported image type: application/pdf")]
-    #[case::oversized(
-        "image/png",
-        image_attachments::MAX_IMAGE_BYTES + 1,
-        "image attachments exceed the 10 MiB limit"
-    )]
     #[tokio::test]
-    async fn send_message_rejects_invalid_image_attachments(
-        #[case] mime_type: &str,
-        #[case] size: usize,
-        #[case] error: &str,
-        action_context: ActionContext,
-    ) {
+    async fn send_message_removes_saved_images_when_runtime_fails(action_context: ActionContext) {
         action_context.save_session(&session("sample-session"));
-
+        action_context.set_message_error("message transport failed");
         let response = action_context
             .router()
             .oneshot(post(
                 "/sessions/sample-session/messages",
                 json!({
                     "content": "Inspect this image",
-                    "images": [{ "mimeType": mime_type, "size": size, "data": "" }],
+                    "images": [{
+                        "mimeType": "image/gif",
+                        "size": 6,
+                        "data": "R0lGODlh",
+                    }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let mut response = response_snapshot(response, &action_context).await;
+        let message = response["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let path_line = message
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("- "))
+            .unwrap_or_default();
+        let path = path_line.strip_prefix("- ").unwrap_or_default();
+        let path_is_absolute = PathBuf::from(path).is_absolute();
+        response["calls"][0]["content"] = message.replace(path, "<attachment-path>").into();
+        let files_left = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+            .map(|entries| entries.count())
+            .unwrap_or_default();
+        let actual = json!({
+            "response": response,
+            "pathIsAbsolute": path_is_absolute,
+            "filesLeft": files_left,
+        });
+        let expected_message = indoc::indoc! {"
+            Inspect this image
+
+            Attached image(s):
+            - <attachment-path>
+        "}
+        .trim_end();
+        assert_eq!(
+            actual,
+            json!({
+                "response": {
+                    "status": StatusCode::BAD_GATEWAY.as_u16(),
+                    "body": { "error": "message transport failed" },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message,
+                    }],
+                },
+                "pathIsAbsolute": true,
+                "filesLeft": 0,
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::non_image(
+        vec![("application/pdf", 0)],
+        "unsupported image type: application/pdf"
+    )]
+    #[case::oversized(
+        vec![("image/png", image_attachments::MAX_IMAGE_BYTES + 1)],
+        "image attachments exceed the 10 MiB limit"
+    )]
+    #[case::cumulative_size(
+        vec![("image/png", 6 * 1024 * 1024), ("image/png", 6 * 1024 * 1024)],
+        "image attachments exceed the 10 MiB limit"
+    )]
+    #[tokio::test]
+    async fn send_message_rejects_invalid_image_attachments(
+        #[case] attachments: Vec<(&str, usize)>,
+        #[case] error: &str,
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+
+        let images = attachments
+            .iter()
+            .map(|(mime_type, size)| json!({ "mimeType": mime_type, "size": size, "data": "" }))
+            .collect::<Vec<_>>();
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": "Inspect this image",
+                    "images": images,
                 }),
             ))
             .await

@@ -1,6 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, SystemTime};
 
 use anyhow::Context;
 use base64::Engine as _;
@@ -9,6 +11,9 @@ use serde::Deserialize;
 use thiserror::Error;
 
 pub(super) const MAX_IMAGE_BYTES: usize = 10 * 1024 * 1024;
+const MAX_STORAGE_BYTES: u64 = 1024 * 1024 * 1024;
+const ATTACHMENT_RETENTION: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+static STORAGE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,20 +40,18 @@ pub(super) enum ValidationError {
 }
 
 pub(super) fn validate(images: Vec<Request>) -> Result<Vec<Image>, ValidationError> {
-    let mut total_size = 0_usize;
+    let total_size = images.iter().try_fold(0_usize, |total, image| {
+        total
+            .checked_add(image.size)
+            .filter(|size| *size <= MAX_IMAGE_BYTES)
+            .ok_or(ValidationError::TooLarge)
+    })?;
+    if total_size > MAX_IMAGE_BYTES {
+        return Err(ValidationError::TooLarge);
+    }
     images
         .into_iter()
         .map(|image| {
-            if image.size > MAX_IMAGE_BYTES {
-                return Err(ValidationError::TooLarge);
-            }
-            total_size = total_size
-                .checked_add(image.size)
-                .ok_or(ValidationError::TooLarge)?;
-            if total_size > MAX_IMAGE_BYTES {
-                return Err(ValidationError::TooLarge);
-            }
-
             let (extension, signature) = match image.mime_type.as_str() {
                 "image/png" => ("png", &[137, 80, 78, 71, 13, 10, 26, 10][..]),
                 "image/jpeg" => ("jpg", &[255, 216, 255][..]),
@@ -74,8 +77,18 @@ pub(super) fn save(images: Vec<Image>, directory: Option<PathBuf>) -> anyhow::Re
     if images.is_empty() {
         return Ok(Vec::new());
     }
+    let _guard = STORAGE_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| anyhow::anyhow!("image attachment storage lock is poisoned"))?;
     let directory = directory.unwrap_or(state_dir()?.join("armyknife").join("agent-watch-images"));
     create_private_directory(&directory)?;
+    prune_expired(&directory)?;
+    let existing_size = directory_size(&directory)?;
+    let incoming_size = images.iter().map(|image| image.bytes.len() as u64).sum();
+    if existing_size.saturating_add(incoming_size) > MAX_STORAGE_BYTES {
+        anyhow::bail!("image attachment storage is full");
+    }
     let mut paths = Vec::with_capacity(images.len());
     for image in images {
         match save_one(&directory, image) {
@@ -93,6 +106,36 @@ pub(super) fn remove(paths: &[PathBuf]) {
     for path in paths {
         let _ = fs::remove_file(path);
     }
+}
+
+fn prune_expired(directory: &Path) -> std::io::Result<()> {
+    let now = SystemTime::now();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let metadata = entry.metadata()?;
+        if now
+            .duration_since(metadata.modified()?)
+            .is_ok_and(|age| age >= ATTACHMENT_RETENTION)
+        {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
+}
+
+fn directory_size(directory: &Path) -> std::io::Result<u64> {
+    fs::read_dir(directory)?.try_fold(0_u64, |size, entry| {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            return Ok(size);
+        }
+        size.checked_add(entry.metadata()?.len()).ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "directory size overflow")
+        })
+    })
 }
 
 fn save_one(directory: &Path, image: Image) -> anyhow::Result<PathBuf> {
@@ -160,6 +203,8 @@ fn state_dir() -> anyhow::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use base64::Engine as _;
     use rstest::rstest;
 
@@ -210,6 +255,30 @@ mod tests {
             error.to_string(),
             "image attachments exceed the 10 MiB limit"
         );
+    }
+
+    #[test]
+    fn save_rejects_when_the_retained_attachment_limit_is_reached() {
+        let directory = tempfile::tempdir().unwrap();
+        let occupied_path = directory.path().join("occupied.bin");
+        OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&occupied_path)
+            .unwrap()
+            .set_len(super::MAX_STORAGE_BYTES)
+            .unwrap();
+
+        let error = super::save(
+            vec![super::Image {
+                extension: "gif",
+                bytes: b"GIF89a".to_vec(),
+            }],
+            Some(directory.path().to_path_buf()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.to_string(), "image attachment storage is full");
     }
 
     fn request(mime_type: &str, bytes: &[u8]) -> Request {

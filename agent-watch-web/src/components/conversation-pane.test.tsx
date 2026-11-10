@@ -638,6 +638,59 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   })
 })
 
+it('clears pasted attachments after a successful send', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const file = new File(['payload'], 'clipboard.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          images: [
+            {
+              mimeType: 'application/octet-stream',
+              size: 7,
+              data: 'cGF5bG9hZA==',
+            },
+          ],
+        },
+      ],
+    ],
+    attachmentNames: [],
+  })
+})
+
 it('shows a server image validation error and retains the rejected attachment', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
