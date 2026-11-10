@@ -39,9 +39,8 @@ export function ConversationPaneView({
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
-  const { draft, updateDraft, clearDraftIfUnchanged } = useComposerDraft(
-    session.id,
-  )
+  const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
+    useComposerDraft(session.id)
   const [sendPending, setSendPending] = useState(false)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
@@ -426,6 +425,11 @@ export function ConversationPaneView({
       {error != null && error !== '' ? (
         <p className="conversation-error" role="alert">
           {error}
+        </p>
+      ) : null}
+      {!storageAvailable ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
         </p>
       ) : null}
       <MessageComposer

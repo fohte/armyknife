@@ -633,10 +633,13 @@ it('keeps the composer usable when browser storage is unavailable', () => {
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
+    storageNotice: container.querySelector('[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
     composerVisible: true,
+    storageNotice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
   })
 })
 

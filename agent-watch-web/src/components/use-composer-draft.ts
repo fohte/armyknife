@@ -6,13 +6,13 @@ function readComposerDraft(key: string) {
     () => window.localStorage.getItem(key),
     (error: unknown) => error,
   )().match(
-    (draft) => draft ?? '',
-    () => '',
+    (draft) => ({ draft: draft ?? '', storageAvailable: true }),
+    () => ({ draft: '', storageAvailable: false }),
   )
 }
 
 function writeComposerDraft(key: string, draft: string) {
-  Result.fromThrowable(
+  return Result.fromThrowable(
     () => {
       if (draft === '') {
         window.localStorage.removeItem(key)
@@ -22,25 +22,29 @@ function writeComposerDraft(key: string, draft: string) {
     },
     (error: unknown) => error,
   )().match(
-    () => undefined,
-    () => undefined,
+    () => true,
+    () => false,
   )
 }
 
 export function useComposerDraft(sessionId: string) {
   const storageKey = `agent-watch-web:composer-draft:${sessionId}`
-  const [draft, setDraft] = useState(() => readComposerDraft(storageKey))
+  const [initialDraft] = useState(() => readComposerDraft(storageKey))
+  const [draft, setDraft] = useState(initialDraft.draft)
+  const [storageAvailable, setStorageAvailable] = useState(
+    initialDraft.storageAvailable,
+  )
   const draftRef = useRef(draft)
 
   const updateDraft = (value: string) => {
     draftRef.current = value
     setDraft(value)
-    writeComposerDraft(storageKey, value)
+    setStorageAvailable(writeComposerDraft(storageKey, value))
   }
 
   const clearDraftIfUnchanged = (sentDraft: string) => {
     if (draftRef.current === sentDraft) updateDraft('')
   }
 
-  return { draft, updateDraft, clearDraftIfUnchanged }
+  return { draft, updateDraft, clearDraftIfUnchanged, storageAvailable }
 }
