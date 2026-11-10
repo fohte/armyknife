@@ -32,17 +32,21 @@ pub(super) fn for_each_jsonl_record(
     Ok(())
 }
 
-pub(super) fn tool_target(input: Option<&serde_json::Value>) -> Option<String> {
+pub(super) fn tool_target(name: &str, input: Option<&serde_json::Value>) -> Option<String> {
     let input = input?;
-    if let Some(subagent_type) = input
-        .get("subagent_type")
-        .and_then(serde_json::Value::as_str)
-    {
+    if matches!(name, "Agent" | "Task") {
+        let subagent_type = input
+            .get("subagent_type")
+            .and_then(serde_json::Value::as_str);
         let description = input.get("description").and_then(serde_json::Value::as_str);
-        return Some(description.map_or_else(
-            || subagent_type.to_owned(),
-            |description| format!("{subagent_type} · {description}"),
-        ));
+        return match (subagent_type, description) {
+            (Some(subagent_type), Some(description)) => {
+                Some(format!("{subagent_type} · {description}"))
+            }
+            (Some(subagent_type), None) => Some(subagent_type.to_owned()),
+            (None, Some(description)) => Some(description.to_owned()),
+            (None, None) => None,
+        };
     }
     let target = ["command", "file_path", "path", "pattern", "url", "query"]
         .into_iter()
@@ -161,7 +165,7 @@ pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -
             .or_else(|| value.get("input"))
             .or_else(|| value.get("parameters"))
     });
-    if let Some(target) = tool_target(detail).or_else(|| tool_target(nested_detail)) {
+    if let Some(target) = tool_target(name, detail).or_else(|| tool_target(name, nested_detail)) {
         return Some(target);
     }
     if matches!(name, "exec" | "shell" | "CommandExecution")

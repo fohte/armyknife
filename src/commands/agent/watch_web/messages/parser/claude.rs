@@ -192,7 +192,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     } else if let Some(tool_use) = tool_uses.last() {
         items.push(ChatItem::ToolInProgress {
             tool: tool_use.name.clone(),
-            target: tool_target(tool_use.input.as_ref()),
+            target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
     Ok(items)
@@ -488,7 +488,7 @@ fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
-    let Some(target) = tool_target(input) else {
+    let Some(target) = tool_target(name, input) else {
         return name.to_owned();
     };
     format!("{name}: {target}")
@@ -586,6 +586,35 @@ mod tests {
             vec![ChatItem::ToolInProgress {
                 tool: "Agent".to_string(),
                 target: Some("Explore · Find fixture loaders".to_string()),
+            }],
+        );
+    }
+
+    #[rstest]
+    #[case::agent_tool("Agent")]
+    #[case::task_tool("Task")]
+    fn pending_agent_tool_uses_description_when_type_is_omitted(#[case] tool: &str) {
+        let transcript = serde_json::json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "fixture-agent-without-type",
+                    "name": tool,
+                    "input": {
+                        "description": "Find fixture loaders",
+                        "prompt": "This full prompt stays hidden from the summary.",
+                    },
+                }],
+            },
+        })
+        .to_string();
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::ToolInProgress {
+                tool: tool.to_string(),
+                target: Some("Find fixture loaders".to_string()),
             }],
         );
     }
