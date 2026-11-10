@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 
+import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import { BoardView } from '#components/board-view'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
 import { setSessionLater, setSessionToday } from '#session-actions'
@@ -9,17 +11,17 @@ import {
   getLaterPresetShortcut,
   getSessionShortcutAction,
   moveSelection,
+  type SessionView,
 } from '#session-navigation'
 import type { Session } from '#types'
-
-type View = 'inbox' | 'board'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [view, setView] = useState<View>('inbox')
+  const [view, setView] = useState<SessionView>('inbox')
+  const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
@@ -70,6 +72,31 @@ export function App() {
         (session) => laterExpanded || session.category !== 'later',
       ),
     [laterExpanded, orderedSessions],
+  )
+  const projects = useMemo(
+    () => buildBoardProjects(sessionsWithElapsedTime),
+    [sessionsWithElapsedTime],
+  )
+  const pmProjects = useMemo(
+    () =>
+      sortPmProjects(projects).map((project) => {
+        const descendantAncestorIds = new Set(
+          project.sessions.flatMap((session) => session.ancestorSessionIds),
+        )
+        const pmSessionId =
+          project.sessions.find(
+            (session) =>
+              session.parent === null && descendantAncestorIds.has(session.id),
+          )?.id ?? null
+
+        return {
+          name: project.name,
+          status: project.status,
+          needsActionCount: project.needsActionCount,
+          sessionId: pmSessionId,
+        }
+      }),
+    [projects],
   )
 
   useEffect(
@@ -173,7 +200,7 @@ export function App() {
         return
       }
 
-      const action = getSessionShortcutAction(event.key, event.shiftKey)
+      const action = getSessionShortcutAction(event.key, event.shiftKey, view)
       if (action?.type === 'view') {
         event.preventDefault()
         setView(action.view)
@@ -217,6 +244,10 @@ export function App() {
       },
     )
   }
+  const openSessionInInbox = (sessionId: string) => {
+    setSelectedId(sessionId)
+    setView('inbox')
+  }
 
   return (
     <div className="agent-watch-shell">
@@ -226,11 +257,13 @@ export function App() {
         todaySessions={sessionsWithElapsedTime.filter(
           (session) => session.isToday === true,
         )}
+        pmProjects={pmProjects}
         onViewChange={setView}
         onSelectToday={(id) => {
           setView('inbox')
           setSelectedId(id)
         }}
+        onSelectSession={openSessionInInbox}
       />
       <main className="agent-watch-main">
         {view === 'inbox' ? (
@@ -252,11 +285,14 @@ export function App() {
             onToggleToday={toggleToday}
           />
         ) : (
-          <section className="board-placeholder" aria-labelledby="board-title">
-            <header className="view-header">
-              <h1 id="board-title">Board</h1>
-            </header>
-          </section>
+          <BoardView
+            error={error}
+            hideQuietProjects={hideQuietProjects}
+            loaded={loaded}
+            onHideQuietProjectsChange={setHideQuietProjects}
+            onSelectSession={openSessionInInbox}
+            projects={projects}
+          />
         )}
       </main>
       {laterSession !== undefined ? (
