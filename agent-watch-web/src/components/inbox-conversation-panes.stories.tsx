@@ -117,3 +117,11 @@ export const IPhoneShowsTheInboxBeforeSelection: Story = {
     ),
   ],
 }
+
+export const DesktopShowsTheInboxBeforeSelection: Story = {
+  name: 'The desktop shows the inbox before a conversation is selected',
+  args: {
+    inboxProps: { ...inboxProps, selectedId: null },
+    selectedSession: null,
+  },
+}

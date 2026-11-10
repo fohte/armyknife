@@ -2,10 +2,12 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { CritPane } from '#components/crit-pane'
 import { ResizableColumns } from '#components/resizable-columns'
 
 let container: HTMLDivElement
 let root: Root | null = null
+let viewport: { width: number; height: number }
 
 function renderColumns(
   storageKey: string | null = 'test:columns',
@@ -31,6 +33,7 @@ function renderColumns(
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   window.localStorage.clear()
+  viewport = { width: window.innerWidth, height: window.innerHeight }
   container = document.createElement('div')
   container.style.width = '900px'
   container.style.height = '500px'
@@ -41,6 +44,7 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  window.resizeTo(viewport.width, viewport.height)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -177,6 +181,59 @@ it('keeps a user-selected width when a narrow window clamps it', () => {
     { width: '472px', value: '472', maximum: '472', saved: '600' },
     { width: '600px', value: '600', maximum: '672', saved: '600' },
   ])
+})
+
+it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
+  window.resizeTo(1000, 900)
+  container.style.width = '1000px'
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ResizableColumns
+        first={<div>Conversation</div>}
+        second={
+          <CritPane
+            url="http://127.0.0.1:5000/review/sample"
+            onClose={() => undefined}
+          />
+        }
+        storageKey={null}
+        firstSize={400}
+        firstMinSize={240}
+        secondMinSize={300}
+        label="Resize conversation and crit"
+      />,
+    )
+  })
+
+  const firstPane = container.querySelector<HTMLDivElement>(
+    '.resizable-columns-first-pane',
+  )
+  const separator = container.querySelector<HTMLDivElement>(
+    '.resizable-columns-separator',
+  )
+  const secondPane = container.querySelector<HTMLDivElement>(
+    '.resizable-columns-second-pane',
+  )
+  if (firstPane === null || separator === null || secondPane === null) {
+    throw new Error('Expected both panes and a separator')
+  }
+
+  const snapshot = () => ({
+    narrowViewport: window.matchMedia('(max-width: 1279px)').matches,
+    firstPaneFlexGrow: window.getComputedStyle(firstPane).flexGrow,
+    firstPaneWidth: firstPane.getBoundingClientRect().width,
+    separatorDisplay: window.getComputedStyle(separator).display,
+    secondPaneDisplay: window.getComputedStyle(secondPane).display,
+  })
+
+  expect(snapshot()).toEqual({
+    narrowViewport: true,
+    firstPaneFlexGrow: '1',
+    firstPaneWidth: 1000,
+    separatorDisplay: 'none',
+    secondPaneDisplay: 'none',
+  })
 })
 
 it('keeps resizing when browser storage is unavailable', () => {
