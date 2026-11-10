@@ -11,6 +11,7 @@ function session(id: string): Session {
   return {
     id,
     category: 'needs_action',
+    isPaused: false,
     kind: 'Question',
     title: 'Review a request',
     preview: 'Please choose a retry policy.',
