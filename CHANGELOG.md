@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.555](https://github.com/fohte/armyknife/compare/v0.1.554...v0.1.555) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show permission progress ([#1469](https://github.com/fohte/armyknife/issues/1469)) ([77cda1e](https://github.com/fohte/armyknife/commit/77cda1e944d3004f0a8268412388a2cabcc79749))
+
 ## [0.1.554](https://github.com/fohte/armyknife/compare/v0.1.553...v0.1.554) (2026-11-10)
 
 
