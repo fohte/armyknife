@@ -7,6 +7,7 @@ import type { Session } from '#types'
 
 type InboxConversationPanesProps = {
   inboxProps: Omit<ComponentProps<typeof InboxView>, 'isMobile'>
+  sessions?: readonly Session[]
   selectedSession: Session | null | undefined
   refreshKey: number
   isMobile: boolean
@@ -18,6 +19,7 @@ type InboxConversationPanesProps = {
 
 export function InboxConversationPanes({
   inboxProps,
+  sessions = [],
   selectedSession,
   refreshKey,
   isMobile,
@@ -32,6 +34,7 @@ export function InboxConversationPanes({
       <ConversationPane
         key={selectedSession.id}
         session={selectedSession}
+        sessions={sessions}
         refreshKey={refreshKey}
         isMobile={isMobile}
         onBack={onBack}
