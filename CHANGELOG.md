@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.527](https://github.com/fohte/armyknife/compare/v0.1.526...v0.1.527) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add Later and TODAY ([#1407](https://github.com/fohte/armyknife/issues/1407)) ([221630c](https://github.com/fohte/armyknife/commit/221630cfd07be8f0729479e07ec4cde635b9697c))
+
 ## [0.1.526](https://github.com/fohte/armyknife/compare/v0.1.525...v0.1.526) (2026-11-10)
 
 
