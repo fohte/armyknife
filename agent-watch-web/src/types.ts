@@ -34,6 +34,7 @@ export type Session = {
   workType?: string | null
   category: SessionCategory
   isPaused: boolean
+  isCompacting?: boolean
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
@@ -56,11 +57,16 @@ export type Session = {
 
 export type SessionLinkTarget = Pick<
   Session,
-  'id' | 'title' | 'project' | 'category' | 'isPaused'
+  'id' | 'category' | 'isPaused' | 'task' | 'repo'
 >
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
+  | {
+      type: 'user_with_content'
+      content: UserContentPart[]
+      from?: string
+    }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool_summary'
@@ -75,6 +81,10 @@ export type ChatItem =
       answer: string | null
     }
   | { type: 'permission'; tool: string; description: string }
+
+export type UserContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: string; available: boolean }
 
 export type ToolOperation = {
   tool: string

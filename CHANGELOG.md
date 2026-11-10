@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.560](https://github.com/fohte/armyknife/compare/v0.1.559...v0.1.560) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show compaction status ([#1475](https://github.com/fohte/armyknife/issues/1475)) ([19d0e65](https://github.com/fohte/armyknife/commit/19d0e65748540456f3f70f4ac9bb4047aafc31eb))
+
+## [0.1.559](https://github.com/fohte/armyknife/compare/v0.1.558...v0.1.559) (2026-11-10)
+
+
+### Bug Fixes
+
+* **watch-web:** show sent messages and images ([#1471](https://github.com/fohte/armyknife/issues/1471)) ([62a9118](https://github.com/fohte/armyknife/commit/62a91181da78e9aa4388f4484e01c87d61f3a681))
+
+## [0.1.558](https://github.com/fohte/armyknife/compare/v0.1.557...v0.1.558) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** show session link details ([#1474](https://github.com/fohte/armyknife/issues/1474)) ([4f85f65](https://github.com/fohte/armyknife/commit/4f85f6521d0d1cabc7d09360240841e04e971088))
+
 ## [0.1.557](https://github.com/fohte/armyknife/compare/v0.1.556...v0.1.557) (2026-11-10)
 
 

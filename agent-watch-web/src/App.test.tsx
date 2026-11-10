@@ -3168,6 +3168,8 @@ it('opens a known session ID from a conversation message', async () => {
   )
   if (link === null) throw new Error('Expected a link to the known session')
   const linkTitle = link.title
+  const linkClass = link.className
+  const underlineStyle = getComputedStyle(link).textDecorationStyle
   act(() => {
     link.click()
   })
@@ -3179,11 +3181,15 @@ it('opens a known session ID from a conversation message', async () => {
     selectedTitle: readSelectedTitle(),
     url: window.location.search,
     linkTitle,
+    linkClass,
+    underlineStyle,
   })
   expect(snapshot()).toEqual({
     selectedTitle: 'Linked session',
     url: `?session=${linkedId}`,
-    linkTitle: 'Linked session\nexample toolkit\nDone',
+    linkTitle: '',
+    linkClass: 'session-link-trigger',
+    underlineStyle: 'dotted',
   })
 })
 

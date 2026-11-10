@@ -375,6 +375,7 @@ impl<'de> Deserialize<'de> for ToolInput {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HookEvent {
     SessionStart,
+    PreCompact,
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
@@ -390,6 +391,7 @@ impl HookEvent {
     pub fn from_str(s: &str) -> Result<Self> {
         match s {
             "session-start" => Ok(Self::SessionStart),
+            "pre-compact" => Ok(Self::PreCompact),
             "user-prompt-submit" => Ok(Self::UserPromptSubmit),
             "pre-tool-use" => Ok(Self::PreToolUse),
             "post-tool-use" => Ok(Self::PostToolUse),
