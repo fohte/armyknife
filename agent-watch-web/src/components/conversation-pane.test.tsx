@@ -677,7 +677,7 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
-it('links known session IDs in user and assistant messages', () => {
+it('links known session IDs in user, rich user, and assistant messages', () => {
   const linkedSession: Session = {
     ...session,
     id: '11111111-1111-4111-8111-111111111111',
@@ -692,6 +692,10 @@ it('links known session IDs in user and assistant messages', () => {
     onSelectSession,
     [
       { type: 'user', text: `Use ${linkedSession.id}` },
+      {
+        type: 'user_with_content',
+        content: [{ type: 'text', text: `Inspect ${linkedSession.id}` }],
+      },
       { type: 'assistant', text: `I found ${linkedSession.id}` },
     ],
     actions,
@@ -711,12 +715,17 @@ it('links known session IDs in user and assistant messages', () => {
   }
 
   const expected = {
-    messageClasses: ['chat-user-group', 'chat-assistant-message'],
+    messageClasses: [
+      'chat-user-group',
+      'chat-user-group',
+      'chat-assistant-message',
+    ],
     linkTitles: [
       'Inspect the retry path\nexample toolkit\nDone',
       'Inspect the retry path\nexample toolkit\nDone',
+      'Inspect the retry path\nexample toolkit\nDone',
     ],
-    selectedIds: [linkedSession.id, linkedSession.id],
+    selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   const getActual = () => ({
     messageClasses: links.map((link) => link.closest('article')?.className),
