@@ -187,8 +187,35 @@ fn parse_with_background_tasks_and_image_directory(
                             .position(|tool_use: &ToolUse| tool_use.id == id)
                         {
                             let tool_use = tool_uses.remove(index);
-                            tools.record(&tool_use.name, tool_use.input.as_ref());
-                            background_tasks.complete_tool_use(&tool_use, &record, block, now);
+                            if classifier::is_peer_notify_tool(
+                                &tool_use.name,
+                                tool_use.input.as_ref(),
+                            ) {
+                                let text = block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .unwrap_or_default();
+                                if tool_result_failed(&record, block)
+                                    || classifier::peer_notification_failed(&record, &text)
+                                {
+                                    append_classification_with_image_directory(
+                                        &mut items,
+                                        classifier::failed_peer_notification(&text),
+                                        Vec::new(),
+                                        image_directory,
+                                        parent,
+                                    );
+                                } else if let Some(peer) = classifier::peer_out_from_tool(
+                                    &tool_use.name,
+                                    tool_use.input.as_ref(),
+                                    parent.map(|parent| parent.session_id.as_str()),
+                                ) {
+                                    super::append_peer_out(&mut items, peer);
+                                }
+                            } else {
+                                tools.record(&tool_use.name, tool_use.input.as_ref());
+                                background_tasks.complete_tool_use(&tool_use, &record, block, now);
+                            }
                         }
                     }
                     let (text, images) = user_content(message.get("content"));
@@ -253,9 +280,16 @@ fn parse_with_background_tasks_and_image_directory(
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
                                 let input = block.get("input");
-                                if let Some(peer) = classifier::peer_out_from_tool(name, input) {
+                                if classifier::is_peer_notify_tool(name, input) {
                                     tools.flush_into(&mut items);
-                                    super::append_peer_out(&mut items, peer);
+                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                                        tool_uses.push(ToolUse {
+                                            id: id.to_owned(),
+                                            name: name.to_owned(),
+                                            input: input.cloned(),
+                                            started_at: record_timestamp(&record),
+                                        });
+                                    }
                                 } else if name == "AskUserQuestion" {
                                     tools.flush_into(&mut items);
                                     if let Some(id) = block.get("id").and_then(Value::as_str) {
@@ -286,16 +320,18 @@ fn parse_with_background_tasks_and_image_directory(
     tools.flush_into(&mut items);
     // Permission state must be tied to an unanswered call ID, not a reused tool name.
     if let Some(tool_use) = pending_tool.and_then(|pending| {
-        tool_uses
-            .iter()
-            .rev()
-            .find(|tool_use| matches_pending_tool(tool_use, pending))
+        tool_uses.iter().rev().find(|tool_use| {
+            matches_pending_tool(tool_use, pending)
+                && !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
+        })
     }) {
         items.push(ChatItem::Permission {
             tool: tool_use.name.clone(),
             description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
         });
-    } else if let Some(tool_use) = tool_uses.last() {
+    } else if let Some(tool_use) = tool_uses.last().filter(|tool_use| {
+        !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
+    }) {
         items.push(ChatItem::ToolInProgress {
             tool: tool_use.name.clone(),
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
@@ -333,6 +369,17 @@ fn tool_result_text(content: &Value) -> Option<String> {
         ),
         _ => None,
     }
+}
+
+fn tool_result_failed(record: &Value, block: &Value) -> bool {
+    [Some(block), record.get("toolUseResult")]
+        .into_iter()
+        .flatten()
+        .any(|result| {
+            ["is_error", "isError"]
+                .into_iter()
+                .any(|key| result.get(key).and_then(Value::as_bool) == Some(true))
+        })
 }
 
 fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
@@ -539,6 +586,57 @@ mod tests {
     }
 
     #[test]
+    fn parses_an_unmarked_peer_message_with_a_saved_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000003.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(&image_path, b"fixture image").unwrap();
+        let content = formatdoc! {"
+            <peer-message>
+            - From session_id: fixture-peer-session
+            - Sender engine: fixture-engine
+
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+            </peer-message>
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "user",
+            "origin": {"kind": "peer", "from": "fixture-peer-session"},
+            "message": {"content": content},
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::Peer {
+                direction: PeerDirection::From,
+                session_id: "fixture-peer-session".to_string(),
+                session_title: None,
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
     fn classifies_peer_messages_events_and_outgoing_notifications() {
         let transcript = indoc! {r#"
             {"attachment":{"type":"queued_command","prompt":"<peer-message>\n- From session_id: fixture-remote-session\n- Sender engine: fixture-engine\n\nReview the fictional output.\n</peer-message>"}}
@@ -601,6 +699,59 @@ mod tests {
                     }],
                 },
             ]
+        );
+    }
+
+    #[rstest]
+    #[case::tool_error(
+        true,
+        "The fictional target was unavailable.\nPlease retry later.",
+        "The fictional target was unavailable. Please retry later."
+    )]
+    #[case::saved_for_retry(
+        false,
+        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours.",
+        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours."
+    )]
+    fn shows_failed_parent_peer_notifications_as_failed_events(
+        #[case] is_error: bool,
+        #[case] result_text: &str,
+        #[case] expected_text: &str,
+    ) {
+        let tool_call = serde_json::to_string(&json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-peer-notify-call",
+                "name": "Bash",
+                "input": {"command": "a agent peer notify --parent -m 'Please verify the fictional result.'"},
+            }]},
+        }))
+        .unwrap();
+        let tool_result = serde_json::to_string(&json!({
+            "type": "user",
+            "toolUseResult": {},
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-peer-notify-call",
+                "is_error": is_error,
+                "content": result_text,
+            }]},
+        }))
+        .unwrap();
+        let transcript = format!("{tool_call}\n{tool_result}");
+        let parent = ParentSession {
+            session_id: "fixture-parent-session".to_string(),
+            title: "Fixture parent session".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::Armyknife,
+                text: expected_text.to_string(),
+                failed: true,
+            }],
         );
     }
 

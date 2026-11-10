@@ -43,10 +43,21 @@ pub(super) fn classify_inbound(
         return MessageKind::Hidden;
     }
 
-    if let Some((tag, body)) = tagged_body(text) {
-        if is_hidden_tag(tag) {
-            return MessageKind::Hidden;
-        }
+    let tagged = tagged_body(text);
+    if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
+        return MessageKind::Hidden;
+    }
+    if origin(record)
+        .and_then(|origin| origin.get("kind"))
+        .and_then(Value::as_str)
+        == Some("human")
+    {
+        return MessageKind::User {
+            text: marked_user_body(text, user_marker).unwrap_or_else(|| text.to_owned()),
+        };
+    }
+
+    if let Some((tag, body)) = tagged {
         if let Some((session_id, peer_body)) = peer_message_parts(text) {
             if let Some(user_body) = marked_user_body(peer_body, user_marker) {
                 return MessageKind::User { text: user_body };
@@ -146,7 +157,50 @@ fn peer_transport_body(text: &str) -> &str {
         .map_or(body, |(body, _)| body)
 }
 
-pub(super) fn peer_out_from_tool(name: &str, input: Option<&Value>) -> Option<PeerOut> {
+pub(super) fn is_peer_notify_tool(name: &str, input: Option<&Value>) -> bool {
+    peer_notify_arguments(name, input).is_some()
+}
+
+pub(super) fn peer_out_from_tool(
+    name: &str,
+    input: Option<&Value>,
+    parent_session_id: Option<&str>,
+) -> Option<PeerOut> {
+    let arguments = peer_notify_arguments(name, input)?;
+    let mut message = None;
+    let mut session_id = None;
+    let mut parent = false;
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if matches!(argument.as_str(), "--message" | "-m") {
+            message = arguments.get(index + 1).cloned();
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument.strip_prefix("--message=") {
+            message = Some(value.to_owned());
+        } else if argument == "--parent" {
+            parent = true;
+        } else if argument == "--" {
+            session_id = arguments.get(index + 1).cloned();
+            break;
+        } else if !argument.starts_with('-') {
+            session_id = Some(argument.clone());
+        }
+        index += 1;
+    }
+    Some(PeerOut {
+        session_id: if parent {
+            parent_session_id?.to_owned()
+        } else {
+            session_id?
+        },
+        text: message?,
+    })
+}
+
+fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
     if name != "Bash" {
         return None;
     }
@@ -158,30 +212,30 @@ pub(super) fn peer_out_from_tool(name: &str, input: Option<&Value>) -> Option<Pe
     let command_start = arguments
         .windows(4)
         .position(|parts| parts == ["a", "agent", "peer", "notify"])?;
-    let mut message = None;
-    let mut session_id = None;
-    let mut index = command_start + 4;
-    while index < arguments.len() {
-        let argument = &arguments[index];
-        if argument == "--message" {
-            message = arguments.get(index + 1).cloned();
-            index += 2;
-            continue;
-        }
-        if let Some(value) = argument.strip_prefix("--message=") {
-            message = Some(value.to_owned());
-        } else if !argument.starts_with('-') {
-            session_id = Some(argument.clone());
-        }
-        index += 1;
+    Some(arguments.into_iter().skip(command_start + 4).collect())
+}
+
+pub(super) fn failed_peer_notification(text: &str) -> MessageKind {
+    let text = one_line(text);
+    MessageKind::Event {
+        kind: EventKind::Armyknife,
+        text: if text.is_empty() {
+            "Peer notification failed".to_owned()
+        } else {
+            text
+        },
+        failed: true,
     }
-    Some(PeerOut {
-        session_id: session_id?,
-        text: message?,
-    })
+}
+
+pub(super) fn peer_notification_failed(record: &Value, text: &str) -> bool {
+    is_failure(record, "peer-notify", text)
 }
 
 fn system_record(record: &Value, raw_text: &str) -> MessageKind {
+    if record.get("subtype").and_then(Value::as_str).is_none() && raw_text.trim().is_empty() {
+        return MessageKind::Hidden;
+    }
     let subtype = record
         .get("subtype")
         .and_then(Value::as_str)
@@ -208,7 +262,17 @@ fn event(tag: &str, body: &str, record: &Value) -> MessageKind {
     } else {
         EventKind::System
     };
-    let text = one_line(body);
+    let text = if tag == "task-notification" {
+        match (
+            nested_tag_value(body, "task-id"),
+            nested_tag_value(body, "status"),
+        ) {
+            (Some(task_id), Some(status)) => format!("Background task {task_id} {status}"),
+            _ => one_line(body),
+        }
+    } else {
+        one_line(body)
+    };
     MessageKind::Event {
         kind,
         failed: is_failure(record, tag, &text),
@@ -238,6 +302,15 @@ fn is_failure(record: &Value, label: &str, text: &str) -> bool {
 
 fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn nested_tag_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let opening = format!("<{tag}>");
+    let closing = format!("</{tag}>");
+    text.split_once(&opening)?
+        .1
+        .split_once(&closing)
+        .map(|(value, _)| value)
 }
 
 fn tagged_body(text: &str) -> Option<(&str, &str)> {
@@ -340,8 +413,18 @@ mod tests {
 
     use super::{EventKind, MessageKind, classify_inbound, peer_out_from_tool};
 
+    const HUMAN_PEER_ENVELOPE: &str = indoc! {r#"
+        <peer-message>
+        - From session_id: fixture-peer-id
+
+        Human supplied text.
+        </peer-message>
+    "#};
+
     #[rstest]
     #[case::human_user(json!({"type":"user","origin":{"kind":"human"}}), "Please continue.", Some("fixture-marker"), MessageKind::User { text: "Please continue.".to_owned() })]
+    #[case::human_tagged_text_stays_user(json!({"type":"user","origin":{"kind":"human"}}), "<task-notification>Human supplied text.</task-notification>", None, MessageKind::User { text: "<task-notification>Human supplied text.</task-notification>".to_owned() })]
+    #[case::human_peer_envelope_stays_user(json!({"type":"user","origin":{"kind":"human"}}), HUMAN_PEER_ENVELOPE, None, MessageKind::User { text: HUMAN_PEER_ENVELOPE.to_owned() })]
     #[case::unrelated_peer(
         json!({"type":"user","origin":{"kind":"peer","from":"fixture-peer-id"}}),
         indoc! {r#"
@@ -382,29 +465,43 @@ mod tests {
     fn marks_failed_events() {
         assert_eq!(
             classify_inbound(
-                &json!({"type":"system","subtype":"task_failed","exit_code":1}),
+                &json!({"type":"system","subtype":"task","exit_code":1}),
                 "",
                 None,
             ),
             MessageKind::Event {
                 kind: EventKind::System,
-                text: "task failed".to_owned(),
+                text: "task".to_owned(),
                 failed: true,
             },
         );
     }
 
-    #[test]
-    fn classifies_peer_notify_bash_input() {
+    #[rstest]
+    #[case::long_flag(
+        "a agent peer notify --message 'Please inspect this fictional task.' fixture-target-id",
+        Some("fixture-target-id")
+    )]
+    #[case::short_flag(
+        "a agent peer notify -m 'Please inspect this fictional task.' fixture-target-id",
+        Some("fixture-target-id")
+    )]
+    #[case::parent(
+        "a agent peer notify --parent -m 'Please inspect this fictional task.'",
+        Some("fixture-parent-id")
+    )]
+    fn classifies_peer_notify_bash_input(
+        #[case] command: &str,
+        #[case] parent_session_id: Option<&str>,
+    ) {
         assert_eq!(
-            peer_out_from_tool(
-                "Bash",
-                Some(
-                    &json!({"command":"a agent peer notify --message 'Please inspect this fictional task.' fixture-target-id"})
-                ),
-            ),
+            peer_out_from_tool("Bash", Some(&json!({"command":command})), parent_session_id,),
             Some(super::PeerOut {
-                session_id: "fixture-target-id".to_owned(),
+                session_id: if command.contains("--parent") {
+                    "fixture-parent-id".to_owned()
+                } else {
+                    "fixture-target-id".to_owned()
+                },
                 text: "Please inspect this fictional task.".to_owned(),
             }),
         );

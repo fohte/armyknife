@@ -1,3 +1,5 @@
+import '#components/peer-message.css'
+
 import { MarkdownMessage } from '#components/markdown-message'
 import { SessionLink } from '#components/session-link'
 import type { ChatItem, SessionLinkTarget } from '#types'

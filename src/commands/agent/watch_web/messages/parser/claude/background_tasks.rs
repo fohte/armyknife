@@ -233,20 +233,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::completed("completed", Vec::new(), true)]
-    #[case::failed("failed", Vec::new(), true)]
-    #[case::killed("killed", Vec::new(), true)]
+    #[case::completed("completed", Vec::new(), true, false)]
+    #[case::failed("failed", Vec::new(), true, true)]
+    #[case::killed("killed", Vec::new(), true, false)]
     #[case::still_running("running", vec![BackgroundTask {
         id: "fixture-task-id".to_string(),
         description: "Watch the synthetic build".to_string(),
         elapsed_seconds: 90,
-    }], true)]
-    #[case::legacy_notification("completed", Vec::new(), false)]
+    }], true, false)]
+    #[case::legacy_notification("completed", Vec::new(), false, false)]
     fn task_notifications_only_remove_finished_tasks(
         background_bash_transcript: String,
         #[case] status: &str,
         #[case] expected_tasks: Vec<BackgroundTask>,
         #[case] include_origin: bool,
+        #[case] expected_failed: bool,
     ) {
         let mut transcript = background_bash_transcript;
         let mut notification = json!({
@@ -272,6 +273,13 @@ mod tests {
         );
         transcript.push('\n');
 
+        let mut expected_messages = background_bash_messages();
+        expected_messages.push(ChatItem::Event {
+            kind: super::super::super::super::EventKind::System,
+            text: format!("Background task fixture-task-id {status}"),
+            failed: expected_failed,
+        });
+
         assert_eq!(
             parse_with_background_tasks(
                 Cursor::new(transcript),
@@ -281,7 +289,7 @@ mod tests {
                 timestamp("2026-01-01T00:01:30Z"),
             )
             .unwrap(),
-            (background_bash_messages(), expected_tasks),
+            (expected_messages, expected_tasks),
         );
     }
 

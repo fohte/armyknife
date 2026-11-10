@@ -62,7 +62,7 @@ pub(super) struct ToolSummary {
 
 impl ToolSummary {
     pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>) {
-        if classifier::peer_out_from_tool(name, input).is_some() {
+        if classifier::is_peer_notify_tool(name, input) {
             return;
         }
         self.actions += 1;
@@ -339,11 +339,8 @@ fn peer_item(
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
 ) -> ChatItem {
-    let content = match user_item_with_image_directory(text, None, images, image_directory) {
-        ChatItem::User { text, .. } => vec![UserContentPart::Text { text }],
-        ChatItem::UserWithContent { content, .. } => content,
-        _ => Vec::new(),
-    };
+    let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
+    let content = content.unwrap_or_else(|| vec![UserContentPart::Text { text }]);
     ChatItem::Peer {
         direction,
         session_id,
@@ -353,11 +350,23 @@ fn peer_item(
 }
 
 fn user_item_with_image_directory(
-    mut text: String,
+    text: String,
     from: Option<String>,
-    mut images: Vec<UserContentPart>,
+    images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
 ) -> ChatItem {
+    let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
+    match content {
+        Some(content) => ChatItem::UserWithContent { content, from },
+        None => ChatItem::User { text, from },
+    }
+}
+
+fn user_content_parts_with_image_directory(
+    mut text: String,
+    mut images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+) -> (String, Option<Vec<UserContentPart>>) {
     if let Some(directory) = image_directory
         && let Some((visible_text, references)) =
             super::super::image_attachments::extract_references(&text, directory)
@@ -374,7 +383,7 @@ fn user_item_with_image_directory(
     }
 
     if images.is_empty() {
-        return ChatItem::User { text, from };
+        return (text, None);
     }
 
     let mut content = Vec::new();
@@ -400,7 +409,7 @@ fn user_item_with_image_directory(
         });
     }
     content.extend(remaining_images);
-    ChatItem::UserWithContent { content, from }
+    (text, Some(content))
 }
 
 fn image_placeholder(text: &str) -> Option<(usize, usize)> {
