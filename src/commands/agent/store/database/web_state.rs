@@ -13,6 +13,7 @@ pub(crate) struct WatchWebSessionState {
     pub(crate) activity_snapshot: Option<DateTime<Utc>>,
     pub(crate) until_activity: bool,
     pub(crate) is_today: bool,
+    pub(crate) is_compacting: bool,
 }
 
 pub(in crate::commands::agent::store) fn watch_web_session_states(
@@ -23,7 +24,7 @@ pub(in crate::commands::agent::store) fn watch_web_session_states(
     }
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today
+        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today, is_compacting
          FROM watch_web_session_state",
     )?;
     let rows = statement.query_map([], |row| {
@@ -35,19 +36,70 @@ pub(in crate::commands::agent::store) fn watch_web_session_states(
             activity_snapshot,
             row.get::<_, bool>(3)?,
             row.get::<_, bool>(4)?,
+            row.get::<_, Option<bool>>(5)?.unwrap_or(false),
         ))
     })?;
     rows.map(|row| {
-        let (session_id, later_until, activity_snapshot, until_activity, is_today) = row?;
+        let (session_id, later_until, activity_snapshot, until_activity, is_today, is_compacting) =
+            row?;
         Ok(WatchWebSessionState {
             session_id,
             later_until: parse_timestamp(later_until)?,
             activity_snapshot: parse_timestamp(activity_snapshot)?,
             until_activity,
             is_today,
+            is_compacting,
         })
     })
     .collect()
+}
+
+pub(crate) fn set_watch_web_compacting(
+    sessions_dir: &Path,
+    session_id: &str,
+    is_compacting: bool,
+) -> Result<bool> {
+    super::validate_session_id(session_id)?;
+    if !sessions_dir.exists() {
+        return Ok(false);
+    }
+
+    let mut connection = open_connection(sessions_dir)?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let current: Option<Option<bool>> = transaction
+        .query_row(
+            "SELECT is_compacting FROM watch_web_session_state WHERE session_id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    if !exists || current.flatten().unwrap_or(false) == is_compacting {
+        transaction.rollback()?;
+        return Ok(false);
+    }
+
+    transaction.execute(
+        "INSERT INTO watch_web_session_state (session_id, is_compacting)
+         VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET is_compacting = excluded.is_compacting",
+        params![session_id, is_compacting],
+    )?;
+    let revision = super::increment_revision(&transaction)?;
+    let changed = transaction.execute(
+        "UPDATE sessions SET rev = ?1 WHERE session_id = ?2",
+        params![revision, session_id],
+    )?;
+    ensure!(
+        changed == 1,
+        "session {session_id} disappeared during state update"
+    );
+    transaction.commit()?;
+    Ok(true)
 }
 
 pub(in crate::commands::agent::store) fn set_watch_web_later(
@@ -263,8 +315,41 @@ mod tests {
                     activity_snapshot: Some(session.updated_at),
                     until_activity: true,
                     is_today: false,
+                    is_compacting: false,
                 }],
             ),
+        );
+    }
+
+    #[rstest]
+    fn compacting_state_changes_revision_only_when_the_value_changes(
+        saved_session_dir: TempDir,
+        session: crate::commands::agent::types::Session,
+    ) {
+        let before_revision =
+            session_store_revision(saved_session_dir.path()).expect("revision should load");
+
+        let first = set_watch_web_compacting(saved_session_dir.path(), &session.session_id, true)
+            .expect("compacting state should update");
+        let repeated =
+            set_watch_web_compacting(saved_session_dir.path(), &session.session_id, true)
+                .expect("repeated compacting state should succeed");
+        let cleared =
+            set_watch_web_compacting(saved_session_dir.path(), &session.session_id, false)
+                .expect("compacting state should clear");
+
+        assert_eq!(
+            (
+                first,
+                repeated,
+                cleared,
+                session_store_revision(saved_session_dir.path()).expect("revision should load"),
+                watch_web_session_states(saved_session_dir.path())
+                    .expect("state should load")
+                    .first()
+                    .map(|state| state.is_compacting),
+            ),
+            (true, false, true, before_revision + 2, Some(false)),
         );
     }
 

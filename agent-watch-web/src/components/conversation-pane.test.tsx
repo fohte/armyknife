@@ -784,7 +784,7 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
-it('links known session IDs in user and assistant messages', () => {
+it('links known session IDs in user, rich user, and assistant messages', () => {
   const linkedSession: Session = {
     ...session,
     id: '11111111-1111-4111-8111-111111111111',
@@ -799,6 +799,10 @@ it('links known session IDs in user and assistant messages', () => {
     onSelectSession,
     [
       { type: 'user', text: `Use ${linkedSession.id}` },
+      {
+        type: 'user_with_content',
+        content: [{ type: 'text', text: `Inspect ${linkedSession.id}` }],
+      },
       { type: 'assistant', text: `I found ${linkedSession.id}` },
     ],
     actions,
@@ -818,16 +822,21 @@ it('links known session IDs in user and assistant messages', () => {
   }
 
   const expected = {
-    messageClasses: ['chat-user-group', 'chat-assistant-message'],
-    linkTitles: [
-      'Inspect the retry path\nexample toolkit\nDone',
-      'Inspect the retry path\nexample toolkit\nDone',
+    messageClasses: [
+      'chat-user-group',
+      'chat-user-group',
+      'chat-assistant-message',
     ],
-    selectedIds: [linkedSession.id, linkedSession.id],
+    linkHrefs: [
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   const getActual = () => ({
     messageClasses: links.map((link) => link.closest('article')?.className),
-    linkTitles: links.map((link) => link.title),
+    linkHrefs: links.map((link) => link.getAttribute('href')),
     selectedIds: onSelectSession.mock.calls.map(([id]) => id),
   })
   expect(getActual()).toEqual(expected)
@@ -850,6 +859,33 @@ it('shows elapsed time while the session is working without an active tool', () 
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 1m 32s',
     message: 'No messages yet.',
+  })
+})
+
+it('shows the compacting status while hiding elapsed time and stale tool details', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, isCompacting: true, elapsedSeconds: 92 },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo test --manifest-path fixture/Cargo.toml',
+      },
+    ],
+  )
+
+  const getSnapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    toolItems: container.querySelectorAll('.conversation-working-tool').length,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  })
+  expect(getSnapshot()).toEqual({
+    workingStatus: 'Compacting conversation…',
+    toolItems: 0,
+    inProgressItems: 0,
   })
 })
 
@@ -1772,7 +1808,10 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
-it('shows the operation error returned by the server', async () => {
+it.each([
+  { action: 'approve' as const, buttonIndex: 0 },
+  { action: 'reject' as const, buttonIndex: 1 },
+])('shows the $action error independently', async ({ action, buttonIndex }) => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1813,25 +1852,15 @@ it('shows the operation error returned by the server', async () => {
     )
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
+  const permissionButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>('.permission-actions button')
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.permission-actions button'),
-    ).click()
+    requireElement(permissionButtons().item(buttonIndex)).click()
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
   const actionRequest = fetcher.mock.calls[2]?.[0]
@@ -1841,22 +1870,24 @@ it('shows the operation error returned by the server', async () => {
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
-  const approveButton = requireElement(
-    container.querySelector<HTMLButtonElement>('.permission-actions button'),
-  )
-  const snapshot = () => ({
-    error: container.querySelector('[role="alert"]')?.textContent ?? null,
+  const expected = JSON.stringify([
+    'session pane is idle or unavailable',
+    `/api/sessions/sample-session/permission/${action}`,
+    [
+      { label: 'Approve', disabled: false },
+      { label: 'Reject', disabled: false },
+    ],
+  ])
+  const buttonStates = Array.from(permissionButtons(), (button) => ({
+    label: button.textContent,
+    disabled: button.disabled,
+  }))
+  const actual = JSON.stringify([
+    container.querySelector('[role="alert"]')?.textContent,
     actionRequestUrl,
-    approveButton: {
-      label: approveButton.textContent,
-      disabled: approveButton.disabled,
-    },
-  })
-  expect(snapshot()).toEqual({
-    error: 'session pane is idle or unavailable',
-    actionRequestUrl: '/api/sessions/sample-session/permission/approve',
-    approveButton: { label: 'Approve', disabled: false },
-  })
+    buttonStates,
+  ])
+  expect(actual).toBe(expected)
 })
 
 it.each([
