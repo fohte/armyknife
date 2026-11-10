@@ -197,11 +197,21 @@
   text-align: right;
 }
 
+.chat-queued-label {
+  color: var(--muted-foreground-ghost);
+  font-size: 11px;
+  text-align: right;
+}
+
 .chat-user-message {
   padding: 9px 12px;
   border-radius: 8px;
   background: #1f1f1f;
   white-space: pre-wrap;
+}
+
+.chat-user-message-queued {
+  opacity: 0.55;
 }
 
 .chat-assistant-message {

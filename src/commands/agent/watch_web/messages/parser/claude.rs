@@ -196,6 +196,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
+    items.extend(super::queue::parse(&mut reader, parent, user_marker)?);
     Ok(items)
 }
 

@@ -43,14 +43,20 @@ export function renderConversationMessage({
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
-  if (message.type === 'user') {
+  if (message.type === 'user' || message.type === 'queued_user') {
+    const queued = message.type === 'queued_user'
     return (
       <article className="chat-user-group" key={`user-${String(index)}`}>
         {message.from != null && message.from !== '' ? (
           <div className="chat-from">From {message.from}</div>
         ) : null}
+        {queued ? <div className="chat-queued-label">Queued</div> : null}
         <MarkdownMessage
-          className="chat-user-message"
+          className={
+            queued
+              ? 'chat-user-message chat-user-message-queued'
+              : 'chat-user-message'
+          }
           onSelectSession={onSelectSession}
           sessions={sessions}
         >

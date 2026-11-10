@@ -86,6 +86,23 @@ export const QuestionWaitsForAnAnswer: Story = {
   },
 }
 
+export const QueuedPromptAppearsAfterConversation: Story = {
+  name: 'A queued prompt appears below the delivered conversation',
+  args: {
+    messages: [
+      { type: 'user', text: 'Please summarize the current changes.' },
+      {
+        type: 'assistant',
+        text: 'I am reviewing the current changes.',
+      },
+      {
+        type: 'queued_user',
+        text: 'Also check the error handling.',
+      },
+    ],
+  },
+}
+
 export const QuestionShowsSelectedAnswer: Story = {
   name: 'A question marks the choice selected by the user',
   args: {

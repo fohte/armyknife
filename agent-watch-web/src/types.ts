@@ -57,6 +57,7 @@ export type SessionLinkTarget = Pick<
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
+  | { type: 'queued_user'; text: string; from?: string }
   | { type: 'assistant'; text: string }
   | {
       type: 'tool_summary'

@@ -726,6 +726,35 @@ it('links known session IDs in user and assistant messages', () => {
   expect(getActual()).toEqual(expected)
 })
 
+it('marks a queued prompt below the delivered conversation', () => {
+  renderView(vi.fn().mockResolvedValue(true), session, undefined, [
+    { type: 'user', text: 'Please summarize the current changes.' },
+    { type: 'assistant', text: 'I am reviewing the current changes.' },
+    { type: 'queued_user', text: 'Also check the error handling.' },
+  ])
+
+  const actual = Array.from(
+    container.querySelectorAll<HTMLElement>('.chat-user-group'),
+  ).map((group) => ({
+    className: group.querySelector('.chat-user-message')?.className,
+    label: group.querySelector('.chat-queued-label')?.textContent ?? null,
+    text: group.querySelector('.chat-user-message')?.textContent ?? null,
+  }))
+
+  expect(actual).toEqual([
+    {
+      className: 'markdown-message chat-user-message',
+      label: null,
+      text: 'Please summarize the current changes.',
+    },
+    {
+      className: 'markdown-message chat-user-message chat-user-message-queued',
+      label: 'Queued',
+      text: 'Also check the error handling.',
+    },
+  ])
+})
+
 it('shows elapsed time while the session is working without an active tool', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
