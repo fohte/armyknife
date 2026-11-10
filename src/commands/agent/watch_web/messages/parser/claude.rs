@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record, peer_message_item};
+use super::super::parser::{
+    ToolSummary, append_text, for_each_jsonl_record, peer_message_item, tool_target,
+};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
@@ -217,18 +219,10 @@ fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
 }
 
 fn tool_detail(name: &str, input: Option<&Value>) -> String {
-    let detail = ["command", "file_path", "path", "pattern", "url", "query"]
-        .into_iter()
-        .find_map(|key| {
-            input
-                .and_then(|value| value.get(key))
-                .and_then(Value::as_str)
-        });
-    let Some(detail) = detail else {
+    let Some(target) = tool_target(input) else {
         return name.to_owned();
     };
-    let detail = detail.chars().take(240).collect::<String>();
-    format!("{name}: {detail}")
+    format!("{name}: {target}")
 }
 
 fn user_text(message: &Value) -> String {
@@ -318,6 +312,10 @@ mod tests {
                 },
                 ChatItem::ToolSummary {
                     summary: "2 actions · 1 file edited".to_string(),
+                    operations: vec![
+                        operation("Read", Some("fixture/flow.rs")),
+                        operation("Edit", Some("fixture/flow.rs")),
+                    ],
                 },
                 ChatItem::Question {
                     question: "Should notifications be grouped?".to_string(),
@@ -353,6 +351,7 @@ mod tests {
             vec![
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("echo earlier"))],
                 },
                 ChatItem::Permission {
                     tool: "Bash".to_string(),
@@ -386,6 +385,7 @@ mod tests {
                 },
                 ChatItem::ToolSummary {
                     summary: "1 action · 1 file edited".to_string(),
+                    operations: vec![operation("Edit", Some("fixture/notes.txt"))],
                 },
                 ChatItem::User {
                     text: "A visible user message.".to_string(),
@@ -414,5 +414,12 @@ mod tests {
                 from: Some("fixture-parent-title".to_string()),
             }]
         );
+    }
+
+    fn operation(tool: &str, target: Option<&str>) -> super::super::super::ToolOperation {
+        super::super::super::ToolOperation {
+            tool: tool.to_string(),
+            target: target.map(str::to_owned),
+        }
     }
 }
