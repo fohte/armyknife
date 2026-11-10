@@ -430,6 +430,12 @@ export function InboxView({
         <span>
           <kbd>⇧B</kbd> Board
         </span>
+        <span>
+          <kbd>[</kbd> Inbox
+        </span>
+        <span>
+          <kbd>⌘.</kbd> Panel
+        </span>
       </footer>
       {filterDialogOpen ? (
         <InboxFilterDialog

@@ -24,6 +24,8 @@ type SessionKeyboardNavigationOptions = {
     update: (current: SessionHistoryState) => SessionHistoryState,
     mode?: HistoryMode,
   ) => void
+  toggleInbox: () => void
+  toggleStatusPanel: () => void
 }
 
 export function useSessionKeyboardNavigation({
@@ -37,18 +39,30 @@ export function useSessionKeyboardNavigation({
   selectedId,
   view,
   navigate,
+  toggleInbox,
+  toggleStatusPanel,
 }: SessionKeyboardNavigationOptions) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
         event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
         (event.target instanceof HTMLElement &&
           (event.target.isContentEditable ||
             ['INPUT', 'TEXTAREA', 'SELECT'].includes(event.target.tagName)))
       ) {
+        return
+      }
+
+      if (
+        !isMobile &&
+        event.metaKey &&
+        event.key === '.' &&
+        selectedId !== null &&
+        view === 'inbox'
+      ) {
+        event.preventDefault()
+        toggleStatusPanel()
         return
       }
 
@@ -63,6 +77,7 @@ export function useSessionKeyboardNavigation({
         if (isMobile) {
           return
         }
+        if (event.ctrlKey || event.metaKey) return
         const preset = getLaterPresetShortcut(event.key)
         if (preset !== null) {
           event.preventDefault()
@@ -71,7 +86,13 @@ export function useSessionKeyboardNavigation({
         return
       }
 
-      if (isMobile) {
+      if (isMobile) return
+
+      if (event.ctrlKey || event.metaKey) return
+
+      if (event.key === '[') {
+        event.preventDefault()
+        toggleInbox()
         return
       }
 
@@ -116,6 +137,8 @@ export function useSessionKeyboardNavigation({
     openLater,
     selectedId,
     submitLater,
+    toggleInbox,
+    toggleStatusPanel,
     view,
   ])
 }

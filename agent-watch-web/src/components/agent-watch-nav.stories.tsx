@@ -69,6 +69,8 @@ const meta = {
     onSelectToday: () => undefined,
     onSelectSession: () => undefined,
     onOpenPalette: () => undefined,
+    inboxCollapsed: false,
+    onToggleInbox: () => undefined,
   },
 } satisfies Meta<typeof AgentWatchNav>
 
@@ -82,6 +84,11 @@ export const InboxIsSelected: Story = {
 export const BoardIsSelected: Story = {
   name: 'Board is selected in the main navigation',
   args: { activeView: 'board' },
+}
+
+export const InboxIsCollapsed: Story = {
+  name: 'The Inbox toggle is highlighted while the Inbox is collapsed',
+  args: { inboxCollapsed: true },
 }
 
 export const NoWorkTypeIsConfigured: Story = {

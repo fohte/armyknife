@@ -70,6 +70,10 @@ export function App() {
     null,
   )
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
+  const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+  const [manualInboxCollapsed, setManualInboxCollapsed] = useState<
+    boolean | null
+  >(null)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
@@ -80,6 +84,13 @@ export function App() {
   const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const inboxCollapsed = manualInboxCollapsed ?? statusPanelOpen
+  const toggleInbox = useCallback(() => {
+    setManualInboxCollapsed((manual) => !(manual ?? statusPanelOpen))
+  }, [statusPanelOpen])
+  const toggleStatusPanel = useCallback(() => {
+    setStatusPanelOpen((open) => !open)
+  }, [])
 
   const elapsedOffsetSeconds = Math.floor(
     Math.max(0, nowMs - sessionsReceivedAt) / 1_000,
@@ -353,6 +364,8 @@ export function App() {
     selectedId,
     view,
     navigate,
+    toggleInbox,
+    toggleStatusPanel,
   })
 
   const needsActionCount = filteredOrderedSessions.filter(
@@ -444,6 +457,8 @@ export function App() {
       onOpenPalette={() => {
         setCommandPaletteOpen(true)
       }}
+      inboxCollapsed={inboxCollapsed}
+      onToggleInbox={toggleInbox}
     />
   ) : null
   const main = (
@@ -456,6 +471,12 @@ export function App() {
           refreshKey={sessionsRevision}
           isMobile={isMobile}
           showMobileConversation={showMobileConversation}
+          inboxCollapsed={inboxCollapsed}
+          statusPanelOpen={statusPanelOpen}
+          onToggleStatusPanel={toggleStatusPanel}
+          onCloseStatusPanel={() => {
+            setStatusPanelOpen(false)
+          }}
           onBack={backToInbox}
           onLater={openLater}
           onSelectSession={(id) => {
