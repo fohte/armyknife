@@ -117,6 +117,17 @@ pub(crate) fn save_session_to(sessions_dir: &Path, session: &Session) -> Result<
     database::save_session(sessions_dir, session)
 }
 
+pub(crate) fn watch_web_user_marker(session_id: &str) -> Result<Option<String>> {
+    database::watch_web_user_marker(&sessions_dir()?, session_id)
+}
+
+pub(crate) fn watch_web_user_marker_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Option<String>> {
+    database::watch_web_user_marker(sessions_dir, session_id)
+}
+
 /// Acquires the exclusive session lock ahead of a load-mutate-save round
 /// trip (see `SessionLock`).
 pub(crate) fn lock_session_for_update(

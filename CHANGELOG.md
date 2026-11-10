@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.546](https://github.com/fohte/armyknife/compare/v0.1.545...v0.1.546) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** hide canceled messages ([#1447](https://github.com/fohte/armyknife/issues/1447)) ([6ebf5a2](https://github.com/fohte/armyknife/commit/6ebf5a2c0d881b849ae30dad07d3bcaa1637cb3f))
+
+## [0.1.545](https://github.com/fohte/armyknife/compare/v0.1.544...v0.1.545) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** treat input as user messages ([#1445](https://github.com/fohte/armyknife/issues/1445)) ([bd26d66](https://github.com/fohte/armyknife/commit/bd26d66cbc1c481f62bdc176c4b101ad2fd9f6c4))
+
 ## [0.1.544](https://github.com/fohte/armyknife/compare/v0.1.543...v0.1.544) (2026-11-10)
 
 

@@ -1,26 +1,67 @@
-use std::collections::HashMap;
-use std::io::BufRead;
+use std::collections::{BTreeMap, HashMap};
+use std::io::{BufRead, Seek, SeekFrom};
 
 use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::parser::{
-    ToolSummary, append_text, for_each_jsonl_record, peer_message_item, tool_target,
+    ToolSummary, append_text, append_text_with_user_marker, for_each_jsonl_record,
+    peer_message_item_with_user_marker, tool_target,
 };
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
-    reader: impl BufRead,
+    mut reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
+    user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
+    let mut transcript_nodes = BTreeMap::new();
+    let mut latest_uuid = None;
+    for_each_jsonl_record(&mut reader, |record| {
+        let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
+            return;
+        };
+        latest_uuid = Some(uuid.to_owned());
+        let parent_uuid = match record.get("parentUuid") {
+            Some(Value::String(parent)) => Some(parent.clone()),
+            Some(Value::Null) => match record.get("logicalParentUuid") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(parent)) => Some(parent.clone()),
+                _ => None,
+            },
+            _ => None,
+        };
+        transcript_nodes.insert(
+            uuid.to_owned(),
+            TranscriptNode {
+                parent_uuid,
+                membership: BranchMembership::Unknown,
+            },
+        );
+    })?;
+    mark_active_branch(&mut transcript_nodes, latest_uuid.as_deref());
+    reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
 
-    for_each_jsonl_record(reader, |record| {
-        match record.get("type").and_then(Value::as_str) {
+    for_each_jsonl_record(&mut reader, |record| {
+        if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
+            let membership = transcript_nodes.get(uuid).map(|node| node.membership);
+            let is_tool_result_only = is_tool_result_only_user_record(&record);
+            if membership.is_none() && !is_tool_result_only {
+                return;
+            }
+            if membership == Some(BranchMembership::Unknown)
+                && !is_tool_result_only
+                && is_inactive_branch(uuid, &mut transcript_nodes)
+            {
+                return;
+            }
+        }
+        (|| match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
                 .and_then(|attachment| attachment.get("type"))
@@ -34,7 +75,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let text = content_text(Some(prompt));
                     if !text.is_empty() {
                         tools.flush_into(&mut items);
-                        append_text(&mut items, text, true, parent);
+                        append_text_with_user_marker(&mut items, text, parent, user_marker);
                     }
                 }
             }
@@ -73,7 +114,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                     let text = user_text(message);
                     if !text.is_empty() {
                         if origin == UserOrigin::Peer {
-                            let Some(item) = peer_message_item(&text, parent) else {
+                            let Some(item) =
+                                peer_message_item_with_user_marker(&text, parent, user_marker)
+                            else {
                                 return;
                             };
                             tools.flush_into(&mut items);
@@ -131,7 +174,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 }
             }
             _ => {}
-        }
+        })();
     })?;
 
     tools.flush_into(&mut items);
@@ -153,6 +196,79 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         });
     }
     Ok(items)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BranchMembership {
+    Unknown,
+    Visiting,
+    Active,
+    ReachesActive,
+    Disconnected,
+}
+
+struct TranscriptNode {
+    parent_uuid: Option<String>,
+    membership: BranchMembership,
+}
+
+fn mark_active_branch(
+    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
+    latest_uuid: Option<&str>,
+) {
+    let Some(mut uuid) = latest_uuid.map(str::to_owned) else {
+        return;
+    };
+
+    loop {
+        let Some(node) = transcript_nodes.get_mut(&uuid) else {
+            return;
+        };
+        if node.membership == BranchMembership::Active {
+            return;
+        }
+        node.membership = BranchMembership::Active;
+        let Some(parent_uuid) = &node.parent_uuid else {
+            return;
+        };
+        let parent_uuid = parent_uuid.clone();
+        if !transcript_nodes.contains_key(&parent_uuid) {
+            return;
+        }
+        uuid = parent_uuid;
+    }
+}
+
+fn is_inactive_branch(uuid: &str, transcript_nodes: &mut BTreeMap<String, TranscriptNode>) -> bool {
+    let mut current_uuid = uuid.to_owned();
+    let mut path = Vec::new();
+    let reaches_active = loop {
+        let Some(node) = transcript_nodes.get_mut(&current_uuid) else {
+            break false;
+        };
+        match node.membership {
+            BranchMembership::Active | BranchMembership::ReachesActive => break true,
+            BranchMembership::Disconnected | BranchMembership::Visiting => break false,
+            BranchMembership::Unknown => node.membership = BranchMembership::Visiting,
+        }
+        path.push(current_uuid.clone());
+        let Some(parent_uuid) = &node.parent_uuid else {
+            break false;
+        };
+        current_uuid = parent_uuid.clone();
+    };
+
+    let membership = if reaches_active {
+        BranchMembership::ReachesActive
+    } else {
+        BranchMembership::Disconnected
+    };
+    for uuid in path {
+        if let Some(node) = transcript_nodes.get_mut(&uuid) {
+            node.membership = membership;
+        }
+    }
+    reaches_active
 }
 
 struct ToolUse {
@@ -263,6 +379,20 @@ fn apply_question_answers(
             *answer = Some(selected_answer);
         }
     }
+}
+
+fn is_tool_result_only_user_record(record: &Value) -> bool {
+    record.get("type").and_then(Value::as_str) == Some("user")
+        && record
+            .get("message")
+            .and_then(|message| message.get("content"))
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                !blocks.is_empty()
+                    && blocks.iter().all(|block| {
+                        block.get("type").and_then(Value::as_str) == Some("tool_result")
+                    })
+            })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -421,7 +551,7 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usi
 
 #[cfg(test)]
 mod tests {
-    use std::io::Cursor;
+    use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
     use indoc::indoc;
     use rstest::rstest;
@@ -459,7 +589,7 @@ mod tests {
         #[case] queued_text: &str,
     ) {
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Before the queued prompt.".to_string(),
@@ -492,7 +622,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![ChatItem::User {
                 text: "Please group these fictional events.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
@@ -520,7 +650,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "Review the notification flow.".to_string(),
@@ -642,7 +772,7 @@ mod tests {
         #[case] expected: Vec<ChatItem>,
     ) {
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             expected
         );
     }
@@ -659,7 +789,8 @@ mod tests {
             parse(
                 Cursor::new(transcript),
                 None,
-                Some("Bash(echo awaiting approval)")
+                Some("Bash(echo awaiting approval)"),
+                None,
             )
             .unwrap(),
             vec![
@@ -683,7 +814,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
                     summary: "1 action".to_string(),
@@ -713,7 +844,7 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse(Cursor::new(transcript), None, None).unwrap(),
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::User {
                     text: "/inspect fixture-argument".to_string(),
@@ -744,7 +875,7 @@ mod tests {
         };
 
         assert_eq!(
-            parse(Cursor::new(transcript), Some(&parent), None).unwrap(),
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
             vec![ChatItem::User {
                 text: "Synthetic peer request contains </peer-message> inside.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
@@ -752,10 +883,305 @@ mod tests {
         );
     }
 
+    #[test]
+    fn shows_only_the_branch_containing_the_latest_user_message() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep this earlier message."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"type":"queue-operation","operation":"enqueue","content":"Show this queued text."}
+            {"attachment":{"type":"queued_command","prompt":"Show this queued text."}}
+            {"uuid":"fixture-active-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Keep this replacement message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this earlier message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Show this queued text.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this replacement message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_parallel_tool_results_from_sibling_branches() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Update the fixture."}}
+            {"uuid":"fixture-tool-use-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read-id","name":"Read","input":{"file_path":"fixture/plan.md"}},{"type":"tool_use","id":"fixture-edit-id","name":"Edit","input":{"file_path":"fixture/plan.md"}}]}}
+            {"uuid":"fixture-read-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-id","content":"Fictional source text."}]}}
+            {"uuid":"fixture-edit-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-edit-id","content":"Fictional edit result."}]}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-tool-use-id","type":"assistant","message":{"content":[{"type":"text","text":"The fixture is updated."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Update the fixture.".to_string(),
+                    from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "2 actions · 1 file edited".to_string(),
+                    operations: vec![
+                        operation("Read", Some("fixture/plan.md")),
+                        operation("Edit", Some("fixture/plan.md")),
+                    ],
+                },
+                ChatItem::Assistant {
+                    text: "The fixture is updated.".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn follows_logical_parent_across_compact_boundaries() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before-compact-id","parentUuid":null,"type":"user","message":{"content":"Keep this pre-compact message."}}
+            {"uuid":"fixture-compact-id","parentUuid":null,"logicalParentUuid":"fixture-before-compact-id","type":"system","subtype":"compact_boundary"}
+            {"uuid":"fixture-after-compact-id","parentUuid":"fixture-compact-id","type":"user","message":{"content":"Keep this post-compact message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this pre-compact message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this post-compact message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_unconnected_history_when_compact_parent_is_missing() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-earlier-history-id","parentUuid":null,"type":"user","message":{"content":"Keep the earlier history."}}
+            {"uuid":"fixture-compact-boundary-id","parentUuid":null,"logicalParentUuid":"fixture-unrecorded-parent-id","type":"system","subtype":"compact_boundary"}
+            {"uuid":"fixture-post-compact-context-id","parentUuid":"fixture-compact-boundary-id","type":"user","message":{"content":"Keep the post-compact context."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-post-compact-context-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-post-compact-context-id","type":"user","message":{"content":"Keep this replacement message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the earlier history.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the post-compact context.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this replacement message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn skips_uuid_rows_appended_after_branch_discovery() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep this earlier message."}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Keep this current message."}}
+        "#};
+        let reader = AppendingReader {
+            inner: Cursor::new(transcript.as_bytes().to_vec()),
+            appended_row: Some(
+                indoc! {r#"
+                    {"uuid":"fixture-new-fork-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Hide this newly appended fork."}}
+                "#}
+                .as_bytes()
+                .to_vec(),
+            ),
+        };
+
+        assert_eq!(
+            parse(reader, None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this earlier message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this current message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_tool_results_appended_after_branch_discovery() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Read the plan."}}
+            {"uuid":"fixture-tool-use-id","parentUuid":"fixture-root-id","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read-id","name":"Read","input":{"file_path":"fixture/plan.md"}}]}}
+        "#};
+        let reader = AppendingReader {
+            inner: Cursor::new(transcript.as_bytes().to_vec()),
+            appended_row: Some(
+                indoc! {r#"
+                    {"uuid":"fixture-result-id","parentUuid":"fixture-tool-use-id","type":"user","sourceToolAssistantUUID":"fixture-tool-use-id","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-id","content":"Fictional delayed result."}]}}
+                "#}
+                .as_bytes()
+                .to_vec(),
+            ),
+        };
+
+        assert_eq!(
+            parse(reader, None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Read the plan.".to_string(),
+                    from: None,
+                },
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Read", Some("fixture/plan.md"))],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shows_all_messages_when_transcript_rows_have_no_uuids() {
+        let transcript = indoc! {r#"
+            {"type":"user","message":{"content":"Keep the first legacy message."}}
+            {"type":"user","message":{"content":"Keep the second legacy message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the first legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the second legacy message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn keeps_the_reachable_branch_when_an_ancestor_is_missing() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the first legacy message."}}
+            {"uuid":"fixture-unreachable-id","parentUuid":"fixture-missing-parent-id","type":"user","message":{"content":"Keep the second legacy message."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-unreachable-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"uuid":"fixture-active-id","parentUuid":"fixture-unreachable-id","type":"user","message":{"content":"Keep this current message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the first legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the second legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this current message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn peer_markers_control_user_attribution_in_both_delivery_paths() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nDirect user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nQueued user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+        "#};
+        let parent = ParentSession {
+            session_id: "fixture-parent-id".to_string(),
+            title: "Fixture parent".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None, Some(marker)).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Direct user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Queued user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.".to_string(),
+                    from: Some("Fixture parent".to_string()),
+                },
+                ChatItem::User {
+                    text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.".to_string(),
+                    from: Some("Fixture parent".to_string()),
+                },
+            ],
+        );
+    }
+
     fn operation(tool: &str, target: Option<&str>) -> super::super::super::ToolOperation {
         super::super::super::ToolOperation {
             tool: tool.to_string(),
             target: target.map(str::to_owned),
+        }
+    }
+
+    struct AppendingReader {
+        inner: Cursor<Vec<u8>>,
+        appended_row: Option<Vec<u8>>,
+    }
+
+    impl Read for AppendingReader {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            self.inner.read(buffer)
+        }
+    }
+
+    impl BufRead for AppendingReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            self.inner.fill_buf()
+        }
+
+        fn consume(&mut self, amount: usize) {
+            self.inner.consume(amount);
+        }
+    }
+
+    impl Seek for AppendingReader {
+        fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+            if position == SeekFrom::Start(0)
+                && let Some(appended_row) = self.appended_row.take()
+            {
+                self.inner.get_mut().extend(appended_row);
+            }
+            self.inner.seek(position)
         }
     }
 }

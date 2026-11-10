@@ -52,6 +52,7 @@ pub(crate) mod user_turn;
 mod vibe;
 mod watch;
 mod watch_web;
+mod watch_web_user_marker;
 mod window_status;
 
 use clap::Subcommand;

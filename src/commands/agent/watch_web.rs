@@ -74,12 +74,13 @@ fn app() -> Router {
 }
 
 fn app_with_assets(dist: &'static Dir<'static>) -> Router {
-    app_with_assets_and_loader(dist, store::load_session)
+    app_with_assets_and_loader(dist, store::load_session, store::watch_web_user_marker)
 }
 
 fn app_with_assets_and_loader(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
     let api = Router::new()
@@ -87,7 +88,7 @@ fn app_with_assets_and_loader(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates))
-        .merge(messages::routes_with(load_session))
+        .merge(messages::routes_with(load_session, load_user_marker))
         .fallback(api_not_found);
 
     Router::new()
@@ -256,9 +257,11 @@ mod tests {
             "last_message": null,
         }))
         .unwrap();
-        let router = app_with_assets_and_loader(&TEST_DIST, move |session_id| {
-            Ok((session_id == "fixture-session").then(|| session.clone()))
-        });
+        let router = app_with_assets_and_loader(
+            &TEST_DIST,
+            move |session_id| Ok((session_id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+        );
         let response = router
             .oneshot(request("GET", uri, "localhost", None))
             .await
