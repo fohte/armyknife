@@ -431,6 +431,46 @@ function renderApp() {
   })
 }
 
+it('prevents file drags anywhere in the app from navigating away', () => {
+  renderApp()
+  const dispatchFileEvent = (type: 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['Files'], files: [] },
+    })
+    act(() => {
+      document.body.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const snapshot = () => ({
+    dragOverPrevented: dispatchFileEvent('dragover').defaultPrevented,
+    dropPrevented: dispatchFileEvent('drop').defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ dragOverPrevented: true, dropPrevented: true })
+})
+
+it('allows non-file drags to keep their default behavior', () => {
+  renderApp()
+  const dispatchTextEvent = (type: 'dragover' | 'drop') => {
+    const event = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', {
+      value: { types: ['text/plain'], files: [] },
+    })
+    act(() => {
+      document.body.dispatchEvent(event)
+    })
+    return event
+  }
+
+  const snapshot = () => ({
+    dragOverPrevented: dispatchTextEvent('dragover').defaultPrevented,
+    dropPrevented: dispatchTextEvent('drop').defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ dragOverPrevented: false, dropPrevented: false })
+})
+
 function publishSessions(response: SessionsResponse) {
   const onSessions = capturedFeed.onSessions
   if (onSessions === null) {

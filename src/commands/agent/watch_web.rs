@@ -2,6 +2,7 @@ mod actions;
 mod assets;
 mod events;
 mod image_attachments;
+mod interrupted;
 mod messages;
 mod security;
 mod session_enrichment;
