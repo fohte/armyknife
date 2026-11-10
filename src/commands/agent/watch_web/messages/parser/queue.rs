@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use serde_json::Value;
 
 use super::super::{ChatItem, ParentSession, claude_content_text};
-use super::append_text_with_user_marker;
+use super::append_text_with_user_marker_and_image_directory;
 
 #[derive(Default)]
 pub(super) struct Queue {
@@ -99,7 +99,14 @@ impl Queue {
         let mut items = Vec::new();
         for prompt in self.pending.into_iter().flatten() {
             let start = items.len();
-            append_text_with_user_marker(&mut items, prompt, parent, user_marker);
+            append_text_with_user_marker_and_image_directory(
+                &mut items,
+                prompt,
+                parent,
+                user_marker,
+                Vec::new(),
+                None,
+            );
             if items.len() > start
                 && let Some(ChatItem::User { text, from }) = items.pop()
             {

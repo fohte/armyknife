@@ -19,6 +19,24 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'queued_user':
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'user_with_content':
+      return (
+        Array.isArray(value['content']) &&
+        value['content'].every((part) => {
+          if (!isRecord(part) || typeof part['type'] !== 'string') return false
+          if (part['type'] === 'text') return typeof part['text'] === 'string'
+          if (part['type'] !== 'image') return false
+          return (
+            typeof part['source'] === 'string' &&
+            (part['source'].startsWith('/api/images/') ||
+              /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(
+                part['source'],
+              )) &&
+            typeof part['available'] === 'boolean'
+          )
+        }) &&
+        (value['from'] === undefined || typeof value['from'] === 'string')
+      )
     case 'tool_summary':
       return (
         typeof value['summary'] === 'string' &&

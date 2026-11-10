@@ -318,6 +318,21 @@
   opacity: 0.55;
 }
 
+.chat-user-image {
+  max-width: min(100%, 560px);
+  max-height: 480px;
+  border-radius: 8px;
+  object-fit: contain;
+}
+
+.chat-image-unavailable {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: #1f1f1f;
+  color: var(--muted-foreground-strong);
+}
+
 .chat-assistant-message {
   max-width: 100%;
   color: #e4e4e7;

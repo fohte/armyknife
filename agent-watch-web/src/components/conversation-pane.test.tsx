@@ -778,7 +778,7 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
-it('links known session IDs in user and assistant messages', () => {
+it('links known session IDs in user, rich user, and assistant messages', () => {
   const linkedSession: Session = {
     ...session,
     id: '11111111-1111-4111-8111-111111111111',
@@ -793,6 +793,10 @@ it('links known session IDs in user and assistant messages', () => {
     onSelectSession,
     [
       { type: 'user', text: `Use ${linkedSession.id}` },
+      {
+        type: 'user_with_content',
+        content: [{ type: 'text', text: `Inspect ${linkedSession.id}` }],
+      },
       { type: 'assistant', text: `I found ${linkedSession.id}` },
     ],
     actions,
@@ -812,9 +816,17 @@ it('links known session IDs in user and assistant messages', () => {
   }
 
   const expected = {
-    messageClasses: ['chat-user-group', 'chat-assistant-message'],
-    linkHrefs: [`?session=${linkedSession.id}`, `?session=${linkedSession.id}`],
-    selectedIds: [linkedSession.id, linkedSession.id],
+    messageClasses: [
+      'chat-user-group',
+      'chat-user-group',
+      'chat-assistant-message',
+    ],
+    linkHrefs: [
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+      `?session=${linkedSession.id}`,
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   const getActual = () => ({
     messageClasses: links.map((link) => link.closest('article')?.className),
@@ -839,6 +851,8 @@ it('marks a queued prompt below the delivered conversation', () => {
     className: message.className,
     label: message.querySelector('.chat-queued-label')?.textContent ?? null,
     text: message.querySelector('.markdown-message')?.textContent ?? null,
+    bubbleClassName:
+      message.querySelector('.chat-user-message')?.className ?? null,
   }))
 
   expect(actual).toEqual([
@@ -846,16 +860,20 @@ it('marks a queued prompt below the delivered conversation', () => {
       className: 'chat-user-group',
       label: null,
       text: 'Please summarize the current changes.',
+      bubbleClassName: 'markdown-message chat-user-message',
     },
     {
       className: 'chat-assistant-message',
       label: null,
       text: 'I am reviewing the current changes.',
+      bubbleClassName: null,
     },
     {
       className: 'chat-user-group',
       label: 'Queued',
       text: 'Also check the error handling.',
+      bubbleClassName:
+        'markdown-message chat-user-message chat-user-message-queued',
     },
   ])
 })
@@ -1847,7 +1865,10 @@ it('follows new messages at the bottom without moving a reader who scrolled up',
   })
 })
 
-it('shows the operation error returned by the server', async () => {
+it.each([
+  { action: 'approve' as const, buttonIndex: 0 },
+  { action: 'reject' as const, buttonIndex: 1 },
+])('shows the $action error independently', async ({ action, buttonIndex }) => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
       status,
@@ -1888,25 +1909,15 @@ it('shows the operation error returned by the server', async () => {
     )
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
+  const permissionButtons = () =>
+    container.querySelectorAll<HTMLButtonElement>('.permission-actions button')
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.permission-actions button'),
-    ).click()
+    requireElement(permissionButtons().item(buttonIndex)).click()
   })
   await act(async () => {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
 
   const actionRequest = fetcher.mock.calls[2]?.[0]
@@ -1916,22 +1927,24 @@ it('shows the operation error returned by the server', async () => {
       : actionRequest instanceof URL
         ? actionRequest.href
         : actionRequest?.url
-  const approveButton = requireElement(
-    container.querySelector<HTMLButtonElement>('.permission-actions button'),
-  )
-  const snapshot = () => ({
-    error: container.querySelector('[role="alert"]')?.textContent ?? null,
+  const expected = JSON.stringify([
+    'session pane is idle or unavailable',
+    `/api/sessions/sample-session/permission/${action}`,
+    [
+      { label: 'Approve', disabled: false },
+      { label: 'Reject', disabled: false },
+    ],
+  ])
+  const buttonStates = Array.from(permissionButtons(), (button) => ({
+    label: button.textContent,
+    disabled: button.disabled,
+  }))
+  const actual = JSON.stringify([
+    container.querySelector('[role="alert"]')?.textContent,
     actionRequestUrl,
-    approveButton: {
-      label: approveButton.textContent,
-      disabled: approveButton.disabled,
-    },
-  })
-  expect(snapshot()).toEqual({
-    error: 'session pane is idle or unavailable',
-    actionRequestUrl: '/api/sessions/sample-session/permission/approve',
-    approveButton: { label: 'Approve', disabled: false },
-  })
+    buttonStates,
+  ])
+  expect(actual).toBe(expected)
 })
 
 it.each([

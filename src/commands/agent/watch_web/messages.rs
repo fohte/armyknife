@@ -293,6 +293,11 @@ enum ChatItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
+    UserWithContent {
+        content: Vec<UserContentPart>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from: Option<String>,
+    },
     Assistant {
         text: String,
     },
@@ -314,6 +319,13 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum UserContentPart {
+    Text { text: String },
+    Image { source: String, available: bool },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -8,6 +8,7 @@ import {
 } from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
 import { ToolSummary } from '#components/tool-summary'
+import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
   Session,
@@ -48,26 +49,18 @@ export function renderConversationMessage({
   session,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
-  if (message.type === 'user' || message.type === 'queued_user') {
-    const queued = message.type === 'queued_user'
+  if (
+    message.type === 'user' ||
+    message.type === 'queued_user' ||
+    message.type === 'user_with_content'
+  ) {
     return (
-      <article className="chat-user-group" key={`user-${String(index)}`}>
-        {message.from != null && message.from !== '' ? (
-          <div className="chat-from">From {message.from}</div>
-        ) : null}
-        {queued ? <div className="chat-queued-label">Queued</div> : null}
-        <MarkdownMessage
-          className={
-            queued
-              ? 'chat-user-message chat-user-message-queued'
-              : 'chat-user-message'
-          }
-          onSelectSession={onSelectSession}
-          sessions={sessions}
-        >
-          {message.text}
-        </MarkdownMessage>
-      </article>
+      <UserWithContent
+        key={`user-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
     )
   }
   if (message.type === 'assistant') {
