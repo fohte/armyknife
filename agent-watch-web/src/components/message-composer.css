@@ -1,0 +1,79 @@
+.conversation-composer {
+  width: min(712px, calc(100% - 32px));
+  margin: 0 auto 20px;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  background: #141414;
+}
+
+.conversation-composer textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 54px;
+  max-height: 50dvh;
+  overflow-y: auto;
+  resize: none;
+  padding: 10px 12px 4px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+}
+
+.conversation-composer textarea::placeholder {
+  color: var(--muted-foreground-ghost);
+}
+
+.composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 7px 12px;
+  color: var(--muted-foreground-ghost);
+  font-size: 10.5px;
+}
+
+.composer-footer [data-slot='button'] {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: #fafafa;
+  color: #18181b;
+  font-size: 20px;
+}
+
+.conversation-composer[data-mobile='true'] {
+  width: calc(100% - 24px);
+  margin-bottom: calc(8px + env(safe-area-inset-bottom));
+}
+
+.conversation-composer[data-mobile='true'] textarea {
+  min-height: 58px;
+  padding: 10px 12px;
+  font-size: 16px;
+}
+
+.conversation-composer[data-mobile='true']
+  .composer-footer
+  [data-slot='button'] {
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+}
+
+.conversation-composer[data-mobile='true'] .composer-footer {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.conversation-composer[data-mobile='true']
+  .composer-footer
+  .mobile-interrupt-button {
+  width: auto;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid #3f3f46;
+  color: #d4d4d8;
+}

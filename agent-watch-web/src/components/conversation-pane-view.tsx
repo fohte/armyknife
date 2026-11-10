@@ -4,9 +4,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
+import { MessageComposer } from '#components/message-composer'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
+import { useComposerDraft } from '#components/use-composer-draft'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -26,6 +28,7 @@ type ConversationPaneViewProps = {
   onBack?: () => void
   onLater?: () => void
 }
+
 export function ConversationPaneView({
   session,
   messages,
@@ -40,7 +43,8 @@ export function ConversationPaneView({
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
-  const [draft, setDraft] = useState('')
+  const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
+    useComposerDraft(session.id)
   const [sendPending, setSendPending] = useState(false)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
@@ -71,9 +75,7 @@ export function ConversationPaneView({
     setSendPending(true)
     void onAction('messages', { content: sentDraft }).then((succeeded) => {
       if (succeeded) {
-        setDraft((currentDraft) =>
-          currentDraft === sentDraft ? '' : currentDraft,
-        )
+        clearDraftIfUnchanged(sentDraft)
       }
       sendingRef.current = false
       setSendPending(false)
@@ -436,58 +438,29 @@ export function ConversationPaneView({
           {error}
         </p>
       ) : null}
-      <form
-        className="conversation-composer"
-        onSubmit={(event) => {
-          event.preventDefault()
-          sendMessage()
+      {!storageAvailable ? (
+        <p className="conversation-error" role="status">
+          Browser storage is unavailable. Drafts may not survive a page reload.
+        </p>
+      ) : null}
+      <MessageComposer
+        draft={draft}
+        placeholder={
+          session.pullRequest
+            ? `Message PR ${String(session.pullRequest.number)}`
+            : 'Message session'
+        }
+        disabled={actions?.message !== true}
+        isSending={isSending}
+        isMobile={isMobile}
+        canInterrupt={actions?.interrupt === true}
+        onDraftChange={updateDraft}
+        onKeyDown={onComposerKeyDown}
+        onSend={sendMessage}
+        onInterrupt={() => {
+          void onAction('interrupt')
         }}
-      >
-        <textarea
-          aria-label="Message"
-          placeholder={
-            session.pullRequest
-              ? `Message PR ${String(session.pullRequest.number)}`
-              : 'Message session'
-          }
-          value={draft}
-          onChange={(event) => {
-            setDraft(event.currentTarget.value)
-          }}
-          onKeyDown={onComposerKeyDown}
-          disabled={actions?.message !== true}
-          rows={2}
-        />
-        <div className="composer-footer">
-          {!isMobile ? (
-            <span role={isSending ? 'status' : undefined}>
-              {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
-            </span>
-          ) : null}
-          {isMobile && actions?.interrupt === true ? (
-            <Button
-              className="mobile-interrupt-button"
-              type="button"
-              variant="plain"
-              onClick={() => {
-                void onAction('interrupt')
-              }}
-            >
-              Interrupt
-            </Button>
-          ) : null}
-          <Button
-            type="submit"
-            variant="plain"
-            aria-label="Send message"
-            disabled={
-              draft.trim() === '' || actions?.message !== true || isSending
-            }
-          >
-            ↑
-          </Button>
-        </div>
-      </form>
+      />
     </section>
   )
 

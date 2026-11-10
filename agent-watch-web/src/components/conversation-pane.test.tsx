@@ -121,6 +121,7 @@ function dispatchKeyInAct(
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
 })
@@ -570,12 +571,18 @@ it('keeps the message draft when sending fails', async () => {
     await Promise.resolve()
   })
 
-  const actual = JSON.stringify([textarea.value, onAction.mock.calls])
-  const expected = JSON.stringify([
-    'Retain this draft',
-    [['messages', { content: 'Retain this draft' }]],
-  ])
-  expect(actual).toBe(expected)
+  const snapshot = () => ({
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Retain this draft',
+    storedDraft: 'Retain this draft',
+    actions: [['messages', { content: 'Retain this draft' }]],
+  })
 })
 
 it('clears the message draft after a successful send', async () => {
@@ -592,12 +599,169 @@ it('clears the message draft after a successful send', async () => {
     await Promise.resolve()
   })
 
-  const actual = JSON.stringify([textarea.value, onAction.mock.calls])
-  const expected = JSON.stringify([
-    '',
-    [['messages', { content: 'Send this message' }]],
-  ])
-  expect(actual).toBe(expected)
+  const snapshot = () => ({
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: '',
+    storedDraft: null,
+    actions: [['messages', { content: 'Send this message' }]],
+  })
+})
+
+it('keeps text added after a send starts', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'First message')
+  act(() => {
+    dispatchKey(textarea, 'Enter')
+  })
+  setTextareaValue(textarea, 'Next message')
+
+  await act(async () => {
+    completeSend?.(true)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    actions: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Next message',
+    storedDraft: 'Next message',
+    actions: [['messages', { content: 'First message' }]],
+  })
+})
+
+it('restores the message draft after the conversation is remounted', () => {
+  renderView(() => Promise.resolve(true))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Continue this draft')
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderView(() => Promise.resolve(true))
+
+  const snapshot = () => ({
+    draft: container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+    storedDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Continue this draft',
+    storedDraft: 'Continue this draft',
+  })
+})
+
+it('keeps the composer usable when browser storage is unavailable', () => {
+  vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  renderView(() => Promise.resolve(true))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep editing in memory')
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    composerVisible: textarea.isConnected,
+    storageNotice: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Keep editing in memory',
+    composerVisible: true,
+    storageNotice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
+  })
+})
+
+it('reports when a draft cannot be saved after loading storage succeeds', () => {
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('storage unavailable')
+  })
+  renderView(() => Promise.resolve(true))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep editing in memory')
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    composerVisible: textarea.isConnected,
+    storageNotice: container.querySelector('[role="status"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Keep editing in memory',
+    composerVisible: true,
+    storageNotice:
+      'Browser storage is unavailable. Drafts may not survive a page reload.',
+  })
+})
+
+it('keeps drafts separate for each session', () => {
+  renderView(() => Promise.resolve(true))
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'First session draft',
+  )
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderView(() => Promise.resolve(true), { ...session, id: 'another-session' })
+  const otherTextarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(otherTextarea, 'Second session draft')
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderView(() => Promise.resolve(true))
+
+  const snapshot = () => ({
+    selectedDraft:
+      container.querySelector<HTMLTextAreaElement>('textarea')?.value,
+    firstSessionDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:sample-session',
+    ),
+    secondSessionDraft: window.localStorage.getItem(
+      'agent-watch-web:composer-draft:another-session',
+    ),
+  })
+  expect(snapshot()).toEqual({
+    selectedDraft: 'First session draft',
+    firstSessionDraft: 'First session draft',
+    secondSessionDraft: 'Second session draft',
+  })
 })
 
 it('blocks duplicate sends and shows their pending status', async () => {
