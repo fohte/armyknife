@@ -99,6 +99,18 @@ export const PermissionWaitsForApproval: Story = {
   },
 }
 
+export const CritReviewCanOpenBesideTheConversation: Story = {
+  name: 'A waiting crit review can open beside the conversation',
+  args: {
+    session: {
+      ...session,
+      category: 'needs_action',
+      kind: 'Review',
+      critUrl: 'http://127.0.0.1:5000/review/sample',
+    },
+  },
+}
+
 export const CodexOnlyOpensInTerminal: Story = {
   name: 'A Codex session sends questions and permissions to the terminal',
   args: {

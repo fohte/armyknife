@@ -83,6 +83,7 @@ struct SessionView {
     parent: Option<ParentSessionView>,
     ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
+    crit_url: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -244,6 +245,13 @@ async fn list_sessions<S: SessionSource>(
                 parent,
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
+                crit_url: if turn_kinds.get(session.session_id.as_str())
+                    == Some(&UserTurnKind::Crit)
+                {
+                    session.crit_urls.last().cloned()
+                } else {
+                    None
+                },
             }
         })
         .collect::<Vec<_>>();
@@ -637,6 +645,7 @@ mod tests {
             parent: None,
             ancestor_session_ids: Vec::new(),
             pull_request: None,
+            crit_url: None,
         }
     }
 
@@ -687,11 +696,12 @@ mod tests {
     }
 
     fn test_source() -> TestSessionSource {
-        let mut session = session(SessionStatus::Stopped);
+        let mut session = session(SessionStatus::WaitingInput);
         session.session_id = "child-session".to_string();
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
         session.last_message = Some("last message".to_string());
         session.ancestor_session_ids = vec!["parent-session".to_string()];
+        session.crit_urls = vec!["http://127.0.0.1:52413".to_string()];
         session.pr_context = Some(crate::commands::agent::types::SessionPrContext {
             owner: "example-org".to_string(),
             repo: "example-repo".to_string(),
@@ -822,12 +832,12 @@ mod tests {
                         "id": "child-session",
                         "engine": "claude",
                         "category": "needs_action",
-                        "kind": "Stopped",
+                        "kind": "Review",
                         "title": "child title",
                         "preview": "last message",
                         "updatedAt": "1970-01-01T00:16:40Z",
                         "elapsedSeconds": 100,
-                        "unread": true,
+                        "unread": false,
                         "task": {
                             "id": "task-id",
                             "number": 17,
@@ -844,7 +854,8 @@ mod tests {
                         "pullRequest": {
                             "number": 42,
                             "state": "Open"
-                        }
+                        },
+                        "critUrl": "http://127.0.0.1:52413"
                     }]
                 }),
             ),
