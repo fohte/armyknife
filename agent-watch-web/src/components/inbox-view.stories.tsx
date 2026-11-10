@@ -149,6 +149,21 @@ export const InboxHasSessionsAcrossStatuses: Story = {
   name: 'The inbox groups sessions by action, progress, and completion',
 }
 
+export const InboxHasNoFilters: Story = {
+  name: 'The inbox shows the filter shortcut before any filters are set',
+  args: { filterQuery: '' },
+}
+
+export const InboxFiltersSessionsByProjectAndKind: Story = {
+  name: 'The inbox shows project and kind filters as removable chips',
+  args: { filterQuery: 'project:sample project kind:question,review' },
+}
+
+export const InboxFilterDialogIsOpen: Story = {
+  name: 'The filter dialog shows available session values and counts',
+  args: { filterQuery: 'project:sample project', filterDialogOpen: true },
+}
+
 export const InboxIsLoading: Story = {
   name: 'The inbox shows a loading state before the first response',
   args: { sessions: [], loaded: false },
