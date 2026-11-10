@@ -13,7 +13,6 @@
 
 .session-link-positioner {
   z-index: 50;
-  pointer-events: none;
 }
 
 .session-link-card {

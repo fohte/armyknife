@@ -73,6 +73,63 @@ it('shows session details on hover', async () => {
   })
 })
 
+it('keeps the card open while the pointer is over it', async () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionLink session={linkedSession}>sample-session</SessionLink>,
+    )
+  })
+
+  const link = container.querySelector('a')
+  if (link === null) throw new Error('Expected a session link')
+  await act(async () => {
+    await userEvent.hover(link)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  })
+
+  const card = document.querySelector('.session-link-card')
+  if (card === null) throw new Error('Expected the session detail card')
+  await act(async () => {
+    await userEvent.hover(card)
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  })
+
+  expect(document.querySelector('.session-link-card')?.textContent).toBe(
+    'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+  )
+})
+
+it('labels a paused session in the detail card', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionLink open session={{ ...linkedSession, isPaused: true }}>
+        sample-session
+      </SessionLink>,
+    )
+  })
+
+  expect(document.querySelector('.session-link-card')?.textContent).toBe(
+    'In progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-service',
+  )
+})
+
+it('explains when no tq task is linked', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionLink open session={{ ...linkedSession, task: null }}>
+        sample-session
+      </SessionLink>,
+    )
+  })
+
+  expect(document.querySelector('.session-link-card')?.textContent).toBe(
+    'In progressNo linked tq taskrepo sample-org/example-service',
+  )
+})
+
 it('opens the session when clicked while the card is visible', async () => {
   const onSelectSession = vi.fn<(id: string) => void>()
   root = createRoot(container)
