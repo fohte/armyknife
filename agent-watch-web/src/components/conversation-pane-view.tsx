@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
+import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
@@ -31,47 +32,6 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   onBack?: () => void
   onLater?: () => void
-}
-
-function copyTextToClipboard(text: string): Promise<boolean> {
-  const copyWithExecCommand = () => {
-    const textarea = document.createElement('textarea')
-    textarea.value = text
-    textarea.setAttribute('readonly', '')
-    textarea.style.position = 'fixed'
-    textarea.style.opacity = '0'
-    textarea.style.left = '0'
-    textarea.style.top = '0'
-    document.body.append(textarea)
-    textarea.select()
-    textarea.setSelectionRange(0, text.length)
-    const execCommand: unknown = Reflect.get(document, 'execCommand')
-    const result: unknown =
-      typeof execCommand === 'function'
-        ? Reflect.apply(execCommand, document, ['copy'])
-        : false
-    textarea.remove()
-    return result === true
-  }
-
-  const clipboard: unknown = Reflect.get(navigator, 'clipboard')
-  if (typeof clipboard !== 'object' || clipboard === null) {
-    return Promise.resolve(copyWithExecCommand())
-  }
-  const writeText: unknown = Reflect.get(clipboard, 'writeText')
-  if (typeof writeText !== 'function') {
-    return Promise.resolve(copyWithExecCommand())
-  }
-
-  return Promise.resolve()
-    .then(() => {
-      const result: unknown = Reflect.apply(writeText, clipboard, [text])
-      return Promise.resolve(result)
-    })
-    .then(
-      () => true,
-      () => copyWithExecCommand(),
-    )
 }
 
 export function ConversationPaneView({
@@ -106,10 +66,8 @@ export function ConversationPaneView({
     onAction,
   })
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
-  const [sessionIdCopied, setSessionIdCopied] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
-  const copiedTimeoutRef = useRef<number | null>(null)
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
   )
@@ -156,42 +114,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  const copySessionId = () => {
-    void copyTextToClipboard(session.id).then((copied) => {
-      if (!copied) return
-      setSessionIdCopied(true)
-      if (copiedTimeoutRef.current !== null) {
-        window.clearTimeout(copiedTimeoutRef.current)
-      }
-      copiedTimeoutRef.current = window.setTimeout(() => {
-        setSessionIdCopied(false)
-        copiedTimeoutRef.current = null
-      }, 1500)
-    })
-  }
-
-  const renderCopySessionIdButton = (compact = false) => (
-    <Button
-      className="conversation-copy-session-id"
-      type="button"
-      variant="plain"
-      aria-label={sessionIdCopied ? 'Session ID copied' : 'Copy session ID'}
-      title="Copy session ID"
-      onClick={copySessionId}
-    >
-      {sessionIdCopied ? 'Copied' : compact ? 'Copy ID' : 'Copy session ID'}
-    </Button>
-  )
-
-  useEffect(
-    () => () => {
-      if (copiedTimeoutRef.current !== null) {
-        window.clearTimeout(copiedTimeoutRef.current)
-      }
-    },
-    [],
-  )
 
   const renderTerminalFallback = (message: string) => (
     <div className="conversation-terminal-fallback">
@@ -305,17 +227,15 @@ export function ConversationPaneView({
                 isPaused={session.isPaused}
               />
             </div>
-            <div className="mobile-conversation-session-actions">
-              {renderCopySessionIdButton(true)}
-              <Button
-                className="mobile-conversation-later cursor-pointer"
-                type="button"
-                variant="plain"
-                onClick={onLater}
-              >
-                Later
-              </Button>
-            </div>
+            <CopySessionIdControl sessionId={session.id} compact />
+            <Button
+              className="mobile-conversation-later cursor-pointer"
+              type="button"
+              variant="plain"
+              onClick={onLater}
+            >
+              Later
+            </Button>
           </>
         ) : (
           <>
@@ -384,7 +304,7 @@ export function ConversationPaneView({
                   #{session.pullRequest.number} PR
                 </a>
               ) : null}
-              {renderCopySessionIdButton()}
+              <CopySessionIdControl sessionId={session.id} />
               {actions?.openInTerminal === true ? (
                 <Button type="button" variant="plain" onClick={openInTerminal}>
                   Open in terminal

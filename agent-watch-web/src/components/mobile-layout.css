@@ -297,14 +297,7 @@
   font-size: 16px;
 }
 
-.mobile-conversation-session-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 2px;
-}
-
-.mobile-conversation-session-actions .conversation-copy-session-id {
+.conversation-pane[data-mobile='true'] .conversation-copy-session-id {
   min-width: 44px;
   min-height: 44px;
   padding: 0 6px;
