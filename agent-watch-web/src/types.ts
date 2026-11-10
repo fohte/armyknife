@@ -89,6 +89,17 @@ export type ToolOperation = {
   target?: string
 }
 
+export type BackgroundTask = {
+  id: string
+  description: string
+  elapsedSeconds: number
+}
+
+export type ConversationResponse = {
+  messages: ChatItem[]
+  backgroundTasks: BackgroundTask[]
+}
+
 export type SessionActions = {
   message: boolean
   answerQuestion: boolean

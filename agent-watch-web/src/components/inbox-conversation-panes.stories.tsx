@@ -71,12 +71,15 @@ const meta = {
     msw: {
       handlers: [
         http.get('/api/sessions/:sessionId/messages', () =>
-          HttpResponse.json([
-            {
-              type: 'assistant',
-              text: 'The retry policy is ready for review.',
-            },
-          ]),
+          HttpResponse.json({
+            messages: [
+              {
+                type: 'assistant',
+                text: 'The retry policy is ready for review.',
+              },
+            ],
+            backgroundTasks: [],
+          }),
         ),
         http.get('/api/sessions/:sessionId/actions', () =>
           HttpResponse.json({
