@@ -16,6 +16,7 @@ import { startSessionFeed } from '#session-feed'
 import {
   getLaterPresetShortcut,
   getSessionShortcutAction,
+  type LaterPreset,
   type LaterPresetTimes,
   moveSelection,
   type SessionView,
@@ -35,6 +36,7 @@ export function App() {
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [laterTimesError, setLaterTimesError] = useState(false)
+  const laterSubmissionInFlight = useRef(false)
   const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
@@ -134,6 +136,32 @@ export function App() {
     laterRequestId.current += 1
     setLaterSessionId(null)
   }, [])
+  const submitLater = useCallback(
+    (sessionId: string, preset: LaterPreset) => {
+      if (laterSubmissionInFlight.current) {
+        return
+      }
+      const expectedDeadline = laterTimes?.[preset].deadline
+      if (expectedDeadline === undefined) {
+        return
+      }
+
+      laterSubmissionInFlight.current = true
+      void setSessionLater(sessionId, preset, expectedDeadline).match(
+        () => {
+          laterSubmissionInFlight.current = false
+          closeLater()
+          setError(null)
+        },
+        () => {
+          laterSubmissionInFlight.current = false
+          openLater(sessionId)
+          setError('Could not move the session to Later.')
+        },
+      )
+    },
+    [closeLater, laterTimes, openLater],
+  )
 
   useEffect(
     () =>
@@ -223,21 +251,8 @@ export function App() {
         }
         const preset = getLaterPresetShortcut(event.key)
         if (preset !== null) {
-          const expectedDeadline = laterTimes?.[preset].deadline
-          if (expectedDeadline === undefined) {
-            return
-          }
           event.preventDefault()
-          void setSessionLater(laterSessionId, preset, expectedDeadline).match(
-            () => {
-              closeLater()
-              setError(null)
-            },
-            () => {
-              openLater(laterSessionId)
-              setError('Could not move the session to Later.')
-            },
-          )
+          submitLater(laterSessionId, preset)
         }
         return
       }
@@ -268,10 +283,10 @@ export function App() {
   }, [
     closeLater,
     laterSessionId,
-    laterTimes,
     navigableSessions,
     openLater,
     selectedId,
+    submitLater,
     view,
   ])
 
@@ -379,24 +394,7 @@ export function App() {
             )
           }}
           onSelect={(preset) => {
-            const expectedDeadline = laterTimes?.[preset].deadline
-            if (expectedDeadline === undefined) {
-              return
-            }
-            void setSessionLater(
-              laterSession.id,
-              preset,
-              expectedDeadline,
-            ).match(
-              () => {
-                closeLater()
-                setError(null)
-              },
-              () => {
-                openLater(laterSession.id)
-                setError('Could not move the session to Later.')
-              },
-            )
+            submitLater(laterSession.id, preset)
           }}
         />
       ) : null}

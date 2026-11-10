@@ -474,6 +474,53 @@ it('opens Later with L and selects a preset with its number key', async () => {
   })
 })
 
+it('ignores further Later shortcuts while a preset request is pending', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input) === '/api/sessions/session-a/later'
+        ? mockPendingResponse()
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+    dispatchKey(window, '2')
+  })
+
+  const snapshot = () => ({
+    menuOpen:
+      container.querySelector('[aria-label="Later: First session"]') !== null,
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menuOpen: true,
+    requests: [
+      [
+        '/api/sessions/session-a/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
 it('returns a Later session immediately from the menu', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()

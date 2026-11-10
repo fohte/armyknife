@@ -104,8 +104,12 @@ async fn set_later(
     let now = state.clock.now();
     let until_activity = matches!(request.preset, LaterPreset::UntilItChanges);
     let later_until = if let Some(preset) = request.preset.timed() {
-        let deadline = later_deadline(preset, now).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
-        if request.expected_deadline != Some(deadline) {
+        let deadline = request.expected_deadline.ok_or(StatusCode::CONFLICT)?;
+        if deadline <= now {
+            clear_later(&state, &id)?;
+            return Ok(StatusCode::NO_CONTENT);
+        }
+        if deadline > now + maximum_later_window(preset) {
             return Err(StatusCode::CONFLICT);
         }
         Some(deadline)
@@ -134,7 +138,16 @@ fn load_session(
         Some(dir) => store::load_session_from(dir, id),
         None => store::load_session(id),
     }
-    .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    .map_err(|error| {
+        if error
+            .downcast_ref::<super::super::error::CcError>()
+            .is_some_and(|error| matches!(error, super::super::error::CcError::InvalidSessionId(_)))
+        {
+            StatusCode::NOT_FOUND
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    })?;
     session
         .filter(|session| session.archived_at.is_none())
         .ok_or(StatusCode::NOT_FOUND)
@@ -273,6 +286,15 @@ fn later_deadline(preset: TimedLaterPreset, now: DateTime<Utc>) -> Option<DateTi
         LocalResult::Single(deadline) => Some(deadline.with_timezone(&Utc)),
         LocalResult::Ambiguous(_, latest) => Some(latest.with_timezone(&Utc)),
         LocalResult::None => None,
+    }
+}
+
+fn maximum_later_window(preset: TimedLaterPreset) -> chrono::Duration {
+    match preset {
+        TimedLaterPreset::OneHour => chrono::Duration::hours(1),
+        TimedLaterPreset::ThisEvening => chrono::Duration::hours(25),
+        TimedLaterPreset::Tomorrow => chrono::Duration::days(2),
+        TimedLaterPreset::NextWeek => chrono::Duration::days(8),
     }
 }
 
@@ -494,6 +516,15 @@ mod tests {
             .with_timezone(&Utc)
     }
 
+    fn local_time_with_seconds_as_utc(
+        (year, month, day, hour, minute, second): (i32, u32, u32, u32, u32, u32),
+    ) -> DateTime<Utc> {
+        Local
+            .with_ymd_and_hms(year, month, day, hour, minute, second)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
     #[derive(Debug)]
     struct LaterOptionsCase {
         now_local: (i32, u32, u32, u32, u32),
@@ -633,10 +664,75 @@ mod tests {
     }
 
     #[rstest]
+    #[case::one_hour_deadline_survives_minute_rollover(
+        "one_hour",
+        (2030, 3, 4, 15, 59, 0),
+        (2030, 3, 4, 16, 0, 0),
+        Some((2030, 3, 4, 16, 59, 0)),
+    )]
+    #[case::this_evening_deadline_expires_at_19(
+        "this_evening",
+        (2030, 3, 4, 18, 59, 0),
+        (2030, 3, 4, 19, 0, 1),
+        None,
+    )]
     #[tokio::test]
-    async fn rejects_a_later_deadline_that_does_not_match_the_options_response(
+    async fn later_requests_handle_preset_rollovers(
         saved_session_dir: TempDir,
+        session: Session,
+        #[case] preset: &str,
+        #[case] menu_opened_at: (i32, u32, u32, u32, u32, u32),
+        #[case] submitted_at: (i32, u32, u32, u32, u32, u32),
+        #[case] expected_stored_deadline: Option<(i32, u32, u32, u32, u32, u32)>,
     ) {
+        let menu_options = later_preset_times(local_time_with_seconds_as_utc(menu_opened_at));
+        let menu_deadline = match preset {
+            "one_hour" => menu_options.one_hour.deadline,
+            "this_evening" => menu_options.this_evening.deadline,
+            _ => unreachable!(),
+        }
+        .unwrap();
+        let now = local_time_with_seconds_as_utc(submitted_at);
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(saved_session_dir.path().to_path_buf()),
+            clock: SessionClock::Fixed(now),
+        });
+        let response = app
+            .oneshot(
+                Request::post("/sessions/test-session/later")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "preset": preset,
+                            "expectedDeadline": menu_deadline,
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let expected_later_until = expected_stored_deadline.map(local_time_with_seconds_as_utc);
+        let expected_state = store::WatchWebSessionState {
+            session_id: session.session_id,
+            later_until: expected_later_until,
+            activity_snapshot: expected_later_until.map(|_| session.updated_at),
+            until_activity: false,
+            is_today: false,
+        };
+        assert_eq!(
+            (
+                response.status(),
+                store::watch_web_session_states_from(saved_session_dir.path()).unwrap(),
+            ),
+            (StatusCode::NO_CONTENT, vec![expected_state]),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejects_a_later_deadline_that_is_too_far_in_the_future(saved_session_dir: TempDir) {
         let app = router_with_store(SessionStateStore {
             sessions_dir: Some(saved_session_dir.path().to_path_buf()),
             clock: SessionClock::Fixed(local_time_as_utc((2030, 3, 4, 15, 0))),
@@ -664,6 +760,26 @@ mod tests {
             ),
             (StatusCode::CONFLICT, vec![]),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn malformed_session_ids_return_not_found(saved_session_dir: TempDir) {
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(saved_session_dir.path().to_path_buf()),
+            clock: SessionClock::System,
+        });
+        let response = app
+            .oneshot(
+                Request::post("/sessions/a..b/today")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"isToday":true}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[rstest]
