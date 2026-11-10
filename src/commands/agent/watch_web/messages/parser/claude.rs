@@ -161,6 +161,11 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             tool: tool_use.name.clone(),
             description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
         });
+    } else if let Some(tool_use) = tool_uses.last() {
+        items.push(ChatItem::ToolInProgress {
+            tool: tool_use.name.clone(),
+            target: tool_target(tool_use.input.as_ref()),
+        });
     }
     Ok(items)
 }
@@ -576,6 +581,28 @@ mod tests {
                 ChatItem::Permission {
                     tool: "Bash".to_string(),
                     description: "Bash: echo awaiting approval".to_string(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn returns_the_last_unanswered_tool_call() {
+        let transcript = indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-first-call","name":"Read","input":{"file_path":"fixture/old.rs"}},{"type":"tool_use","id":"fixture-last-call","name":"Bash","input":{"command":"cargo check"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-first-call","content":"fixture result"}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Read", Some("fixture/old.rs"))],
+                },
+                ChatItem::ToolInProgress {
+                    tool: "Bash".to_string(),
+                    target: Some("cargo check".to_string()),
                 },
             ]
         );

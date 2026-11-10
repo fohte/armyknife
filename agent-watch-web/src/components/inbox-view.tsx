@@ -1,19 +1,15 @@
 import '#components/later-today.css'
-import '#components/inbox-filter.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter } from 'lucide-react'
+import { Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
+import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { SessionRow } from '#components/session-row'
-import {
-  filterInboxSessions,
-  INBOX_FILTER_FIELDS,
-  type InboxFilterKey,
-  parseInboxFilterQuery,
-} from '#inbox-filter'
+import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
 
 type InboxViewProps = {
@@ -39,6 +35,18 @@ type InboxViewProps = {
   onFilterQueryChange?: (query: string) => void
   filterDialogOpen?: boolean
   onFilterDialogOpenChange?: (open: boolean) => void
+  saveViewOpen?: boolean
+  saveViewName?: string
+  onSaveViewOpenChange?: (open: boolean) => void
+  onSaveViewNameChange?: (name: string) => void
+  onSaveView?: (name: string) => void
+  savedViews?: readonly (SavedInboxView & {
+    count: number
+    countTone: 'needs-action' | 'error' | null
+  })[]
+  selectedSavedViewId?: string | null
+  onSelectSavedView?: (id: string) => void
+  onDeleteSavedView?: (id: string) => void
 }
 
 function renderSessionSection({
@@ -110,6 +118,15 @@ export function InboxView({
   onFilterQueryChange,
   filterDialogOpen: controlledFilterDialogOpen,
   onFilterDialogOpenChange,
+  saveViewOpen = false,
+  saveViewName = '',
+  onSaveViewOpenChange,
+  onSaveViewNameChange,
+  onSaveView,
+  savedViews = [],
+  selectedSavedViewId = null,
+  onSelectSavedView,
+  onDeleteSavedView,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -181,14 +198,6 @@ export function InboxView({
     }
   }, [filterDialogOpen, openFilterDialog])
 
-  const removeFilter = (key: InboxFilterKey) => {
-    setFilterQuery(
-      filters
-        .filter((filter) => filter.key !== key)
-        .map((filter) => `${filter.key}:${filter.values.join(',')}`)
-        .join(' '),
-    )
-  }
   const visibleInProgress = isMobile
     ? inProgressExpanded
       ? inProgress
@@ -208,70 +217,62 @@ export function InboxView({
         <h1 id="inbox-title">Inbox</h1>
         <span className="sort-description">Sorted by tq priority</span>
       </header>
-      <div className="inbox-filter-bar">
-        {filters.length === 0 ? (
-          <Button
-            type="button"
-            variant="plain"
-            className="inbox-filter-open cursor-pointer"
-            onClick={openFilterDialog}
-          >
-            <Filter aria-hidden="true" size={14} />
-            <span>Filter by project, kind, tq task, repo</span>
-            <kbd>/</kbd>
-          </Button>
-        ) : (
-          <>
-            <div
-              aria-label="Active inbox filters"
-              className="inbox-filter-chips"
-            >
-              {filters.map((filter) => {
-                const field = INBOX_FILTER_FIELDS.find(
-                  (candidate) => candidate.key === filter.key,
-                )
-                const label = field?.label ?? filter.key
-                const values = filter.values
-                  .map((value) =>
-                    filter.key === 'task' && !value.startsWith('#')
-                      ? `#${value}`
-                      : value,
-                  )
-                  .join(', ')
-                return (
-                  <span key={filter.key} className="inbox-filter-chip">
-                    <span>
-                      {label} {values}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="plain"
-                      aria-label={`Remove ${label} filter`}
-                      className="inbox-filter-chip-remove"
-                      onClick={() => {
-                        removeFilter(filter.key)
-                      }}
-                    >
-                      ×
-                    </Button>
+      <InboxFilterBar
+        filters={filters}
+        matchingNeedsActionCount={needsAction.length}
+        totalNeedsActionCount={allNeedsActionCount}
+        onFilterQueryChange={setFilterQuery}
+        onOpenFilterDialog={openFilterDialog}
+        saveViewOpen={saveViewOpen}
+        saveViewName={saveViewName}
+        onSaveViewOpenChange={onSaveViewOpenChange}
+        onSaveViewNameChange={onSaveViewNameChange}
+        onSaveView={onSaveView}
+      />
+      {isMobile && savedViews.length > 0 ? (
+        <section
+          className="mobile-saved-views"
+          aria-labelledby="mobile-saved-views-title"
+        >
+          <h2 id="mobile-saved-views-title">VIEWS</h2>
+          <ul>
+            {savedViews.map((savedView) => (
+              <li key={savedView.id}>
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-pressed={selectedSavedViewId === savedView.id}
+                  className={`mobile-saved-view-link${selectedSavedViewId === savedView.id ? ' is-active' : ''}`}
+                  onClick={() => {
+                    onSelectSavedView?.(savedView.id)
+                  }}
+                >
+                  <Filter aria-hidden="true" size={13} />
+                  <span className="mobile-saved-view-name">
+                    {savedView.name}
                   </span>
-                )
-              })}
-            </div>
-            <Button
-              type="button"
-              variant="plain"
-              className="inbox-filter-add cursor-pointer"
-              onClick={openFilterDialog}
-            >
-              + Filter
-            </Button>
-            <span className="inbox-filter-result-count">
-              {needsAction.length} of {allNeedsActionCount}
-            </span>
-          </>
-        )}
-      </div>
+                  <span
+                    className={`mobile-saved-view-count${savedView.countTone === null ? '' : ` is-${savedView.countTone}`}`}
+                  >
+                    {savedView.count}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-label={`Delete ${savedView.name} view`}
+                  className="mobile-saved-view-delete"
+                  onClick={() => {
+                    onDeleteSavedView?.(savedView.id)
+                  }}
+                >
+                  <X aria-hidden="true" size={13} />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div className="mobile-today-strip" aria-label="TODAY sessions">
         <span className="mobile-today-label">TODAY</span>
         {filterInboxSessions(todaySessions, filters).map((session) => (
