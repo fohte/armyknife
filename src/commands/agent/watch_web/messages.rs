@@ -82,6 +82,7 @@ fn load_messages_with(
         .unwrap_or_default();
 
     if pending_permission
+        && session.current_tool.as_deref() != Some("AskUserQuestion")
         && !messages
             .iter()
             .any(|message| matches!(message, ChatItem::Permission { .. }))
@@ -202,6 +203,7 @@ enum ChatItem {
     Question {
         question: String,
         choices: Vec<String>,
+        answer: Option<String>,
     },
     Permission {
         tool: String,
@@ -269,6 +271,46 @@ mod tests {
             Some(vec![ChatItem::Permission {
                 tool: "Bash(cargo test -p sample)".to_string(),
                 description: "Run the package tests".to_string(),
+            }])
+        );
+    }
+
+    #[test]
+    fn pending_question_does_not_create_a_permission_card() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let record = json!({
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "tool_use",
+                    "id": "fixture-question-id",
+                    "name": "AskUserQuestion",
+                    "input": {
+                        "questions": [{
+                            "question": "Should the summary be brief?",
+                            "options": [{"label": "Yes"}, {"label": "No"}],
+                        }],
+                    },
+                }],
+            },
+        });
+        std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let mut session = stored_session();
+        session.pending_permission_agent_ids = BTreeSet::from(["main".to_string()]);
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.transcript_path = Some(transcript_path);
+
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::Question {
+                question: "Should the summary be brief?".to_string(),
+                choices: vec!["Yes".to_string(), "No".to_string()],
+                answer: None,
             }])
         );
     }

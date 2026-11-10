@@ -189,9 +189,39 @@
   text-align: left;
 }
 
+.chat-question-choices [data-slot='button'].is-selected {
+  border: 1px solid #86efac;
+  background: #14532d;
+  color: #f0fdf4;
+  opacity: 1;
+}
+
+.chat-question-choices [data-slot='button'].is-unselected {
+  opacity: 0.45;
+}
+
+.chat-question-choice-text {
+  flex: 1;
+  text-align: left;
+}
+
 .chat-question-choices kbd {
   width: 18px;
   color: #fbbf24;
+}
+
+.chat-question-choice-check {
+  margin-left: auto;
+  color: #86efac;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.chat-question-answer {
+  margin: 10px 0 0;
+  color: #d4d4d8;
+  font-size: 13px;
+  white-space: pre-wrap;
 }
 
 .conversation-terminal-fallback {

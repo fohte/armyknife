@@ -135,6 +135,7 @@ export function ConversationPaneView({
       if (
         !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
+        waitingQuestion.answer !== null ||
         activeQuestionIndex < 0 ||
         !actionsReady ||
         actions?.answerQuestion !== true
@@ -357,8 +358,14 @@ export function ConversationPaneView({
               />
             )
           if (message.type === 'question') {
+            const selectedChoice = message.choices.includes(
+              message.answer ?? '',
+            )
+              ? message.answer
+              : null
             const canAnswer =
               index === activeQuestionIndex &&
+              message.answer === null &&
               actionsReady &&
               actions?.answerQuestion === true
             return (
@@ -367,7 +374,9 @@ export function ConversationPaneView({
                 key={`question-${String(index)}`}
               >
                 <h2>Question</h2>
-                <p>{message.question}</p>
+                <MarkdownMessage className="chat-question-text">
+                  {message.question}
+                </MarkdownMessage>
                 {session.engine === 'Codex' &&
                 actions !== null &&
                 !actions.answerQuestion
@@ -378,6 +387,14 @@ export function ConversationPaneView({
                     <Button
                       type="button"
                       variant="plain"
+                      className={
+                        selectedChoice === choice
+                          ? 'is-selected'
+                          : message.answer !== null
+                            ? 'is-unselected'
+                            : undefined
+                      }
+                      aria-pressed={selectedChoice === choice}
                       key={`${String(choiceIndex)}-${choice}`}
                       disabled={!canAnswer}
                       onClick={() => {
@@ -385,10 +402,28 @@ export function ConversationPaneView({
                       }}
                     >
                       {!isMobile ? <kbd>{choiceIndex + 1}</kbd> : null}
-                      <span>{choice}</span>
+                      <MarkdownMessage
+                        className="chat-question-choice-text"
+                        inline
+                      >
+                        {choice}
+                      </MarkdownMessage>
+                      {selectedChoice === choice ? (
+                        <span
+                          className="chat-question-choice-check"
+                          aria-hidden="true"
+                        >
+                          ✓
+                        </span>
+                      ) : null}
                     </Button>
                   ))}
                 </div>
+                {message.answer !== null && selectedChoice === null ? (
+                  <p className="chat-question-answer">
+                    Answer: {message.answer}
+                  </p>
+                ) : null}
               </article>
             )
           }

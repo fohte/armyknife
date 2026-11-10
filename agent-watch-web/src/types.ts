@@ -58,7 +58,12 @@ export type ChatItem =
       summary: string
       operations?: ToolOperation[]
     }
-  | { type: 'question'; question: string; choices: string[] }
+  | {
+      type: 'question'
+      question: string
+      choices: string[]
+      answer: string | null
+    }
   | { type: 'permission'; tool: string; description: string }
 
 export type ToolOperation = {

@@ -2338,6 +2338,7 @@ it('answers an Inbox question with a number key when the pane is not focused', a
             type: 'question',
             question: 'Which retry policy should be used?',
             choices: ['Retry three times', 'Retry once'],
+            answer: null,
           },
         ]
       : path.endsWith('/actions')

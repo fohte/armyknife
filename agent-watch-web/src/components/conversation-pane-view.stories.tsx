@@ -75,11 +75,46 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
       {
         type: 'question',
-        question: 'Which retry policy should be used?',
+        question: 'Which **retry policy** should be used?',
+        choices: [
+          'Retry **three times** with exponential backoff',
+          'Retry once without delay',
+        ],
+        answer: null,
+      },
+    ],
+  },
+}
+
+export const QuestionShowsSelectedAnswer: Story = {
+  name: 'A question marks the choice selected by the user',
+  args: {
+    messages: [
+      {
+        type: 'question',
+        question: 'Which **retry policy** should be used?',
+        choices: [
+          'Retry **three times** with exponential backoff',
+          'Retry once without delay',
+        ],
+        answer: 'Retry once without delay',
+      },
+    ],
+  },
+}
+
+export const QuestionShowsFreeformAnswer: Story = {
+  name: 'A question shows an answer outside its listed choices',
+  args: {
+    messages: [
+      {
+        type: 'question',
+        question: 'Which **retry policy** should be used?',
         choices: [
           'Retry three times with exponential backoff',
           'Retry once without delay',
         ],
+        answer: 'Use a short delay before each retry',
       },
     ],
   },
@@ -191,6 +226,7 @@ export const CodexOnlyOpensInTerminal: Story = {
         type: 'question',
         question: 'Which retry policy should be used?',
         choices: ['Retry three times', 'Retry once'],
+        answer: null,
       },
       {
         type: 'permission',
