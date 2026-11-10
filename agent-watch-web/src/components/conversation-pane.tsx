@@ -162,10 +162,6 @@ export function ConversationPane({
   }, [session.id])
 
   useEffect(() => {
-    setMessages([])
-    setActions(null)
-    setLoading(true)
-    setError(null)
     refresh()
     return () => {
       requestGeneration.current += 1

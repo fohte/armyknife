@@ -1,6 +1,6 @@
 import { Button } from '@fohte/ui/button'
-import type { KeyboardEvent } from 'react'
-import { useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { ChatItem, Session, SessionActions } from '#types'
 
@@ -9,6 +9,7 @@ type ConversationPaneViewProps = {
   messages: readonly ChatItem[]
   actions: SessionActions | null
   loading: boolean
+  sending?: boolean
   error: string | null
   onAction: (
     action: string,
@@ -21,30 +22,54 @@ export function ConversationPaneView({
   messages,
   actions,
   loading,
+  sending = false,
   error,
   onAction,
   onSelectSession,
 }: ConversationPaneViewProps) {
   const [draft, setDraft] = useState('')
+  const [sendPending, setSendPending] = useState(false)
+  const sendingRef = useRef(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const followLatestRef = useRef(true)
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
+  const isSending = sending || sendPending
 
   const sendMessage = () => {
-    if (draft.trim() === '' || actions?.message !== true) return
+    if (
+      draft.trim() === '' ||
+      actions?.message !== true ||
+      isSending ||
+      sendingRef.current
+    )
+      return
     const sentDraft = draft
+    sendingRef.current = true
+    setSendPending(true)
     void onAction('messages', { content: sentDraft }).then((succeeded) => {
       if (succeeded) {
         setDraft((currentDraft) =>
           currentDraft === sentDraft ? '' : currentDraft,
         )
       }
+      sendingRef.current = false
+      setSendPending(false)
     })
   }
 
-  const onComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const onComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (
+      event.nativeEvent.isComposing ||
+      Reflect.get(event.nativeEvent, 'keyCode') === 229
+    ) {
+      return
+    }
     if (event.key === 'Escape' && actions?.interrupt === true) {
       event.preventDefault()
       void onAction('interrupt')
@@ -56,42 +81,80 @@ export function ConversationPaneView({
     }
   }
 
-  const onQuestionKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    const target = event.target
-    if (
-      event.defaultPrevented ||
-      event.altKey ||
-      event.ctrlKey ||
-      event.metaKey ||
-      event.shiftKey ||
-      (target instanceof HTMLElement &&
-        (target.isContentEditable ||
-          ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
-    )
-      return
-    if (
-      !/^[1-9]$/.test(event.key) ||
-      waitingQuestion?.type !== 'question' ||
-      activeQuestionIndex < 0 ||
-      actions?.answerQuestion !== true
-    )
-      return
-    const choice = Number(event.key)
-    if (choice <= waitingQuestion.choices.length) {
-      event.preventDefault()
-      void onAction('answer', { choice })
-    }
-  }
-
   const openInTerminal = () => {
     void onAction('focus')
+  }
+
+  const renderTerminalFallback = (message: string) => (
+    <div className="conversation-terminal-fallback">
+      <span>{message}</span>
+      {actions?.openInTerminal === true ? (
+        <Button type="button" variant="plain" onClick={openInTerminal}>
+          Open in terminal
+        </Button>
+      ) : null}
+    </div>
+  )
+
+  useEffect(() => {
+    const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
+      const target = event.target
+      if (
+        event.defaultPrevented ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        (target instanceof HTMLElement &&
+          (target.isContentEditable ||
+            ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
+      ) {
+        return
+      }
+      if (
+        !/^[1-9]$/.test(event.key) ||
+        waitingQuestion?.type !== 'question' ||
+        activeQuestionIndex < 0 ||
+        actions?.answerQuestion !== true
+      ) {
+        return
+      }
+      const choice = Number(event.key)
+      if (choice <= waitingQuestion.choices.length) {
+        event.preventDefault()
+        void onAction('answer', { choice })
+      }
+    }
+
+    window.addEventListener('keydown', onQuestionKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onQuestionKeyDown)
+    }
+  }, [actions?.answerQuestion, activeQuestionIndex, onAction, waitingQuestion])
+
+  useLayoutEffect(() => {
+    const scrollContainer = scrollRef.current
+    if (scrollContainer !== null && followLatestRef.current) {
+      scrollContainer.scrollTop =
+        scrollContainer.scrollHeight - scrollContainer.clientHeight
+    }
+  }, [messages])
+
+  const updateFollowLatest = () => {
+    const scrollContainer = scrollRef.current
+    if (scrollContainer !== null) {
+      followLatestRef.current =
+        scrollContainer.scrollHeight -
+          scrollContainer.scrollTop -
+          scrollContainer.clientHeight <=
+        24
+    }
   }
 
   return (
     <section
       className="conversation-pane"
       aria-label={`Conversation with ${session.title}`}
-      onKeyDown={onQuestionKeyDown}
     >
       <header className="conversation-header">
         <div className="conversation-header-copy">
@@ -151,7 +214,12 @@ export function ConversationPaneView({
         </div>
       </header>
 
-      <div className="conversation-scroll" aria-live="polite">
+      <div
+        ref={scrollRef}
+        className="conversation-scroll"
+        aria-live="polite"
+        onScroll={updateFollowLatest}
+      >
         <div className="conversation-timeline">
           <span>Conversation</span>
         </div>
@@ -203,6 +271,11 @@ export function ConversationPaneView({
               >
                 <h2>Question</h2>
                 <p>{message.question}</p>
+                {session.engine === 'Codex' &&
+                actions !== null &&
+                !actions.answerQuestion
+                  ? renderTerminalFallback('Answer in terminal to continue.')
+                  : null}
                 <div className="chat-question-choices">
                   {message.choices.map((choice, choiceIndex) => (
                     <Button
@@ -230,7 +303,8 @@ export function ConversationPaneView({
               <h2>Permission required</h2>
               <p className="permission-tool">{message.tool}</p>
               <p>{message.description}</p>
-              {actions?.permission != null ? (
+              {actions?.permission != null &&
+              (actions.permission.approve || actions.permission.reject) ? (
                 <div className="permission-actions">
                   <Button
                     type="button"
@@ -253,6 +327,8 @@ export function ConversationPaneView({
                     Reject
                   </Button>
                 </div>
+              ) : session.engine === 'Codex' && actions !== null ? (
+                renderTerminalFallback('Review this permission in terminal.')
               ) : null}
             </article>
           )
@@ -287,12 +363,16 @@ export function ConversationPaneView({
           rows={2}
         />
         <div className="composer-footer">
-          <span>↵ Send · ⇧↵ New line · Esc Interrupt</span>
+          <span role={isSending ? 'status' : undefined}>
+            {isSending ? 'Sending…' : '↵ Send · ⇧↵ New line · Esc Interrupt'}
+          </span>
           <Button
             type="submit"
             variant="plain"
             aria-label="Send message"
-            disabled={draft.trim() === '' || actions?.message !== true}
+            disabled={
+              draft.trim() === '' || actions?.message !== true || isSending
+            }
           >
             ↑
           </Button>

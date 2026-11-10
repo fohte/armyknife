@@ -45,6 +45,7 @@ const meta = {
     messages: [] as ChatItem[],
     actions,
     loading: false,
+    sending: false,
     error: null,
     ...callbacks,
   },
@@ -98,18 +99,34 @@ export const PermissionWaitsForApproval: Story = {
 }
 
 export const CodexOnlyOpensInTerminal: Story = {
-  name: 'A Codex session without approval controls opens in terminal',
+  name: 'A Codex session sends questions and permissions to the terminal',
   args: {
     session: { ...session, engine: 'Codex' },
     messages: [
-      { type: 'assistant', text: 'Waiting for input in the terminal.' },
+      {
+        type: 'question',
+        question: 'Which retry policy should be used?',
+        choices: ['Retry three times', 'Retry once'],
+      },
+      {
+        type: 'permission',
+        tool: 'Shell',
+        description: 'Run the project formatter.',
+      },
     ],
     actions: {
-      message: false,
+      message: true,
       answerQuestion: false,
-      interrupt: false,
+      interrupt: true,
       openInTerminal: true,
     },
+  },
+}
+
+export const AMessageIsSending: Story = {
+  name: 'The composer shows that the message is sending',
+  args: {
+    sending: true,
   },
 }
 

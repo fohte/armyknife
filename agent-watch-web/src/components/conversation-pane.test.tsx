@@ -48,18 +48,33 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  act(() => {
+    const valueSetter = Reflect.getOwnPropertyDescriptor(
+      textarea.constructor.prototype,
+      'value',
+    )?.set
+    if (valueSetter !== undefined) {
+      Reflect.apply(valueSetter, textarea, [value])
+    }
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+  })
+}
+
 function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
   onSelectSession: (id: string) => void = () => undefined,
+  viewMessages: readonly ChatItem[] = [question],
+  viewActions: SessionActions | null = actions,
 ) {
-  root = createRoot(container)
+  root ??= createRoot(container)
   act(() => {
     root?.render(
       <ConversationPaneView
         session={viewSession}
-        messages={[question]}
-        actions={actions}
+        messages={viewMessages}
+        actions={viewActions}
         loading={false}
         error={null}
         onAction={onAction}
@@ -143,35 +158,36 @@ it('answers a question from a number key or a choice click', () => {
   expect(actual).toBe(expected)
 })
 
-it('sends on Enter and Command-Enter and preserves Shift-Enter', () => {
-  const onAction = vi.fn(() => new Promise<boolean>(() => undefined))
+it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
+  const completedSends: Array<(succeeded: boolean) => void> = []
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completedSends.push(resolve)
+      }),
+  )
   renderView(onAction)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
 
-  const changeText = (text: string) => {
-    act(() => {
-      const valueSetter = Reflect.getOwnPropertyDescriptor(
-        textarea.constructor.prototype,
-        'value',
-      )?.set
-      if (valueSetter !== undefined) {
-        Reflect.apply(valueSetter, textarea, [text])
-      }
-      textarea.dispatchEvent(new Event('input', { bubbles: true }))
-    })
-  }
-
-  changeText('Use bounded retries')
+  setTextareaValue(textarea, 'Use bounded retries')
   act(() => {
     dispatchKey(textarea, 'Enter')
   })
-  changeText('Keep the error visible')
+  await act(async () => {
+    completedSends[0]?.(true)
+    await Promise.resolve()
+  })
+  setTextareaValue(textarea, 'Keep the error visible')
   act(() => {
     dispatchKey(textarea, 'Enter', { metaKey: true })
   })
-  changeText('Add one more detail')
+  await act(async () => {
+    completedSends[1]?.(true)
+    await Promise.resolve()
+  })
+  setTextareaValue(textarea, 'Add one more detail')
   const shiftEvent = dispatchKeyInAct(textarea, 'Enter', { shiftKey: true })
 
   const actual = JSON.stringify([
@@ -186,6 +202,45 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', () => {
     false,
   ])
   expect(actual).toBe(expected)
+})
+
+it('does not send while Enter confirms an IME composition', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'A composed message')
+  const composingEvent = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+    isComposing: true,
+  })
+  const legacyImeEvent = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+  })
+  Object.defineProperty(legacyImeEvent, 'keyCode', { value: 229 })
+  act(() => {
+    textarea.dispatchEvent(composingEvent)
+    textarea.dispatchEvent(legacyImeEvent)
+  })
+
+  const snapshot = () => ({
+    actions: onAction.mock.calls,
+    defaultPrevented: [
+      composingEvent.defaultPrevented,
+      legacyImeEvent.defaultPrevented,
+    ],
+    draft: textarea.value,
+  })
+  expect(snapshot()).toEqual({
+    actions: [],
+    defaultPrevented: [false, false],
+    draft: 'A composed message',
+  })
 })
 
 it('interrupts the session on Escape', () => {
@@ -228,21 +283,76 @@ it('selects the parent session from its link', () => {
   expect(onSelectSession.mock.calls).toEqual([['parent-session']])
 })
 
+it('directs Codex questions and permissions to the terminal', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const codexActions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    interrupt: true,
+    openInTerminal: true,
+  }
+  renderView(
+    onAction,
+    { ...session, engine: 'Codex' },
+    undefined,
+    [
+      question,
+      {
+        type: 'permission',
+        tool: 'Shell',
+        description: 'Run the project formatter.',
+      },
+    ],
+    codexActions,
+  )
+  const terminalButtons = Array.from(
+    container.querySelectorAll<HTMLButtonElement>(
+      '.conversation-terminal-fallback button',
+    ),
+  )
+  act(() => {
+    terminalButtons.forEach((button) => {
+      button.click()
+    })
+  })
+
+  const snapshot = () => ({
+    disabledChoices: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    guidance: Array.from(
+      container.querySelectorAll('.conversation-terminal-fallback span'),
+      (element) => element.textContent,
+    ),
+    terminalButtons: terminalButtons.map((button) => button.textContent),
+    composerDisabled: requireElement(
+      container.querySelector<HTMLTextAreaElement>('textarea'),
+    ).disabled,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    disabledChoices: [true, true],
+    guidance: [
+      'Answer in terminal to continue.',
+      'Review this permission in terminal.',
+    ],
+    terminalButtons: ['Open in terminal', 'Open in terminal'],
+    composerDisabled: false,
+    actionCalls: [['focus'], ['focus']],
+  })
+})
+
 it('keeps the message draft when sending fails', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
   renderView(onAction)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
+  setTextareaValue(textarea, 'Retain this draft')
   act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, ['Retain this draft'])
-    }
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
     dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
@@ -263,15 +373,8 @@ it('clears the message draft after a successful send', async () => {
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
+  setTextareaValue(textarea, 'Send this message')
   act(() => {
-    const valueSetter = Reflect.getOwnPropertyDescriptor(
-      textarea.constructor.prototype,
-      'value',
-    )?.set
-    if (valueSetter !== undefined) {
-      Reflect.apply(valueSetter, textarea, ['Send this message'])
-    }
-    textarea.dispatchEvent(new Event('input', { bubbles: true }))
     dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
@@ -284,6 +387,130 @@ it('clears the message draft after a successful send', async () => {
     [['messages', { content: 'Send this message' }]],
   ])
   expect(actual).toBe(expected)
+})
+
+it('blocks duplicate sends and shows their pending status', async () => {
+  let completeSend: ((succeeded: boolean) => void) | undefined
+  const onAction = vi.fn(
+    () =>
+      new Promise<boolean>((resolve) => {
+        completeSend = resolve
+      }),
+  )
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Send once')
+  const events: KeyboardEvent[] = []
+  act(() => {
+    events.push(dispatchKey(textarea, 'Enter'))
+    events.push(dispatchKey(textarea, 'Enter'))
+  })
+  const sendButton = requireElement(
+    container.querySelector<HTMLButtonElement>('[aria-label="Send message"]'),
+  )
+  const duringSend = () => ({
+    actionCalls: onAction.mock.calls,
+    buttonDisabled: sendButton.disabled,
+    defaultPrevented: events.map((event) => event.defaultPrevented),
+    draft: textarea.value,
+    status: container.querySelector('[role="status"]')?.textContent ?? null,
+  })
+  const pendingSnapshot = duringSend()
+
+  await act(async () => {
+    completeSend?.(true)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    duringSend: pendingSnapshot,
+    afterSend: {
+      buttonDisabled: sendButton.disabled,
+      draft: textarea.value,
+      status: container.querySelector('[role="status"]')?.textContent ?? null,
+    },
+  })
+  const expected = {
+    duringSend: {
+      actionCalls: [['messages', { content: 'Send once' }]],
+      buttonDisabled: true,
+      defaultPrevented: [true, true],
+      draft: 'Send once',
+      status: 'Sending…',
+    },
+    afterSend: {
+      buttonDisabled: true,
+      draft: '',
+      status: null,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('follows new messages at the bottom without moving a reader who scrolled up', () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  const firstMessage: ChatItem = {
+    type: 'assistant',
+    text: 'First message',
+  }
+  renderView(onAction, session, undefined, [firstMessage])
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  let height = 300
+  Object.defineProperties(scroll, {
+    scrollHeight: { configurable: true, get: () => height },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  renderView(onAction, session, undefined, [firstMessage])
+  const initialBottom = scroll.scrollTop
+
+  height = 500
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    { type: 'assistant', text: 'Second message' },
+  ])
+  const afterNewMessage = scroll.scrollTop
+
+  act(() => {
+    scroll.scrollTop = 40
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  height = 600
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    { type: 'assistant', text: 'Second message' },
+    { type: 'assistant', text: 'Third message' },
+  ])
+  const whileReadingEarlierMessages = scroll.scrollTop
+
+  act(() => {
+    scroll.scrollTop = 500
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  height = 700
+  renderView(onAction, session, undefined, [
+    firstMessage,
+    { type: 'assistant', text: 'Second message' },
+    { type: 'assistant', text: 'Third message' },
+    { type: 'assistant', text: 'Fourth message' },
+  ])
+
+  const snapshot = () => ({
+    initialBottom,
+    afterNewMessage,
+    whileReadingEarlierMessages,
+    afterReturningToBottom: scroll.scrollTop,
+  })
+  expect(snapshot()).toEqual({
+    initialBottom: 200,
+    afterNewMessage: 400,
+    whileReadingEarlierMessages: 40,
+    afterReturningToBottom: 600,
+  })
 })
 
 it('shows the operation error returned by the server', async () => {
@@ -482,4 +709,75 @@ it('reloads the selected conversation when the session feed changes', async () =
   ])
   const expected = JSON.stringify(['After update', 4])
   expect(actual).toBe(expected)
+})
+
+it('keeps the conversation and focused draft while a feed refresh is pending', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse([{ type: 'assistant', text: 'Current conversation' }]),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({
+        message: true,
+        answerQuestion: false,
+        interrupt: true,
+        openInTerminal: true,
+      }),
+    )
+    .mockImplementation(() => new Promise<Response>(() => undefined))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Draft during refresh')
+  act(() => {
+    textarea.focus()
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    sameComposer: textarea === container.querySelector('textarea'),
+    composerValue: textarea.value,
+    composerDisabled: textarea.disabled,
+    composerFocused: document.activeElement === textarea,
+    transcript: container.querySelector('.chat-assistant-message')?.textContent,
+    requestsStarted: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameComposer: true,
+    composerValue: 'Draft during refresh',
+    composerDisabled: false,
+    composerFocused: true,
+    transcript: 'Current conversation',
+    requestsStarted: 4,
+  })
 })

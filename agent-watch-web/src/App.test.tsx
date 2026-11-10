@@ -710,3 +710,96 @@ it('reloads the selected conversation when the session feed updates', async () =
     ],
   })
 })
+
+it('answers an Inbox question with a number key when the pane is not focused', async () => {
+  const requestPath = (input: Parameters<typeof fetch>[0]) =>
+    typeof input === 'string'
+      ? new URL(input, 'http://localhost').pathname
+      : input instanceof URL
+        ? input.pathname
+        : new URL(input.url).pathname
+  const fetcher = vi.fn<typeof fetch>()
+  fetcher.mockImplementation((input) => {
+    const path = requestPath(input)
+    const body = path.endsWith('/messages')
+      ? [
+          {
+            type: 'question',
+            question: 'Which retry policy should be used?',
+            choices: ['Retry three times', 'Retry once'],
+          },
+        ]
+      : path.endsWith('/actions')
+        ? {
+            message: true,
+            answerQuestion: true,
+            interrupt: true,
+            openInTerminal: true,
+          }
+        : {}
+    return Promise.resolve(
+      new Response(JSON.stringify(body), {
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-question', 'Choose a retry policy')],
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  let event: KeyboardEvent | null = null
+  act(() => {
+    event = dispatchKey(window, '1')
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    defaultPrevented: event?.defaultPrevented,
+    requests: fetcher.mock.calls.map(([input, init]) => ({
+      path: requestPath(input),
+      method: init?.method ?? 'GET',
+      body: init?.body ?? null,
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Choose a retry policy',
+    defaultPrevented: true,
+    requests: [
+      {
+        path: '/api/sessions/session-question/messages',
+        method: 'GET',
+        body: null,
+      },
+      {
+        path: '/api/sessions/session-question/actions',
+        method: 'GET',
+        body: null,
+      },
+      {
+        path: '/api/sessions/session-question/answer',
+        method: 'POST',
+        body: '{"choice":1}',
+      },
+      {
+        path: '/api/sessions/session-question/messages',
+        method: 'GET',
+        body: null,
+      },
+      {
+        path: '/api/sessions/session-question/actions',
+        method: 'GET',
+        body: null,
+      },
+    ],
+  })
+})
