@@ -3,10 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
-import { ConversationPane } from '#components/conversation-pane'
-import { InboxView } from '#components/inbox-view'
+import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
-import { ResizableColumns } from '#components/resizable-columns'
 import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
@@ -341,54 +339,33 @@ export function App() {
     setSelectedId,
     setConversationOpen,
   })
-  const inboxView = (
-    <InboxView
-      error={error}
-      loaded={loaded}
-      selectedId={selectedId}
-      sessions={sessionsWithElapsedTime}
-      showAllInProgress={showAllInProgress}
-      onShowMore={() => {
-        setShowAllInProgress(true)
-      }}
-      onSelect={openConversation}
-      laterExpanded={laterExpanded}
-      onToggleLater={() => {
-        setLaterExpanded((expanded) => !expanded)
-      }}
-      onLater={openLater}
-      onToggleToday={toggleToday}
-      todaySessions={todaySessions}
-      onSelectToday={openTodaySession}
-      isMobile={isMobile}
-      inProgressExpanded={inProgressExpanded}
-      onToggleInProgress={() => {
-        setInProgressExpanded((expanded) => !expanded)
-      }}
-      doneExpanded={doneExpanded}
-      onToggleDone={() => {
-        setDoneExpanded((expanded) => !expanded)
-      }}
-    />
-  )
-  const conversationPane =
-    selectedSession && (!isMobile || showMobileConversation) ? (
-      <ConversationPane
-        key={selectedSession.id}
-        session={selectedSession}
-        refreshKey={sessionsRevision}
-        isMobile={isMobile}
-        onBack={backToInbox}
-        onLater={() => {
-          openLater(selectedSession.id)
-        }}
-        onSelectSession={(id) => {
-          if (orderedSessions.some((session) => session.id === id)) {
-            navigate((current) => ({ ...current, selectedId: id }))
-          }
-        }}
-      />
-    ) : null
+  const inboxProps = {
+    error,
+    loaded,
+    selectedId,
+    sessions: sessionsWithElapsedTime,
+    showAllInProgress,
+    onShowMore: () => {
+      setShowAllInProgress(true)
+    },
+    onSelect: openConversation,
+    laterExpanded,
+    onToggleLater: () => {
+      setLaterExpanded((expanded) => !expanded)
+    },
+    onLater: openLater,
+    onToggleToday: toggleToday,
+    todaySessions,
+    onSelectToday: openTodaySession,
+    inProgressExpanded,
+    onToggleInProgress: () => {
+      setInProgressExpanded((expanded) => !expanded)
+    },
+    doneExpanded,
+    onToggleDone: () => {
+      setDoneExpanded((expanded) => !expanded)
+    },
+  }
 
   return (
     <div
@@ -411,23 +388,20 @@ export function App() {
       ) : null}
       <main className="agent-watch-main">
         {view === 'inbox' ? (
-          isMobile ? (
-            <>
-              {inboxView}
-              {conversationPane}
-            </>
-          ) : (
-            <ResizableColumns
-              first={inboxView}
-              second={conversationPane}
-              storageKey="agent-watch:inbox-width"
-              firstSize={460}
-              firstMinSize={200}
-              secondMinSize={300}
-              label="Resize session list and conversation"
-              fillFirstPaneWhenAlone={false}
-            />
-          )
+          <InboxConversationPanes
+            inboxProps={inboxProps}
+            selectedSession={selectedSession}
+            refreshKey={sessionsRevision}
+            isMobile={isMobile}
+            showMobileConversation={showMobileConversation}
+            onBack={backToInbox}
+            onLater={openLater}
+            onSelectSession={(id) => {
+              if (orderedSessions.some((session) => session.id === id)) {
+                navigate((current) => ({ ...current, selectedId: id }))
+              }
+            }}
+          />
         ) : (
           <BoardView
             error={error}
