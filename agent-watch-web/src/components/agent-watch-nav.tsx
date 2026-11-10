@@ -10,6 +10,7 @@ type PmProject = {
   name: string
   status: 'Review' | 'Working' | 'Idle'
   needsActionCount: number
+  sessionId: string | null
 }
 
 type AgentWatchNavProps = {
@@ -17,6 +18,7 @@ type AgentWatchNavProps = {
   needsActionCount: number
   pmProjects: readonly PmProject[]
   onViewChange: (view: View) => void
+  onSelectSession: (id: string) => void
 }
 
 export function AgentWatchNav({
@@ -24,6 +26,7 @@ export function AgentWatchNav({
   needsActionCount,
   pmProjects,
   onViewChange,
+  onSelectSession,
 }: AgentWatchNavProps) {
   return (
     <nav className="agent-watch-nav" aria-label="Main navigation">
@@ -70,18 +73,33 @@ export function AgentWatchNav({
         <h2 id="pm-projects-title">PM</h2>
         <ul>
           {pmProjects.map((project) => (
-            <li
-              key={project.name}
-              className={cn(
-                'pm-project',
-                'pm-project-' + project.status.toLowerCase(),
-                project.needsActionCount > 0 && 'has-needs-action',
-              )}
-              aria-label={project.name + ': ' + project.status}
-            >
-              <span className="pm-project-dot" aria-hidden="true" />
-              <span className="pm-project-name">{project.name}</span>
-              <span className="pm-project-status">{project.status}</span>
+            <li key={project.name}>
+              <Button
+                type="button"
+                variant="plain"
+                disabled={project.sessionId === null}
+                className={cn(
+                  'pm-project grid w-full',
+                  'pm-project-' + project.status.toLowerCase(),
+                  project.needsActionCount > 0 && 'has-needs-action',
+                  project.sessionId !== null &&
+                    'cursor-pointer hover:text-foreground',
+                )}
+                aria-label={
+                  project.sessionId === null
+                    ? `${project.name}: no PM session`
+                    : `Open ${project.name} PM session in Inbox`
+                }
+                onClick={() => {
+                  if (project.sessionId !== null) {
+                    onSelectSession(project.sessionId)
+                  }
+                }}
+              >
+                <span className="pm-project-dot" aria-hidden="true" />
+                <span className="pm-project-name">{project.name}</span>
+                <span className="pm-project-status">{project.status}</span>
+              </Button>
             </li>
           ))}
         </ul>

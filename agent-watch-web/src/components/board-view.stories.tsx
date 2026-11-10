@@ -78,6 +78,7 @@ const meta = {
     error: null,
     hideQuietProjects: true,
     onHideQuietProjectsChange: () => undefined,
+    onSelectSession: () => undefined,
   },
   decorators: [
     (Story) => (

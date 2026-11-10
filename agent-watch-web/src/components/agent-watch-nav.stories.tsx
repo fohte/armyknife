@@ -8,11 +8,27 @@ const meta = {
     activeView: 'inbox',
     needsActionCount: 3,
     pmProjects: [
-      { name: 'service refresh', status: 'Review', needsActionCount: 3 },
-      { name: 'observability', status: 'Working', needsActionCount: 0 },
-      { name: 'documentation', status: 'Idle', needsActionCount: 0 },
+      {
+        name: 'service refresh',
+        status: 'Review',
+        needsActionCount: 3,
+        sessionId: 'sample-pm-service',
+      },
+      {
+        name: 'observability',
+        status: 'Working',
+        needsActionCount: 0,
+        sessionId: 'sample-pm-observability',
+      },
+      {
+        name: 'documentation',
+        status: 'Idle',
+        needsActionCount: 0,
+        sessionId: 'sample-pm-documentation',
+      },
     ],
     onViewChange: () => undefined,
+    onSelectSession: () => undefined,
   },
 } satisfies Meta<typeof AgentWatchNav>
 
@@ -26,4 +42,18 @@ export const InboxIsSelected: Story = {
 export const BoardIsSelected: Story = {
   name: 'Board is selected in the main navigation',
   args: { activeView: 'board' },
+}
+
+export const ProjectHasNoManagerSession: Story = {
+  name: 'A project row is disabled when no PM session exists',
+  args: {
+    pmProjects: [
+      {
+        name: 'documentation',
+        status: 'Idle',
+        needsActionCount: 0,
+        sessionId: null,
+      },
+    ],
+  },
 }

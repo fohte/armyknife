@@ -1,5 +1,6 @@
 import '#components/board-view.css'
 
+import { Button } from '@fohte/ui/button'
 import { useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
@@ -10,6 +11,7 @@ type BoardViewProps = {
   error: string | null
   hideQuietProjects: boolean
   onHideQuietProjectsChange: (checked: boolean) => void
+  onSelectSession: (id: string) => void
 }
 
 const GROUPS = [
@@ -64,13 +66,21 @@ function taskLabel(session: BoardProject['sessions'][number]) {
 
 function ProjectCard({
   session,
+  onSelectSession,
 }: {
   session: BoardProject['sessions'][number]
+  onSelectSession: (id: string) => void
 }) {
   return (
-    <article
-      className={`board-card category-${session.category}`}
+    <Button
+      type="button"
+      variant="plain"
+      className={`board-card block w-full cursor-pointer category-${session.category} hover:text-foreground`}
       data-kind={session.kind?.toLowerCase() ?? ''}
+      aria-label={`Open in Inbox: ${session.title}`}
+      onClick={() => {
+        onSelectSession(session.id)
+      }}
     >
       <div className="board-card-heading">
         <span>{cardKind(session)}</span>
@@ -78,11 +88,17 @@ function ProjectCard({
       </div>
       <div className="board-card-title">{session.title}</div>
       <div className="board-card-task">{taskLabel(session)}</div>
-    </article>
+    </Button>
   )
 }
 
-function ProjectColumn({ project }: { project: BoardProject }) {
+function ProjectColumn({
+  project,
+  onSelectSession,
+}: {
+  project: BoardProject
+  onSelectSession: (id: string) => void
+}) {
   return (
     <section className="board-project" aria-label={project.name}>
       <header className="board-project-header">
@@ -143,7 +159,11 @@ function ProjectColumn({ project }: { project: BoardProject }) {
             </h3>
             <div className="board-card-list">
               {visibleSessions.map((session) => (
-                <ProjectCard key={session.id} session={session} />
+                <ProjectCard
+                  key={session.id}
+                  session={session}
+                  onSelectSession={onSelectSession}
+                />
               ))}
               {sessions.length > visibleSessions.length ? (
                 <p className="board-more">
@@ -164,6 +184,7 @@ export function BoardView({
   error,
   hideQuietProjects,
   onHideQuietProjectsChange,
+  onSelectSession,
 }: BoardViewProps) {
   const projectsScrollRef = useRef<HTMLDivElement>(null)
   const [remainingProjects, setRemainingProjects] = useState(0)
@@ -238,7 +259,11 @@ export function BoardView({
         <div className="board-projects-scroll" ref={projectsScrollRef}>
           <div className="board-projects">
             {visibleProjects.map((project) => (
-              <ProjectColumn key={project.name} project={project} />
+              <ProjectColumn
+                key={project.name}
+                project={project}
+                onSelectSession={onSelectSession}
+              />
             ))}
           </div>
           {remainingProjects > 0 ? (

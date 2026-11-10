@@ -48,11 +48,25 @@ export function App() {
   )
   const pmProjects = useMemo(
     () =>
-      sortPmProjects(projects).map(({ name, status, needsActionCount }) => ({
-        name,
-        status,
-        needsActionCount,
-      })),
+      sortPmProjects(projects).map((project) => {
+        const childSessionIds = new Set(
+          project.sessions.flatMap((session) =>
+            session.parent === null ? [] : [session.parent.id],
+          ),
+        )
+        const pmSessionId =
+          project.sessions.find(
+            (session) =>
+              session.parent === null && childSessionIds.has(session.id),
+          )?.id ?? null
+
+        return {
+          name: project.name,
+          status: project.status,
+          needsActionCount: project.needsActionCount,
+          sessionId: pmSessionId,
+        }
+      }),
     [projects],
   )
 
@@ -146,6 +160,10 @@ export function App() {
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
+  const openSessionInInbox = (sessionId: string) => {
+    setSelectedId(sessionId)
+    setView('inbox')
+  }
 
   return (
     <div className="agent-watch-shell">
@@ -154,6 +172,7 @@ export function App() {
         needsActionCount={needsActionCount}
         pmProjects={pmProjects}
         onViewChange={setView}
+        onSelectSession={openSessionInInbox}
       />
       <main className="agent-watch-main">
         {view === 'inbox' ? (
@@ -174,6 +193,7 @@ export function App() {
             hideQuietProjects={hideQuietProjects}
             loaded={loaded}
             onHideQuietProjectsChange={setHideQuietProjects}
+            onSelectSession={openSessionInInbox}
             projects={projects}
           />
         )}

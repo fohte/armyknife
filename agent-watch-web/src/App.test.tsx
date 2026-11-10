@@ -1,6 +1,7 @@
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { App } from '#App'
 import type { Session, SessionsResponse } from '#types'
@@ -27,6 +28,7 @@ function session(
   category: Session['category'] = 'needs_action',
   elapsedSeconds = 8,
   project = 'service refresh',
+  parent: Session['parent'] = null,
 ): Session {
   return {
     id,
@@ -39,9 +41,37 @@ function session(
     task: null,
     repo: 'example/service',
     project,
-    parent: null,
+    parent,
     pullRequest: null,
   }
+}
+
+function projectSessions(): Session[] {
+  return [
+    session('session-pm', 'Project manager', 'in_progress', 30),
+    session(
+      'session-owner',
+      'Project owner',
+      'in_progress',
+      20,
+      'service refresh',
+      {
+        id: 'session-pm',
+        title: 'Project manager',
+      },
+    ),
+    session(
+      'session-worker',
+      'Handle an alert',
+      'needs_action',
+      8,
+      'service refresh',
+      {
+        id: 'session-owner',
+        title: 'Project owner',
+      },
+    ),
+  ]
 }
 
 it('keeps the Board updated from the session feed while it is active', () => {
@@ -151,6 +181,100 @@ it('toggles between the Board and Inbox with shifted B', () => {
   views.push(readActiveView())
 
   expect(views).toEqual(['Board', 'Inbox'])
+})
+
+it.each(['click', 'keyboard'] as const)(
+  'opens a Board card in Inbox with %s activation',
+  async (activation) => {
+    renderApp()
+    publishSessions({ revision: 1, sessions: projectSessions() })
+    act(() => {
+      dispatchKey(window, 'B', { shiftKey: true })
+    })
+
+    const card = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open in Inbox: Handle an alert"]',
+    )
+    if (activation === 'click') {
+      act(() => {
+        card?.click()
+      })
+    } else {
+      card?.focus()
+      await act(async () => {
+        await userEvent.keyboard('{Enter}')
+      })
+    }
+
+    const snapshot = () => ({
+      activeView: readActiveView(),
+      selectedTitle: readSelectedTitle(),
+    })
+
+    expect(snapshot()).toEqual({
+      activeView: 'Inbox',
+      selectedTitle: 'Handle an alert',
+    })
+  },
+)
+
+it.each(['click', 'keyboard'] as const)(
+  'opens the project PM session in Inbox with %s activation',
+  async (activation) => {
+    renderApp()
+    publishSessions({ revision: 1, sessions: projectSessions() })
+    act(() => {
+      dispatchKey(window, 'B', { shiftKey: true })
+    })
+
+    const pmButton = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Open service refresh PM session in Inbox"]',
+    )
+    if (activation === 'click') {
+      act(() => {
+        pmButton?.click()
+      })
+    } else {
+      pmButton?.focus()
+      await act(async () => {
+        await userEvent.keyboard('{Enter}')
+      })
+    }
+
+    const snapshot = () => ({
+      activeView: readActiveView(),
+      selectedTitle: readSelectedTitle(),
+    })
+
+    expect(snapshot()).toEqual({
+      activeView: 'Inbox',
+      selectedTitle: 'Project manager',
+    })
+  },
+)
+
+it('disables a PM row when its project has no PM session', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-alone', 'Unmanaged session')],
+  })
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+
+  const pmButton = container.querySelector<HTMLButtonElement>('.pm-project')
+  const disabled = pmButton?.disabled
+  act(() => {
+    pmButton?.click()
+  })
+
+  const snapshot = () => ({ disabled, activeView: readActiveView() })
+
+  expect(snapshot()).toEqual({
+    disabled: true,
+    activeView: 'Board',
+  })
 })
 
 function readSelectedTitle() {

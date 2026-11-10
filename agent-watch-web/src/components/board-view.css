@@ -172,9 +172,15 @@
 }
 
 .board-card {
+  display: block;
+  width: 100%;
   min-width: 0;
   padding: 7px 9px;
+  border: 0;
+  border-radius: 0;
   background: #161616;
+  font: inherit;
+  text-align: left;
 }
 
 .board-card.category-needs_action {
