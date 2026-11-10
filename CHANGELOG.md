@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.523](https://github.com/fohte/armyknife/compare/v0.1.522...v0.1.523) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** add project board and PM UI ([#1399](https://github.com/fohte/armyknife/issues/1399)) ([a455a5b](https://github.com/fohte/armyknife/commit/a455a5b86d12fe6c5413ef146a1dab90434b19ef))
+
+## [0.1.522](https://github.com/fohte/armyknife/compare/v0.1.521...v0.1.522) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent:** accept newer session databases ([#1397](https://github.com/fohte/armyknife/issues/1397)) ([2d0738a](https://github.com/fohte/armyknife/commit/2d0738a03a61d3eb367caad948c2492c5ca82a47))
+
 ## [0.1.521](https://github.com/fohte/armyknife/compare/v0.1.520...v0.1.521) (2026-11-09)
 
 

@@ -14,6 +14,9 @@ function session(id: string): Session {
     unread: true,
     task: null,
     repo: 'example/service',
+    project: 'sample project',
+    ancestorSessionIds: [],
+    parent: null,
     pullRequest: null,
   }
 }
@@ -40,16 +43,18 @@ it('moves the selected row with j and k and keeps selection in bounds', () => {
   ])
 })
 
-it('maps shifted B to Board and unshifted j and k to row movement', () => {
+it('toggles views with shifted B and maps unshifted j and k to row movement', () => {
   const getShortcutResults = () => [
-    getSessionShortcutAction('B', true),
-    getSessionShortcutAction('j', false),
-    getSessionShortcutAction('k', false),
-    getSessionShortcutAction('l', false),
+    getSessionShortcutAction('B', true, 'inbox'),
+    getSessionShortcutAction('B', true, 'board'),
+    getSessionShortcutAction('j', false, 'inbox'),
+    getSessionShortcutAction('k', false, 'inbox'),
+    getSessionShortcutAction('l', false, 'inbox'),
   ]
 
   expect(getShortcutResults()).toEqual([
     { type: 'view', view: 'board' },
+    { type: 'view', view: 'inbox' },
     { type: 'move', key: 'j' },
     { type: 'move', key: 'k' },
     null,

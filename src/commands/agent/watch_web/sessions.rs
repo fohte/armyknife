@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use axum::Json;
@@ -79,7 +79,9 @@ struct SessionView {
     unread: bool,
     task: Option<TqTaskView>,
     repo: String,
+    project: String,
     parent: Option<ParentSessionView>,
+    ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
 }
 
@@ -192,6 +194,19 @@ async fn list_sessions<S: SessionSource>(
                     id: id.clone(),
                     title: snapshot.title_by_id.get(id).cloned(),
                 });
+            let repo = snapshot
+                .repo_by_id
+                .get(&session.session_id)
+                .cloned()
+                .unwrap_or_default();
+            let parent_project = resolve_parent_project(
+                &session.ancestor_session_ids,
+                &task_metadata,
+                &snapshot.repo_by_id,
+            );
+            let task_project = task
+                .as_ref()
+                .and_then(|task| task_metadata.task_projects.get(&task.id));
             let pull_request = pull_requests
                 .get(&session.session_id)
                 .and_then(Option::as_ref)
@@ -224,12 +239,10 @@ async fn list_sessions<S: SessionSource>(
                     .max(0) as u64,
                 unread: session.is_unread_stopped(),
                 task,
-                repo: snapshot
-                    .repo_by_id
-                    .get(&session.session_id)
-                    .cloned()
-                    .unwrap_or_default(),
+                repo: repo.clone(),
+                project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
+                ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
             }
         })
@@ -246,14 +259,12 @@ async fn list_sessions<S: SessionSource>(
 fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let revision = store::session_store_revision()?;
     let sessions = store::list_sessions()?;
-    let title_by_id = store::list_all_sessions()?
-        .into_iter()
-        .map(|session| (session.session_id.clone(), title_display_name(&session)))
-        .collect();
-    let repo_by_id = sessions
+    let all_sessions = store::list_all_sessions()?;
+    let title_by_id = all_sessions
         .iter()
-        .map(|session| (session.session_id.clone(), resolve_repo(&session.cwd)))
+        .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
+    let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
 
     Ok(SessionSnapshot {
         revision,
@@ -262,6 +273,33 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         repo_by_id,
         agent_config: config::load_config_or_default().agent,
     })
+}
+
+fn resolve_repos_for_sessions(
+    sessions: &[Session],
+    all_sessions: &[Session],
+    mut resolve_repo: impl FnMut(&std::path::Path) -> String,
+) -> HashMap<String, String> {
+    let relevant_ids = sessions
+        .iter()
+        .flat_map(|session| {
+            std::iter::once(session.session_id.clone())
+                .chain(session.ancestor_session_ids.iter().cloned())
+        })
+        .collect::<HashSet<_>>();
+    let mut repo_by_cwd = HashMap::<std::path::PathBuf, String>::new();
+
+    all_sessions
+        .iter()
+        .filter(|session| relevant_ids.contains(&session.session_id))
+        .map(|session| {
+            let repo = repo_by_cwd
+                .entry(session.cwd.clone())
+                .or_insert_with(|| resolve_repo(&session.cwd))
+                .clone();
+            (session.session_id.clone(), repo)
+        })
+        .collect()
 }
 
 fn resolve_repo(cwd: &std::path::Path) -> String {
@@ -275,6 +313,165 @@ fn resolve_repo(cwd: &std::path::Path) -> String {
         .and_then(|name| name.to_str())
         .map(String::from)
         .unwrap_or_else(|| cwd.display().to_string())
+}
+
+fn resolve_project(parent_project: Option<&str>, task_project: Option<&str>, repo: &str) -> String {
+    parent_project
+        .filter(|project| !project.trim().is_empty())
+        .or_else(|| task_project.filter(|project| !project.trim().is_empty()))
+        .or_else(|| (!repo.trim().is_empty()).then_some(repo))
+        .unwrap_or("Unsorted")
+        .to_string()
+}
+
+fn resolve_parent_project<'a>(
+    ancestor_session_ids: &[String],
+    task_metadata: &'a SessionTaskMetadata,
+    repo_by_id: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    ancestor_session_ids.iter().find_map(|ancestor_id| {
+        task_metadata
+            .links
+            .get(ancestor_id)
+            .and_then(|task| task_metadata.task_projects.get(&task.task_id))
+            .map(String::as_str)
+            .filter(|project| !project.trim().is_empty())
+            .or_else(|| {
+                repo_by_id
+                    .get(ancestor_id)
+                    .map(String::as_str)
+                    .filter(|repo| !repo.trim().is_empty())
+            })
+    })
+}
+
+#[cfg(test)]
+mod project_tests {
+    use super::{SessionTaskMetadata, resolve_parent_project, resolve_project};
+    use crate::commands::agent::tq_session_tasks::SessionTask;
+    use rstest::rstest;
+    use std::collections::HashMap;
+
+    fn task_metadata(links: &[(&str, &str)], projects: &[(&str, &str)]) -> SessionTaskMetadata {
+        SessionTaskMetadata {
+            links: links
+                .iter()
+                .map(|(session_id, task_id)| {
+                    (
+                        (*session_id).to_string(),
+                        SessionTask {
+                            task_id: (*task_id).to_string(),
+                            task_number: 1,
+                            task_title: "Sample task".to_string(),
+                            parent_task_id: None,
+                            is_closed: false,
+                        },
+                    )
+                })
+                .collect(),
+            task_projects: projects
+                .iter()
+                .map(|(task_id, project)| ((*task_id).to_string(), (*project).to_string()))
+                .collect(),
+            ..SessionTaskMetadata::default()
+        }
+    }
+
+    #[rstest]
+    #[case::parent_takes_precedence(
+        Some("parent-project"),
+        Some("task-project"),
+        "example-org/repo",
+        "parent-project"
+    )]
+    #[case::task_project_precedes_repo(
+        None,
+        Some("task-project"),
+        "example-org/repo",
+        "task-project"
+    )]
+    #[case::repo_is_the_fallback(None, None, "example-org/repo", "example-org/repo")]
+    #[case::unsorted_is_the_final_fallback(None, None, "", "Unsorted")]
+    #[case::empty_candidates_are_ignored(
+        Some(" "),
+        Some(""),
+        "example-org/repo",
+        "example-org/repo"
+    )]
+    fn resolves_projects_by_source_precedence(
+        #[case] parent_project: Option<&str>,
+        #[case] task_project: Option<&str>,
+        #[case] repo: &str,
+        #[case] expected: &str,
+    ) {
+        assert_eq!(
+            resolve_project(parent_project, task_project, repo),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::single_parent_uses_its_task_project(
+        vec!["parent"],
+        vec![("parent", "parent-task")],
+        vec![("parent-task", "parent-project")],
+        vec![],
+        Some("parent-project")
+    )]
+    #[case::single_parent_falls_back_to_its_repo(
+        vec!["parent"],
+        vec![],
+        vec![],
+        vec![("parent", "sample/parent-repo")],
+        Some("sample/parent-repo")
+    )]
+    #[case::three_levels_use_the_root_project_first(
+        vec!["root", "middle", "parent"],
+        vec![("root", "root-task")],
+        vec![("root-task", "root-project")],
+        vec![
+            ("root", "sample/root-repo"),
+            ("middle", "sample/middle-repo"),
+            ("parent", "sample/parent-repo"),
+        ],
+        Some("root-project")
+    )]
+    #[case::unknown_root_uses_the_next_available_ancestor(
+        vec!["unknown-root", "middle", "parent"],
+        vec![("middle", "middle-task")],
+        vec![("middle-task", "middle-project")],
+        vec![("parent", "sample/parent-repo")],
+        Some("middle-project")
+    )]
+    #[case::unknown_ancestors_fall_back_to_the_current_session(
+        vec!["unknown-root", "unknown-parent"],
+        vec![],
+        vec![],
+        vec![],
+        None
+    )]
+    fn resolves_parent_project_from_root_to_parent(
+        #[case] ancestor_ids: Vec<&str>,
+        #[case] links: Vec<(&str, &str)>,
+        #[case] projects: Vec<(&str, &str)>,
+        #[case] repos: Vec<(&str, &str)>,
+        #[case] expected: Option<&str>,
+    ) {
+        let ancestor_ids = ancestor_ids
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let metadata = task_metadata(&links, &projects);
+        let repo_by_id = repos
+            .into_iter()
+            .map(|(session_id, repo)| (session_id.to_string(), repo.to_string()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            resolve_parent_project(&ancestor_ids, &metadata, &repo_by_id),
+            expected,
+        );
+    }
 }
 
 fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategory {
@@ -436,7 +633,9 @@ mod tests {
                 priority_order,
             }),
             repo: String::new(),
+            project: "Unsorted".to_string(),
             parent: None,
+            ancestor_session_ids: Vec::new(),
             pull_request: None,
         }
     }
@@ -450,6 +649,7 @@ mod tests {
         task_links: HashMap<String, LinkedSessionTask>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
+        task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
         now: DateTime<Utc>,
     }
@@ -470,6 +670,7 @@ mod tests {
                 links: self.task_links.clone(),
                 priorities: self.task_priorities.clone(),
                 priority_order: self.task_priority_order.clone(),
+                task_projects: self.task_projects.clone(),
             }
         }
 
@@ -505,22 +706,44 @@ mod tests {
                 ("child-session".to_string(), "child title".to_string()),
                 ("parent-session".to_string(), "parent title".to_string()),
             ]),
-            repo_by_id: HashMap::from([(
-                "child-session".to_string(),
-                "example-org/example-repo".to_string(),
-            )]),
-            task_links: HashMap::from([(
-                "child-session".to_string(),
-                LinkedSessionTask {
-                    task_id: "task-id".to_string(),
-                    task_number: 17,
-                    task_title: "task title".to_string(),
-                    parent_task_id: None,
-                    is_closed: false,
-                },
-            )]),
+            repo_by_id: HashMap::from([
+                (
+                    "child-session".to_string(),
+                    "example-org/example-repo".to_string(),
+                ),
+                (
+                    "parent-session".to_string(),
+                    "example-org/parent-repository".to_string(),
+                ),
+            ]),
+            task_links: HashMap::from([
+                (
+                    "child-session".to_string(),
+                    LinkedSessionTask {
+                        task_id: "task-id".to_string(),
+                        task_number: 17,
+                        task_title: "task title".to_string(),
+                        parent_task_id: None,
+                        is_closed: false,
+                    },
+                ),
+                (
+                    "parent-session".to_string(),
+                    LinkedSessionTask {
+                        task_id: "parent-task-id".to_string(),
+                        task_number: 18,
+                        task_title: "parent task".to_string(),
+                        parent_task_id: None,
+                        is_closed: false,
+                    },
+                ),
+            ]),
             task_priorities: HashMap::from([("task-id".to_string(), Some(1))]),
             task_priority_order: HashMap::from([("task-id".to_string(), 0)]),
+            task_projects: HashMap::from([
+                ("parent-task-id".to_string(), "parent project".to_string()),
+                ("task-id".to_string(), "task project".to_string()),
+            ]),
             pull_requests: HashMap::from([(
                 "child-session".to_string(),
                 Some(PrInfo {
@@ -532,6 +755,45 @@ mod tests {
             )]),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
+    }
+
+    #[test]
+    fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
+        let mut active = session(SessionStatus::Running);
+        active.session_id = "active-session".to_string();
+        active.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        let mut parent = session(SessionStatus::Ended);
+        parent.session_id = "parent-session".to_string();
+        parent.cwd = active.cwd.clone();
+
+        let mut unrelated = session(SessionStatus::Ended);
+        unrelated.session_id = "unrelated-session".to_string();
+        unrelated.cwd = PathBuf::from("/workspace/unrelated");
+
+        let all_sessions = vec![active.clone(), parent, unrelated];
+        let mut resolved_cwds = Vec::new();
+        let repos = resolve_repos_for_sessions(&[active.clone()], &all_sessions, |cwd| {
+            resolved_cwds.push(cwd.to_path_buf());
+            "example-org/sample-repo".to_string()
+        });
+
+        assert_eq!(
+            (repos, resolved_cwds),
+            (
+                HashMap::from([
+                    (
+                        "active-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                    (
+                        "parent-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                ]),
+                vec![active.cwd],
+            ),
+        );
     }
 
     #[tokio::test]
@@ -573,10 +835,12 @@ mod tests {
                             "priority": 1
                         },
                         "repo": "example-org/example-repo",
+                        "project": "parent project",
                         "parent": {
                             "id": "parent-session",
                             "title": "parent title"
                         },
+                        "ancestorSessionIds": ["parent-session"],
                         "pullRequest": {
                             "number": 42,
                             "state": "Open"

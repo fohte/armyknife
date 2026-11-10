@@ -21,6 +21,11 @@ type PullRequest = {
   state: 'Open' | 'Closed' | 'Merged' | (string & {})
 }
 
+type ParentSession = {
+  id: string
+  title: string | null
+}
+
 export type Session = {
   id: string
   engine?: 'Claude' | 'Codex' | (string & {})
@@ -32,7 +37,9 @@ export type Session = {
   unread: boolean
   task: SessionTask | null
   repo: string
-  parent?: { id: string; title: string | null } | null
+  project: string
+  parent: ParentSession | null
+  ancestorSessionIds: string[]
   pullRequest: PullRequest | null
 }
 
