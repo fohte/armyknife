@@ -174,6 +174,19 @@ mod tests {
         }
     }
 
+    fn task_with_parent(
+        id: &str,
+        number: u32,
+        title: &str,
+        parent_id: &str,
+        status: TqTaskStatus,
+    ) -> TqTask {
+        TqTask {
+            parent_id: Some(parent_id.to_string()),
+            ..task(id, number, title, None, status)
+        }
+    }
+
     fn view_task(id: &str, number: u32, title: &str, is_closed: bool) -> SessionTask {
         SessionTask {
             task_id: id.to_string(),
@@ -253,6 +266,15 @@ mod tests {
             view_task("first", 1, "First task", false),
             view_task("second", 2, "Second task", false),
         ])]),
+    )]
+    #[case::preserves_parent_task_id(
+        vec![session("session-a", None, vec![
+            task_with_parent("child-task", 1, "Child task", "parent-task", TqTaskStatus::Todo),
+        ])],
+        HashMap::from([("session-a".to_string(), vec![SessionTask {
+            parent_task_id: Some("parent-task".to_string()),
+            ..view_task("child-task", 1, "Child task", false)
+        }])]),
     )]
     #[case::drops_unrequested_sessions(
         vec![
