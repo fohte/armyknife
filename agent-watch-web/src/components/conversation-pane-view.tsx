@@ -16,6 +16,7 @@ import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
+  sessions?: readonly Session[]
   messages: readonly ChatItem[]
   actions: SessionActions | null
   actionsReady?: boolean
@@ -35,6 +36,7 @@ type ConversationPaneViewProps = {
 
 export function ConversationPaneView({
   session,
+  sessions = [],
   messages,
   actions,
   actionsReady = true,
@@ -343,7 +345,11 @@ export function ConversationPaneView({
                 {message.from != null && message.from !== '' ? (
                   <div className="chat-from">From {message.from}</div>
                 ) : null}
-                <MarkdownMessage className="chat-user-message">
+                <MarkdownMessage
+                  className="chat-user-message"
+                  onSelectSession={onSelectSession}
+                  sessions={sessions}
+                >
                   {message.text}
                 </MarkdownMessage>
               </article>
@@ -355,7 +361,12 @@ export function ConversationPaneView({
                 className="chat-assistant-message"
                 key={`assistant-${String(index)}`}
               >
-                <MarkdownMessage>{message.text}</MarkdownMessage>
+                <MarkdownMessage
+                  onSelectSession={onSelectSession}
+                  sessions={sessions}
+                >
+                  {message.text}
+                </MarkdownMessage>
               </article>
             )
           if (message.type === 'tool_summary')
