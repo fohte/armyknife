@@ -117,6 +117,15 @@ const meta = {
     onToggleLater: () => undefined,
     onLater: () => undefined,
     onToggleToday: () => undefined,
+    todaySessions: sessions.filter(
+      (session) => session.id === 'sample-question',
+    ),
+    onSelectToday: () => undefined,
+    isMobile: false,
+    inProgressExpanded: false,
+    onToggleInProgress: () => undefined,
+    doneExpanded: false,
+    onToggleDone: () => undefined,
   },
   decorators: [
     (Story) => (
@@ -156,4 +165,26 @@ export const InboxCannotLoadSessions: Story = {
     loaded: false,
     error: 'Unable to load sessions. Reconnecting…',
   },
+}
+
+export const InboxFitsAnIPhone: Story = {
+  name: 'The inbox keeps its actions usable on an iPhone',
+  args: {
+    isMobile: true,
+    laterExpanded: false,
+    todaySessions: sessions.filter(
+      (session) => session.id === 'sample-question',
+    ),
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }

@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
@@ -24,6 +31,17 @@ import {
 import type { Session } from '#types'
 
 export function App() {
+  const isMobile = useSyncExternalStore(
+    (listener) => {
+      const query = window.matchMedia('(max-width: 760px)')
+      query.addEventListener('change', listener)
+      return () => {
+        query.removeEventListener('change', listener)
+      }
+    },
+    () => window.matchMedia('(max-width: 760px)').matches,
+    () => false,
+  )
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
@@ -33,6 +51,9 @@ export function App() {
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
+  const [inProgressExpanded, setInProgressExpanded] = useState(false)
+  const [doneExpanded, setDoneExpanded] = useState(false)
+  const [mobileConversationOpen, setMobileConversationOpen] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [laterTimesError, setLaterTimesError] = useState(false)
@@ -267,6 +288,12 @@ export function App() {
   }, [selectedId, showAllInProgress, view])
 
   useEffect(() => {
+    if (isMobile && view !== 'inbox') {
+      setView('inbox')
+    }
+  }, [isMobile, view])
+
+  useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
         event.defaultPrevented ||
@@ -352,24 +379,36 @@ export function App() {
   const openSessionInInbox = (sessionId: string) => {
     setSelectedId(sessionId)
     setView('inbox')
+    setMobileConversationOpen(true)
+  }
+  const openConversation = (sessionId: string) => {
+    setSelectedId(sessionId)
+    setMobileConversationOpen(true)
   }
 
   return (
-    <div className="agent-watch-shell">
-      <AgentWatchNav
-        activeView={view}
-        needsActionCount={needsActionCount}
-        todaySessions={sessionsWithElapsedTime.filter(
-          (session) => session.isToday === true,
-        )}
-        pmProjects={pmProjects}
-        onViewChange={setView}
-        onSelectToday={(id) => {
-          setView('inbox')
-          setSelectedId(id)
-        }}
-        onSelectSession={openSessionInInbox}
-      />
+    <div
+      className="agent-watch-shell"
+      data-layout={isMobile ? 'mobile' : 'desktop'}
+      data-mobile-screen={mobileConversationOpen ? 'conversation' : 'inbox'}
+    >
+      {!isMobile ? (
+        <AgentWatchNav
+          activeView={view}
+          needsActionCount={needsActionCount}
+          todaySessions={sessionsWithElapsedTime.filter(
+            (session) => session.isToday === true,
+          )}
+          pmProjects={pmProjects}
+          onViewChange={setView}
+          onSelectToday={(id) => {
+            setView('inbox')
+            setSelectedId(id)
+            setMobileConversationOpen(true)
+          }}
+          onSelectSession={openSessionInInbox}
+        />
+      ) : null}
       <main className="agent-watch-main">
         {view === 'inbox' ? (
           <>
@@ -382,19 +421,39 @@ export function App() {
               onShowMore={() => {
                 setShowAllInProgress(true)
               }}
-              onSelect={setSelectedId}
+              onSelect={openConversation}
               laterExpanded={laterExpanded}
               onToggleLater={() => {
                 setLaterExpanded((expanded) => !expanded)
               }}
               onLater={openLater}
               onToggleToday={toggleToday}
+              todaySessions={sessionsWithElapsedTime.filter(
+                (session) => session.isToday === true,
+              )}
+              onSelectToday={openConversation}
+              isMobile={isMobile}
+              inProgressExpanded={inProgressExpanded}
+              onToggleInProgress={() => {
+                setInProgressExpanded((expanded) => !expanded)
+              }}
+              doneExpanded={doneExpanded}
+              onToggleDone={() => {
+                setDoneExpanded((expanded) => !expanded)
+              }}
             />
-            {selectedSession ? (
+            {selectedSession && (!isMobile || mobileConversationOpen) ? (
               <ConversationPane
                 key={selectedSession.id}
                 session={selectedSession}
                 refreshKey={sessionsRevision}
+                isMobile={isMobile}
+                onBack={() => {
+                  setMobileConversationOpen(false)
+                }}
+                onLater={() => {
+                  openLater(selectedSession.id)
+                }}
                 onSelectSession={(id) => {
                   if (orderedSessions.some((session) => session.id === id)) {
                     setSelectedId(id)

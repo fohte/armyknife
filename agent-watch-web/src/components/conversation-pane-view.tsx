@@ -18,6 +18,9 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
+  isMobile?: boolean
+  onBack?: () => void
+  onLater?: () => void
 }
 export function ConversationPaneView({
   session,
@@ -29,6 +32,9 @@ export function ConversationPaneView({
   error,
   onAction,
   onSelectSession,
+  isMobile = false,
+  onBack,
+  onLater,
 }: ConversationPaneViewProps) {
   const [draft, setDraft] = useState('')
   const [sendPending, setSendPending] = useState(false)
@@ -171,78 +177,124 @@ export function ConversationPaneView({
   const conversationPane = (
     <section
       className="conversation-pane"
+      data-mobile={isMobile ? 'true' : undefined}
       aria-label={`Conversation with ${session.title}`}
     >
       <header className="conversation-header">
-        <div className="conversation-header-copy">
-          <div className="conversation-context-line">
-            {session.task ? (
-              <a
-                className="conversation-task-link"
-                href={`https://tq.fohte.net/tasks/${encodeURIComponent(session.task.id)}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {session.task.priority != null ? (
-                  <span>P{session.task.priority}</span>
-                ) : null}{' '}
-                #{session.task.number} {session.task.title}
-              </a>
-            ) : null}
-            <a
-              className="conversation-repo"
-              href={`https://github.com/${session.repo}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {session.repo}
-            </a>
-            {parent != null ? (
-              <a
-                className="conversation-parent"
-                href={`#${encodeURIComponent(parent.id)}`}
-                onClick={(event) => {
-                  event.preventDefault()
-                  onSelectSession(parent.id)
-                }}
-              >
-                ↑ Parent: {parent.title ?? 'session'}
-              </a>
-            ) : null}
-          </div>
-          <h1>{session.title || 'Untitled session'}</h1>
-        </div>
-        <div className="conversation-header-actions">
-          {hasCritUrl ? (
+        {isMobile ? (
+          <>
             <Button
-              className="conversation-crit-toggle"
+              className="mobile-conversation-back cursor-pointer"
               type="button"
               variant="plain"
-              aria-expanded={critOpen}
-              onClick={() => {
-                setOpenCritUrl(critOpen ? null : critUrl)
-              }}
+              aria-label="Back to Inbox"
+              onClick={onBack}
             >
-              {critOpen ? 'Hide crit' : 'Open crit'}
+              ‹
             </Button>
-          ) : null}
-          {session.pullRequest ? (
-            <a
-              className="conversation-pr-link"
-              href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
-              target="_blank"
-              rel="noreferrer"
+            <div className="mobile-conversation-heading">
+              <div className="mobile-conversation-context">
+                {session.task ? (
+                  <span>
+                    {session.task.priority != null
+                      ? `P${String(session.task.priority)} `
+                      : ''}
+                    #{session.task.number} {session.task.title}
+                  </span>
+                ) : null}
+                {session.task ? <span aria-hidden="true"> · </span> : null}
+                <span>{session.repo.split('/').at(-1)}</span>
+              </div>
+              <h1>{session.title || 'Untitled session'}</h1>
+            </div>
+            <Button
+              className="mobile-conversation-later cursor-pointer"
+              type="button"
+              variant="plain"
+              onClick={onLater}
             >
-              #{session.pullRequest.number} PR
-            </a>
-          ) : null}
-          {actions?.openInTerminal === true ? (
-            <Button type="button" variant="plain" onClick={openInTerminal}>
-              Open in terminal
+              Later
             </Button>
-          ) : null}
-        </div>
+          </>
+        ) : (
+          <>
+            <div className="conversation-header-copy">
+              <div className="conversation-context-line">
+                {session.task ? (
+                  <a
+                    className="conversation-task-link"
+                    href={`https://tq.fohte.net/tasks/${encodeURIComponent(session.task.id)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {session.task.priority != null ? (
+                      <span>P{session.task.priority}</span>
+                    ) : null}{' '}
+                    #{session.task.number} {session.task.title}
+                  </a>
+                ) : null}
+                <a
+                  className="conversation-repo"
+                  href={`https://github.com/${session.repo}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {session.repo}
+                </a>
+                {parent != null ? (
+                  <a
+                    className="conversation-parent"
+                    href={`#${encodeURIComponent(parent.id)}`}
+                    onClick={(event) => {
+                      event.preventDefault()
+                      onSelectSession(parent.id)
+                    }}
+                  >
+                    ↑ Parent: {parent.title ?? 'session'}
+                  </a>
+                ) : null}
+              </div>
+              <h1>{session.title || 'Untitled session'}</h1>
+            </div>
+            <div className="conversation-header-actions">
+              {hasCritUrl ? (
+                <Button
+                  className="conversation-crit-toggle"
+                  type="button"
+                  variant="plain"
+                  aria-expanded={critOpen}
+                  onClick={() => {
+                    setOpenCritUrl(critOpen ? null : critUrl)
+                  }}
+                >
+                  {critOpen ? 'Hide crit' : 'Open crit'}
+                </Button>
+              ) : null}
+              {session.pullRequest ? (
+                <a
+                  className="conversation-pr-link"
+                  href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  #{session.pullRequest.number} PR
+                </a>
+              ) : null}
+              {actions?.openInTerminal === true ? (
+                <Button type="button" variant="plain" onClick={openInTerminal}>
+                  Open in terminal
+                </Button>
+              ) : null}
+            </div>
+          </>
+        )}
       </header>
+
+      {isMobile && hasCritUrl ? (
+        <p className="mobile-review-note">
+          Open this session on your desktop to review it in crit.
+        </p>
+      ) : null}
 
       <div
         ref={scrollRef}
@@ -416,7 +468,7 @@ export function ConversationPaneView({
   return (
     <>
       {conversationPane}
-      {critOpen ? (
+      {critOpen && !isMobile ? (
         <CritPane
           url={critUrl}
           onClose={() => {

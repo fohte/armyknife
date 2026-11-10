@@ -1,6 +1,7 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
+import { Chip } from '@fohte/ui/chip'
 
 import { SessionRow } from '#components/session-row'
 import type { Session } from '#types'
@@ -17,6 +18,13 @@ type InboxViewProps = {
   onToggleLater: () => void
   onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
+  todaySessions: readonly Session[]
+  onSelectToday: (id: string) => void
+  isMobile: boolean
+  inProgressExpanded: boolean
+  onToggleInProgress: () => void
+  doneExpanded: boolean
+  onToggleDone: () => void
 }
 
 function renderSessionSection({
@@ -27,6 +35,7 @@ function renderSessionSection({
   onSelect,
   onLater,
   onToggleToday,
+  compactRepo,
   className = '',
 }: {
   title: string
@@ -36,6 +45,7 @@ function renderSessionSection({
   onSelect: (id: string) => void
   onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
+  compactRepo: boolean
   className?: string
 }) {
   return (
@@ -54,6 +64,7 @@ function renderSessionSection({
               onSelect={onSelect}
               onLater={onLater}
               onToggleToday={onToggleToday}
+              compactRepo={compactRepo}
             />
           ))}
         </ul>
@@ -74,6 +85,13 @@ export function InboxView({
   onToggleLater,
   onLater,
   onToggleToday,
+  todaySessions,
+  onSelectToday,
+  isMobile,
+  inProgressExpanded,
+  onToggleInProgress,
+  doneExpanded,
+  onToggleDone,
 }: InboxViewProps) {
   const needsAction = sessions.filter(
     (session) => session.category === 'needs_action',
@@ -83,17 +101,49 @@ export function InboxView({
   )
   const done = sessions.filter((session) => session.category === 'done')
   const later = sessions.filter((session) => session.category === 'later')
-  const visibleInProgress = showAllInProgress
-    ? inProgress
-    : inProgress.slice(0, 2)
+  const visibleInProgress = isMobile
+    ? inProgressExpanded
+      ? inProgress
+      : []
+    : showAllInProgress
+      ? inProgress
+      : inProgress.slice(0, 2)
   const hiddenInProgressCount = inProgress.length - visibleInProgress.length
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
+      <div className="mobile-inbox-brand" aria-hidden="true">
+        <span className="brand-mark">&gt;</span>
+        <span>agent watch</span>
+      </div>
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
         <span className="sort-description">Sorted by tq priority</span>
       </header>
+      <div className="mobile-today-strip" aria-label="TODAY sessions">
+        <span className="mobile-today-label">TODAY</span>
+        {todaySessions.map((session) => (
+          <Button
+            key={session.id}
+            type="button"
+            variant="plain"
+            className={`mobile-today-chip cursor-pointer${session.category === 'needs_action' ? ' is-needs-action' : ''}`}
+            onClick={() => {
+              onSelectToday(session.id)
+            }}
+          >
+            <span aria-hidden="true" className="today-star">
+              ★
+            </span>
+            <span>{session.title}</span>
+            {session.category === 'needs_action' ? (
+              <Chip size="sm" tone="strong">
+                Needs action
+              </Chip>
+            ) : null}
+          </Button>
+        ))}
+      </div>
       <div className="inbox-scroll-area">
         {error !== null ? (
           <p className="load-message is-error" role="status">
@@ -116,6 +166,7 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
+          compactRepo: isMobile,
         })}
         <Button
           type="button"
@@ -126,11 +177,9 @@ export function InboxView({
         >
           <span>◷ Later</span>
           <span className="later-section-count">{later.length}</span>
-          {later.length > 0 ? (
-            <span className="later-next-return">
-              {nextReturnLabel(later)} {laterExpanded ? '▾' : '▸'}
-            </span>
-          ) : null}
+          <span className="later-next-return">
+            {nextReturnLabel(later)} {laterExpanded ? '⌄' : '›'}
+          </span>
         </Button>
         {laterExpanded && later.length > 0 ? (
           <ul className="session-list later-session-list">
@@ -142,10 +191,24 @@ export function InboxView({
                 onSelect={onSelect}
                 onLater={onLater}
                 onToggleToday={onToggleToday}
+                compactRepo={isMobile}
               />
             ))}
           </ul>
         ) : null}
+        <Button
+          type="button"
+          variant="plain"
+          className="mobile-collapse-row mobile-in-progress-row cursor-pointer"
+          aria-expanded={inProgressExpanded}
+          onClick={onToggleInProgress}
+        >
+          <span>In progress</span>
+          <span className="mobile-collapse-count">{inProgress.length}</span>
+          <span className="mobile-collapse-chevron" aria-hidden="true">
+            {inProgressExpanded ? '⌄' : '›'}
+          </span>
+        </Button>
         {renderSessionSection({
           title: 'In progress',
           className: 'in-progress-section',
@@ -155,8 +218,9 @@ export function InboxView({
           onSelect,
           onLater,
           onToggleToday,
+          compactRepo: isMobile,
         })}
-        {hiddenInProgressCount > 0 ? (
+        {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
             className="show-more-button cursor-pointer"
             type="button"
@@ -167,14 +231,28 @@ export function InboxView({
             {hiddenInProgressCount} more ▸
           </Button>
         ) : null}
+        <Button
+          type="button"
+          variant="plain"
+          className="mobile-collapse-row mobile-done-row cursor-pointer"
+          aria-expanded={doneExpanded}
+          onClick={onToggleDone}
+        >
+          <span>Done</span>
+          <span className="mobile-collapse-count">{done.length}</span>
+          <span className="mobile-collapse-chevron" aria-hidden="true">
+            {doneExpanded ? '⌄' : '›'}
+          </span>
+        </Button>
         {renderSessionSection({
           title: 'Done',
           className: 'done-section',
-          sessions: done,
+          sessions: isMobile && !doneExpanded ? [] : done,
           selectedId,
           onSelect,
           onLater,
           onToggleToday,
+          compactRepo: isMobile,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
