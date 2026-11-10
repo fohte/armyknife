@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::BufRead;
+use std::io::{BufRead, Seek, SeekFrom};
 
 use serde_json::Value;
 
@@ -10,23 +10,46 @@ use super::super::parser::{
 };
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
-    reader: impl BufRead,
+    mut reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
-    let mut records = Vec::new();
-    for_each_jsonl_record(reader, |record| records.push(record))?;
-    let active_uuids = active_branch_uuids(&records);
+    let mut parent_uuids = BTreeMap::new();
+    let mut latest_uuid = None;
+    for_each_jsonl_record(&mut reader, |record| {
+        let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
+            return;
+        };
+        latest_uuid = Some(uuid.to_owned());
+        let parent_uuid = match record.get("parentUuid") {
+            Some(Value::String(parent)) => Some(parent.clone()),
+            Some(Value::Null) => match record.get("logicalParentUuid") {
+                None | Some(Value::Null) => None,
+                Some(Value::String(parent)) => Some(parent.clone()),
+                _ => {
+                    parent_uuids.remove(uuid);
+                    return;
+                }
+            },
+            _ => {
+                parent_uuids.remove(uuid);
+                return;
+            }
+        };
+        parent_uuids.insert(uuid.to_owned(), parent_uuid);
+    })?;
+    let active_uuids = active_branch_uuids(&parent_uuids, latest_uuid.as_deref());
+    reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
 
-    for record in records {
+    for_each_jsonl_record(&mut reader, |record| {
         if let Some(active_uuids) = &active_uuids
             && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
             && !active_uuids.contains(uuid)
         {
-            continue;
+            return;
         }
         (|| match record.get("type").and_then(Value::as_str) {
             _ if record
@@ -117,7 +140,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             }
             _ => {}
         })();
-    }
+    })?;
 
     tools.flush_into(&mut items);
     // Permission state must be tied to an unanswered call ID, not a reused tool name.
@@ -135,36 +158,22 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     Ok(items)
 }
 
-fn active_branch_uuids(records: &[Value]) -> Option<BTreeSet<String>> {
-    let records_by_uuid: BTreeMap<_, _> = records
-        .iter()
-        .filter_map(|record| {
-            record
-                .get("uuid")
-                .and_then(Value::as_str)
-                .map(|uuid| (uuid, record))
-        })
-        .collect();
-    let mut uuid = records
-        .iter()
-        .rev()
-        .find_map(|record| record.get("uuid").and_then(Value::as_str))?;
+fn active_branch_uuids(
+    parent_uuids: &BTreeMap<String, Option<String>>,
+    latest_uuid: Option<&str>,
+) -> Option<BTreeSet<String>> {
+    let mut uuid = latest_uuid?;
     let mut active_uuids = BTreeSet::new();
 
     loop {
         if !active_uuids.insert(uuid.to_owned()) {
             return None;
         }
-        let record = records_by_uuid.get(uuid)?;
-        let parent = match record.get("parentUuid")? {
-            Value::String(parent) => Some(parent.as_str()),
-            Value::Null => record.get("logicalParentUuid").and_then(Value::as_str),
-            _ => return None,
-        };
-        let Some(parent) = parent else {
+        let parent_uuid = parent_uuids.get(uuid)?;
+        let Some(parent_uuid) = parent_uuid else {
             return Some(active_uuids);
         };
-        uuid = parent;
+        uuid = parent_uuid;
     }
 }
 
@@ -609,6 +618,28 @@ mod tests {
         let transcript = indoc! {r#"
             {"type":"user","message":{"content":"Keep the first legacy message."}}
             {"type":"user","message":{"content":"Keep the second legacy message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the first legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the second legacy message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shows_all_messages_when_the_latest_parent_cannot_be_found() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the first legacy message."}}
+            {"uuid":"fixture-unreachable-id","parentUuid":"fixture-missing-parent-id","type":"user","message":{"content":"Keep the second legacy message."}}
         "#};
 
         assert_eq!(

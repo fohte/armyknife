@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -134,12 +134,41 @@ fn parse_session_transcript(
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
 ) -> Result<Vec<ChatItem>> {
-    let Some(reader) = open_transcript(path, engine == Engine::Codex)? else {
-        return Ok(Vec::new());
-    };
     match engine {
-        Engine::Claude => Ok(parser::claude::parse(reader, parent, pending_tool)?),
-        Engine::Codex => Ok(parser::codex::parse(reader, parent)?),
+        Engine::Claude => {
+            let Some(reader) = open_seekable_transcript(path)? else {
+                return Ok(Vec::new());
+            };
+            Ok(parser::claude::parse(reader, parent, pending_tool)?)
+        }
+        Engine::Codex => {
+            let Some(reader) = open_transcript(path, true)? else {
+                return Ok(Vec::new());
+            };
+            Ok(parser::codex::parse(reader, parent)?)
+        }
+    }
+}
+
+trait SeekableBufRead: BufRead + Seek {}
+
+impl<T: BufRead + Seek> SeekableBufRead for T {}
+
+fn open_seekable_transcript(path: &Path) -> Result<Option<Box<dyn SeekableBufRead + Send>>> {
+    match File::open(path) {
+        Ok(file) if path.extension().and_then(|extension| extension.to_str()) == Some("zst") => {
+            // The parser rewinds after collecting UUID ancestry, so compressed input must be buffered.
+            let mut decoder = zstd::stream::read::Decoder::new(file)
+                .with_context(|| format!("decompress transcript {}", path.display()))?;
+            let mut contents = Vec::new();
+            decoder
+                .read_to_end(&mut contents)
+                .with_context(|| format!("decompress transcript {}", path.display()))?;
+            Ok(Some(Box::new(Cursor::new(contents))))
+        }
+        Ok(file) => Ok(Some(Box::new(BufReader::new(file)))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error).with_context(|| format!("open transcript {}", path.display())),
     }
 }
 
