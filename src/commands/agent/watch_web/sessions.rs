@@ -85,6 +85,7 @@ struct SessionView {
     parent: Option<ParentSessionView>,
     ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
+    crit_url: Option<String>,
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
 }
@@ -253,6 +254,13 @@ async fn list_sessions<S: SessionSource>(
                 parent,
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
+                crit_url: if turn_kinds.get(session.session_id.as_str())
+                    == Some(&UserTurnKind::Crit)
+                {
+                    session.crit_urls.last().cloned()
+                } else {
+                    None
+                },
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
             }
@@ -672,6 +680,7 @@ mod tests {
             parent: None,
             ancestor_session_ids: Vec::new(),
             pull_request: None,
+            crit_url: None,
             later_until: None,
             is_today: false,
         }
@@ -860,10 +869,17 @@ mod tests {
         );
     }
 
+    struct ExpectedSessionDetails<'a> {
+        kind: &'a str,
+        unread: bool,
+        crit_url: Option<&'a str>,
+    }
+
     fn expected_response(
         category: &str,
         later_until: Option<&str>,
         is_today: bool,
+        details: ExpectedSessionDetails<'_>,
         updated_at: &str,
         elapsed_seconds: u64,
     ) -> serde_json::Value {
@@ -874,12 +890,12 @@ mod tests {
                 "engine": "claude",
                 "category": category,
                 "categoryWhenNotLater": "needs_action",
-                "kind": "Stopped",
+                "kind": details.kind,
                 "title": "child title",
                 "preview": "last message",
                 "updatedAt": updated_at,
                 "elapsedSeconds": elapsed_seconds,
-                "unread": true,
+                "unread": details.unread,
                 "task": {
                     "id": "task-id",
                     "number": 17,
@@ -898,7 +914,8 @@ mod tests {
                     "state": "Open"
                 },
                 "laterUntil": later_until,
-                "isToday": is_today
+                "isToday": is_today,
+                "critUrl": details.crit_url
             }]
         })
     }
@@ -908,12 +925,25 @@ mod tests {
     async fn sessions_route_returns_the_complete_inbox_response(mut source: TestSessionSource) {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
+        source.sessions[0].status = SessionStatus::WaitingInput;
+        source.sessions[0].crit_urls = vec!["http://127.0.0.1:52413".to_string()];
 
         assert_eq!(
             sessions_response(source).await,
             (
                 StatusCode::OK,
-                expected_response("needs_action", None, false, "1970-01-01T00:16:40Z", 100,),
+                expected_response(
+                    "needs_action",
+                    None,
+                    false,
+                    ExpectedSessionDetails {
+                        kind: "Review",
+                        unread: false,
+                        crit_url: Some("http://127.0.0.1:52413"),
+                    },
+                    "1970-01-01T00:16:40Z",
+                    100,
+                ),
             ),
         );
     }
@@ -929,6 +959,11 @@ mod tests {
                     "later",
                     Some("1970-01-01T01:18:20Z"),
                     true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
                     "1970-01-01T00:16:40Z",
                     100,
                 ),
@@ -951,6 +986,11 @@ mod tests {
                     "needs_action",
                     Some("1970-01-01T01:18:20Z"),
                     true,
+                    ExpectedSessionDetails {
+                        kind: "Stopped",
+                        unread: true,
+                        crit_url: None,
+                    },
                     "1970-01-01T00:16:40Z",
                     3_700,
                 ),
@@ -976,11 +1016,33 @@ mod tests {
             (
                 (
                     StatusCode::OK,
-                    expected_response("later", None, true, "1970-01-01T00:16:40Z", 100,),
+                    expected_response(
+                        "later",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
+                        },
+                        "1970-01-01T00:16:40Z",
+                        100,
+                    ),
                 ),
                 (
                     StatusCode::OK,
-                    expected_response("needs_action", None, true, "1970-01-01T00:16:41Z", 99,),
+                    expected_response(
+                        "needs_action",
+                        None,
+                        true,
+                        ExpectedSessionDetails {
+                            kind: "Stopped",
+                            unread: true,
+                            crit_url: None,
+                        },
+                        "1970-01-01T00:16:41Z",
+                        99,
+                    ),
                 ),
             ),
         );
