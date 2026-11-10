@@ -5,11 +5,9 @@ use rstest::rstest;
 use serde_json::json;
 use tower::ServiceExt;
 
-use super::super::messages::send_via_peer_notify;
 use super::{
     ActionContext, action_context, normalized_queued_prompts, post, response_snapshot, session,
 };
-use crate::commands::agent::peer::notify;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Engine;
 use crate::commands::agent::watch_web::attachments;
@@ -444,31 +442,6 @@ async fn send_message_rejects_whitespace_without_calling_runtime(action_context:
             "body": { "error": "message must not be empty" },
             "calls": [],
         }),
-    );
-}
-#[test]
-fn live_message_adapter_forwards_session_and_content_to_peer_notify() {
-    let session = session("sample-session");
-    let mut calls = Vec::new();
-
-    let result = send_via_peer_notify(
-        &session,
-        "continue the investigation",
-        |session_id, content| {
-            calls.push((session_id.to_string(), content.to_string()));
-            Ok(notify::Delivery::Sent)
-        },
-    );
-
-    assert_eq!(
-        (result.map_err(|error| error.to_string()), calls),
-        (
-            Ok(()),
-            vec![(
-                "sample-session".to_string(),
-                "continue the investigation".to_string(),
-            )],
-        ),
     );
 }
 #[rstest]

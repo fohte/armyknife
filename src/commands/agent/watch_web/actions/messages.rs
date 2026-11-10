@@ -15,7 +15,7 @@ use super::{ActionState, ApiError, Success, load_session, resolve_sessions_dir, 
 pub(super) const MAX_MESSAGE_BODY_BYTES: usize = 72 * 1024 * 1024;
 
 pub(super) fn send_live_message(session: &Session, content: &str) -> Result<()> {
-    send_via_peer_notify(session, content, |session_id, content| {
+    send_via_peer_notify(&session.session_id, content, |session_id, content| {
         notify::notify(session_id, content, None, None)
     })
 }
@@ -104,11 +104,42 @@ fn watch_web_message_content(session: &Session, marker: Option<&str>, content: &
         _ => content.to_string(),
     }
 }
-pub(super) fn send_via_peer_notify(
-    session: &Session,
+fn send_via_peer_notify(
+    session_id: &str,
     content: &str,
     deliver: impl FnOnce(&str, &str) -> Result<notify::Delivery>,
 ) -> Result<()> {
-    deliver(&session.session_id, content)?;
+    deliver(session_id, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::send_via_peer_notify;
+    use crate::commands::agent::peer::notify;
+
+    #[test]
+    fn live_message_adapter_forwards_session_and_content_to_peer_notify() {
+        let mut calls = Vec::new();
+
+        let result = send_via_peer_notify(
+            "sample-session",
+            "continue the investigation",
+            |session_id, content| {
+                calls.push((session_id.to_string(), content.to_string()));
+                Ok(notify::Delivery::Sent)
+            },
+        );
+
+        assert_eq!(
+            (result.map_err(|error| error.to_string()), calls),
+            (
+                Ok(()),
+                vec![(
+                    "sample-session".to_string(),
+                    "continue the investigation".to_string(),
+                )],
+            ),
+        );
+    }
 }
