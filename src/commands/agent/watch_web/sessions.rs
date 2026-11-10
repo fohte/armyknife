@@ -926,7 +926,7 @@ mod tests {
         source.web_states[0].later_until = None;
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
-        source.sessions[0].crit_urls = vec!["http://127.0.0.1:52413".to_string()];
+        source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
 
         assert_eq!(
             sessions_response(source).await,
@@ -939,7 +939,7 @@ mod tests {
                     ExpectedSessionDetails {
                         kind: "Review",
                         unread: false,
-                        crit_url: Some("http://127.0.0.1:52413"),
+                        crit_url: Some("http://127.0.0.1:6000"),
                     },
                     "1970-01-01T00:16:40Z",
                     100,

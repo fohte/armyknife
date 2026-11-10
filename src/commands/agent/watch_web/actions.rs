@@ -395,12 +395,7 @@ async fn load_session(state: ActionState, id: String) -> Result<Session, ApiErro
             None => store::load_session(&id),
         }
         .map_err(|error| {
-            if error
-                .downcast_ref::<super::super::error::CcError>()
-                .is_some_and(|error| {
-                    matches!(error, super::super::error::CcError::InvalidSessionId(_))
-                })
-            {
+            if super::is_invalid_session_id_error(&error) {
                 ApiError::not_found()
             } else {
                 ApiError::internal(error)

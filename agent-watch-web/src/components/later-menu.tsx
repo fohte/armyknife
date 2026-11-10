@@ -13,6 +13,7 @@ type LaterMenuProps = {
   isLater: boolean
   laterTimes: LaterPresetTimes | null
   laterTimesError: boolean
+  isSubmitting: boolean
   onSelect: (preset: LaterPreset) => void
   onBackNow: () => void
   onClose: () => void
@@ -23,12 +24,20 @@ export function LaterMenu({
   isLater,
   laterTimes,
   laterTimesError,
+  isSubmitting,
   onSelect,
   onBackNow,
   onClose,
 }: LaterMenuProps) {
   return (
-    <div className="later-menu-overlay" onClick={onClose}>
+    <div
+      className="later-menu-overlay"
+      onClick={() => {
+        if (!isSubmitting) {
+          onClose()
+        }
+      }}
+    >
       <section
         aria-label={`Later: ${sessionTitle}`}
         className="later-menu"
@@ -45,6 +54,7 @@ export function LaterMenu({
             variant="plain"
             role="menuitem"
             disabled={
+              isSubmitting ||
               laterTimes === null ||
               (option.preset !== 'until_it_changes' &&
                 laterTimes[option.preset].deadline === null)
@@ -73,6 +83,7 @@ export function LaterMenu({
             variant="plain"
             role="menuitem"
             aria-label={`Back now: ${sessionTitle}`}
+            disabled={isSubmitting}
             className="later-menu-option later-menu-reset cursor-pointer"
             onClick={onBackNow}
           >

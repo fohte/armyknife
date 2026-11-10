@@ -521,6 +521,219 @@ it('ignores further Later shortcuts while a preset request is pending', async ()
   })
 })
 
+it('disables Back now and preset shortcuts while a Later request is pending', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input) === '/api/sessions/session-later/later'
+        ? mockPendingResponse()
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      {
+        ...session('session-later', 'Deferred session', 'later'),
+        categoryWhenNotLater: 'needs_action',
+        laterUntil: '2030-03-11T09:00:00.000Z',
+      },
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.later-collapsed-row')?.click()
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const backNow = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Back now: Deferred session"]',
+  )
+  act(() => {
+    backNow?.click()
+    dispatchKey(window, '2')
+  })
+
+  const snapshot = () => ({
+    menuItemsDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (button) => button.disabled,
+    ),
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-later/later',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    menuItemsDisabled: [true, true, true, true, true, true],
+    requests: [
+      [
+        '/api/sessions/session-later/later',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+        },
+      ],
+    ],
+  })
+})
+
+it('accepts a new Later preset after the previous request settles', async () => {
+  let resolveFirstRequest: ((response: Response) => void) | undefined
+  let shouldHoldFirstRequest = true
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (
+      requestUrl(input) === '/api/sessions/session-a/later' &&
+      shouldHoldFirstRequest
+    ) {
+      shouldHoldFirstRequest = false
+      return new Promise<Response>((resolve) => {
+        resolveFirstRequest = resolve
+      })
+    }
+    return mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const resolveSuccess = resolveFirstRequest
+  if (resolveSuccess === undefined) {
+    throw new Error('The first Later request did not start')
+  }
+  await act(async () => {
+    resolveSuccess(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  await act(async () => {
+    dispatchKey(window, '2')
+    await flushAsyncState()
+  })
+
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    )
+
+  expect(snapshot()).toEqual([
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+      },
+    ],
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"this_evening","expectedDeadline":"2030-03-04T19:00:00Z"}',
+      },
+    ],
+  ])
+})
+
+it('accepts a new Later preset after a failed request reloads its menu', async () => {
+  let resolveFirstRequest: ((response: Response) => void) | undefined
+  let shouldHoldFirstRequest = true
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (
+      requestUrl(input) === '/api/sessions/session-a/later' &&
+      shouldHoldFirstRequest
+    ) {
+      shouldHoldFirstRequest = false
+      return new Promise<Response>((resolve) => {
+        resolveFirstRequest = resolve
+      })
+    }
+    return mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+  act(() => {
+    dispatchKey(window, '1')
+  })
+  const resolveFailure = resolveFirstRequest
+  if (resolveFailure === undefined) {
+    throw new Error('The first Later request did not start')
+  }
+  await act(async () => {
+    resolveFailure(new Response(null, { status: 500 }))
+    await flushAsyncState()
+    await vi.waitFor(() => {
+      const menuItems = Array.from(
+        container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      )
+      if (menuItems.length !== 5 || menuItems.some((item) => item.disabled)) {
+        throw new Error('The Later menu has not reloaded')
+      }
+    })
+  })
+  await act(async () => {
+    dispatchKey(window, '2')
+    await flushAsyncState()
+  })
+
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/session-a/later',
+    )
+
+  expect(snapshot()).toEqual([
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"one_hour","expectedDeadline":"2030-03-04T16:00:00Z"}',
+      },
+    ],
+    [
+      '/api/sessions/session-a/later',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"preset":"this_evening","expectedDeadline":"2030-03-04T19:00:00Z"}',
+      },
+    ],
+  ])
+})
+
 it('returns a Later session immediately from the menu', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()

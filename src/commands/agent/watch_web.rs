@@ -20,6 +20,7 @@ use include_dir::Dir;
 use tokio::net::TcpListener;
 
 use super::browser;
+use super::error::CcError;
 use crate::commands::agent::store;
 use crate::commands::agent::types::Session;
 
@@ -27,6 +28,12 @@ use crate::commands::agent::types::Session;
 pub struct WatchWebArgs {}
 
 const LISTEN_PORT: u16 = 4317;
+
+fn is_invalid_session_id_error(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<CcError>()
+        .is_some_and(|error| matches!(error, CcError::InvalidSessionId(_)))
+}
 
 #[derive(Clone)]
 pub(super) struct EnrichmentUpdates {

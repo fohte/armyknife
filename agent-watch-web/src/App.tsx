@@ -36,6 +36,7 @@ export function App() {
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
   const [laterTimesError, setLaterTimesError] = useState(false)
+  const [laterMutationPending, setLaterMutationPending] = useState(false)
   const laterSubmissionInFlight = useRef(false)
   const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
@@ -136,31 +137,67 @@ export function App() {
     laterRequestId.current += 1
     setLaterSessionId(null)
   }, [])
+  const beginLaterMutation = useCallback(() => {
+    if (laterSubmissionInFlight.current) {
+      return false
+    }
+    laterSubmissionInFlight.current = true
+    setLaterMutationPending(true)
+    return true
+  }, [])
+  const finishLaterMutation = useCallback(() => {
+    laterSubmissionInFlight.current = false
+    setLaterMutationPending(false)
+  }, [])
   const submitLater = useCallback(
     (sessionId: string, preset: LaterPreset) => {
-      if (laterSubmissionInFlight.current) {
-        return
-      }
       const expectedDeadline = laterTimes?.[preset].deadline
       if (expectedDeadline === undefined) {
         return
       }
+      if (!beginLaterMutation()) {
+        return
+      }
 
-      laterSubmissionInFlight.current = true
       void setSessionLater(sessionId, preset, expectedDeadline).match(
         () => {
-          laterSubmissionInFlight.current = false
+          finishLaterMutation()
           closeLater()
           setError(null)
         },
         () => {
-          laterSubmissionInFlight.current = false
+          finishLaterMutation()
           openLater(sessionId)
           setError('Could not move the session to Later.')
         },
       )
     },
-    [closeLater, laterTimes, openLater],
+    [
+      beginLaterMutation,
+      closeLater,
+      finishLaterMutation,
+      laterTimes,
+      openLater,
+    ],
+  )
+  const submitBackNow = useCallback(
+    (sessionId: string) => {
+      if (!beginLaterMutation()) {
+        return
+      }
+      void setSessionBackNow(sessionId).match(
+        () => {
+          finishLaterMutation()
+          closeLater()
+          setError(null)
+        },
+        () => {
+          finishLaterMutation()
+          setError('Could not return the session now.')
+        },
+      )
+    },
+    [beginLaterMutation, closeLater, finishLaterMutation],
   )
 
   useEffect(
@@ -246,7 +283,9 @@ export function App() {
       if (laterSessionId !== null) {
         if (event.key === 'Escape') {
           event.preventDefault()
-          closeLater()
+          if (!laterSubmissionInFlight.current) {
+            closeLater()
+          }
           return
         }
         const preset = getLaterPresetShortcut(event.key)
@@ -381,17 +420,14 @@ export function App() {
           isLater={laterSession.category === 'later'}
           laterTimes={laterTimes}
           laterTimesError={laterTimesError}
-          onClose={closeLater}
+          isSubmitting={laterMutationPending}
+          onClose={() => {
+            if (!laterSubmissionInFlight.current) {
+              closeLater()
+            }
+          }}
           onBackNow={() => {
-            void setSessionBackNow(laterSession.id).match(
-              () => {
-                closeLater()
-                setError(null)
-              },
-              () => {
-                setError('Could not return the session now.')
-              },
-            )
+            submitBackNow(laterSession.id)
           }}
           onSelect={(preset) => {
             submitLater(laterSession.id, preset)

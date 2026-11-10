@@ -15,6 +15,7 @@ const meta = {
       until_it_changes: { when: 'next activity', deadline: null },
     },
     laterTimesError: false,
+    isSubmitting: false,
     onSelect: () => {},
     onBackNow: () => {},
     onClose: () => {},
@@ -44,4 +45,11 @@ export const MenuCannotLoadReturnTimes: Story = {
     laterTimesError: true,
   },
   name: 'the menu disables presets when return times are unavailable',
+}
+
+export const MenuSubmitting: Story = {
+  args: {
+    isSubmitting: true,
+  },
+  name: 'the menu disables actions while a request is pending',
 }
