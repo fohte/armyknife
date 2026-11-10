@@ -19,6 +19,20 @@ const sessions: Session[] = [
       title: 'Improve notifications',
       priority: 1,
     },
+    tasks: [
+      {
+        id: 'task-notifications',
+        number: 42,
+        title: 'Improve notifications',
+        priority: 1,
+      },
+      {
+        id: 'task-delivery',
+        number: 43,
+        title: 'Document delivery behavior',
+        priority: null,
+      },
+    ],
     repo: 'example/web-app',
     branch: 'feature/notification-rollout',
     canOpenInTerminal: true,

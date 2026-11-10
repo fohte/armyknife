@@ -48,10 +48,11 @@ function itemTitle(item: PaletteItem) {
 function itemSubtitle(item: PaletteItem) {
   switch (item.type) {
     case 'session': {
-      const task =
-        item.session.task === null
-          ? ''
-          : `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title} · `
+      const taskCount = item.session.tasks?.length ?? 1
+      const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+      const task = item.session.task
+        ? `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title}${linkedTaskCount} · `
+        : ''
       const branch = item.session.branch?.trim()
       const branchLabel =
         branch === undefined || branch.length === 0 ? '' : `${branch} · `

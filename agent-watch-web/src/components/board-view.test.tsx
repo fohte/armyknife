@@ -109,6 +109,40 @@ it('shows paused sessions beside the count of other Done sessions', () => {
   })
 })
 
+it('shows the primary task and the count of other linked tasks on a card', () => {
+  renderBoard([
+    {
+      ...completedSession,
+      category: 'needs_action',
+      kind: 'Question',
+      task: {
+        id: 'primary-task',
+        number: 42,
+        title: 'Improve delivery reliability',
+        priority: 1,
+      },
+      tasks: [
+        {
+          id: 'primary-task',
+          number: 42,
+          title: 'Improve delivery reliability',
+          priority: 1,
+        },
+        {
+          id: 'linked-task',
+          number: 43,
+          title: 'Document delivery behavior',
+          priority: null,
+        },
+      ],
+    },
+  ])
+
+  expect(container.querySelector('.board-card-task')?.textContent).toBe(
+    'P1 #42 · Improve delivery reliability +1',
+  )
+})
+
 it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {
   container.style.cssText = 'display: flex; width: 320px; height: 320px'
   renderBoard(

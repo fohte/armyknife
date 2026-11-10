@@ -1112,6 +1112,7 @@ mod tests {
                 work_type_nav_labels: serde_json::json!({}),
                 updated_at: "1970-01-01T00:16:40Z",
                 elapsed_seconds: 100,
+                can_open_in_terminal: true,
             },
         );
         expected["sessions"][0]["isCompacting"] = serde_json::json!(true);
@@ -1570,7 +1571,7 @@ mod tests {
 
     #[rstest]
     #[case::lower_priority_first(Some((Some(1), Some(0), 1)), Some((Some(0), Some(1), 2)), std::cmp::Ordering::Less)]
-    #[case::unset_before_deferred(Some((None, Some(3), 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Less)]
+    #[case::unset_priority_after_deferred(Some((None, None, 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Greater)]
     #[case::deferred_after_regular(Some((Some(-1), Some(4), 1)), Some((Some(0), Some(2), 2)), std::cmp::Ordering::Greater)]
     #[case::missing_order_after_known(Some((Some(1), None, 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Greater)]
     #[case::same_priority_ties(Some((Some(1), Some(2), 1)), Some((Some(1), Some(2), 2)), std::cmp::Ordering::Equal)]
@@ -1604,12 +1605,12 @@ mod tests {
         ],
         vec!["needs_high", "needs_low", "needs_without_task", "working", "done"]
     )]
-    #[case::unset_before_deferred(
+    #[case::unset_priority_last(
         vec![
             row("deferred", SessionCategory::NeedsAction, Some((Some(-1), Some(4), 2)), 1),
-            row("inbox", SessionCategory::NeedsAction, Some((None, Some(3), 1)), 1),
+            row("inbox", SessionCategory::NeedsAction, Some((None, None, 1)), 1),
         ],
-        vec!["inbox", "deferred"]
+        vec!["deferred", "inbox"]
     )]
     #[case::newest_same_priority_first(
         vec![
