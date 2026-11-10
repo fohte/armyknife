@@ -106,6 +106,7 @@ function dispatchKey(
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  vi.stubGlobal('fetch', () => new Promise(() => undefined))
   container = document.createElement('div')
   document.body.append(container)
   capturedFeed.onSessions = null

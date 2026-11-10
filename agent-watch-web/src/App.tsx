@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
+import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { startSessionFeed } from '#session-feed'
 import { getSessionShortcutAction, moveSelection } from '#session-navigation'
@@ -10,6 +11,7 @@ type View = 'inbox' | 'board'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -50,6 +52,7 @@ export function App() {
               session.category === 'done',
           ),
         )
+        setSessionsRevision((revision) => revision + 1)
         setSessionsReceivedAt(receivedAt)
         setNowMs(receivedAt)
         setLoaded(true)
@@ -128,6 +131,9 @@ export function App() {
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
+  const selectedSession = sessionsWithElapsedTime.find(
+    (session) => session.id === selectedId,
+  )
 
   return (
     <div className="agent-watch-shell">
@@ -138,17 +144,30 @@ export function App() {
       />
       <main className="agent-watch-main">
         {view === 'inbox' ? (
-          <InboxView
-            error={error}
-            loaded={loaded}
-            selectedId={selectedId}
-            sessions={sessionsWithElapsedTime}
-            showAllInProgress={showAllInProgress}
-            onShowMore={() => {
-              setShowAllInProgress(true)
-            }}
-            onSelect={setSelectedId}
-          />
+          <>
+            <InboxView
+              error={error}
+              loaded={loaded}
+              selectedId={selectedId}
+              sessions={sessionsWithElapsedTime}
+              showAllInProgress={showAllInProgress}
+              onShowMore={() => {
+                setShowAllInProgress(true)
+              }}
+              onSelect={setSelectedId}
+            />
+            {selectedSession ? (
+              <ConversationPane
+                session={selectedSession}
+                refreshKey={sessionsRevision}
+                onSelectSession={(id) => {
+                  if (orderedSessions.some((session) => session.id === id)) {
+                    setSelectedId(id)
+                  }
+                }}
+              />
+            ) : null}
+          </>
         ) : (
           <section className="board-placeholder" aria-labelledby="board-title">
             <header className="view-header">
