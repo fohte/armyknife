@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.566](https://github.com/fohte/armyknife/compare/v0.1.565...v0.1.566) (2026-11-10)
+
+
+### Features
+
+* **watch-web:** show messages by kind ([#1489](https://github.com/fohte/armyknife/issues/1489)) ([96b393a](https://github.com/fohte/armyknife/commit/96b393aa6e4bc152cadc65aecc35111bf23192a2))
+
 ## [0.1.565](https://github.com/fohte/armyknife/compare/v0.1.564...v0.1.565) (2026-11-10)
 
 
