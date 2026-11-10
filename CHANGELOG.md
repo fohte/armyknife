@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.549](https://github.com/fohte/armyknife/compare/v0.1.548...v0.1.549) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** sort sessions newest first ([#1453](https://github.com/fohte/armyknife/issues/1453)) ([183cff7](https://github.com/fohte/armyknife/commit/183cff7b1fbc64595e5663ccb11fb3b2c63c1912))
+
 ## [0.1.548](https://github.com/fohte/armyknife/compare/v0.1.547...v0.1.548) (2026-11-10)
 
 
