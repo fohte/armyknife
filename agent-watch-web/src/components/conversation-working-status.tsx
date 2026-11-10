@@ -1,8 +1,10 @@
-import type { ToolOperation } from '#types'
+import type { BackgroundTask, ToolOperation } from '#types'
 
 type ConversationWorkingStatusProps = {
+  showWorking?: boolean
   elapsedSeconds: number
   activeTool: ToolOperation | undefined
+  backgroundTasks?: readonly BackgroundTask[]
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -19,22 +21,41 @@ function formatElapsedTime(totalSeconds: number) {
 }
 
 export function ConversationWorkingStatus({
+  showWorking = true,
   elapsedSeconds,
   activeTool,
+  backgroundTasks = [],
 }: ConversationWorkingStatusProps) {
   return (
     <div className="conversation-working-status" role="status">
-      <span className="conversation-working-dot" aria-hidden="true" />
-      <span>Working · {formatElapsedTime(elapsedSeconds)}</span>
-      {activeTool != null ? (
-        <span className="conversation-working-tool">
-          {activeTool.tool}
-          {activeTool.target != null && activeTool.target !== '' ? (
-            <span className="conversation-working-target">
-              {activeTool.target}
+      {showWorking ? (
+        <>
+          <span className="conversation-working-dot" aria-hidden="true" />
+          <span>Working · {formatElapsedTime(elapsedSeconds)}</span>
+          {activeTool != null ? (
+            <span className="conversation-working-tool">
+              {activeTool.tool}
+              {activeTool.target != null && activeTool.target !== '' ? (
+                <span className="conversation-working-target">
+                  {activeTool.target}
+                </span>
+              ) : null}
             </span>
           ) : null}
-        </span>
+        </>
+      ) : null}
+      {backgroundTasks.length > 0 ? (
+        <details className="conversation-background-tasks">
+          <summary>Background tasks ({String(backgroundTasks.length)})</summary>
+          <ul>
+            {backgroundTasks.map((task) => (
+              <li key={task.id}>
+                <span>{task.description}</span>
+                <span>{formatElapsedTime(task.elapsedSeconds)}</span>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
     </div>
   )

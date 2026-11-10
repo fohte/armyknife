@@ -294,7 +294,7 @@ mod tests {
         "/api/sessions/fixture-session/messages",
         StatusCode::OK,
         Some("application/json"),
-        "[]"
+        r#"{"messages":[],"backgroundTasks":[]}"#
     )]
     #[case::unknown_session(
         "/api/sessions/unregistered-session/messages",

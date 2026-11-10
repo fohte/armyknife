@@ -1,8 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Seek, SeekFrom};
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::claude_content_text as content_text;
@@ -11,12 +13,24 @@ use super::super::parser::{
     peer_message_item_with_user_marker, tool_target,
 };
 
+#[cfg(test)]
 pub(in crate::commands::agent::watch_web::messages) fn parse(
-    mut reader: impl BufRead + Seek,
+    reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
+    parse_with_background_tasks(reader, parent, pending_tool, user_marker, Utc::now())
+        .map(|(messages, _)| messages)
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
+    mut reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
     for_each_jsonl_record(&mut reader, |record| {
@@ -47,16 +61,19 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
+    let mut background_tasks = Vec::<RunningBackgroundTask>::new();
 
     for_each_jsonl_record(&mut reader, |record| {
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
             let membership = transcript_nodes.get(uuid).map(|node| node.membership);
             let is_tool_result_only = is_tool_result_only_user_record(&record);
-            if membership.is_none() && !is_tool_result_only {
+            let is_task_notification = is_task_notification(&record);
+            if membership.is_none() && !is_tool_result_only && !is_task_notification {
                 return;
             }
             if membership == Some(BranchMembership::Unknown)
                 && !is_tool_result_only
+                && !is_task_notification
                 && is_inactive_branch(uuid, &mut transcript_nodes)
             {
                 return;
@@ -81,6 +98,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 }
             }
             Some("user") => {
+                finish_task_notification(&record, &mut background_tasks);
                 if let Some(message) = record.get("message") {
                     let tool_use_result = record
                         .get("toolUseResult")
@@ -107,6 +125,17 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                         {
                             let tool_use = tool_uses.remove(index);
                             tools.record(&tool_use.name, tool_use.input.as_ref());
+                            if is_background_tool(&tool_use.name, tool_use.input.as_ref(), &record)
+                                && let Some(task_id) =
+                                    background_task_id(&tool_use.name, &record, block)
+                            {
+                                background_tasks.retain(|task| task.id != task_id);
+                                background_tasks.push(RunningBackgroundTask {
+                                    id: task_id,
+                                    description: tool_use_description(&tool_use),
+                                    started_at: tool_use.started_at.unwrap_or(now),
+                                });
+                            }
                         }
                     }
                     let Some(origin) = user_origin(&record, message) else {
@@ -162,10 +191,14 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                                         append_questions(&mut items, input);
                                     }
                                 } else if let Some(id) = block.get("id").and_then(Value::as_str) {
+                                    if is_task_stop_tool(name) {
+                                        stop_background_task(input, &mut background_tasks);
+                                    }
                                     tool_uses.push(ToolUse {
                                         id: id.to_owned(),
                                         name: name.to_owned(),
                                         input: input.cloned(),
+                                        started_at: record_timestamp(&record),
                                     });
                                 }
                             }
@@ -196,7 +229,20 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
-    Ok(items)
+    let background_tasks = background_tasks
+        .into_iter()
+        .map(|task| BackgroundTask {
+            id: task.id,
+            description: task.description,
+            elapsed_seconds: u64::try_from(
+                now.signed_duration_since(task.started_at)
+                    .num_seconds()
+                    .max(0),
+            )
+            .unwrap_or_default(),
+        })
+        .collect();
+    Ok((items, background_tasks))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -276,6 +322,145 @@ struct ToolUse {
     id: String,
     name: String,
     input: Option<Value>,
+    started_at: Option<DateTime<Utc>>,
+}
+
+struct RunningBackgroundTask {
+    id: String,
+    description: String,
+    started_at: DateTime<Utc>,
+}
+
+fn is_background_tool(name: &str, input: Option<&Value>, record: &Value) -> bool {
+    (matches!(name, "Bash" | "Task")
+        && input
+            .and_then(|input| input.get("run_in_background"))
+            .and_then(Value::as_bool)
+            == Some(true))
+        || (name == "Agent"
+            && record.get("toolUseResult").is_some_and(|result| {
+                result.get("isAsync").and_then(Value::as_bool) == Some(true)
+                    && result.get("status").and_then(Value::as_str) == Some("async_launched")
+            }))
+}
+
+fn is_task_stop_tool(name: &str) -> bool {
+    matches!(name, "TaskStop" | "KillShell")
+}
+
+fn tool_use_description(tool_use: &ToolUse) -> String {
+    let description = tool_use
+        .input
+        .as_ref()
+        .and_then(|input| {
+            ["description", "command", "prompt"]
+                .into_iter()
+                .find_map(|key| input.get(key).and_then(Value::as_str))
+        })
+        .filter(|description| !description.trim().is_empty())
+        .unwrap_or(&tool_use.name);
+    description.chars().take(240).collect()
+}
+
+fn background_task_id(name: &str, record: &Value, result: &Value) -> Option<String> {
+    let structured_result = record.get("toolUseResult");
+    let agent_id = (name == "Agent")
+        .then_some(structured_result)
+        .flatten()
+        .filter(|result| {
+            result.get("isAsync").and_then(Value::as_bool) == Some(true)
+                && result.get("status").and_then(Value::as_str) == Some("async_launched")
+        })
+        .and_then(|result| result.get("agentId"))
+        .and_then(Value::as_str);
+    if let Some(agent_id) = agent_id {
+        return Some(agent_id.to_owned());
+    }
+    let id = structured_result.and_then(|result| {
+        [
+            "task_id",
+            "taskId",
+            "background_task_id",
+            "backgroundTaskId",
+            "shell_id",
+            "shellId",
+        ]
+        .into_iter()
+        .find_map(|key| result.get(key).and_then(Value::as_str))
+    });
+    id.map(str::to_owned).or_else(|| {
+        tool_result_text(result.get("content")?)
+            .as_deref()
+            .and_then(background_task_id_from_text)
+    })
+}
+
+fn background_task_id_from_text(text: &str) -> Option<String> {
+    let lowercase_text = text.to_ascii_lowercase();
+    let background_index = lowercase_text.find("background")?;
+    let id_index = lowercase_text[background_index..].find("id:")? + background_index + "id:".len();
+    let candidate = text[id_index..].split_whitespace().next()?;
+    let id = candidate.trim_matches(|character: char| {
+        !character.is_ascii_alphanumeric() && !matches!(character, '-' | '_')
+    });
+    (!id.is_empty()).then(|| id.to_owned())
+}
+
+fn finish_task_notification(record: &Value, tasks: &mut Vec<RunningBackgroundTask>) {
+    if !is_task_notification(record) {
+        return;
+    }
+    let Some(message) = record.get("message") else {
+        return;
+    };
+    let text = user_text(message);
+    let Some(task_id) = tagged_value(&text, "task-id") else {
+        return;
+    };
+    let Some(status) = tagged_value(&text, "status") else {
+        return;
+    };
+    if matches!(status, "completed" | "failed" | "killed") {
+        tasks.retain(|task| task.id != task_id);
+    }
+}
+
+fn is_task_notification(record: &Value) -> bool {
+    record
+        .get("origin")
+        .and_then(|origin| origin.get("kind"))
+        .and_then(Value::as_str)
+        == Some("task-notification")
+}
+
+fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let start = format!("<{tag}>");
+    let end = format!("</{tag}>");
+    text.split_once(&start)?
+        .1
+        .split_once(&end)
+        .map(|(value, _)| value)
+}
+
+fn stop_background_task(input: Option<&Value>, tasks: &mut Vec<RunningBackgroundTask>) {
+    let Some(task_id) = input.and_then(|input| {
+        [
+            "task_id", "taskId", "agent_id", "agentId", "shell_id", "shellId",
+        ]
+        .into_iter()
+        .find_map(|key| input.get(key).and_then(Value::as_str))
+    }) else {
+        return;
+    };
+    tasks.retain(|task| task.id != task_id);
+}
+
+fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
+    record
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {
@@ -541,11 +726,226 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usi
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
+    use chrono::{DateTime, Utc};
     use indoc::indoc;
     use rstest::rstest;
+    use serde_json::{Value, json};
 
-    use super::parse;
-    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
+    use super::{parse, parse_with_background_tasks};
+    use crate::commands::agent::watch_web::messages::{
+        BackgroundTask, ChatItem, ParentSession, ToolOperation,
+    };
+
+    #[test]
+    fn reports_a_running_background_bash_task_with_elapsed_time() {
+        let transcript = background_bash_transcript();
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:01:30Z"),
+            )
+            .unwrap(),
+            (
+                background_bash_messages(),
+                vec![BackgroundTask {
+                    id: "fixture-task-id".to_string(),
+                    description: "Watch the synthetic build".to_string(),
+                    elapsed_seconds: 90,
+                }],
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::completed("completed", Vec::new())]
+    #[case::failed("failed", Vec::new())]
+    #[case::killed("killed", Vec::new())]
+    #[case::still_running("running", vec![BackgroundTask {
+        id: "fixture-task-id".to_string(),
+        description: "Watch the synthetic build".to_string(),
+        elapsed_seconds: 90,
+    }])]
+    fn task_notifications_only_remove_finished_tasks(
+        #[case] status: &str,
+        #[case] expected_tasks: Vec<BackgroundTask>,
+    ) {
+        let mut transcript = background_bash_transcript();
+        let notification = json!({
+            "type": "user",
+            "origin": {"kind": "task-notification"},
+            "message": {"content": format!(
+                "<task-notification><task-id>fixture-task-id</task-id><status>{status}</status></task-notification>"
+            )},
+        });
+        transcript.push_str(&serde_json::to_string(&notification).unwrap());
+        transcript.push('\n');
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:01:30Z"),
+            )
+            .unwrap(),
+            (background_bash_messages(), expected_tasks),
+        );
+    }
+
+    #[rstest]
+    #[case::task_stop(
+        "TaskStop",
+        json!({"task_id": "fixture-task-id"}),
+        "TaskStop",
+    )]
+    #[case::kill_shell(
+        "KillShell",
+        json!({"shell_id": "fixture-task-id"}),
+        "KillShell",
+    )]
+    fn stop_tool_calls_remove_running_tasks(
+        #[case] tool: &str,
+        #[case] input: Value,
+        #[case] result_tool: &str,
+    ) {
+        let mut transcript = background_bash_transcript();
+        let stop_call = json!({
+            "uuid": "fixture-stop-call-row",
+            "parentUuid": "fixture-bash-result-row",
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-stop-tool-use-id",
+                "name": tool,
+                "input": input,
+            }]},
+        });
+        let stop_result = json!({
+            "uuid": "fixture-stop-result-row",
+            "parentUuid": "fixture-stop-call-row",
+            "type": "user",
+            "toolUseResult": {},
+            "sourceToolAssistantUUID": "fixture-stop-call-row",
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-stop-tool-use-id",
+                "content": "Synthetic stop result.",
+            }]},
+        });
+        transcript.push_str(&serde_json::to_string(&stop_call).unwrap());
+        transcript.push('\n');
+        transcript.push_str(&serde_json::to_string(&stop_result).unwrap());
+        transcript.push('\n');
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:01:30Z"),
+            )
+            .unwrap(),
+            (
+                vec![
+                    ChatItem::User {
+                        text: "Watch the fixture build.".to_string(),
+                        from: None,
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "2 actions".to_string(),
+                        operations: vec![
+                            ToolOperation {
+                                tool: "Bash".to_string(),
+                                target: Some("watch fixture build".to_string()),
+                            },
+                            ToolOperation {
+                                tool: result_tool.to_string(),
+                                target: None,
+                            },
+                        ],
+                    },
+                ],
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
+    fn reports_an_async_agent_from_its_structured_tool_result() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
+            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
+            {"uuid":"fixture-agent-result-row","parentUuid":"fixture-agent-call-row","type":"user","sourceToolAssistantUUID":"fixture-agent-call-row","toolUseResult":{"agentId":"fixture-agent-id","isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-agent-tool-use-id","content":"agentId: fixture-agent-id (internal ID)"}]}}
+        "#};
+
+        assert_eq!(
+            parse_with_background_tasks(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:00:45Z"),
+            )
+            .unwrap(),
+            (
+                vec![
+                    ChatItem::User {
+                        text: "Review the synthetic change.".to_string(),
+                        from: None,
+                    },
+                    ChatItem::ToolSummary {
+                        summary: "1 action".to_string(),
+                        operations: vec![ToolOperation {
+                            tool: "Agent".to_string(),
+                            target: Some("Review the synthetic change".to_string()),
+                        }],
+                    },
+                ],
+                vec![BackgroundTask {
+                    id: "fixture-agent-id".to_string(),
+                    description: "Review the synthetic change".to_string(),
+                    elapsed_seconds: 45,
+                }],
+            ),
+        );
+    }
+
+    fn background_bash_transcript() -> String {
+        indoc! {r#"
+            {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
+            {"uuid":"fixture-bash-call-row","parentUuid":"fixture-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-bash-tool-use-id","name":"Bash","input":{"command":"watch fixture build","description":"Watch the synthetic build","run_in_background":true}}]}}
+            {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
+        "#}
+        .to_string()
+    }
+
+    fn background_bash_messages() -> Vec<ChatItem> {
+        vec![
+            ChatItem::User {
+                text: "Watch the fixture build.".to_string(),
+                from: None,
+            },
+            ChatItem::ToolSummary {
+                summary: "1 action".to_string(),
+                operations: vec![ToolOperation {
+                    tool: "Bash".to_string(),
+                    target: Some("watch fixture build".to_string()),
+                }],
+            },
+        ]
+    }
+
+    fn timestamp(value: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
+    }
 
     #[test]
     fn agent_tool_summary_shows_its_type_and_description_without_its_prompt() {

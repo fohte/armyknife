@@ -14,11 +14,12 @@ import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
-import type { ChatItem, Session, SessionActions } from '#types'
+import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
   messages: readonly ChatItem[]
+  backgroundTasks?: readonly BackgroundTask[]
   actions: SessionActions | null
   actionsReady?: boolean
   loading: boolean
@@ -39,6 +40,7 @@ type ConversationPaneViewProps = {
 export function ConversationPaneView({
   session,
   messages,
+  backgroundTasks = [],
   actions,
   actionsReady = true,
   loading,
@@ -463,10 +465,12 @@ export function ConversationPaneView({
         })}
       </div>
 
-      {session.category === 'in_progress' ? (
+      {session.category === 'in_progress' || backgroundTasks.length > 0 ? (
         <ConversationWorkingStatus
+          showWorking={session.category === 'in_progress'}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
+          backgroundTasks={backgroundTasks}
         />
       ) : null}
 

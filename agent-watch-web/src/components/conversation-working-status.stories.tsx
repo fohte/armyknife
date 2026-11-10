@@ -31,3 +31,35 @@ export const WorkingWithAnActiveTool: Story = {
     },
   },
 }
+
+export const WorkingWithBackgroundTasks: Story = {
+  name: 'The working status lists tasks that are still running',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'fixture-task-one',
+        description: 'Watch the build pipeline',
+        elapsedSeconds: 128,
+      },
+      {
+        id: 'fixture-task-two',
+        description: 'Review the generated report',
+        elapsedSeconds: 43,
+      },
+    ],
+  },
+}
+
+export const BackgroundTasksContinueWhileTheSessionWaits: Story = {
+  name: 'Background tasks stay visible while the session waits',
+  args: {
+    showWorking: false,
+    backgroundTasks: [
+      {
+        id: 'fixture-task-one',
+        description: 'Watch the build pipeline',
+        elapsedSeconds: 128,
+      },
+    ],
+  },
+}
