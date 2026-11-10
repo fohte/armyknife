@@ -81,6 +81,7 @@ struct SessionView {
     repo: String,
     project: String,
     parent: Option<ParentSessionView>,
+    ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
 }
 
@@ -241,6 +242,7 @@ async fn list_sessions<S: SessionSource>(
                 repo: repo.clone(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
+                ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
             }
         })
@@ -633,6 +635,7 @@ mod tests {
             repo: String::new(),
             project: "Unsorted".to_string(),
             parent: None,
+            ancestor_session_ids: Vec::new(),
             pull_request: None,
         }
     }
@@ -837,6 +840,7 @@ mod tests {
                             "id": "parent-session",
                             "title": "parent title"
                         },
+                        "ancestorSessionIds": ["parent-session"],
                         "pullRequest": {
                             "number": 42,
                             "state": "Open"

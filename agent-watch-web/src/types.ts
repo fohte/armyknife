@@ -38,6 +38,7 @@ export type Session = {
   repo: string
   project: string
   parent: ParentSession | null
+  ancestorSessionIds: string[]
   pullRequest: PullRequest | null
 }
 

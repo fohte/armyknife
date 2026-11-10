@@ -23,6 +23,7 @@ function session(
     task: null,
     repo: 'example/' + project,
     project,
+    ancestorSessionIds: [],
     parent: null,
     pullRequest: null,
   }

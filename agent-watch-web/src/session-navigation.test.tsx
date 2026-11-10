@@ -15,6 +15,7 @@ function session(id: string): Session {
     task: null,
     repo: 'example/service',
     project: 'sample project',
+    ancestorSessionIds: [],
     parent: null,
     pullRequest: null,
   }

@@ -19,6 +19,7 @@ const session: Session = {
   },
   repo: 'example/service',
   project: 'sample project',
+  ancestorSessionIds: [],
   parent: null,
   pullRequest: null,
 }

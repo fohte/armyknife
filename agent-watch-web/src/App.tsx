@@ -49,15 +49,13 @@ export function App() {
   const pmProjects = useMemo(
     () =>
       sortPmProjects(projects).map((project) => {
-        const childSessionIds = new Set(
-          project.sessions.flatMap((session) =>
-            session.parent === null ? [] : [session.parent.id],
-          ),
+        const descendantAncestorIds = new Set(
+          project.sessions.flatMap((session) => session.ancestorSessionIds),
         )
         const pmSessionId =
           project.sessions.find(
             (session) =>
-              session.parent === null && childSessionIds.has(session.id),
+              session.parent === null && descendantAncestorIds.has(session.id),
           )?.id ?? null
 
         return {

@@ -29,6 +29,7 @@ function session(
   elapsedSeconds = 8,
   project = 'service refresh',
   parent: Session['parent'] = null,
+  ancestorSessionIds = parent === null ? [] : [parent.id],
 ): Session {
   return {
     id,
@@ -42,6 +43,7 @@ function session(
     repo: 'example/service',
     project,
     parent,
+    ancestorSessionIds,
     pullRequest: null,
   }
 }
@@ -49,17 +51,6 @@ function session(
 function projectSessions(): Session[] {
   return [
     session('session-pm', 'Project manager', 'in_progress', 30),
-    session(
-      'session-owner',
-      'Project owner',
-      'in_progress',
-      20,
-      'service refresh',
-      {
-        id: 'session-pm',
-        title: 'Project manager',
-      },
-    ),
     session(
       'session-worker',
       'Handle an alert',
@@ -70,9 +61,37 @@ function projectSessions(): Session[] {
         id: 'session-owner',
         title: 'Project owner',
       },
+      ['session-pm', 'session-owner'],
     ),
   ]
 }
+
+const openSessionCases = [
+  {
+    target: 'Board card',
+    selector: '[aria-label="Open in Inbox: Handle an alert"]',
+    expectedTitle: 'Handle an alert',
+    activation: 'click',
+  },
+  {
+    target: 'Board card',
+    selector: '[aria-label="Open in Inbox: Handle an alert"]',
+    expectedTitle: 'Handle an alert',
+    activation: 'keyboard',
+  },
+  {
+    target: 'project PM row',
+    selector: '[aria-label="Open service refresh PM session in Inbox"]',
+    expectedTitle: 'Project manager',
+    activation: 'click',
+  },
+  {
+    target: 'project PM row',
+    selector: '[aria-label="Open service refresh PM session in Inbox"]',
+    expectedTitle: 'Project manager',
+    activation: 'keyboard',
+  },
+] as const
 
 it('keeps the Board updated from the session feed while it is active', () => {
   renderApp()
@@ -183,24 +202,22 @@ it('toggles between the Board and Inbox with shifted B', () => {
   expect(views).toEqual(['Board', 'Inbox'])
 })
 
-it.each(['click', 'keyboard'] as const)(
-  'opens a Board card in Inbox with %s activation',
-  async (activation) => {
+it.each(openSessionCases)(
+  'opens $target in Inbox with $activation activation',
+  async ({ selector, expectedTitle, activation }) => {
     renderApp()
     publishSessions({ revision: 1, sessions: projectSessions() })
     act(() => {
       dispatchKey(window, 'B', { shiftKey: true })
     })
 
-    const card = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Open in Inbox: Handle an alert"]',
-    )
+    const target = container.querySelector<HTMLButtonElement>(selector)
     if (activation === 'click') {
       act(() => {
-        card?.click()
+        target?.click()
       })
     } else {
-      card?.focus()
+      target?.focus()
       await act(async () => {
         await userEvent.keyboard('{Enter}')
       })
@@ -213,42 +230,7 @@ it.each(['click', 'keyboard'] as const)(
 
     expect(snapshot()).toEqual({
       activeView: 'Inbox',
-      selectedTitle: 'Handle an alert',
-    })
-  },
-)
-
-it.each(['click', 'keyboard'] as const)(
-  'opens the project PM session in Inbox with %s activation',
-  async (activation) => {
-    renderApp()
-    publishSessions({ revision: 1, sessions: projectSessions() })
-    act(() => {
-      dispatchKey(window, 'B', { shiftKey: true })
-    })
-
-    const pmButton = container.querySelector<HTMLButtonElement>(
-      '[aria-label="Open service refresh PM session in Inbox"]',
-    )
-    if (activation === 'click') {
-      act(() => {
-        pmButton?.click()
-      })
-    } else {
-      pmButton?.focus()
-      await act(async () => {
-        await userEvent.keyboard('{Enter}')
-      })
-    }
-
-    const snapshot = () => ({
-      activeView: readActiveView(),
-      selectedTitle: readSelectedTitle(),
-    })
-
-    expect(snapshot()).toEqual({
-      activeView: 'Inbox',
-      selectedTitle: 'Project manager',
+      selectedTitle: expectedTitle,
     })
   },
 )
