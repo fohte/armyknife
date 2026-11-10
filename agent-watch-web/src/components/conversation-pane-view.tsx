@@ -12,6 +12,7 @@ import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
+import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -29,6 +30,7 @@ type ConversationPaneViewProps = {
   ) => Promise<boolean>
   onSelectSession: (id: string) => void
   isMobile?: boolean
+  fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
 }
@@ -45,6 +47,7 @@ export function ConversationPaneView({
   onAction,
   onSelectSession,
   isMobile = false,
+  fileDropActive = false,
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
@@ -89,6 +92,13 @@ export function ConversationPaneView({
     onPasteFiles(files)
     onClearError()
   }
+  const {
+    isFileDragActive,
+    handleDragEnter,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+  } = useConversationFileDrop(handlePasteFiles)
 
   const onComposerKeyDown = (
     event: ReactKeyboardEvent<HTMLTextAreaElement>,
@@ -195,7 +205,16 @@ export function ConversationPaneView({
       className="conversation-pane"
       data-mobile={isMobile ? 'true' : undefined}
       aria-label={`Conversation with ${session.title}`}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
     >
+      {fileDropActive || isFileDragActive ? (
+        <div className="conversation-drop-target" role="status">
+          Drop PNG, JPEG, GIF, or WebP images to attach
+        </div>
+      ) : null}
       <header className="conversation-header">
         {isMobile ? (
           <>

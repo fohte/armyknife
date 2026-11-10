@@ -250,6 +250,13 @@ export const AMessageIsSending: Story = {
   },
 }
 
+export const ImagesCanBeDropped: Story = {
+  name: 'The conversation highlights image drops',
+  args: {
+    fileDropActive: true,
+  },
+}
+
 export const TheConversationShowsOperationSummaries: Story = {
   name: 'The transcript shows messages and operation summaries',
   args: {
