@@ -348,6 +348,7 @@ pub(super) struct BackgroundTask {
 enum UserContentPart {
     Text { text: String },
     Image { source: String, available: bool },
+    File { name: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

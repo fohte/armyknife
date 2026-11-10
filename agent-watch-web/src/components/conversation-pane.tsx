@@ -30,6 +30,7 @@ function isChatItem(value: unknown): value is ChatItem {
         value['content'].every((part) => {
           if (!isRecord(part) || typeof part['type'] !== 'string') return false
           if (part['type'] === 'text') return typeof part['text'] === 'string'
+          if (part['type'] === 'file') return typeof part['name'] === 'string'
           if (part['type'] !== 'image') return false
           return (
             typeof part['source'] === 'string' &&

@@ -54,3 +54,16 @@ export const TextOnlyMessageIsDisplayed: Story = {
     },
   },
 }
+
+export const NonImageAttachmentNameAppears: Story = {
+  name: 'The user message shows the name of a document attachment',
+  args: {
+    message: {
+      type: 'user_with_content',
+      content: [
+        { type: 'text', text: 'Inspect this document.' },
+        { type: 'file', name: 'sample-layout.html' },
+      ],
+    },
+  },
+}

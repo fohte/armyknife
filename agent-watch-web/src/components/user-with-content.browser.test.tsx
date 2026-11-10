@@ -105,6 +105,29 @@ it('explains when an image is already unavailable', () => {
   ])
 })
 
+it('renders a non-image attachment by its filename in message order', () => {
+  render({
+    type: 'user_with_content',
+    content: [
+      { type: 'text', text: 'Inspect this document.' },
+      { type: 'file', name: 'sample-layout.html' },
+    ],
+  })
+
+  expect(snapshot()).toEqual([
+    {
+      className: 'markdown-message chat-user-message',
+      text: 'Inspect this document.',
+      source: null,
+    },
+    {
+      className: 'chat-user-file',
+      text: 'sample-layout.html',
+      source: null,
+    },
+  ])
+})
+
 it('renders a text-only user message', () => {
   render({ type: 'user', text: 'Please rerun the example check.' })
 

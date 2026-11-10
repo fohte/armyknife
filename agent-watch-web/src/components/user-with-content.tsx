@@ -63,12 +63,16 @@ export function UserWithContent({
           >
             {part.text}
           </MarkdownMessage>
-        ) : (
+        ) : part.type === 'image' ? (
           <UserImage
             key={`image-${String(partIndex)}`}
             source={part.source}
             available={part.available}
           />
+        ) : (
+          <p className="chat-user-file" key={`file-${String(partIndex)}`}>
+            {part.name}
+          </p>
         ),
       )}
     </article>
