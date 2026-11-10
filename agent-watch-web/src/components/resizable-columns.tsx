@@ -15,6 +15,8 @@ const separatorSize = 8
 type ResizableColumnsProps = {
   first: ReactNode
   second: ReactNode
+  firstCollapsed?: boolean
+  overlaySecondPane?: boolean
   storageKey: string | null
   firstSize: number
   firstMinSize: number
@@ -46,7 +48,6 @@ function saveStoredSize(storageKey: string | null, size: number) {
     () => undefined,
   )
 }
-
 function getMaximumFirstSize(
   containerWidth: number,
   firstMinSize: number,
@@ -59,6 +60,8 @@ function getMaximumFirstSize(
 export function ResizableColumns({
   first,
   second,
+  firstCollapsed = false,
+  overlaySecondPane = false,
   storageKey,
   firstSize: initialFirstSize,
   firstMinSize,
@@ -171,7 +174,12 @@ export function ResizableColumns({
   }
 
   return (
-    <div className="resizable-columns" ref={containerRef}>
+    <div
+      className="resizable-columns"
+      data-first-collapsed={firstCollapsed ? 'true' : undefined}
+      data-overlay-second-pane={overlaySecondPane ? 'true' : undefined}
+      ref={containerRef}
+    >
       <div
         className={`resizable-columns-pane resizable-columns-first-pane${!hasSecond && fillFirstPaneWhenAlone ? ' is-alone' : ''}`}
         style={{ flexBasis: `${String(firstSize)}px` }}
@@ -206,22 +214,5 @@ export function ResizableColumns({
         </>
       )}
     </div>
-  )
-}
-
-export function renderConversationCritColumns(
-  conversation: ReactNode,
-  crit: ReactNode,
-) {
-  return (
-    <ResizableColumns
-      first={conversation}
-      second={crit}
-      storageKey="agent-watch:conversation-width"
-      firstSize={560}
-      firstMinSize={240}
-      secondMinSize={300}
-      label="Resize conversation and crit"
-    />
   )
 }

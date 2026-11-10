@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { CritPane } from '#components/crit-pane'
 import { ResizableColumns } from '#components/resizable-columns'
+import { SessionStatusPanel } from '#components/session-status-panel'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -77,6 +78,41 @@ it('restores the stored width and saves keyboard resizing', () => {
     width: '450px',
     value: '450',
     saved: '450',
+  })
+})
+
+it('marks the first pane as collapsed without removing the second pane', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ResizableColumns
+        first={<div>First pane</div>}
+        second={<div>Second pane</div>}
+        firstCollapsed
+        storageKey={null}
+        firstSize={400}
+        firstMinSize={240}
+        secondMinSize={320}
+        label="Resize first and second panes"
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    collapsed: container
+      .querySelector('.resizable-columns')
+      ?.getAttribute('data-first-collapsed'),
+    first: container.querySelector('.resizable-columns-first-pane')
+      ?.textContent,
+    second: container.querySelector('.resizable-columns-second-pane')
+      ?.textContent,
+    separatorCount: container.querySelectorAll('[role="separator"]').length,
+  })
+  expect(snapshot()).toEqual({
+    collapsed: 'true',
+    first: 'First pane',
+    second: 'Second pane',
+    separatorCount: 1,
   })
 })
 
@@ -183,7 +219,7 @@ it('keeps a user-selected width when a narrow window clamps it', () => {
   ])
 })
 
-it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
+it('keeps the status panel visible on narrow desktop viewports', () => {
   window.resizeTo(1000, 900)
   container.style.width = '1000px'
   root = createRoot(container)
@@ -192,8 +228,22 @@ it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
       <ResizableColumns
         first={<div>Conversation</div>}
         second={
-          <CritPane
-            url="http://127.0.0.1:5000/review/sample"
+          <SessionStatusPanel
+            tabs={[
+              {
+                id: 'crit',
+                label: 'crit',
+                count: 1,
+                content: (
+                  <CritPane
+                    url="http://127.0.0.1:5000/review/sample"
+                    onClose={() => undefined}
+                  />
+                ),
+              },
+            ]}
+            activeTabId="crit"
+            onTabChange={() => undefined}
             onClose={() => undefined}
           />
         }
@@ -201,7 +251,7 @@ it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
         firstSize={400}
         firstMinSize={240}
         secondMinSize={300}
-        label="Resize conversation and crit"
+        label="Resize conversation and status panel"
       />,
     )
   })
@@ -215,7 +265,13 @@ it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
   const secondPane = container.querySelector<HTMLDivElement>(
     '.resizable-columns-second-pane',
   )
-  if (firstPane === null || separator === null || secondPane === null) {
+  const critPane = container.querySelector<HTMLDivElement>('.crit-pane')
+  if (
+    firstPane === null ||
+    separator === null ||
+    secondPane === null ||
+    critPane === null
+  ) {
     throw new Error('Expected both panes and a separator')
   }
 
@@ -225,14 +281,16 @@ it('hides the non-fullscreen Crit column on narrow desktop viewports', () => {
     firstPaneWidth: firstPane.getBoundingClientRect().width,
     separatorDisplay: window.getComputedStyle(separator).display,
     secondPaneDisplay: window.getComputedStyle(secondPane).display,
+    critPaneDisplay: window.getComputedStyle(critPane).display,
   })
 
   expect(snapshot()).toEqual({
     narrowViewport: true,
-    firstPaneFlexGrow: '1',
-    firstPaneWidth: 1000,
-    separatorDisplay: 'none',
-    secondPaneDisplay: 'none',
+    firstPaneFlexGrow: '0',
+    firstPaneWidth: 400,
+    separatorDisplay: 'block',
+    secondPaneDisplay: 'flex',
+    critPaneDisplay: 'flex',
   })
 })
 
