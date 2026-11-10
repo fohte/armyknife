@@ -886,7 +886,11 @@ fn process_hook_event_impl_with_settings(
         let compacting = match event {
             HookEvent::PreCompact => Some(true),
             HookEvent::Stop | HookEvent::StopFailure => Some(false),
-            HookEvent::SessionStart if input.source.as_deref() == Some("compact") => Some(false),
+            HookEvent::SessionStart
+                if matches!(input.source.as_deref(), Some("compact" | "resume")) =>
+            {
+                Some(false)
+            }
             _ => None,
         };
         if let Some(compacting) = compacting {
@@ -1948,13 +1952,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::stop(HookEvent::Stop, None)]
-    #[case::stop_failure(HookEvent::StopFailure, None)]
-    #[case::session_end(HookEvent::SessionEnd, None)]
-    #[case::other_session_start(HookEvent::SessionStart, Some("resume"))]
+    #[case::stop(HookEvent::Stop, None, false)]
+    #[case::stop_failure(HookEvent::StopFailure, None, false)]
+    #[case::session_end(HookEvent::SessionEnd, None, false)]
+    #[case::compaction_start(HookEvent::SessionStart, Some("compact"), false)]
+    #[case::resume(HookEvent::SessionStart, Some("resume"), false)]
+    #[case::startup_preserves_marker(HookEvent::SessionStart, Some("startup"), true)]
     fn compaction_state_clears_only_for_expected_lifecycle_events(
         #[case] event: HookEvent,
         #[case] source: Option<&str>,
+        #[case] expected: bool,
     ) {
         let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
         let sessions_dir = temp_dir.path();
@@ -1979,7 +1986,35 @@ mod tests {
                 .expect("watch-web state should load")
                 .first()
                 .map(|state| state.is_compacting),
-            Some(event == HookEvent::SessionStart),
+            Some(expected),
+        );
+    }
+
+    #[rstest]
+    #[case::claude_subagent(Engine::Claude, Some("fixture-agent"))]
+    #[case::codex_main_thread(Engine::Codex, None)]
+    fn pre_compact_ignores_events_outside_the_claude_main_thread(
+        #[case] engine: Engine,
+        #[case] agent_id: Option<&str>,
+    ) {
+        let temp_dir = tempfile::TempDir::new().expect("temp dir creation should succeed");
+        let sessions_dir = temp_dir.path();
+        let mut input = create_test_input(None);
+        input.engine = engine;
+        input.agent_id = agent_id.map(str::to_string);
+
+        process_hook_event_without_instruction(
+            HookEvent::PreCompact,
+            input,
+            sessions_dir,
+            &SideEffects::none(),
+        )
+        .expect("pre-compact hook should succeed");
+
+        assert_eq!(
+            store::watch_web_session_states_from(sessions_dir)
+                .expect("watch-web state should load"),
+            Vec::new(),
         );
     }
 
