@@ -58,8 +58,8 @@ export function UserWithContent({
           <MarkdownMessage
             className="chat-user-message"
             key={`text-${String(partIndex)}`}
-            onSelectSession={onSelectSession}
-            sessions={sessions}
+            {...(onSelectSession === undefined ? {} : { onSelectSession })}
+            {...(sessions === undefined ? {} : { sessions })}
           >
             {part.text}
           </MarkdownMessage>
