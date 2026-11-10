@@ -21,7 +21,10 @@ export const LATER_PRESET_OPTIONS = [
 ] as const
 
 export type LaterPreset = (typeof LATER_PRESET_OPTIONS)[number]['preset']
-export type LaterPresetTimes = Record<LaterPreset, string>
+export type LaterPresetTimes = Record<
+  LaterPreset,
+  { when: string; deadline: string | null }
+>
 
 export function getSessionShortcutAction(
   key: string,

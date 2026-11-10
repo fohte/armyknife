@@ -25,8 +25,15 @@ function postSessionAction(sessionId: string, action: string, body: object) {
   )
 }
 
-export function setSessionLater(sessionId: string, preset: LaterPreset) {
-  return postSessionAction(sessionId, 'later', { preset })
+export function setSessionLater(
+  sessionId: string,
+  preset: LaterPreset,
+  expectedDeadline?: string | null,
+) {
+  return postSessionAction(sessionId, 'later', {
+    preset,
+    expectedDeadline,
+  })
 }
 
 export function setSessionBackNow(sessionId: string) {
@@ -37,16 +44,27 @@ export function setSessionToday(sessionId: string, isToday: boolean) {
   return postSessionAction(sessionId, 'today', { isToday })
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
 function isLaterPresetTimes(value: unknown): value is LaterPresetTimes {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    LATER_PRESET_OPTIONS.every(
-      ({ preset }) =>
-        Object.hasOwn(value, preset) &&
-        typeof Reflect.get(value, preset) === 'string',
+  if (!isRecord(value)) {
+    return false
+  }
+  return LATER_PRESET_OPTIONS.every(({ preset }) => {
+    if (!Object.hasOwn(value, preset)) {
+      return false
+    }
+    const option = value[preset]
+    return (
+      isRecord(option) &&
+      Object.hasOwn(option, 'when') &&
+      typeof option['when'] === 'string' &&
+      Object.hasOwn(option, 'deadline') &&
+      (option['deadline'] === null || typeof option['deadline'] === 'string')
     )
-  )
+  })
 }
 
 export function getLaterPresetTimes() {

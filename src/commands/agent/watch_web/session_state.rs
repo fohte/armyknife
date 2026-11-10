@@ -62,6 +62,7 @@ enum LaterPreset {
 #[serde(rename_all = "camelCase")]
 struct LaterRequest {
     preset: LaterPreset,
+    expected_deadline: Option<DateTime<Utc>>,
 }
 
 #[derive(Deserialize)]
@@ -70,13 +71,19 @@ struct TodayRequest {
     is_today: bool,
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize)]
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
+struct LaterPresetTime {
+    when: String,
+    deadline: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 struct LaterPresetTimes {
-    one_hour: String,
-    this_evening: String,
-    tomorrow: String,
-    next_week: String,
-    until_it_changes: String,
+    one_hour: LaterPresetTime,
+    this_evening: LaterPresetTime,
+    tomorrow: LaterPresetTime,
+    next_week: LaterPresetTime,
+    until_it_changes: LaterPresetTime,
 }
 
 async fn later_options(State(state): State<SessionStateStore>) -> Json<LaterPresetTimes> {
@@ -96,9 +103,15 @@ async fn set_later(
 
     let now = state.clock.now();
     let until_activity = matches!(request.preset, LaterPreset::UntilItChanges);
-    let later_until = (!until_activity)
-        .then(|| later_deadline(request.preset, now))
-        .flatten();
+    let later_until = if let Some(preset) = request.preset.timed() {
+        let deadline = later_deadline(preset, now).ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+        if request.expected_deadline != Some(deadline) {
+            return Err(StatusCode::CONFLICT);
+        }
+        Some(deadline)
+    } else {
+        None
+    };
     save_later(&state, &id, later_until, session.updated_at, until_activity)?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -165,72 +178,96 @@ fn save_today(state: &SessionStateStore, id: &str, is_today: bool) -> Result<(),
 
 fn later_preset_times(now: DateTime<Utc>) -> LaterPresetTimes {
     LaterPresetTimes {
-        one_hour: later_preset_when(LaterPreset::OneHour, now),
-        this_evening: later_preset_when(LaterPreset::ThisEvening, now),
-        tomorrow: later_preset_when(LaterPreset::Tomorrow, now),
-        next_week: later_preset_when(LaterPreset::NextWeek, now),
-        until_it_changes: later_preset_when(LaterPreset::UntilItChanges, now),
+        one_hour: timed_later_preset_time(TimedLaterPreset::OneHour, now),
+        this_evening: timed_later_preset_time(TimedLaterPreset::ThisEvening, now),
+        tomorrow: timed_later_preset_time(TimedLaterPreset::Tomorrow, now),
+        next_week: timed_later_preset_time(TimedLaterPreset::NextWeek, now),
+        until_it_changes: LaterPresetTime {
+            when: "next activity".to_string(),
+            deadline: None,
+        },
     }
 }
 
-fn later_preset_when(preset: LaterPreset, now: DateTime<Utc>) -> String {
-    if matches!(preset, LaterPreset::UntilItChanges) {
-        return "next activity".to_string();
-    }
-    if matches!(preset, LaterPreset::BackNow) {
-        return "now".to_string();
-    }
+fn timed_later_preset_time(preset: TimedLaterPreset, now: DateTime<Utc>) -> LaterPresetTime {
     let Some(deadline) = later_deadline(preset, now) else {
-        return "Unavailable".to_string();
+        return LaterPresetTime {
+            when: "Unavailable".to_string(),
+            deadline: None,
+        };
     };
     let deadline = deadline.with_timezone(&Local);
     let today = now.with_timezone(&Local).date_naive();
 
-    match preset {
-        LaterPreset::OneHour => format!("{:02}:{:02}", deadline.hour(), deadline.minute()),
-        LaterPreset::ThisEvening if deadline.date_naive() == today => {
+    let when = match preset {
+        TimedLaterPreset::OneHour => format!("{:02}:{:02}", deadline.hour(), deadline.minute()),
+        TimedLaterPreset::ThisEvening if deadline.date_naive() == today => {
             format!("{:02}:{:02}", deadline.hour(), deadline.minute())
         }
-        LaterPreset::ThisEvening => format!(
+        TimedLaterPreset::ThisEvening => format!(
             "{} {:02}:{:02}",
             deadline.format("%a"),
             deadline.hour(),
             deadline.minute()
         ),
-        LaterPreset::Tomorrow => format!(
+        TimedLaterPreset::Tomorrow => format!(
             "{} {}:{:02}",
             deadline.format("%a"),
             deadline.hour(),
             deadline.minute()
         ),
-        LaterPreset::NextWeek => format!(
+        TimedLaterPreset::NextWeek => format!(
             "{} {}/{}",
             deadline.format("%a"),
             deadline.month(),
             deadline.day()
         ),
-        LaterPreset::UntilItChanges => "next activity".to_string(),
-        LaterPreset::BackNow => "now".to_string(),
+    };
+    LaterPresetTime {
+        when,
+        deadline: Some(deadline.with_timezone(&Utc)),
     }
 }
 
-fn later_deadline(preset: LaterPreset, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+#[derive(Clone, Copy)]
+enum TimedLaterPreset {
+    OneHour,
+    ThisEvening,
+    Tomorrow,
+    NextWeek,
+}
+
+impl LaterPreset {
+    fn timed(self) -> Option<TimedLaterPreset> {
+        match self {
+            Self::OneHour => Some(TimedLaterPreset::OneHour),
+            Self::ThisEvening => Some(TimedLaterPreset::ThisEvening),
+            Self::Tomorrow => Some(TimedLaterPreset::Tomorrow),
+            Self::NextWeek => Some(TimedLaterPreset::NextWeek),
+            Self::BackNow | Self::UntilItChanges => None,
+        }
+    }
+}
+
+fn later_deadline(preset: TimedLaterPreset, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let local_now = now.with_timezone(&Local);
     let today = local_now.date_naive();
     let evening = NaiveTime::from_hms_opt(19, 0, 0)?;
     let (date, time) = match preset {
-        LaterPreset::OneHour => return Some(now + chrono::Duration::hours(1)),
-        LaterPreset::ThisEvening if local_now.time() < evening => (today, evening),
-        LaterPreset::ThisEvening => (today + Days::new(1), evening),
-        LaterPreset::Tomorrow => (today + Days::new(1), NaiveTime::from_hms_opt(9, 0, 0)?),
-        LaterPreset::NextWeek => {
+        TimedLaterPreset::OneHour => {
+            let deadline = now + chrono::Duration::hours(1);
+            return deadline.with_second(0)?.with_nanosecond(0);
+        }
+        TimedLaterPreset::ThisEvening if local_now.time() < evening => (today, evening),
+        TimedLaterPreset::ThisEvening => (today + Days::new(1), evening),
+        TimedLaterPreset::Tomorrow => (today + Days::new(1), NaiveTime::from_hms_opt(9, 0, 0)?),
+        TimedLaterPreset::NextWeek => {
             let days_until_monday = 7 - local_now.weekday().num_days_from_monday();
             (
                 today + Days::new(u64::from(days_until_monday)),
                 NaiveTime::from_hms_opt(9, 0, 0)?,
             )
         }
-        LaterPreset::UntilItChanges | LaterPreset::BackNow => return None,
     };
     match Local.from_local_datetime(&date.and_time(time)) {
         LocalResult::Single(deadline) => Some(deadline.with_timezone(&Utc)),
@@ -457,20 +494,45 @@ mod tests {
             .with_timezone(&Utc)
     }
 
+    #[derive(Debug)]
+    struct LaterOptionsCase {
+        now_local: (i32, u32, u32, u32, u32),
+        one_hour: &'static str,
+        this_evening: &'static str,
+        tomorrow: &'static str,
+        one_hour_deadline: (i32, u32, u32, u32, u32),
+        evening_deadline: (i32, u32, u32, u32, u32),
+        tomorrow_deadline: (i32, u32, u32, u32, u32),
+    }
+
     #[rstest]
-    #[case::before_evening((2030, 3, 4, 15, 0), "16:00", "19:00", "Tue 9:00")]
-    #[case::after_evening((2030, 3, 4, 20, 0), "21:00", "Tue 19:00", "Tue 9:00")]
+    #[case::before_evening(LaterOptionsCase {
+        now_local: (2030, 3, 4, 15, 0),
+        one_hour: "16:00",
+        this_evening: "19:00",
+        tomorrow: "Tue 9:00",
+        one_hour_deadline: (2030, 3, 4, 16, 0),
+        evening_deadline: (2030, 3, 4, 19, 0),
+        tomorrow_deadline: (2030, 3, 5, 9, 0),
+    })]
+    #[case::after_evening(LaterOptionsCase {
+        now_local: (2030, 3, 4, 20, 0),
+        one_hour: "21:00",
+        this_evening: "Tue 19:00",
+        tomorrow: "Tue 9:00",
+        one_hour_deadline: (2030, 3, 4, 21, 0),
+        evening_deadline: (2030, 3, 5, 19, 0),
+        tomorrow_deadline: (2030, 3, 5, 9, 0),
+    })]
     #[tokio::test]
     async fn later_options_show_server_calculated_return_times(
         temp_dir: TempDir,
-        #[case] now_local: (i32, u32, u32, u32, u32),
-        #[case] one_hour: &str,
-        #[case] this_evening: &str,
-        #[case] tomorrow: &str,
+        #[case] expected: LaterOptionsCase,
     ) {
+        let now = local_time_as_utc(expected.now_local);
         let app = router_with_store(SessionStateStore {
             sessions_dir: Some(temp_dir.path().to_path_buf()),
-            clock: SessionClock::Fixed(local_time_as_utc(now_local)),
+            clock: SessionClock::Fixed(now),
         });
         let response = app
             .oneshot(
@@ -482,19 +544,34 @@ mod tests {
             .unwrap();
         let status = response.status();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let options = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        let options = serde_json::from_slice::<LaterPresetTimes>(&body).unwrap();
 
         assert_eq!(
             (status, options),
             (
                 StatusCode::OK,
-                serde_json::json!({
-                    "one_hour": one_hour,
-                    "this_evening": this_evening,
-                    "tomorrow": tomorrow,
-                    "next_week": "Mon 3/11",
-                    "until_it_changes": "next activity",
-                }),
+                LaterPresetTimes {
+                    one_hour: LaterPresetTime {
+                        when: expected.one_hour.to_string(),
+                        deadline: Some(local_time_as_utc(expected.one_hour_deadline)),
+                    },
+                    this_evening: LaterPresetTime {
+                        when: expected.this_evening.to_string(),
+                        deadline: Some(local_time_as_utc(expected.evening_deadline)),
+                    },
+                    tomorrow: LaterPresetTime {
+                        when: expected.tomorrow.to_string(),
+                        deadline: Some(local_time_as_utc(expected.tomorrow_deadline)),
+                    },
+                    next_week: LaterPresetTime {
+                        when: "Mon 3/11".to_string(),
+                        deadline: Some(local_time_as_utc((2030, 3, 11, 9, 0))),
+                    },
+                    until_it_changes: LaterPresetTime {
+                        when: "next activity".to_string(),
+                        deadline: None,
+                    },
+                },
             ),
         );
     }
@@ -525,7 +602,13 @@ mod tests {
             .oneshot(
                 Request::post("/sessions/test-session/later")
                     .header("content-type", "application/json")
-                    .body(Body::from(format!(r#"{{"preset":"{preset}"}}"#)))
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "preset": preset,
+                            "expectedDeadline": expected_later_until,
+                        }))
+                        .unwrap(),
+                    ))
                     .unwrap(),
             )
             .await
@@ -546,6 +629,40 @@ mod tests {
                     is_today: false,
                 }],
             ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn rejects_a_later_deadline_that_does_not_match_the_options_response(
+        saved_session_dir: TempDir,
+    ) {
+        let app = router_with_store(SessionStateStore {
+            sessions_dir: Some(saved_session_dir.path().to_path_buf()),
+            clock: SessionClock::Fixed(local_time_as_utc((2030, 3, 4, 15, 0))),
+        });
+        let response = app
+            .oneshot(
+                Request::post("/sessions/test-session/later")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        serde_json::to_vec(&serde_json::json!({
+                            "preset": "one_hour",
+                            "expectedDeadline": local_time_as_utc((2030, 3, 4, 17, 0)),
+                        }))
+                        .unwrap(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response.status(),
+                store::watch_web_session_states_from(saved_session_dir.path()).unwrap(),
+            ),
+            (StatusCode::CONFLICT, vec![]),
         );
     }
 

@@ -12,6 +12,7 @@ type LaterMenuProps = {
   sessionTitle: string
   isLater: boolean
   laterTimes: LaterPresetTimes | null
+  laterTimesError: boolean
   onSelect: (preset: LaterPreset) => void
   onBackNow: () => void
   onClose: () => void
@@ -21,6 +22,7 @@ export function LaterMenu({
   sessionTitle,
   isLater,
   laterTimes,
+  laterTimesError,
   onSelect,
   onBackNow,
   onClose,
@@ -42,6 +44,11 @@ export function LaterMenu({
             type="button"
             variant="plain"
             role="menuitem"
+            disabled={
+              laterTimes === null ||
+              (option.preset !== 'until_it_changes' &&
+                laterTimes[option.preset].deadline === null)
+            }
             className="later-menu-option cursor-pointer"
             onClick={() => {
               onSelect(option.preset)
@@ -49,11 +56,17 @@ export function LaterMenu({
           >
             <span>{option.label}</span>
             <span className="later-menu-when">
-              {laterTimes?.[option.preset] ?? 'Loading…'}
+              {laterTimes?.[option.preset].when ??
+                (laterTimesError ? 'Unavailable' : 'Loading…')}
             </span>
             <kbd>{option.key}</kbd>
           </Button>
         ))}
+        {laterTimesError ? (
+          <p className="later-menu-error" role="alert">
+            Could not load return times.
+          </p>
+        ) : null}
         {isLater ? (
           <Button
             type="button"

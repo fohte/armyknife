@@ -260,11 +260,11 @@ it('disables a PM row when its project has no PM session', () => {
 })
 
 const laterPresetTimes = {
-  one_hour: '16:00',
-  this_evening: '19:00',
-  tomorrow: 'Tue 9:00',
-  next_week: 'Mon 3/11',
-  until_it_changes: 'next activity',
+  one_hour: { when: '16:00', deadline: '2030-03-04T16:00:00Z' },
+  this_evening: { when: '19:00', deadline: '2030-03-04T19:00:00Z' },
+  tomorrow: { when: 'Tue 9:00', deadline: '2030-03-05T09:00:00Z' },
+  next_week: { when: 'Mon 3/11', deadline: '2030-03-11T09:00:00Z' },
+  until_it_changes: { when: 'next activity', deadline: null },
 }
 
 function requestUrl(input: RequestInfo | URL) {
@@ -448,7 +448,7 @@ it('opens Later with L and selects a preset with its number key', async () => {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: '{"preset":"tomorrow"}',
+          body: '{"preset":"tomorrow","expectedDeadline":"2030-03-05T09:00:00Z"}',
         },
       ],
     ],
@@ -507,6 +507,107 @@ it('returns a Later session immediately from the menu', async () => {
       },
     ],
   ])
+})
+
+it.each([
+  {
+    scenario: 'a failed request',
+    response: new Response(null, { status: 503 }),
+  },
+  {
+    scenario: 'an invalid response',
+    response: new Response('{', { status: 200 }),
+  },
+])('disables Later presets after $scenario', async ({ response }) => {
+  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  await act(async () => {
+    dispatchKey(window, 'l')
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.later-menu-error')?.textContent,
+    disabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'),
+      (button) => button.disabled,
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not load return times.',
+    disabled: [true, true, true, true, true],
+  })
+})
+
+it('ignores return times from an earlier Later menu request', async () => {
+  let resolveFirst!: (response: Response) => void
+  let resolveSecond!: (response: Response) => void
+  const firstResponse = new Promise<Response>((resolve) => {
+    resolveFirst = resolve
+  })
+  const secondResponse = new Promise<Response>((resolve) => {
+    resolveSecond = resolve
+  })
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockReturnValueOnce(firstResponse)
+    .mockReturnValueOnce(secondResponse)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+
+  act(() => {
+    dispatchKey(window, 'l')
+  })
+  act(() => {
+    dispatchKey(window, 'Escape')
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  act(() => {
+    dispatchKey(window, 'l')
+  })
+  await act(async () => {
+    resolveSecond(
+      new Response(
+        JSON.stringify({
+          ...laterPresetTimes,
+          one_hour: { when: '22:00', deadline: '2030-03-04T22:00:00Z' },
+        }),
+        { status: 200 },
+      ),
+    )
+    await flushAsyncState()
+  })
+  await act(async () => {
+    resolveFirst(
+      new Response(
+        JSON.stringify({
+          ...laterPresetTimes,
+          one_hour: { when: '14:00', deadline: '2030-03-04T14:00:00Z' },
+        }),
+        { status: 200 },
+      ),
+    )
+    await flushAsyncState()
+  })
+
+  const returnTime = container.querySelector('.later-menu-when')?.textContent
+  expect(returnTime).toEqual('22:00')
 })
 
 it('saves a TODAY star from the session row', async () => {

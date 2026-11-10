@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
@@ -32,6 +32,8 @@ export function App() {
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
   const [laterTimes, setLaterTimes] = useState<LaterPresetTimes | null>(null)
+  const [laterTimesError, setLaterTimesError] = useState(false)
+  const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
   const [loaded, setLoaded] = useState(false)
 
@@ -107,11 +109,28 @@ export function App() {
   )
 
   const openLater = useCallback((id: string) => {
+    const requestId = ++laterRequestId.current
     setLaterTimes(null)
+    setLaterTimesError(false)
     setLaterSessionId(id)
-    void getLaterPresetTimes().match(setLaterTimes, () => {
-      setError('Could not load Later return times.')
-    })
+    setError(null)
+    void getLaterPresetTimes().match(
+      (times) => {
+        if (requestId === laterRequestId.current) {
+          setLaterTimes(times)
+        }
+      },
+      () => {
+        if (requestId === laterRequestId.current) {
+          setLaterTimesError(true)
+          setError('Could not load Later return times.')
+        }
+      },
+    )
+  }, [])
+  const closeLater = useCallback(() => {
+    laterRequestId.current += 1
+    setLaterSessionId(null)
   }, [])
 
   useEffect(
@@ -163,9 +182,9 @@ export function App() {
       laterSessionId !== null &&
       !sessions.some((session) => session.id === laterSessionId)
     ) {
-      setLaterSessionId(null)
+      closeLater()
     }
-  }, [laterSessionId, sessions])
+  }, [closeLater, laterSessionId, sessions])
 
   useEffect(() => {
     if (view !== 'inbox') {
@@ -196,18 +215,23 @@ export function App() {
       if (laterSessionId !== null) {
         if (event.key === 'Escape') {
           event.preventDefault()
-          setLaterSessionId(null)
+          closeLater()
           return
         }
         const preset = getLaterPresetShortcut(event.key)
         if (preset !== null) {
+          const expectedDeadline = laterTimes?.[preset].deadline
+          if (expectedDeadline === undefined) {
+            return
+          }
           event.preventDefault()
-          void setSessionLater(laterSessionId, preset).match(
+          void setSessionLater(laterSessionId, preset, expectedDeadline).match(
             () => {
-              setLaterSessionId(null)
+              closeLater()
               setError(null)
             },
             () => {
+              openLater(laterSessionId)
               setError('Could not move the session to Later.')
             },
           )
@@ -238,7 +262,15 @@ export function App() {
     return () => {
       window.removeEventListener('keydown', onKeyDown)
     }
-  }, [laterSessionId, navigableSessions, openLater, selectedId, view])
+  }, [
+    closeLater,
+    laterSessionId,
+    laterTimes,
+    navigableSessions,
+    openLater,
+    selectedId,
+    view,
+  ])
 
   const needsActionCount = sessionsWithElapsedTime.filter(
     (session) => session.category === 'needs_action',
@@ -313,13 +345,12 @@ export function App() {
           sessionTitle={laterSession.title}
           isLater={laterSession.category === 'later'}
           laterTimes={laterTimes}
-          onClose={() => {
-            setLaterSessionId(null)
-          }}
+          laterTimesError={laterTimesError}
+          onClose={closeLater}
           onBackNow={() => {
             void setSessionBackNow(laterSession.id).match(
               () => {
-                setLaterSessionId(null)
+                closeLater()
                 setError(null)
               },
               () => {
@@ -328,12 +359,21 @@ export function App() {
             )
           }}
           onSelect={(preset) => {
-            void setSessionLater(laterSession.id, preset).match(
+            const expectedDeadline = laterTimes?.[preset].deadline
+            if (expectedDeadline === undefined) {
+              return
+            }
+            void setSessionLater(
+              laterSession.id,
+              preset,
+              expectedDeadline,
+            ).match(
               () => {
-                setLaterSessionId(null)
+                closeLater()
                 setError(null)
               },
               () => {
+                openLater(laterSession.id)
                 setError('Could not move the session to Later.')
               },
             )

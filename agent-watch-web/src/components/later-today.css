@@ -196,3 +196,9 @@
   color: var(--muted-foreground-strong);
   font-size: 10px;
 }
+
+.later-menu-error {
+  margin: 8px 8px 0;
+  color: var(--destructive);
+  font-size: 11px;
+}
