@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.548](https://github.com/fohte/armyknife/compare/v0.1.547...v0.1.548) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show idle after interrupt ([#1452](https://github.com/fohte/armyknife/issues/1452)) ([87d57aa](https://github.com/fohte/armyknife/commit/87d57aaa35e5e86eba7cf43c745759a81e8b157f))
+* **agent/watch-web:** deliver paused messages ([#1454](https://github.com/fohte/armyknife/issues/1454)) ([6d4e506](https://github.com/fohte/armyknife/commit/6d4e5061bca06f24d0c04dca801d8cff26443b1c))
+
 ## [0.1.547](https://github.com/fohte/armyknife/compare/v0.1.546...v0.1.547) (2026-11-10)
 
 
