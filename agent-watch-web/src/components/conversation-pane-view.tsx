@@ -8,7 +8,7 @@ type ConversationPaneViewProps = {
   session: Session
   messages: readonly ChatItem[]
   actions: SessionActions | null
-  actionsPending?: boolean
+  actionsReady?: boolean
   loading: boolean
   sending?: boolean
   error: string | null
@@ -22,7 +22,7 @@ export function ConversationPaneView({
   session,
   messages,
   actions,
-  actionsPending = false,
+  actionsReady = true,
   loading,
   sending = false,
   error,
@@ -117,7 +117,7 @@ export function ConversationPaneView({
         !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
         activeQuestionIndex < 0 ||
-        actionsPending ||
+        !actionsReady ||
         actions?.answerQuestion !== true
       ) {
         return
@@ -135,7 +135,7 @@ export function ConversationPaneView({
     }
   }, [
     actions?.answerQuestion,
-    actionsPending,
+    actionsReady,
     activeQuestionIndex,
     onAction,
     waitingQuestion,
@@ -273,7 +273,7 @@ export function ConversationPaneView({
           if (message.type === 'question') {
             const canAnswer =
               index === activeQuestionIndex &&
-              !actionsPending &&
+              actionsReady &&
               actions?.answerQuestion === true
             return (
               <article
@@ -320,7 +320,7 @@ export function ConversationPaneView({
                   <Button
                     type="button"
                     variant="plain"
-                    disabled={actionsPending || !actions.permission.approve}
+                    disabled={!actionsReady || !actions.permission.approve}
                     onClick={() => {
                       void onAction('permission/approve')
                     }}
@@ -330,7 +330,7 @@ export function ConversationPaneView({
                   <Button
                     type="button"
                     variant="plain"
-                    disabled={actionsPending || !actions.permission.reject}
+                    disabled={!actionsReady || !actions.permission.reject}
                     onClick={() => {
                       void onAction('permission/reject')
                     }}

@@ -44,7 +44,7 @@ const meta = {
     session,
     messages: [] as ChatItem[],
     actions,
-    actionsPending: false,
+    actionsReady: true,
     loading: false,
     sending: false,
     error: null,

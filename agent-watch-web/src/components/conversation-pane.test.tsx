@@ -807,14 +807,14 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
     composerDisabled: false,
     composerFocused: true,
     transcript: 'Current conversation',
-    questionChoiceDisabled: [true, true],
-    permissionButtonsDisabled: [true, true],
+    questionChoiceDisabled: [false, false],
+    permissionButtonsDisabled: [false, false],
     conversationStatus: undefined,
     requestsStarted: 4,
   })
 })
 
-it('keeps question and permission actions disabled after a refresh error', async () => {
+it('keeps question and permission actions active after a refresh error', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
@@ -899,8 +899,8 @@ it('keeps question and permission actions disabled after a refresh error', async
     requestCount: fetcher.mock.calls.length,
   })
   expect(snapshot()).toEqual({
-    questionChoiceDisabled: [true, true],
-    permissionButtonsDisabled: [true, true],
+    questionChoiceDisabled: [false, false],
+    permissionButtonsDisabled: [false, false],
     error: 'Messages unavailable',
     requestCount: 4,
   })
