@@ -210,20 +210,15 @@ export function ConversationPaneView({
             </Button>
             <div className="mobile-conversation-heading">
               <div className="mobile-conversation-context">
-                {session.task ? (
-                  <span>
-                    {session.task.priority != null
-                      ? `P${String(session.task.priority)} `
-                      : ''}
-                    #{session.task.number} {session.task.title}
-                  </span>
-                ) : null}
-                {session.task ? <span aria-hidden="true"> · </span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                task={session.task}
+                tasks={
+                  session.tasks ?? (session.task === null ? [] : [session.task])
+                }
               />
             </div>
             <Button
@@ -239,19 +234,6 @@ export function ConversationPaneView({
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
-                {session.task ? (
-                  <a
-                    className="conversation-task-link"
-                    href={`https://tq.fohte.net/tasks/${encodeURIComponent(session.task.id)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {session.task.priority != null ? (
-                      <span>P{session.task.priority}</span>
-                    ) : null}{' '}
-                    #{session.task.number} {session.task.title}
-                  </a>
-                ) : null}
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}
@@ -276,6 +258,10 @@ export function ConversationPaneView({
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                task={session.task}
+                tasks={
+                  session.tasks ?? (session.task === null ? [] : [session.task])
+                }
               />
             </div>
             <div className="conversation-header-actions">

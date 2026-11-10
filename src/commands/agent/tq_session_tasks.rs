@@ -88,6 +88,7 @@ where
 
 /// Reduces tq's session -> tasks listing to one task per locally known session.
 /// It prefers session-specific tasks, then open tasks, then newer links.
+#[cfg(test)]
 pub(super) fn build_task_by_session(
     sessions: Vec<SessionTasks>,
     local_session_ids: &HashSet<String>,
@@ -156,4 +157,98 @@ pub(super) fn build_all_tasks_by_session(
             (session.session_id, tasks)
         })
         .collect()
+}
+
+/// Orders a session's links by current work first, then by link time.
+pub(super) fn build_watch_web_tasks_by_session(
+    sessions: Vec<SessionTasks>,
+    local_session_ids: &HashSet<String>,
+) -> HashMap<String, Vec<SessionTask>> {
+    sessions
+        .into_iter()
+        .filter(|session| local_session_ids.contains(&session.session_id))
+        .map(|session| {
+            let mut tasks = session.tasks;
+            tasks.sort_by(|left, right| {
+                (left.status == TqTaskStatus::Completed)
+                    .cmp(&(right.status == TqTaskStatus::Completed))
+                    .then_with(|| right.linked_at.cmp(&left.linked_at))
+            });
+            let tasks = tasks
+                .into_iter()
+                .map(|task| SessionTask {
+                    task_id: task.id,
+                    task_number: task.number,
+                    task_title: normalize_title(&task.title),
+                    parent_task_id: task.parent_id,
+                    is_closed: task.status == TqTaskStatus::Completed,
+                })
+                .collect();
+            (session.session_id, tasks)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SessionTask;
+    use super::build_watch_web_tasks_by_session;
+    use crate::infra::tq::{SessionTasks, TqTask, TqTaskStatus};
+    use chrono::{DateTime, Utc};
+    use rstest::rstest;
+    use std::collections::{HashMap, HashSet};
+
+    fn task(id: &str, linked_at: &str, status: TqTaskStatus) -> TqTask {
+        TqTask {
+            id: id.to_string(),
+            number: 1,
+            title: id.to_string(),
+            linked_at: Some(
+                DateTime::parse_from_rfc3339(linked_at)
+                    .expect("valid timestamp")
+                    .with_timezone(&Utc),
+            ),
+            parent_id: None,
+            status,
+        }
+    }
+
+    fn view_task(id: &str, is_closed: bool) -> SessionTask {
+        SessionTask {
+            task_id: id.to_string(),
+            task_number: 1,
+            task_title: id.to_string(),
+            parent_task_id: None,
+            is_closed,
+        }
+    }
+
+    #[rstest]
+    #[case::open_links_precede_completed_links(
+        vec![
+            task("completed-newest", "2026-01-03T00:00:00Z", TqTaskStatus::Completed),
+            task("open-oldest", "2026-01-01T00:00:00Z", TqTaskStatus::Todo),
+            task("open-newest", "2026-01-02T00:00:00Z", TqTaskStatus::Todo),
+        ],
+        vec![view_task("open-newest", false), view_task("open-oldest", false), view_task("completed-newest", true)],
+    )]
+    #[case::newest_link_wins_when_all_tasks_are_completed(
+        vec![
+            task("older", "2026-01-01T00:00:00Z", TqTaskStatus::Completed),
+            task("newer", "2026-01-02T00:00:00Z", TqTaskStatus::Completed),
+        ],
+        vec![view_task("newer", true), view_task("older", true)],
+    )]
+    fn orders_watch_web_links(#[case] tasks: Vec<TqTask>, #[case] expected: Vec<SessionTask>) {
+        let sessions = vec![SessionTasks {
+            session_id: "session-a".to_string(),
+            parent_session_id: None,
+            tasks,
+        }];
+
+        assert_eq!(
+            build_watch_web_tasks_by_session(sessions, &HashSet::from(["session-a".to_string()])),
+            HashMap::from([("session-a".to_string(), expected)]),
+        );
+    }
 }

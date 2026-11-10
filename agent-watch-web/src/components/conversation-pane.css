@@ -25,6 +25,71 @@
   gap: 1px;
 }
 
+.session-heading-task-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.session-heading-task-line .conversation-task-link {
+  min-width: 0;
+}
+
+.session-task-links {
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--muted-foreground-strong);
+  font-size: 10px;
+}
+
+.session-task-links summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-task-links summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-task-links ul {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  min-width: 240px;
+  max-width: min(420px, 80vw);
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  background: #171717;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  list-style: none;
+}
+
+.session-task-links li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-task-links a {
+  overflow: hidden;
+  color: #e4e4e7;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-task-completed {
+  flex: 0 0 auto;
+  color: var(--muted-foreground-ghost);
+}
+
 .conversation-context-line {
   display: flex;
   min-width: 0;
