@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
+import { MarkdownMessage } from '#components/markdown-message'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
@@ -331,7 +332,9 @@ export function ConversationPaneView({
                 {message.from != null && message.from !== '' ? (
                   <div className="chat-from">From {message.from}</div>
                 ) : null}
-                <div className="chat-user-message">{message.text}</div>
+                <MarkdownMessage className="chat-user-message">
+                  {message.text}
+                </MarkdownMessage>
               </article>
             )
           }
@@ -341,7 +344,7 @@ export function ConversationPaneView({
                 className="chat-assistant-message"
                 key={`assistant-${String(index)}`}
               >
-                {message.text}
+                <MarkdownMessage>{message.text}</MarkdownMessage>
               </article>
             )
           if (message.type === 'tool_summary')
