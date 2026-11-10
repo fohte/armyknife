@@ -3,7 +3,7 @@ import { expect, it } from 'vitest'
 import {
   type BoardProject,
   buildBoardProjects,
-  sortPmProjects,
+  buildWorkTypeNavGroups,
 } from '#board-model'
 import type { Session } from '#types'
 
@@ -121,53 +121,43 @@ it('hides only quiet projects when the quiet filter is enabled', () => {
   expect(buildBoardProjects(sessions)).toEqual(expected)
 })
 
-it('orders PM projects by status before activity and name', () => {
+it('groups configured work types by label and chooses a needs-action session per project', () => {
   const sessions = [
-    session('idle', 'alpha', 'done'),
-    session('working', 'bravo', 'in_progress'),
-    session('review-b', 'charlie', 'needs_action'),
-    session('review-a', 'delta', 'needs_action'),
+    {
+      ...session('guide-active', 'sample project', 'in_progress'),
+      workType: 'release-guide',
+    },
+    {
+      ...session('guide-waiting', 'sample project', 'needs_action'),
+      workType: 'release-guide',
+    },
+    {
+      ...session('other-work', 'sample project', 'needs_action'),
+      workType: 'test-review',
+    },
+    {
+      ...session('unconfigured', 'quiet playground', 'done'),
+      workType: 'private-flow',
+    },
   ] as const
 
-  const projects = buildBoardProjects(sessions)
-  const expected: BoardProject[] = [
+  expect(
+    buildWorkTypeNavGroups(sessions, {
+      'release-guide': 'Guides',
+      'test-review': 'Guides',
+      'private-flow': '   ',
+    }),
+  ).toEqual([
     {
-      name: 'charlie',
-      sessions: [sessions[2]],
-      repos: ['example/charlie'],
-      needsActionCount: 1,
-      inProgressCount: 0,
-      quiet: false,
-      status: 'Review',
+      label: 'Guides',
+      projects: [
+        {
+          name: 'sample project',
+          status: 'Review',
+          needsActionCount: 2,
+          sessionId: 'guide-waiting',
+        },
+      ],
     },
-    {
-      name: 'delta',
-      sessions: [sessions[3]],
-      repos: ['example/delta'],
-      needsActionCount: 1,
-      inProgressCount: 0,
-      quiet: false,
-      status: 'Review',
-    },
-    {
-      name: 'bravo',
-      sessions: [sessions[1]],
-      repos: ['example/bravo'],
-      needsActionCount: 0,
-      inProgressCount: 1,
-      quiet: false,
-      status: 'Working',
-    },
-    {
-      name: 'alpha',
-      sessions: [sessions[0]],
-      repos: ['example/alpha'],
-      needsActionCount: 0,
-      inProgressCount: 0,
-      quiet: true,
-      status: 'Idle',
-    },
-  ]
-
-  expect(sortPmProjects(projects)).toEqual(expected)
+  ])
 })

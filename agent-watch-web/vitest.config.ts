@@ -35,6 +35,7 @@ export default mergeConfig(
             exclude: [
               ...configDefaults.exclude,
               'src/App.test.tsx',
+              'src/components/agent-watch-nav.test.tsx',
               'src/components/conversation-pane.test.tsx',
             ],
           },
@@ -45,6 +46,7 @@ export default mergeConfig(
             name: 'app',
             include: [
               'src/App.test.tsx',
+              'src/components/agent-watch-nav.test.tsx',
               'src/components/conversation-pane.test.tsx',
             ],
             browser: chromiumBrowser(),

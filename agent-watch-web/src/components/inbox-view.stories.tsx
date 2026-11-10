@@ -189,6 +189,28 @@ export const InboxFitsAnIPhone: Story = {
   ],
 }
 
+export const IPhoneInboxHasNoLaterSessions: Story = {
+  name: 'The iPhone inbox shows its empty Later section',
+  args: {
+    isMobile: true,
+    sessions: [],
+    selectedId: null,
+    laterExpanded: false,
+    todaySessions: [],
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const IPhoneInboxShowsExpandedProgress: Story = {
   name: 'The iPhone inbox shows expanded active sessions',
   args: {

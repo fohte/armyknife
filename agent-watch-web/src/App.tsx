@@ -1,16 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { buildBoardProjects, sortPmProjects } from '#board-model'
+import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { LaterMenu } from '#components/later-menu'
-import {
-  createSessionNavigationActions,
-  useMobileLayout,
-  useMobileNavigation,
-} from '#mobile-layout'
+import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
   setSessionBackNow,
@@ -25,6 +21,7 @@ import {
   moveSelection,
   type SessionView,
 } from '#session-navigation'
+import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
 
 export function App() {
@@ -38,6 +35,9 @@ export function App() {
     setDoneExpanded,
   } = useMobileLayout()
   const [sessions, setSessions] = useState<Session[]>([])
+  const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
+    Record<string, string>
+  >({})
   const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -121,26 +121,9 @@ export function App() {
     () => buildBoardProjects(sessionsWithElapsedTime),
     [sessionsWithElapsedTime],
   )
-  const pmProjects = useMemo(
-    () =>
-      sortPmProjects(projects).map((project) => {
-        const descendantAncestorIds = new Set(
-          project.sessions.flatMap((session) => session.ancestorSessionIds),
-        )
-        const pmSessionId =
-          project.sessions.find(
-            (session) =>
-              session.parent === null && descendantAncestorIds.has(session.id),
-          )?.id ?? null
-
-        return {
-          name: project.name,
-          status: project.status,
-          needsActionCount: project.needsActionCount,
-          sessionId: pmSessionId,
-        }
-      }),
-    [projects],
+  const workTypeNavGroups = useMemo(
+    () => buildWorkTypeNavGroups(sessionsWithElapsedTime, workTypeNavLabels),
+    [sessionsWithElapsedTime, workTypeNavLabels],
   )
 
   const openLater = useCallback((id: string) => {
@@ -240,6 +223,7 @@ export function App() {
     () =>
       startSessionFeed((response) => {
         const receivedAt = Date.now()
+        setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
         setSessions(
           response.sessions.filter(
             (session) =>
@@ -305,7 +289,6 @@ export function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (
-        isMobile ||
         event.defaultPrevented ||
         event.altKey ||
         event.ctrlKey ||
@@ -325,11 +308,18 @@ export function App() {
           }
           return
         }
+        if (isMobile) {
+          return
+        }
         const preset = getLaterPresetShortcut(event.key)
         if (preset !== null) {
           event.preventDefault()
           submitLater(laterSessionId, preset)
         }
+        return
+      }
+
+      if (isMobile) {
         return
       }
 
@@ -397,7 +387,7 @@ export function App() {
           activeView={view}
           needsActionCount={needsActionCount}
           todaySessions={todaySessions}
-          pmProjects={pmProjects}
+          workTypeNavGroups={workTypeNavGroups}
           onViewChange={setView}
           onSelectToday={(id) => {
             setView('inbox')

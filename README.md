@@ -94,10 +94,11 @@ agent:
   vibe_marker: # icon and color for vibe sessions in watch rows
     icon: '*'
     color: 123
-  work_types: # per-skill icon and color metadata
+  work_types: # per-skill display metadata
     example-workflow:
       icon: '◇'
       color: cyan
+      nav_label: Workflows # optional heading for this work type's session list
   default_engine: claude # coding agent CLI for `a agent new` when `--type` and `--engine` are omitted (default: "claude")
   codex: # defaults for `a agent new --engine codex` only; the `codex` you run yourself is unaffected
     model: example-codex-model # used when `--model` is omitted
@@ -163,7 +164,7 @@ repos: # per-repository overrides, keyed by "owner/repo"
     standalone_fork: true # independently maintained fork; consumed externally, only stored and exposed by armyknife
 ```
 
-`agent.work_types` associates exact skill names with icon and color metadata. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
+`agent.work_types` associates exact skill names with icon and color metadata. `nav_label` is optional; when set, it adds a navigation list headed by that value to `a agent watch-web`, containing sessions of the matching work type grouped by project. Work types without `nav_label` do not add a navigation list. `agent.work_type_fallback` supplies the icon and color shown by `a agent watch` for sessions without a recorded work type; if omitted, those rows remain blank. Unconfigured recorded names remain blank. When a session starts without `a agent new --kind <skill>`, hooks record configured main-thread skill invocations as the session work type; subagent skill calls do not change it. A session started with `--kind` keeps that kind when hooks detect other skills. Configured icons appear before session titles in `a agent watch`. The mapping does not trigger skill detection. Colors accept the snake_case names `reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, and `white`, RGB triplets (`[r, g, b]`), or numeric indices from `0` through `255`.
 
 `agent.vibe_marker` controls the icon and color for vibe-related sessions in the TASKS tree. Its icon appears after the name, unlike work type icons, and it uses the same icon and color formats as `agent.work_types`. Sessions that enabled vibe themselves use the configured color; sessions with a vibe-enabled ancestor show the icon dimmed. The dimmed marker shows the ancestor's state; a session inherits vibe mode when it was launched with `a agent new` while its caller's effective vibe was enabled, or when an enabled ancestor granted inheritance. If unset, no vibe marker is shown.
 
@@ -275,6 +276,8 @@ Register a task's PR split plan and synchronize its ordered overview into linked
 Both commands require the `tq` CLI to be installed and available on `PATH`.
 
 When the current branch has both `branch.<branch>.x-tq-task-id` and `branch.<branch>.x-tq-checklist-item-id` configured, `a ai pr-draft submit` links the submitted PR and synchronizes linked PR overviews if a saved plan exists. This is best effort: failures are reported on stderr without failing the PR submit. Follow the printed recovery commands to relink the checklist item if needed and rerun `a ai pr-series sync <task-id>`.
+
+Before creating or updating a PR, `submit` requires both markers when the current branch has both tq metadata values and its saved plan contains at least two planned PRs. The check uses the plan's PR count because the final visible count is only known during synchronization. The required format is one ordered marker pair on separate lines; placing it after the bullet list in the changes section is recommended. `submit` does not add markers automatically. A standalone PR or a plan with at most one PR does not require them.
 
 When updating an existing PR, `submit` uses the draft's `pr-series` section when it contains content. If the draft includes an empty marker pair, `submit` fills it with the existing section's content at that position. A draft without markers does not inherit the existing section. To choose the section's position, put an empty marker pair in the draft:
 

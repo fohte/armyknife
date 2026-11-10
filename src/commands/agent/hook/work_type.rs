@@ -149,6 +149,7 @@ mod tests {
                 AgentWorkTypeConfig {
                     icon: "*".to_owned(),
                     color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                    nav_label: None,
                 },
             );
         }

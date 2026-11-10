@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 use super::pr_series::{
-    PrSeriesPlan, Repository, load_plan_if_present, resolve_created_pull_requests,
-    sync_after_submit, validate_checklist_leaf_ids,
+    PrSeriesPlan, Repository, resolve_created_pull_requests, sync_after_submit,
+    validate_checklist_leaf_ids,
 };
 use crate::infra::github::{PrBodyClient, RepoClient};
 use crate::infra::tq::{TqChecklist, TqClient, TqTaskDetails};
@@ -51,6 +51,7 @@ pub(super) async fn link_and_sync_after_submit(
     owner: &str,
     repo: &str,
     pr_url: &str,
+    plan: PrSeriesPlan,
 ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
     let context = SubmittedPrContext {
         task_id,
@@ -61,7 +62,7 @@ pub(super) async fn link_and_sync_after_submit(
     };
     link_and_sync_after_submit_with(
         || TqClient::detect().context("tq CLI is required to synchronize a PR series"),
-        load_plan_if_present,
+        |_| Ok(Some(plan.clone())),
         github,
         &context,
     )

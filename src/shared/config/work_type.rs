@@ -1,10 +1,26 @@
 use serde::{Deserialize, Serialize};
 
-/// Display settings for an agent watch marker.
+/// Display settings for a configured work type.
 #[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentWorkTypeConfig {
+    /// Icon shown in the agent watch marker.
+    pub icon: String,
+
+    /// Terminal color used in the agent watch marker.
+    pub color: AgentWorkTypeColor,
+
+    /// Heading used for this work type's session list in the agent watch navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_label: Option<String>,
+}
+
+/// Display settings for an agent watch marker without a named work type.
+#[cfg_attr(feature = "schema-gen", derive(schemars::JsonSchema))]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentWorkTypeMarkerConfig {
     /// Icon shown in the agent watch marker.
     pub icon: String,
 
@@ -83,7 +99,40 @@ impl From<AgentWorkTypeNamedColor> for ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::omitted(
+        indoc! {"
+            icon: '◇'
+            color: cyan
+        "},
+        None
+    )]
+    #[case::configured(
+        indoc! {"
+            icon: '◇'
+            color: cyan
+            nav_label: Workflows
+        "},
+        Some("Workflows")
+    )]
+    fn work_type_config_deserializes_optional_nav_label(
+        #[case] yaml: &str,
+        #[case] nav_label: Option<&str>,
+    ) {
+        let actual: AgentWorkTypeConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            actual,
+            AgentWorkTypeConfig {
+                icon: "◇".to_owned(),
+                color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                nav_label: nav_label.map(str::to_owned),
+            },
+        );
+    }
 
     #[rstest]
     #[case::reset(

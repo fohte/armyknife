@@ -42,6 +42,9 @@ function isSession(value: unknown): value is Session {
 
   return (
     typeof value['id'] === 'string' &&
+    (value['workType'] === undefined ||
+      value['workType'] === null ||
+      typeof value['workType'] === 'string') &&
     typeof category === 'string' &&
     (kind === null || typeof kind === 'string') &&
     typeof value['title'] === 'string' &&
@@ -55,9 +58,18 @@ function isSession(value: unknown): value is Session {
 }
 
 function isSessionsResponse(value: unknown): value is SessionsResponse {
+  const workTypeNavLabels = isRecord(value)
+    ? value['workTypeNavLabels']
+    : undefined
+
   return (
     isRecord(value) &&
     typeof value['revision'] === 'number' &&
+    (workTypeNavLabels === undefined ||
+      (isRecord(workTypeNavLabels) &&
+        Object.values(workTypeNavLabels).every(
+          (label) => typeof label === 'string',
+        ))) &&
     Array.isArray(value['sessions']) &&
     value['sessions'].every(isSession)
   )
