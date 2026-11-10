@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::BackgroundTask;
+use super::user_input::user_text;
 use super::{ToolUse, tool_result_text};
 
 #[derive(Default)]
@@ -38,7 +39,7 @@ impl BackgroundTaskTracker {
         let Some(message) = record.get("message") else {
             return;
         };
-        let text = super::user_text(message);
+        let text = user_text(message);
         let Some(task_id) = tagged_value(&text, "task-id") else {
             return;
         };
@@ -92,7 +93,7 @@ pub(super) fn is_task_notification(record: &Value) -> bool {
     has_task_notification_origin
         || (record.get("type").and_then(Value::as_str) == Some("user")
             && record.get("message").is_some_and(|message| {
-                super::user_text(message)
+                user_text(message)
                     .trim_start()
                     .starts_with("<task-notification>")
             }))

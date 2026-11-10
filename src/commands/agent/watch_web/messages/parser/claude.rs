@@ -1,22 +1,29 @@
 use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Seek, SeekFrom};
+use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 mod background_tasks;
 mod transcript_branch;
+mod user_input;
 
 use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::claude_content_text as content_text;
 use super::super::parser::{
-    ToolSummary, append_text, append_text_with_user_marker, for_each_jsonl_record,
-    peer_message_item_with_user_marker, tool_target,
+    ToolSummary, append_text_with_image_directory,
+    append_text_with_user_marker_and_image_directory, for_each_jsonl_record,
+    peer_message_item_with_user_marker_and_image_directory, tool_target,
+    user_item_with_image_directory,
 };
 use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
 use transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch, mark_active_branch};
+use user_input::{
+    UserOrigin, content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
+    user_origin,
+};
 
 #[cfg(test)]
 fn parse(
@@ -25,16 +32,60 @@ fn parse(
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
-    parse_with_background_tasks(reader, parent, pending_tool, user_marker, Utc::now())
-        .map(|(messages, _)| messages)
+    let image_directory = super::super::super::image_attachments::storage_directory().ok();
+    parse_with_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        image_directory.as_deref(),
+    )
+}
+
+#[cfg(test)]
+fn parse_with_image_directory(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    image_directory: Option<&Path>,
+) -> std::io::Result<Vec<ChatItem>> {
+    parse_with_background_tasks_and_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        Utc::now(),
+        image_directory,
+    )
+    .map(|(messages, _)| messages)
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
+    let image_directory = super::super::super::image_attachments::storage_directory().ok();
+    parse_with_background_tasks_and_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        image_directory.as_deref(),
+    )
+}
+
+fn parse_with_background_tasks_and_image_directory(
     mut reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
+    image_directory: Option<&Path>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
@@ -95,10 +146,17 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
                     .get("attachment")
                     .and_then(|attachment| attachment.get("prompt"))
                 {
-                    let text = content_text(Some(prompt));
-                    if !text.is_empty() {
+                    let (text, images) = user_content(Some(prompt));
+                    if !text.is_empty() || !images.is_empty() {
                         tools.flush_into(&mut items);
-                        append_text_with_user_marker(&mut items, text, parent, user_marker);
+                        append_text_with_user_marker_and_image_directory(
+                            &mut items,
+                            text,
+                            parent,
+                            user_marker,
+                            images,
+                            image_directory,
+                        );
                     }
                 }
             }
@@ -136,24 +194,39 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
                     let Some(origin) = user_origin(&record, message) else {
                         return;
                     };
-                    let text = user_text(message);
-                    if !text.is_empty() {
+                    let (text, images) = user_content(message.get("content"));
+                    if !text.is_empty() || !images.is_empty() {
                         if origin == UserOrigin::Peer {
-                            let Some(item) =
-                                peer_message_item_with_user_marker(&text, parent, user_marker)
-                            else {
+                            let Some(item) = peer_message_item_with_user_marker_and_image_directory(
+                                &text,
+                                parent,
+                                user_marker,
+                                images,
+                                image_directory,
+                            ) else {
                                 return;
                             };
                             tools.flush_into(&mut items);
                             items.push(item);
                         } else {
                             tools.flush_into(&mut items);
-                            append_text(
-                                &mut items,
-                                slash_command_text(&text).unwrap_or(text),
-                                true,
-                                parent,
-                            );
+                            let text = slash_command_text(&text).unwrap_or(text);
+                            if images.is_empty() {
+                                append_text_with_image_directory(
+                                    &mut items,
+                                    text,
+                                    true,
+                                    parent,
+                                    image_directory,
+                                );
+                            } else {
+                                items.push(user_item_with_image_directory(
+                                    text,
+                                    None,
+                                    images,
+                                    image_directory,
+                                ));
+                            }
                         }
                     }
                 }
@@ -168,7 +241,13 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
                             Some("text") => {
                                 if let Some(text) = block.get("text").and_then(Value::as_str) {
                                     tools.flush_into(&mut items);
-                                    append_text(&mut items, text.to_owned(), false, None);
+                                    append_text_with_image_directory(
+                                        &mut items,
+                                        text.to_owned(),
+                                        false,
+                                        None,
+                                        image_directory,
+                                    );
                                 }
                             }
                             Some("tool_use") => {
@@ -337,88 +416,6 @@ fn apply_question_answers(
     }
 }
 
-fn is_tool_result_only_user_record(record: &Value) -> bool {
-    record.get("type").and_then(Value::as_str) == Some("user")
-        && record
-            .get("message")
-            .and_then(|message| message.get("content"))
-            .and_then(Value::as_array)
-            .is_some_and(|blocks| {
-                !blocks.is_empty()
-                    && blocks.iter().all(|block| {
-                        block.get("type").and_then(Value::as_str) == Some("tool_result")
-                    })
-            })
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum UserOrigin {
-    Human,
-    Peer,
-    Legacy,
-}
-
-fn user_origin(record: &Value, message: &Value) -> Option<UserOrigin> {
-    if record.get("sourceToolAssistantUUID").is_some()
-        || record
-            .get("toolUseResult")
-            .is_some_and(|result| !result.is_null())
-    {
-        return None;
-    }
-
-    if let Some(origin) = record.get("origin").filter(|origin| !origin.is_null()) {
-        return match origin.get("kind").and_then(Value::as_str) {
-            Some("human") => Some(UserOrigin::Human),
-            Some("peer") => Some(UserOrigin::Peer),
-            _ => None,
-        };
-    }
-
-    (!is_legacy_harness_user_record(record, message)).then_some(UserOrigin::Legacy)
-}
-
-fn is_legacy_harness_user_record(record: &Value, message: &Value) -> bool {
-    let text = user_text(message);
-    ["isMeta", "isSidechain", "isCompactSummary"]
-        .into_iter()
-        .any(|key| record.get(key).and_then(Value::as_bool) == Some(true))
-        || (text.trim_start().starts_with("<command-message>") && !text.contains("<command-name>"))
-        || [
-            "<task-notification>",
-            "<local-command-stdout>",
-            "<local-command-caveat>",
-        ]
-        .into_iter()
-        .any(|prefix| text.trim_start().starts_with(prefix))
-}
-
-fn slash_command_text(text: &str) -> Option<String> {
-    let command = text
-        .split_once("<command-name>")?
-        .1
-        .split_once("</command-name>")?
-        .0
-        .trim();
-    if command.is_empty() {
-        return None;
-    }
-    let command = if command.starts_with('/') {
-        command.to_owned()
-    } else {
-        format!("/{command}")
-    };
-    let args = text
-        .split_once("<command-args>")
-        .and_then(|(_, value)| value.split_once("</command-args>"))
-        .map_or("", |(args, _)| args.trim());
-    Some(if args.is_empty() {
-        command
-    } else {
-        format!("{command} {args}")
-    })
-}
-
 fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
     let (name, detail) = pending_tool
         .split_once('(')
@@ -448,18 +445,6 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
         return name.to_owned();
     };
     format!("{name}: {target}")
-}
-
-fn user_text(message: &Value) -> String {
-    content_text(message.get("content"))
-}
-
-fn content_blocks(content: &Value) -> Vec<&Value> {
-    match content {
-        Value::Array(blocks) => blocks.iter().collect(),
-        Value::String(_) => Vec::new(),
-        _ => Vec::new(),
-    }
 }
 
 fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usize> {
@@ -496,10 +481,60 @@ fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usi
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
-    use super::parse;
-    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
-    use indoc::indoc;
+    use indoc::{formatdoc, indoc};
     use rstest::rstest;
+    use serde_json::json;
+
+    use super::{parse, parse_with_image_directory};
+    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession, UserContentPart};
+
+    #[test]
+    fn parses_a_marked_peer_message_with_a_saved_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000001.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(&image_path, b"fixture image").unwrap();
+        let marker = "⟦armyknife-user:00000000-0000-4000-8000-000000000002⟧";
+        let content = formatdoc! {"
+            Another Claude session sent a message:
+            {marker}
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "user",
+            "isMeta": true,
+            "origin": {"kind": "peer", "from": "unknown"},
+            "message": {"content": content},
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                Some(marker),
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }]
+        );
+    }
 
     #[test]
     fn agent_tool_summary_shows_its_type_and_description_without_its_prompt() {
@@ -568,7 +603,7 @@ mod tests {
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-tool-id","name":"Read","input":{}}]}}
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-tool-id","content":"Synthetic result."}]}}
             {"type":"queue-operation","operation":"enqueue","content":"Show this prompt once."}
-            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"Show this prompt once."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"c3ludGhldGlj"}}]}}
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"Show this prompt once."}]}}
             {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Show this prompt once."}
             {"type":"user","message":{"content":"After the queued prompt."}}
         "#},
@@ -629,6 +664,51 @@ mod tests {
                 text: "Please group these fictional events.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
             }]
+        );
+    }
+
+    #[test]
+    fn displays_base64_user_images_at_their_text_placeholders() {
+        let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
+        let transcript = indoc! {r#"
+            {"type":"user","origin":{"kind":"human"},"message":{"content":[{"type":"text","text":"Before [Image #3] after."},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"ZmFrZQ=="}}]}}
+            {"attachment":{"type":"queued_command","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"prompt":[{"type":"text","text":"⟦armyknife-user:fixture-marker-cobalt⟧\nQueued [Image #3] request."},{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"c2FtcGxl"}}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, Some(marker)).unwrap(),
+            vec![
+                ChatItem::UserWithContent {
+                    content: vec![
+                        UserContentPart::Text {
+                            text: "Before ".to_string(),
+                        },
+                        UserContentPart::Image {
+                            source: "data:image/png;base64,ZmFrZQ==".to_string(),
+                            available: true,
+                        },
+                        UserContentPart::Text {
+                            text: " after.".to_string(),
+                        },
+                    ],
+                    from: None,
+                },
+                ChatItem::UserWithContent {
+                    content: vec![
+                        UserContentPart::Text {
+                            text: "Queued ".to_string(),
+                        },
+                        UserContentPart::Image {
+                            source: "data:image/jpeg;base64,c2FtcGxl".to_string(),
+                            available: true,
+                        },
+                        UserContentPart::Text {
+                            text: " request.".to_string(),
+                        },
+                    ],
+                    from: None,
+                },
+            ],
         );
     }
 
@@ -1115,8 +1195,14 @@ mod tests {
     fn peer_markers_control_user_attribution_in_both_delivery_paths() {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let transcript = indoc! {r#"
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"Another peer session sent a message:\n⟦armyknife-user:fixture-marker-cobalt⟧\nDirect user request.\n\nThis came from another Claude session — this fictional transport notice must be hidden."}}
+            {"attachment":{"type":"queued_command","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"prompt":"⟦armyknife-user:fixture-marker-cobalt⟧\nQueued user request."}}
+            {"attachment":{"type":"queued_command","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"prompt":"⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."}}
+            {"attachment":{"type":"queued_command","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"prompt":"Missing queued marker request."}}
             {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nDirect user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
             {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nQueued user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"Another peer session sent a message:\n⟦armyknife-user:fixture-marker-amber⟧\nUnknown direct request.\n\nThis came from another Claude session — this fictional transport notice must be hidden."}}
+            {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"unknown"},"message":{"content":"Another peer session sent a message:\nMissing marker request."}}
             {"type":"user","isMeta":true,"origin":{"kind":"peer","from":"fixture-parent-id"},"message":{"content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
             {"attachment":{"type":"queued_command","prompt":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}}
         "#};
@@ -1128,6 +1214,23 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), Some(&parent), None, Some(marker)).unwrap(),
             vec![
+                ChatItem::User {
+                    text: "Direct user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Queued user request.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."
+                        .to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Missing queued marker request.".to_string(),
+                    from: None,
+                },
                 ChatItem::User {
                     text: "Direct user request.".to_string(),
                     from: None,
