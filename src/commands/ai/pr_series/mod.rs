@@ -10,12 +10,8 @@ pub(super) use model::{
     CreatedPullRequest, PrSeriesPlan, Repository, resolve_created_pull_requests,
     validate_checklist_leaf_ids,
 };
-pub(super) use render::preserve_managed_section;
+pub(super) use render::{has_managed_section, preserve_managed_section};
 pub(super) use storage::load_plan_if_present;
-
-pub(super) fn has_managed_section(body: &str) -> anyhow::Result<bool> {
-    render::has_managed_section(body)
-}
 
 pub(super) async fn sync_after_submit(
     plan: &PrSeriesPlan,

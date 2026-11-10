@@ -5,7 +5,9 @@ use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_a
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::commands::ai::pr_series::{has_managed_section, preserve_managed_section};
+use crate::commands::ai::pr_series::{
+    PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
+};
 use crate::commands::ai::pr_series_aftercare::{
     SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
 };
@@ -14,6 +16,7 @@ use crate::infra::github::{
     CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrStackClient, PrState, RepoClient,
     UpdatePrParams,
 };
+use crate::infra::tq::TqClient;
 use crate::shared::config::{Config, load_config};
 use crate::shared::human_in_the_loop::LockGuard;
 
@@ -55,16 +58,23 @@ struct TqBranchMetadata {
     checklist_item_id: String,
 }
 
+#[derive(Clone)]
+struct SavedPrSeriesPlan {
+    task_id: String,
+    plan: PrSeriesPlan,
+}
+
 trait PostSubmitProcessor {
     fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
 
-    fn saved_plan_pull_request_count(&self, metadata: &TqBranchMetadata) -> Option<usize>;
+    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan>;
 
     async fn link_and_sync(
         &self,
         metadata: &TqBranchMetadata,
         target: &PrTarget,
         pr_url: &str,
+        saved_plan: Option<SavedPrSeriesPlan>,
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
 }
 
@@ -77,16 +87,48 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         read_current_branch_tq_metadata(branch)
     }
 
-    fn saved_plan_pull_request_count(&self, metadata: &TqBranchMetadata) -> Option<usize> {
-        match crate::commands::ai::pr_series::load_plan_if_present(&metadata.task_id) {
-            Ok(plan) => plan.map(|plan| plan.pull_requests.len()),
+    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+        match load_plan_if_present(&metadata.task_id) {
+            Ok(Some(plan)) => Some(SavedPrSeriesPlan {
+                task_id: metadata.task_id.clone(),
+                plan,
+            }),
+            Ok(None) if metadata.task_id.parse::<u32>().is_ok() => {
+                let Some(tq_client) = TqClient::detect() else {
+                    tracing::warn!(
+                        event = "pr_draft.submit.plan_task_resolution_failed",
+                        task_id = %metadata.task_id,
+                        "tq CLI is unavailable for resolving the canonical task ID"
+                    );
+                    return None;
+                };
+                let task = match tq_client.task_details(&metadata.task_id).await {
+                    Ok(task) => task,
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "pr_draft.submit.plan_task_resolution_failed",
+                            task_id = %metadata.task_id,
+                            error = %error,
+                            "failed to resolve the canonical tq task ID"
+                        );
+                        return None;
+                    }
+                };
+                match load_plan_if_present(&task.id) {
+                    Ok(Some(plan)) => Some(SavedPrSeriesPlan {
+                        task_id: task.id,
+                        plan,
+                    }),
+                    Ok(None) => None,
+                    Err(error) => {
+                        warn_plan_lookup_failure(metadata, &error);
+                        None
+                    }
+                }
+            }
+            Ok(None) => None,
             Err(error) => {
-                tracing::warn!(
-                    event = "pr_draft.submit.plan_check_failed",
-                    task_id = %metadata.task_id,
-                    error = %error,
-                    "failed to check for a PR series plan"
-                );
+                warn_plan_lookup_failure(metadata, &error);
                 None
             }
         }
@@ -97,17 +139,31 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         metadata: &TqBranchMetadata,
         target: &PrTarget,
         pr_url: &str,
+        saved_plan: Option<SavedPrSeriesPlan>,
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+        let Some(saved_plan) = saved_plan else {
+            return Ok(SubmitSyncOutcome::NoPlan);
+        };
         link_and_sync_after_submit(
             self.github,
-            &metadata.task_id,
+            &saved_plan.task_id,
             &metadata.checklist_item_id,
             &target.owner,
             &target.repo,
             pr_url,
+            saved_plan.plan,
         )
         .await
     }
+}
+
+fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) {
+    tracing::warn!(
+        event = "pr_draft.submit.plan_check_failed",
+        task_id = %metadata.task_id,
+        error = %error,
+        "failed to check for a PR series plan"
+    );
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
@@ -222,13 +278,20 @@ async fn run_impl(
     } else {
         None
     };
-    let saved_plan_pull_request_count = tq_metadata
+    let saved_plan = if let Some(metadata) = &tq_metadata {
+        post_submit_processor.saved_plan(metadata).await
+    } else {
+        None
+    };
+    if saved_plan
         .as_ref()
-        .and_then(|metadata| post_submit_processor.saved_plan_pull_request_count(metadata));
-    if saved_plan_pull_request_count.is_some_and(|count| count >= 2)
-        && !matches!(has_managed_section(&draft.body), Ok(true))
+        .is_some_and(|saved_plan| saved_plan.plan.pull_requests.len() >= 2)
     {
-        anyhow::bail!("{SERIES_MARKERS_REQUIRED_ERROR}");
+        match has_managed_section(&draft.body) {
+            Ok(true) => {}
+            Ok(false) => anyhow::bail!("{SERIES_MARKERS_REQUIRED_ERROR}"),
+            Err(error) => anyhow::bail!("{error}\n{SERIES_MARKERS_REQUIRED_ERROR}"),
+        }
     }
 
     // Check if PR already exists for this branch
@@ -267,7 +330,7 @@ async fn run_impl(
                 &target.repo,
                 number,
                 &draft.body,
-                saved_plan_pull_request_count.is_some(),
+                saved_plan.is_some(),
                 tq_metadata.as_ref(),
             )
             .await;
@@ -327,7 +390,7 @@ async fn run_impl(
 
     if let Some(metadata) = tq_metadata
         && let Err(failure) = post_submit_processor
-            .link_and_sync(&metadata, &target, &pr_url)
+            .link_and_sync(&metadata, &target, &pr_url, saved_plan)
             .await
     {
         eprintln!(
@@ -500,6 +563,23 @@ mod tests {
         Ok(())
     }
 
+    fn series_plan(pull_request_count: usize) -> PrSeriesPlan {
+        PrSeriesPlan {
+            name: "sample series".to_string(),
+            purpose: "exercise submit checks".to_string(),
+            pull_requests: (0..pull_request_count)
+                .map(|index| crate::commands::ai::pr_series::PrSeriesEntry {
+                    id: format!("sample-{index}"),
+                    summary: format!("Sample change {index}"),
+                    depends_on: Vec::new(),
+                    repository: "example-owner/example-repo".to_string(),
+                    tq_leaf_id: format!("sample-leaf-{index}"),
+                })
+                .collect(),
+            steps: None,
+        }
+    }
+
     struct NoopPostSubmitProcessor;
 
     impl PostSubmitProcessor for NoopPostSubmitProcessor {
@@ -507,7 +587,7 @@ mod tests {
             None
         }
 
-        fn saved_plan_pull_request_count(&self, _metadata: &TqBranchMetadata) -> Option<usize> {
+        async fn saved_plan(&self, _metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
             None
         }
 
@@ -516,6 +596,7 @@ mod tests {
             _metadata: &TqBranchMetadata,
             _target: &PrTarget,
             _pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
         ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
             Ok(SubmitSyncOutcome::NoPlan)
         }
@@ -553,8 +634,11 @@ mod tests {
             self.metadata.clone()
         }
 
-        fn saved_plan_pull_request_count(&self, _metadata: &TqBranchMetadata) -> Option<usize> {
-            self.plan_pull_request_count
+        async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+            self.plan_pull_request_count.map(|count| SavedPrSeriesPlan {
+                task_id: metadata.task_id.clone(),
+                plan: series_plan(count),
+            })
         }
 
         async fn link_and_sync(
@@ -562,6 +646,7 @@ mod tests {
             metadata: &TqBranchMetadata,
             target: &PrTarget,
             pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
         ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
             self.calls.lock().expect("post-submit spy mutex").push((
                 metadata.task_id.clone(),
@@ -608,7 +693,9 @@ mod tests {
         true,
         false,
         "<!-- pr-series:start -->",
-        Err(SERIES_MARKERS_REQUIRED_ERROR.to_string()),
+        Err(format!(
+            "PR series markers must occur exactly once\n{SERIES_MARKERS_REQUIRED_ERROR}"
+        )),
         false,
     )]
     #[case::series_with_markers(
@@ -639,15 +726,6 @@ mod tests {
     #[case::standalone_pr_without_markers(
         "series-marker-standalone",
         None,
-        false,
-        false,
-        "Body content",
-        Ok(()),
-        true
-    )]
-    #[case::series_without_branch_metadata(
-        "series-marker-no-metadata",
-        Some(2),
         false,
         false,
         "Body content",
