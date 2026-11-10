@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.541](https://github.com/fohte/armyknife/compare/v0.1.540...v0.1.541) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** allow navigation resizing ([#1436](https://github.com/fohte/armyknife/issues/1436)) ([59b1933](https://github.com/fohte/armyknife/commit/59b1933622b0f3079aa527a36a7867c8b3486c23))
+
 ## [0.1.540](https://github.com/fohte/armyknife/compare/v0.1.539...v0.1.540) (2026-11-10)
 
 
