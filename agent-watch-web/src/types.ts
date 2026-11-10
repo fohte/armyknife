@@ -28,6 +28,7 @@ type ParentSession = {
 
 export type Session = {
   id: string
+  engine?: 'Claude' | 'Codex' | (string & {})
   category: SessionCategory
   kind: SessionKind | null
   title: string
@@ -40,6 +41,21 @@ export type Session = {
   parent: ParentSession | null
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
+}
+
+export type ChatItem =
+  | { type: 'user'; text: string; from?: string }
+  | { type: 'assistant'; text: string }
+  | { type: 'tool_summary'; summary: string }
+  | { type: 'question'; question: string; choices: string[] }
+  | { type: 'permission'; tool: string; description: string }
+
+export type SessionActions = {
+  message: boolean
+  answerQuestion: boolean
+  permission?: { approve: boolean; reject: boolean }
+  interrupt: boolean
+  openInTerminal: boolean
 }
 
 export type SessionsResponse = {

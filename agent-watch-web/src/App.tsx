@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { buildBoardProjects, sortPmProjects } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
+import { ConversationPane } from '#components/conversation-pane'
 import { InboxView } from '#components/inbox-view'
 import { startSessionFeed } from '#session-feed'
 import {
@@ -14,6 +15,7 @@ import type { Session } from '#types'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -80,6 +82,7 @@ export function App() {
               session.category === 'done',
           ),
         )
+        setSessionsRevision((revision) => revision + 1)
         setSessionsReceivedAt(receivedAt)
         setNowMs(receivedAt)
         setLoaded(true)
@@ -158,6 +161,9 @@ export function App() {
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
+  const selectedSession = sessionsWithElapsedTime.find(
+    (session) => session.id === selectedId,
+  )
   const openSessionInInbox = (sessionId: string) => {
     setSelectedId(sessionId)
     setView('inbox')
@@ -174,17 +180,31 @@ export function App() {
       />
       <main className="agent-watch-main">
         {view === 'inbox' ? (
-          <InboxView
-            error={error}
-            loaded={loaded}
-            selectedId={selectedId}
-            sessions={sessionsWithElapsedTime}
-            showAllInProgress={showAllInProgress}
-            onShowMore={() => {
-              setShowAllInProgress(true)
-            }}
-            onSelect={setSelectedId}
-          />
+          <>
+            <InboxView
+              error={error}
+              loaded={loaded}
+              selectedId={selectedId}
+              sessions={sessionsWithElapsedTime}
+              showAllInProgress={showAllInProgress}
+              onShowMore={() => {
+                setShowAllInProgress(true)
+              }}
+              onSelect={setSelectedId}
+            />
+            {selectedSession ? (
+              <ConversationPane
+                key={selectedSession.id}
+                session={selectedSession}
+                refreshKey={sessionsRevision}
+                onSelectSession={(id) => {
+                  if (orderedSessions.some((session) => session.id === id)) {
+                    setSelectedId(id)
+                  }
+                }}
+              />
+            ) : null}
+          </>
         ) : (
           <BoardView
             error={error}

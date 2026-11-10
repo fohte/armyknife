@@ -3,6 +3,7 @@
 @import 'shadcn/tailwind.css';
 @import '@fohte/ui/tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
+@import './components/conversation-pane.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 
 @source '../node_modules/@fohte/ui/src';

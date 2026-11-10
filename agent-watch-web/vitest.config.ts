@@ -32,14 +32,21 @@ export default mergeConfig(
           extends: true,
           test: {
             name: 'unit',
-            exclude: [...configDefaults.exclude, 'src/App.test.tsx'],
+            exclude: [
+              ...configDefaults.exclude,
+              'src/App.test.tsx',
+              'src/components/conversation-pane.test.tsx',
+            ],
           },
         },
         {
           extends: true,
           test: {
             name: 'app',
-            include: ['src/App.test.tsx'],
+            include: [
+              'src/App.test.tsx',
+              'src/components/conversation-pane.test.tsx',
+            ],
             browser: chromiumBrowser(),
           },
         },
