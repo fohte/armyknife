@@ -1,5 +1,13 @@
 .markdown-message {
   overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.markdown-message.chat-user-message {
+  white-space: normal;
+}
+
+.markdown-message p {
   white-space: pre-line;
 }
 

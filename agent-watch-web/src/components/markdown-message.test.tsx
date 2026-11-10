@@ -33,7 +33,7 @@ let attempts = 3;
 
   const expected = [
     '<div class="markdown-message chat-user-message"><h2>Summary</h2>',
-    '<p>Use <code>retry()</code> with the <a href="https://example.com/guide">guide</a>.',
+    '<p>Use <code>retry()</code> with the <a href="https://example.com/guide" target="_blank" rel="noopener noreferrer">guide</a>.',
     'First line',
     'Second line</p>',
     '<ul>',
@@ -54,6 +54,6 @@ it('keeps raw HTML as text and blocks unsafe link protocols', () => {
   )
 
   expect(html).toBe(
-    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; <a href="">unsafe</a></p></div>',
+    '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
   )
 })
