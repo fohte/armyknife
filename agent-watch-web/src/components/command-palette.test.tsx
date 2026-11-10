@@ -81,6 +81,36 @@ it('opens the project for the active result with a prefix and Enter', async () =
   expect(onOpenProject.mock.calls).toEqual([['notification refresh']])
 })
 
+it('shows the primary task and the count of other linked tasks for a session', () => {
+  renderPalette({
+    sessions: [
+      {
+        ...session,
+        tasks: [
+          {
+            id: 'task-alerts',
+            number: 42,
+            title: 'Improve notifications',
+            priority: 1,
+          },
+          {
+            id: 'task-delivery',
+            number: 43,
+            title: 'Document delivery behavior',
+            priority: null,
+          },
+        ],
+      },
+    ],
+  })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toBe(
+    'P1 #42 Improve notifications +1 · notification refresh · example/web-app',
+  )
+})
+
 it('opens a matching project from the project scope with Enter', async () => {
   const onOpenProject = vi.fn<(name: string) => void>()
   renderPalette({ onOpenProject })

@@ -17,6 +17,7 @@ mod wake;
 mod web_state;
 
 pub(crate) use web_state::WatchWebSessionState;
+pub(crate) use web_state::set_watch_web_compacting;
 pub(super) use web_state::{
     clear_watch_web_later, set_watch_web_later, set_watch_web_today, watch_web_session_states,
     watch_web_user_marker,
@@ -25,7 +26,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 3] = [
+static MIGRATION_ENTRIES: [M<'static>; 4] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -48,6 +49,10 @@ static MIGRATION_ENTRIES: [M<'static>; 3] = [
     );",
     ),
     M::up("ALTER TABLE watch_web_session_state ADD COLUMN watch_web_user_marker TEXT;"),
+    M::up(
+        "ALTER TABLE watch_web_session_state
+         ADD COLUMN is_compacting INTEGER;",
+    ),
 ];
 
 static MIGRATIONS: LazyLock<Migrations<'static>> =

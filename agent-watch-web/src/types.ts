@@ -34,6 +34,7 @@ export type Session = {
   workType?: string | null
   category: SessionCategory
   isPaused: boolean
+  isCompacting?: boolean
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null
   title: string
@@ -87,6 +88,17 @@ export type UserContentPart =
 export type ToolOperation = {
   tool: string
   target?: string
+}
+
+export type BackgroundTask = {
+  id: string
+  description: string
+  elapsedSeconds: number
+}
+
+export type ConversationResponse = {
+  messages: ChatItem[]
+  backgroundTasks: BackgroundTask[]
 }
 
 export type SessionActions = {

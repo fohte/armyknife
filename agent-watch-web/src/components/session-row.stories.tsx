@@ -27,6 +27,13 @@ const session: Session = {
       priority: 1,
       isClosed: false,
     },
+    {
+      id: 'example-doc-task',
+      number: 2049,
+      title: 'Document request retries',
+      priority: null,
+      isClosed: false,
+    },
   ],
   repo: 'example/service',
   project: 'sample project',

@@ -2,8 +2,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 
+mod background_tasks;
+mod transcript_branch;
+mod user_input;
+
+use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::parser::{
@@ -12,14 +18,15 @@ use super::super::parser::{
     peer_message_item_with_user_marker_and_image_directory, tool_target,
     user_item_with_image_directory,
 };
+use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
+use transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch, mark_active_branch};
 use user_input::{
     UserOrigin, content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
     user_origin,
 };
 
-mod user_input;
-
-pub(in crate::commands::agent::watch_web::messages) fn parse(
+#[cfg(test)]
+pub(super) fn parse(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -35,13 +42,51 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     )
 }
 
+#[cfg(test)]
 fn parse_with_image_directory(
-    mut reader: impl BufRead + Seek,
+    reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
     image_directory: Option<&Path>,
 ) -> std::io::Result<Vec<ChatItem>> {
+    parse_with_background_tasks_and_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        Utc::now(),
+        image_directory,
+    )
+    .map(|(messages, _)| messages)
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
+    let image_directory = super::super::super::image_attachments::storage_directory().ok();
+    parse_with_background_tasks_and_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        image_directory.as_deref(),
+    )
+}
+
+fn parse_with_background_tasks_and_image_directory(
+    mut reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    image_directory: Option<&Path>,
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
     let mut queue = super::queue::Queue::default();
@@ -74,16 +119,19 @@ fn parse_with_image_directory(
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
+    let mut background_tasks = BackgroundTaskTracker::default();
 
     for_each_jsonl_record(&mut reader, |record| {
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
             let membership = transcript_nodes.get(uuid).map(|node| node.membership);
             let is_tool_result_only = is_tool_result_only_user_record(&record);
-            if membership.is_none() && !is_tool_result_only {
+            let is_task_notification = is_task_notification(&record);
+            if membership.is_none() && !is_tool_result_only && !is_task_notification {
                 return;
             }
             if membership == Some(BranchMembership::Unknown)
                 && !is_tool_result_only
+                && !is_task_notification
                 && is_inactive_branch(uuid, &mut transcript_nodes)
             {
                 return;
@@ -115,6 +163,7 @@ fn parse_with_image_directory(
                 }
             }
             Some("user") => {
+                background_tasks.finish_notification(&record);
                 if let Some(message) = record.get("message") {
                     let tool_use_result = record
                         .get("toolUseResult")
@@ -141,6 +190,7 @@ fn parse_with_image_directory(
                         {
                             let tool_use = tool_uses.remove(index);
                             tools.record(&tool_use.name, tool_use.input.as_ref());
+                            background_tasks.complete_tool_use(&tool_use, &record, block, now);
                         }
                     }
                     let Some(origin) = user_origin(&record, message) else {
@@ -217,10 +267,12 @@ fn parse_with_image_directory(
                                         append_questions(&mut items, input);
                                     }
                                 } else if let Some(id) = block.get("id").and_then(Value::as_str) {
+                                    background_tasks.stop(input, name);
                                     tool_uses.push(ToolUse {
                                         id: id.to_owned(),
                                         name: name.to_owned(),
                                         input: input.cloned(),
+                                        started_at: record_timestamp(&record),
                                     });
                                 }
                             }
@@ -252,86 +304,15 @@ fn parse_with_image_directory(
         });
     }
     items.extend(queue.pending_items(parent, user_marker, image_directory));
-    Ok(items)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BranchMembership {
-    Unknown,
-    Visiting,
-    Active,
-    ReachesActive,
-    Disconnected,
-}
-
-struct TranscriptNode {
-    parent_uuid: Option<String>,
-    membership: BranchMembership,
-}
-
-fn mark_active_branch(
-    transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
-    latest_uuid: Option<&str>,
-) {
-    let Some(mut uuid) = latest_uuid.map(str::to_owned) else {
-        return;
-    };
-
-    loop {
-        let Some(node) = transcript_nodes.get_mut(&uuid) else {
-            return;
-        };
-        if node.membership == BranchMembership::Active {
-            return;
-        }
-        node.membership = BranchMembership::Active;
-        let Some(parent_uuid) = &node.parent_uuid else {
-            return;
-        };
-        let parent_uuid = parent_uuid.clone();
-        if !transcript_nodes.contains_key(&parent_uuid) {
-            return;
-        }
-        uuid = parent_uuid;
-    }
-}
-
-fn is_inactive_branch(uuid: &str, transcript_nodes: &mut BTreeMap<String, TranscriptNode>) -> bool {
-    let mut current_uuid = uuid.to_owned();
-    let mut path = Vec::new();
-    let reaches_active = loop {
-        let Some(node) = transcript_nodes.get_mut(&current_uuid) else {
-            break false;
-        };
-        match node.membership {
-            BranchMembership::Active | BranchMembership::ReachesActive => break true,
-            BranchMembership::Disconnected | BranchMembership::Visiting => break false,
-            BranchMembership::Unknown => node.membership = BranchMembership::Visiting,
-        }
-        path.push(current_uuid.clone());
-        let Some(parent_uuid) = &node.parent_uuid else {
-            break false;
-        };
-        current_uuid = parent_uuid.clone();
-    };
-
-    let membership = if reaches_active {
-        BranchMembership::ReachesActive
-    } else {
-        BranchMembership::Disconnected
-    };
-    for uuid in path {
-        if let Some(node) = transcript_nodes.get_mut(&uuid) {
-            node.membership = membership;
-        }
-    }
-    reaches_active
+    let background_tasks = background_tasks.into_api_tasks(now);
+    Ok((items, background_tasks))
 }
 
 struct ToolUse {
     id: String,
     name: String,
     input: Option<Value>,
+    started_at: Option<DateTime<Utc>>,
 }
 
 fn tool_result_blocks(message: &Value) -> impl Iterator<Item = &Value> {

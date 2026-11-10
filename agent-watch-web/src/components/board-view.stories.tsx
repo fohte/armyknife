@@ -20,6 +20,20 @@ const sessions: Session[] = [
       title: 'Update the service contract',
       priority: 1,
     },
+    tasks: [
+      {
+        id: 'task-api-contract',
+        number: 2048,
+        title: 'Update the service contract',
+        priority: 1,
+      },
+      {
+        id: 'task-api-guide',
+        number: 2049,
+        title: 'Document the service contract',
+        priority: null,
+      },
+    ],
     repo: 'example/service',
     project: 'service refresh',
     ancestorSessionIds: [],

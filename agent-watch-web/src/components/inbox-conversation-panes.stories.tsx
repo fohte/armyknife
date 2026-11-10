@@ -71,12 +71,15 @@ const meta = {
     msw: {
       handlers: [
         http.get('/api/sessions/:sessionId/messages', () =>
-          HttpResponse.json([
-            {
-              type: 'assistant',
-              text: 'The retry policy is ready for review.',
-            },
-          ]),
+          HttpResponse.json({
+            messages: [
+              {
+                type: 'assistant',
+                text: 'The retry policy is ready for review.',
+              },
+            ],
+            backgroundTasks: [],
+          }),
         ),
         http.get('/api/sessions/:sessionId/actions', () =>
           HttpResponse.json({
@@ -96,6 +99,24 @@ type Story = StoryObj<typeof meta>
 
 export const DesktopShowsTheInboxAndConversation: Story = {
   name: 'The desktop shows the inbox beside the selected conversation',
+}
+
+export const NarrowDesktopOverlaysTheStatusPanel: Story = {
+  name: 'A narrow desktop overlays the status panel while keeping the Inbox open',
+  args: {
+    statusPanelOpen: true,
+    selectedSession: {
+      ...session,
+      critUrl: '/review/sample',
+    },
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '620px', height: '800px', display: 'flex' }}>
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const IPhoneShowsTheInboxBeforeSelection: Story = {

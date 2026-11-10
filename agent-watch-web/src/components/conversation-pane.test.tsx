@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import type { ChatItem, Session, SessionActions } from '#types'
+import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
   id: 'sample-session',
@@ -38,6 +38,10 @@ const question: ChatItem = {
   answer: null,
 }
 
+function messagesResponse(messages: unknown, backgroundTasks: unknown = []) {
+  return { messages, backgroundTasks }
+}
+
 const permission: ChatItem = {
   type: 'permission',
   tool: 'Shell',
@@ -49,7 +53,6 @@ const otherPermission: ChatItem = {
   tool: 'Subagent sample-agent',
   description: 'Waiting for permission approval.',
 }
-
 let container: HTMLDivElement
 let root: Root | null = null
 const originalExecCommand = Object.getOwnPropertyDescriptor(
@@ -90,7 +93,10 @@ function renderView(
   viewMessages: readonly ChatItem[] = [question],
   viewActions: SessionActions | null = actions,
   isMobile = false,
+  viewBackgroundTasks: readonly BackgroundTask[] = [],
   viewSessions: readonly Session[] = [],
+  statusPanelOpen = false,
+  onToggleStatusPanel?: () => void,
   pendingPermissionAction?: {
     action: 'approve' | 'reject'
     status: 'sending' | 'sent'
@@ -105,6 +111,7 @@ function renderView(
         session={viewSession}
         sessions={viewSessions}
         messages={viewMessages}
+        backgroundTasks={viewBackgroundTasks}
         actions={viewActions}
         pendingPermissionAction={pendingPermissionAction}
         loading={false}
@@ -112,6 +119,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        statusPanelOpen={statusPanelOpen}
+        {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
       />,
     )
   })
@@ -185,6 +194,9 @@ it('shows pending and sent permission action feedback', () => {
       actions,
       false,
       [],
+      [],
+      false,
+      undefined,
       {
         action: 'approve',
         status,
@@ -801,6 +813,7 @@ it('links known session IDs in user, rich user, and assistant messages', () => {
     ],
     actions,
     false,
+    [],
     [linkedSession],
   )
 
@@ -901,6 +914,77 @@ it('shows elapsed time while the session is working without an active tool', () 
   })
 })
 
+it('expands the background task count into descriptions and elapsed times', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'in_progress', elapsedSeconds: 92 },
+    undefined,
+    [],
+    actions,
+    false,
+    [
+      {
+        id: 'fixture-task-one',
+        description: 'Watch the build pipeline',
+        elapsedSeconds: 128,
+      },
+      {
+        id: 'fixture-task-two',
+        description: 'Review the generated report',
+        elapsedSeconds: 43,
+      },
+    ],
+  )
+
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLElement>(
+        '.conversation-background-tasks summary',
+      ),
+    ).click()
+  })
+
+  const snapshot = () => ({
+    summary: container.querySelector('.conversation-background-tasks summary')
+      ?.textContent,
+    tasks: Array.from(
+      container.querySelectorAll('.conversation-background-tasks li'),
+      (item) => item.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    summary: 'Background tasks (2)',
+    tasks: ['Watch the build pipeline2m 8s', 'Review the generated report43s'],
+  })
+})
+
+it('shows the compacting status while hiding elapsed time and stale tool details', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, isCompacting: true, elapsedSeconds: 92 },
+    undefined,
+    [
+      {
+        type: 'tool_in_progress',
+        tool: 'exec',
+        target: 'cargo test --manifest-path fixture/Cargo.toml',
+      },
+    ],
+  )
+
+  const getSnapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    toolItems: container.querySelectorAll('.conversation-working-tool').length,
+    inProgressItems: container.querySelectorAll('.tool-in-progress').length,
+  })
+  expect(getSnapshot()).toEqual({
+    workingStatus: 'Compacting conversation…',
+    toolItems: 0,
+    inProgressItems: 0,
+  })
+})
+
 it('shows an active tool and hides it from the completed conversation', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
@@ -974,6 +1058,40 @@ it('hides working status when the session is done', () => {
   })
 })
 
+it('keeps background tasks visible while the session waits for input', () => {
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    { ...session, category: 'needs_action' },
+    undefined,
+    [],
+    actions,
+    false,
+    [
+      {
+        id: 'fixture-task-one',
+        description: 'Watch the build pipeline',
+        elapsedSeconds: 128,
+      },
+    ],
+  )
+
+  const snapshot = () => ({
+    status: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    workingDotVisible:
+      container.querySelector('.conversation-working-dot') !== null,
+    backgroundTasks: container.querySelector(
+      '.conversation-background-tasks summary',
+    )?.textContent,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Background tasks (1)Watch the build pipeline2m 8s',
+    workingDotVisible: false,
+    backgroundTasks: 'Background tasks (1)',
+  })
+})
+
 it('accepts the active tool returned by the messages endpoint', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -982,13 +1100,24 @@ it('accepts the active tool returned by the messages endpoint', async () => {
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([
-        {
-          type: 'tool_in_progress',
-          tool: 'exec',
-          target: 'cargo test',
-        },
-      ]),
+      jsonResponse(
+        messagesResponse(
+          [
+            {
+              type: 'tool_in_progress',
+              tool: 'exec',
+              target: 'cargo test',
+            },
+          ],
+          [
+            {
+              id: 'fixture-task-one',
+              description: 'Watch the build pipeline',
+              elapsedSeconds: 128,
+            },
+          ],
+        ),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
@@ -1014,97 +1143,54 @@ it('accepts the active tool returned by the messages endpoint', async () => {
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
 
-  expect(
-    Array.from(
-      requireElement(container.querySelector('.conversation-working-status'))
-        .children,
-    )
-      .slice(1)
-      .map((child) => child.textContent),
-  ).toEqual(['Working · 30s', 'execcargo test'])
+  const snapshot = () => ({
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.children[1]?.textContent,
+    activeTool: container.querySelector('.conversation-working-tool')
+      ?.textContent,
+    backgroundTasks: container.querySelector(
+      '.conversation-background-tasks summary',
+    )?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    workingStatus: 'Working · 30s',
+    activeTool: 'execcargo test',
+    backgroundTasks: 'Background tasks (1)',
+  })
 })
 
-it('opens and closes a crit review beside a waiting conversation', () => {
-  const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction, {
-    ...session,
-    category: 'needs_action',
-    kind: 'Review',
-    critUrl: 'http://127.0.0.1:5000/review/sample',
-  })
-  const conversationScroll = requireElement(
-    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+it('shows the status panel toggle and reports its open state', () => {
+  const onToggleStatusPanel = vi.fn<() => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    () => undefined,
+    [question],
+    actions,
+    false,
+    [],
+    [],
+    true,
+    onToggleStatusPanel,
   )
-
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-status-panel-toggle',
+    ),
+  )
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).click()
-  })
-  const openState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    frameSource: requireElement(
-      container.querySelector<HTMLIFrameElement>('.crit-pane iframe'),
-    ).getAttribute('src'),
-    closeLabel: requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.crit-pane button[aria-label="Close crit"]',
-      ),
-    ).getAttribute('aria-label'),
-    scrollElementPreserved:
-      container.querySelector('.conversation-scroll') === conversationScroll,
-  }
-
-  renderView(onAction, {
-    ...session,
-    category: 'needs_action',
-    kind: 'Review',
-    critUrl: 'http://127.0.0.1:5001/review/sample',
-  })
-  const changedUrlState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    pane: container.querySelector('.crit-pane'),
-  }
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).click()
+    toggle.click()
   })
 
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.crit-pane button[aria-label="Close crit"]',
-      ),
-    ).click()
+  const snapshot = () => ({
+    expanded: toggle.getAttribute('aria-expanded'),
+    controls: toggle.getAttribute('aria-controls'),
+    calls: onToggleStatusPanel.mock.calls,
   })
-  const closedState = {
-    expanded: requireElement(
-      container.querySelector<HTMLButtonElement>('.conversation-crit-toggle'),
-    ).getAttribute('aria-expanded'),
-    pane: container.querySelector('.crit-pane'),
-  }
-
-  const snapshot = () => ({ openState, changedUrlState, closedState })
   expect(snapshot()).toEqual({
-    openState: {
-      expanded: 'true',
-      frameSource: 'http://127.0.0.1:5000/review/sample',
-      closeLabel: 'Close crit',
-      scrollElementPreserved: true,
-    },
-    changedUrlState: {
-      expanded: 'false',
-      pane: null,
-    },
-    closedState: {
-      expanded: 'false',
-      pane: null,
-    },
+    expanded: 'true',
+    controls: 'session-status-panel',
+    calls: [[]],
   })
 })
 
@@ -1155,7 +1241,7 @@ it('shows the paused state in the mobile conversation header', () => {
   })
 })
 
-it('does not offer crit for sessions without a waiting crit URL', () => {
+it('keeps the status panel toggle available without a waiting crit URL', () => {
   renderView(
     vi.fn(() => Promise.resolve(true)),
     {
@@ -1165,7 +1251,8 @@ it('does not offer crit for sessions without a waiting crit URL', () => {
       critUrl: null,
     },
   )
-  const missingUrl = container.querySelector('.conversation-crit-toggle')
+  const missingUrl =
+    container.querySelector('.conversation-status-panel-toggle') !== null
 
   renderView(
     vi.fn(() => Promise.resolve(true)),
@@ -1176,12 +1263,13 @@ it('does not offer crit for sessions without a waiting crit URL', () => {
       critUrl: 'http://127.0.0.1:5000/review/sample',
     },
   )
-  const notWaiting = container.querySelector('.conversation-crit-toggle')
+  const notWaiting =
+    container.querySelector('.conversation-status-panel-toggle') !== null
 
   const snapshot = () => ({ missingUrl, notWaiting })
   expect(snapshot()).toEqual({
-    missingUrl: null,
-    notWaiting: null,
+    missingUrl: true,
+    notWaiting: true,
   })
 })
 
@@ -1491,7 +1579,7 @@ it('shows a server image validation error and retains the rejected attachment', 
     })
   const fetcher = vi
     .fn<typeof fetch>()
-    .mockResolvedValueOnce(jsonResponse([]))
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([])))
     .mockResolvedValueOnce(
       jsonResponse({
         message: true,
@@ -1880,13 +1968,15 @@ it.each([
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([
-        {
-          type: 'permission',
-          tool: 'Shell',
-          description: 'Run the formatter on changed files.',
-        },
-      ]),
+      jsonResponse(
+        messagesResponse([
+          {
+            type: 'permission',
+            tool: 'Shell',
+            description: 'Run the formatter on changed files.',
+          },
+        ]),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
@@ -1982,7 +2072,7 @@ it.each([
     }
     const fetcher = vi
       .fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([permission])))
       .mockResolvedValueOnce(jsonResponse(actions))
       .mockImplementationOnce(
         () =>
@@ -1990,11 +2080,11 @@ it.each([
             completeAction = resolve
           }),
       )
-      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([permission])))
       .mockResolvedValueOnce(jsonResponse(actions))
-      .mockResolvedValueOnce(jsonResponse([permission]))
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([permission])))
       .mockResolvedValueOnce(jsonResponse(unavailableActions))
-      .mockResolvedValueOnce(jsonResponse([]))
+      .mockResolvedValueOnce(jsonResponse(messagesResponse([])))
       .mockResolvedValueOnce(jsonResponse(unavailableActions))
     vi.stubGlobal('fetch', fetcher)
     root = createRoot(container)
@@ -2175,7 +2265,18 @@ it('reloads the selected conversation when the session feed changes', async () =
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([{ type: 'assistant', text: 'Before update' }]),
+      jsonResponse(
+        messagesResponse(
+          [{ type: 'assistant', text: 'Before update' }],
+          [
+            {
+              id: 'fixture-task-one',
+              description: 'Watch the build pipeline',
+              elapsedSeconds: 18,
+            },
+          ],
+        ),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
@@ -2186,7 +2287,9 @@ it('reloads the selected conversation when the session feed changes', async () =
       }),
     )
     .mockResolvedValueOnce(
-      jsonResponse([{ type: 'assistant', text: 'After update' }]),
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'After update' }]),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
@@ -2233,12 +2336,18 @@ it('reloads the selected conversation when the session feed changes', async () =
     await Promise.resolve()
   })
 
-  const actual = JSON.stringify([
-    container.querySelector('.chat-assistant-message')?.textContent,
-    fetcher.mock.calls.length,
-  ])
-  const expected = JSON.stringify(['After update', 4])
-  expect(actual).toBe(expected)
+  const snapshot = () => ({
+    transcript: container.querySelector('.chat-assistant-message')?.textContent,
+    backgroundTasks: container.querySelector(
+      '.conversation-background-tasks summary',
+    )?.textContent,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    transcript: 'After update',
+    backgroundTasks: undefined,
+    requestCount: 4,
+  })
 })
 
 it('keeps the conversation and focused draft while a feed refresh is pending', async () => {
@@ -2249,15 +2358,17 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([
-        { type: 'assistant', text: 'Current conversation' },
-        question,
-        {
-          type: 'permission',
-          tool: 'Shell',
-          description: 'Run the project formatter.',
-        },
-      ]),
+      jsonResponse(
+        messagesResponse([
+          { type: 'assistant', text: 'Current conversation' },
+          question,
+          {
+            type: 'permission',
+            tool: 'Shell',
+            description: 'Run the project formatter.',
+          },
+        ]),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
@@ -2346,14 +2457,16 @@ it('keeps question and permission actions active after a refresh error', async (
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([
-        question,
-        {
-          type: 'permission',
-          tool: 'Shell',
-          description: 'Run the project formatter.',
-        },
-      ]),
+      jsonResponse(
+        messagesResponse([
+          question,
+          {
+            type: 'permission',
+            tool: 'Shell',
+            description: 'Run the project formatter.',
+          },
+        ]),
+      ),
     )
     .mockResolvedValueOnce(
       jsonResponse({
