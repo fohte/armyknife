@@ -86,6 +86,8 @@ struct SessionView {
     task: Option<TqTaskView>,
     tasks: Vec<TqTaskView>,
     repo: String,
+    branch: Option<String>,
+    can_open_in_terminal: bool,
     project: String,
     parent: Option<ParentSessionView>,
     ancestor_session_ids: Vec<String>,
@@ -280,6 +282,11 @@ async fn list_sessions<S: SessionSource>(
                 task,
                 tasks,
                 repo: repo.clone(),
+                branch: session
+                    .pr_context
+                    .as_ref()
+                    .map(|context| context.branch.clone()),
+                can_open_in_terminal: session.tmux_info.is_some(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
@@ -741,6 +748,8 @@ mod tests {
             task: task.clone(),
             tasks: task.into_iter().collect(),
             repo: String::new(),
+            branch: None,
+            can_open_in_terminal: false,
             project: "Unsorted".to_string(),
             parent: None,
             ancestor_session_ids: Vec::new(),
@@ -820,6 +829,13 @@ mod tests {
     fn source() -> TestSessionSource {
         let mut session = session(SessionStatus::Stopped);
         session.session_id = "child-session".to_string();
+        session.tmux_info = Some(TmuxInfo {
+            session_name: "example-session".to_string(),
+            window_name: "example-window".to_string(),
+            window_index: 0,
+            pane_id: "%1".to_string(),
+            socket_path: None,
+        });
         session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
         session.last_message = Some("last message".to_string());
         session.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -1006,6 +1022,8 @@ mod tests {
                     "isClosed": false
                 }],
                 "repo": "example-org/example-repo",
+                "branch": "feature-example",
+                "canOpenInTerminal": true,
                 "project": "parent project",
                 "parent": {
                     "id": "parent-session",

@@ -43,6 +43,8 @@ export type Session = {
   task: SessionTask | null
   tasks?: SessionTask[]
   repo: string
+  branch?: string | null
+  canOpenInTerminal?: boolean
   project: string
   parent: ParentSession | null
   ancestorSessionIds: string[]

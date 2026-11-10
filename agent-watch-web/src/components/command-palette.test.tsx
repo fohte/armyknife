@@ -25,6 +25,8 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/web-app',
+  branch: 'feature/notification-preferences',
+  canOpenInTerminal: true,
   project: 'notification refresh',
   parent: null,
   ancestorSessionIds: [],
@@ -40,9 +42,10 @@ function renderPalette(
       <CommandPalette
         sessions={[session]}
         recentSessionIds={[]}
-        inboxFilterQuery=""
         onClose={() => undefined}
         onOpenSession={() => undefined}
+        onLater={() => undefined}
+        onOpenInTerminal={() => undefined}
         onOpenProject={() => undefined}
         onRunCommand={() => undefined}
         {...props}
@@ -121,4 +124,36 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
       },
     ],
   ])
+})
+
+it('matches a session by branch name and shows its task and repository', () => {
+  renderPalette({ initialQuery: 'feature/notification-preferences' })
+
+  expect(container.querySelector('.command-palette-item')?.textContent).toEqual(
+    'Review notification settingsQuestionP1 #42 Improve notifications · feature/notification-preferences · notification refresh · example/web-appQuestion · 5m',
+  )
+})
+
+it('opens the highlighted session actions with ArrowRight and runs Later', async () => {
+  const onLater = vi.fn<(id: string) => void>()
+  renderPalette({ onLater })
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{Enter}')
+  })
+
+  expect(onLater.mock.calls).toEqual([['session-alerts']])
+})
+
+it('opens the highlighted session in its terminal from the actions submenu', async () => {
+  const onOpenInTerminal = vi.fn<(id: string) => void>()
+  renderPalette({ onOpenInTerminal })
+
+  await act(async () => {
+    await userEvent.keyboard(
+      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
+    )
+  })
+
+  expect(onOpenInTerminal.mock.calls).toEqual([['session-alerts']])
 })

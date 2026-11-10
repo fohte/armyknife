@@ -30,7 +30,6 @@ type PaletteCommandItem = {
   id: string
   label: string
   description: string
-  taskNumber?: number
 }
 
 export type PaletteItem =
@@ -155,7 +154,7 @@ function projectItems(sessions: readonly Session[]): PaletteProjectItem[] {
   )
 }
 
-function baseCommands(hasInboxFilter: boolean): PaletteCommandItem[] {
+function baseCommands(): PaletteCommandItem[] {
   return [
     {
       type: 'command',
@@ -175,16 +174,6 @@ function baseCommands(hasInboxFilter: boolean): PaletteCommandItem[] {
       label: 'Archive all done',
       description: 'Archive every done session',
     },
-    ...(hasInboxFilter
-      ? [
-          {
-            type: 'command' as const,
-            id: 'clear-inbox-filter',
-            label: 'Clear inbox filter',
-            description: 'Show every session in the inbox',
-          },
-        ]
-      : []),
   ]
 }
 
@@ -199,6 +188,7 @@ function itemMatches(query: string, item: PaletteItem) {
         item.session.task === null
           ? null
           : `#${String(item.session.task.number)}`,
+        item.session.branch,
         item.session.project,
         item.session.repo,
       )
@@ -226,7 +216,6 @@ export function buildCommandPaletteGroups(
   input: string,
   selectedScope: PaletteScope,
   recentSessionIds: readonly string[],
-  hasInboxFilter: boolean,
 ): PaletteGroup[] {
   const { scope, query } = resolveScope(input, selectedScope)
   const needsAction = sessions.filter(
@@ -240,16 +229,7 @@ export function buildCommandPaletteGroups(
   })
   const tasks = taskItems(sessions)
   const projects = projectItems(sessions)
-  const commands = [
-    ...baseCommands(hasInboxFilter),
-    ...tasks.map((item) => ({
-      type: 'command' as const,
-      id: `filter-task:${String(item.task.number)}`,
-      label: `Filter inbox by task #${String(item.task.number)}`,
-      description: item.task.title,
-      taskNumber: item.task.number,
-    })),
-  ]
+  const commands = baseCommands()
 
   if (query.length === 0 && scope === 'all') {
     const groups = [
