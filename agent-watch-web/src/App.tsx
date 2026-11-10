@@ -12,11 +12,6 @@ import {
 } from '#inbox-filter'
 import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
-  readSavedInboxViews,
-  type SavedInboxView,
-  writeSavedInboxViews,
-} from '#saved-inbox-views'
-import {
   getLaterPresetTimes,
   setSessionBackNow,
   setSessionLater,
@@ -27,6 +22,7 @@ import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
 import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
+import { useSavedInboxViews } from '#use-saved-inbox-views'
 
 export function App() {
   const {
@@ -52,13 +48,6 @@ export function App() {
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [inboxFilterQuery, setInboxFilterQuery] = useState('')
-  const [savedInboxViews, setSavedInboxViews] =
-    useState<SavedInboxView[]>(readSavedInboxViews)
-  const [selectedSavedViewId, setSelectedSavedViewId] = useState<string | null>(
-    null,
-  )
-  const [saveViewOpen, setSaveViewOpen] = useState(false)
-  const [saveViewName, setSaveViewName] = useState('')
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [laterExpanded, setLaterExpanded] = useState(false)
   const [laterSessionId, setLaterSessionId] = useState<string | null>(null)
@@ -112,54 +101,20 @@ export function App() {
     ],
     [sessionsWithElapsedTime],
   )
+  const inboxFilters = useMemo(
+    () => parseInboxFilterQuery(inboxFilterQuery),
+    [inboxFilterQuery],
+  )
   const filteredOrderedSessions = useMemo(
-    () =>
-      filterInboxSessions(
-        orderedSessions,
-        parseInboxFilterQuery(inboxFilterQuery),
-      ),
-    [inboxFilterQuery, orderedSessions],
+    () => filterInboxSessions(orderedSessions, inboxFilters),
+    [inboxFilters, orderedSessions],
   )
-  const normalizedInboxFilterQuery = formatInboxFilterQuery(
-    parseInboxFilterQuery(inboxFilterQuery),
-  )
-  const activeSavedViewId =
-    view === 'inbox'
-      ? (savedInboxViews.find(
-          (savedView) =>
-            savedView.id === selectedSavedViewId &&
-            savedView.query === normalizedInboxFilterQuery,
-        )?.id ??
-        savedInboxViews.find(
-          (savedView) => savedView.query === normalizedInboxFilterQuery,
-        )?.id ??
-        null)
-      : null
-  const savedViewsForNav = useMemo(
-    () =>
-      savedInboxViews.map((savedView) => {
-        const matchingSessions = filterInboxSessions(
-          sessionsWithElapsedTime,
-          parseInboxFilterQuery(savedView.query),
-        )
-        const hasError = matchingSessions.some(
-          (session) => session.kind?.toLocaleLowerCase() === 'error',
-        )
-        const hasNeedsAction = matchingSessions.some(
-          (session) => session.category === 'needs_action',
-        )
-        const countTone: 'error' | 'needs-action' | null = hasError
-          ? 'error'
-          : hasNeedsAction
-            ? 'needs-action'
-            : null
-        return {
-          ...savedView,
-          count: matchingSessions.length,
-          countTone,
-        }
-      }),
-    [savedInboxViews, sessionsWithElapsedTime],
+  const normalizedInboxFilterQuery = formatInboxFilterQuery(inboxFilters)
+  const savedViews = useSavedInboxViews(
+    sessionsWithElapsedTime,
+    normalizedInboxFilterQuery,
+    view === 'inbox',
+    setError,
   )
   const navigableSessions = useMemo(
     () =>
@@ -397,43 +352,14 @@ export function App() {
     },
     [navigate],
   )
-  const saveInboxView = useCallback(
-    (name: string) => {
-      const trimmedName = name.trim()
-      if (trimmedName.length === 0 || normalizedInboxFilterQuery.length === 0) {
-        return
-      }
-      const savedView = {
-        id: window.crypto.randomUUID(),
-        name: trimmedName,
-        query: normalizedInboxFilterQuery,
-      }
-      const nextViews = [...savedInboxViews, savedView]
-      if (!writeSavedInboxViews(nextViews)) {
-        setError('Could not save the view.')
-        return
-      }
-      setSavedInboxViews(nextViews)
-      setSelectedSavedViewId(savedView.id)
-      setSaveViewName('')
-      setSaveViewOpen(false)
-      setError(null)
-    },
-    [normalizedInboxFilterQuery, savedInboxViews],
-  )
-  const deleteInboxView = useCallback(
+  const selectInboxSavedView = useCallback(
     (id: string) => {
-      const nextViews = savedInboxViews.filter(
-        (savedView) => savedView.id !== id,
-      )
-      if (!writeSavedInboxViews(nextViews)) {
-        setError('Could not delete the view.')
-        return
-      }
-      setSavedInboxViews(nextViews)
-      setError(null)
+      const query = savedViews.selectView(id)
+      if (query === null) return
+      setInboxFilterQuery(query)
+      navigate((current) => ({ ...current, view: 'inbox' }))
     },
-    [savedInboxViews],
+    [navigate, savedViews.selectView],
   )
   const { showConversation: showMobileConversation } = useMobileNavigation({
     isMobile,
@@ -445,17 +371,21 @@ export function App() {
     setConversationOpen,
   })
   const inboxProps = {
-    error,
+    error: error ?? savedViews.storageError,
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,
     filterQuery: inboxFilterQuery,
     onFilterQueryChange: setInboxFilterQuery,
-    saveViewOpen,
-    saveViewName,
-    onSaveViewOpenChange: setSaveViewOpen,
-    onSaveViewNameChange: setSaveViewName,
-    onSaveView: saveInboxView,
+    saveViewOpen: savedViews.saveViewOpen,
+    saveViewName: savedViews.saveViewName,
+    onSaveViewOpenChange: savedViews.setSaveViewOpen,
+    onSaveViewNameChange: savedViews.setSaveViewName,
+    onSaveView: savedViews.saveView,
+    savedViews: savedViews.savedViewsForNav,
+    selectedSavedViewId: savedViews.activeSavedViewId,
+    onSelectSavedView: selectInboxSavedView,
+    onDeleteSavedView: savedViews.deleteView,
     showAllInProgress,
     onShowMore: () => {
       setShowAllInProgress(true)
@@ -489,24 +419,15 @@ export function App() {
         <AgentWatchNav
           activeView={view}
           needsActionCount={needsActionCount}
-          savedViews={savedViewsForNav}
-          selectedSavedViewId={activeSavedViewId}
+          savedViews={savedViews.savedViewsForNav}
+          selectedSavedViewId={savedViews.activeSavedViewId}
           todaySessions={todaySessions}
           workTypeNavGroups={workTypeNavGroups}
           onViewChange={(nextView) => {
             navigate((current) => ({ ...current, view: nextView }))
           }}
-          onSelectSavedView={(id) => {
-            const savedView = savedInboxViews.find(
-              (candidate) => candidate.id === id,
-            )
-            if (savedView === undefined) return
-            setInboxFilterQuery(savedView.query)
-            setSelectedSavedViewId(savedView.id)
-            setSaveViewOpen(false)
-            navigate((current) => ({ ...current, view: 'inbox' }))
-          }}
-          onDeleteSavedView={deleteInboxView}
+          onSelectSavedView={selectInboxSavedView}
+          onDeleteSavedView={savedViews.deleteView}
           onSelectToday={openSessionInInbox}
           onSelectSession={openSessionInInbox}
         />

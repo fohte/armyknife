@@ -288,3 +288,31 @@ export const IPhoneInboxShowsCompletedSessions: Story = {
     ),
   ],
 }
+
+export const IPhoneInboxShowsSavedViews: Story = {
+  name: 'The iPhone inbox shows saved views above its sessions',
+  args: {
+    isMobile: true,
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    selectedSavedViewId: 'reviews',
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}

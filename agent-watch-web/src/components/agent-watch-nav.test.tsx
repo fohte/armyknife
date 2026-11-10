@@ -103,9 +103,8 @@ it('renders no work type sections without configured groups', () => {
   ).toEqual([])
 })
 
-it('selects and deletes saved views and hides the section when it is empty', () => {
+it('selects the active saved view and shows its needs-action count color', () => {
   const onSelectSavedView = vi.fn<(id: string) => void>()
-  const onDeleteSavedView = vi.fn<(id: string) => void>()
   renderNav(
     [],
     () => undefined,
@@ -120,16 +119,10 @@ it('selects and deletes saved views and hides the section when it is empty', () 
     ],
     'reviews',
     onSelectSavedView,
-    onDeleteSavedView,
   )
 
   act(() => {
     container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
-    container
-      .querySelector<HTMLButtonElement>(
-        '[aria-label="Delete Sample reviews view"]',
-      )
-      ?.click()
   })
 
   const snapshot = () => ({
@@ -139,7 +132,6 @@ it('selects and deletes saved views and hides the section when it is empty', () 
       ?.getAttribute('aria-pressed'),
     countTone: container.querySelector('.saved-view-count')?.className,
     selectedIds: onSelectSavedView.mock.calls,
-    deletedIds: onDeleteSavedView.mock.calls,
   })
 
   expect(snapshot()).toEqual({
@@ -147,26 +139,42 @@ it('selects and deletes saved views and hides the section when it is empty', () 
     selected: 'true',
     countTone: 'saved-view-count is-needs-action',
     selectedIds: [['reviews']],
-    deletedIds: [['reviews']],
+  })
+})
+
+it('deletes a saved view from the navigation', () => {
+  const onDeleteSavedView = vi.fn<(id: string) => void>()
+  renderNav(
+    [],
+    () => undefined,
+    [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    null,
+    () => undefined,
+    onDeleteSavedView,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
   })
 
-  act(() => {
-    root?.render(
-      <AgentWatchNav
-        activeView="inbox"
-        needsActionCount={0}
-        savedViews={[]}
-        selectedSavedViewId={null}
-        workTypeNavGroups={[]}
-        onViewChange={() => undefined}
-        onSelectSavedView={() => undefined}
-        onDeleteSavedView={() => undefined}
-        todaySessions={[]}
-        onSelectToday={() => undefined}
-        onSelectSession={() => undefined}
-      />,
-    )
-  })
+  const snapshot = () => onDeleteSavedView.mock.calls
+
+  expect(snapshot()).toEqual([['reviews']])
+})
+
+it('hides the saved views section when no views are saved', () => {
+  renderNav([])
 
   expect(container.querySelector('#saved-views-title')).toBeNull()
 })

@@ -3,7 +3,7 @@ import '#components/inbox-filter.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter } from 'lucide-react'
+import { Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
@@ -14,6 +14,7 @@ import {
   type InboxFilterKey,
   parseInboxFilterQuery,
 } from '#inbox-filter'
+import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
 
 type InboxViewProps = {
@@ -44,6 +45,13 @@ type InboxViewProps = {
   onSaveViewOpenChange?: (open: boolean) => void
   onSaveViewNameChange?: (name: string) => void
   onSaveView?: (name: string) => void
+  savedViews?: readonly (SavedInboxView & {
+    count: number
+    countTone: 'needs-action' | 'error' | null
+  })[]
+  selectedSavedViewId?: string | null
+  onSelectSavedView?: (id: string) => void
+  onDeleteSavedView?: (id: string) => void
 }
 
 function renderSessionSection({
@@ -120,6 +128,10 @@ export function InboxView({
   onSaveViewOpenChange,
   onSaveViewNameChange,
   onSaveView,
+  savedViews = [],
+  selectedSavedViewId = null,
+  onSelectSavedView,
+  onDeleteSavedView,
 }: InboxViewProps) {
   const [localFilterQuery, setLocalFilterQuery] = useState('')
   const [localDialogOpen, setLocalDialogOpen] = useState(false)
@@ -333,6 +345,50 @@ export function InboxView({
           </>
         )}
       </div>
+      {isMobile && savedViews.length > 0 ? (
+        <section
+          className="mobile-saved-views"
+          aria-labelledby="mobile-saved-views-title"
+        >
+          <h2 id="mobile-saved-views-title">VIEWS</h2>
+          <ul>
+            {savedViews.map((savedView) => (
+              <li key={savedView.id}>
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-pressed={selectedSavedViewId === savedView.id}
+                  className={`mobile-saved-view-link${selectedSavedViewId === savedView.id ? ' is-active' : ''}`}
+                  onClick={() => {
+                    onSelectSavedView?.(savedView.id)
+                  }}
+                >
+                  <Filter aria-hidden="true" size={13} />
+                  <span className="mobile-saved-view-name">
+                    {savedView.name}
+                  </span>
+                  <span
+                    className={`mobile-saved-view-count${savedView.countTone === null ? '' : ` is-${savedView.countTone}`}`}
+                  >
+                    {savedView.count}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-label={`Delete ${savedView.name} view`}
+                  className="mobile-saved-view-delete"
+                  onClick={() => {
+                    onDeleteSavedView?.(savedView.id)
+                  }}
+                >
+                  <X aria-hidden="true" size={13} />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div className="mobile-today-strip" aria-label="TODAY sessions">
         <span className="mobile-today-label">TODAY</span>
         {filterInboxSessions(todaySessions, filters).map((session) => (

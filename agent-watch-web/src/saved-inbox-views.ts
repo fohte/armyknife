@@ -6,7 +6,12 @@ export type SavedInboxView = {
   query: string
 }
 
-const storageKey = 'agent-watch-web:saved-inbox-views'
+export const SAVED_INBOX_VIEWS_STORAGE_KEY = 'agent-watch-web:saved-inbox-views'
+
+export type SavedInboxViewsRead = {
+  views: SavedInboxView[]
+  storageAvailable: boolean
+}
 
 function isStoredInboxView(
   value: unknown,
@@ -21,40 +26,45 @@ function isStoredInboxView(
   )
 }
 
-export function readSavedInboxViews(storage: Storage = window.localStorage) {
+export function readSavedInboxViews(storage?: Storage): SavedInboxViewsRead {
   return Result.fromThrowable(
-    () => storage.getItem(storageKey),
+    () =>
+      (storage ?? window.localStorage).getItem(SAVED_INBOX_VIEWS_STORAGE_KEY),
     (error: unknown) => error,
   )().match(
     (raw) => {
-      if (raw === null) return []
+      if (raw === null) return { views: [], storageAvailable: true }
       return Result.fromThrowable(
         () => JSON.parse(raw) as unknown,
         (error: unknown) => error,
       )().match(
         (value) =>
           Array.isArray(value)
-            ? value.flatMap((entry, index) =>
-                isStoredInboxView(entry)
-                  ? [{ ...entry, id: String(index) }]
-                  : [],
-              )
-            : [],
-        () => [],
+            ? {
+                views: value.flatMap((entry, index) =>
+                  isStoredInboxView(entry)
+                    ? [{ ...entry, id: String(index) }]
+                    : [],
+                ),
+                storageAvailable: true,
+              }
+            : { views: [], storageAvailable: false },
+        () => ({ views: [], storageAvailable: false }),
       )
     },
-    () => [],
+    () => ({ views: [], storageAvailable: false }),
   )
 }
 
 export function writeSavedInboxViews(
   views: readonly SavedInboxView[],
-  storage: Storage = window.localStorage,
+  storage?: Storage,
 ) {
   return Result.fromThrowable(
     () => {
-      storage.setItem(
-        storageKey,
+      const targetStorage = storage ?? window.localStorage
+      targetStorage.setItem(
+        SAVED_INBOX_VIEWS_STORAGE_KEY,
         JSON.stringify(views.map(({ name, query }) => ({ name, query }))),
       )
     },

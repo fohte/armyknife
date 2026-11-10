@@ -55,19 +55,37 @@ it('stores only the name and query and reconstructs view identities when reading
     written: true,
     stored:
       '[{"name":"Sample reviews","query":"project:sample-project kind:review"}]',
-    restored: [
-      {
-        id: '0',
-        name: 'Sample reviews',
-        query: 'project:sample-project kind:review',
-      },
-    ],
+    restored: {
+      views: [
+        {
+          id: '0',
+          name: 'Sample reviews',
+          query: 'project:sample-project kind:review',
+        },
+      ],
+      storageAvailable: true,
+    },
   })
 })
 
 it('ignores malformed stored view data', () => {
   const storage = new MemoryStorage()
-  storage.setItem('agent-watch-web:saved-inbox-views', '[{"name":4}]')
+  storage.setItem('agent-watch-web:saved-inbox-views', 'invalid JSON')
 
-  expect(readSavedInboxViews(storage)).toEqual([])
+  expect(readSavedInboxViews(storage)).toEqual({
+    views: [],
+    storageAvailable: false,
+  })
+})
+
+it('reports when browser storage cannot be read', () => {
+  const storage = new MemoryStorage()
+  storage.getItem = () => {
+    throw new Error('Storage is unavailable')
+  }
+
+  expect(readSavedInboxViews(storage)).toEqual({
+    views: [],
+    storageAvailable: false,
+  })
 })
