@@ -23,7 +23,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         match record.get("type").and_then(Value::as_str) {
             Some("user") => {
                 if let Some(message) = record.get("message") {
-                    let tool_use_result = record.get("toolUseResult");
+                    let tool_use_result = record
+                        .get("toolUseResult")
+                        .filter(|result| !result.is_null());
                     for block in tool_result_blocks(message) {
                         let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
                             continue;
@@ -504,6 +506,17 @@ mod tests {
             question: "Which color theme?".to_string(),
             choices: vec!["Light".to_string(), "Dark".to_string()],
             answer: Some("Use a fictional palette".to_string()),
+        }]
+    )]
+    #[case::null_tool_use_result_uses_text_answer(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-null-result","name":"AskUserQuestion","input":{"questions":[{"question":"Should weekends be shown?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-null-result","content":"The user answered: \"Should weekends be shown?\"=\"No\". You can now continue with these answers in mind."}]},"toolUseResult":null}
+        "#},
+        vec![ChatItem::Question {
+            question: "Should weekends be shown?".to_string(),
+            choices: vec!["Yes".to_string(), "No".to_string()],
+            answer: Some("No".to_string()),
         }]
     )]
     #[case::no_answer(
