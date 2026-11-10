@@ -45,7 +45,7 @@ async fn create_watcher(
         let sessions_dir = store::sessions_dir()?;
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-                if event.is_ok() {
+                if event.is_ok_and(|event| is_session_store_change(&event)) {
                     let _ = signal_tx.send(());
                 }
             })?;
@@ -55,6 +55,27 @@ async fn create_watcher(
     .await
     .ok()
     .and_then(Result::ok)
+}
+
+fn is_session_store_change(event: &notify::Event) -> bool {
+    let is_database_file = |path: &std::path::Path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "sessions.db" || name == "sessions.db-wal")
+    };
+
+    match event.kind {
+        notify::EventKind::Modify(
+            notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Any,
+        ) => event.paths.iter().any(|path| is_database_file(path)),
+        notify::EventKind::Create(
+            notify::event::CreateKind::File | notify::event::CreateKind::Any,
+        ) => event
+            .paths
+            .iter()
+            .any(|path| path.file_name().and_then(|name| name.to_str()) == Some("sessions.db")),
+        _ => false,
+    }
 }
 
 async fn current_revision() -> Option<i64> {
@@ -152,6 +173,7 @@ mod tests {
     use axum::response::IntoResponse;
     use futures_util::StreamExt;
     use indoc::indoc;
+    use rstest::rstest;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicI64, Ordering};
 
@@ -234,6 +256,69 @@ mod tests {
                 .to_string(),
             ),
         );
+    }
+
+    #[rstest]
+    #[case::database_data(
+        "/sessions/sessions.db",
+        notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any
+        )),
+        true
+    )]
+    #[case::wal_data(
+        "/sessions/sessions.db-wal",
+        notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any
+        )),
+        true
+    )]
+    #[case::database_create(
+        "/sessions/sessions.db",
+        notify::EventKind::Create(notify::event::CreateKind::File),
+        true
+    )]
+    #[case::wal_create_ignored(
+        "/sessions/sessions.db-wal",
+        notify::EventKind::Create(notify::event::CreateKind::File),
+        false
+    )]
+    #[case::wal_remove_ignored(
+        "/sessions/sessions.db-wal",
+        notify::EventKind::Remove(notify::event::RemoveKind::File),
+        false
+    )]
+    #[case::database_remove_ignored(
+        "/sessions/sessions.db",
+        notify::EventKind::Remove(notify::event::RemoveKind::File),
+        false
+    )]
+    #[case::shared_memory_ignored(
+        "/sessions/sessions.db-shm",
+        notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any
+        )),
+        false
+    )]
+    #[case::unrelated_file_ignored(
+        "/sessions/notes.txt",
+        notify::EventKind::Modify(notify::event::ModifyKind::Data(
+            notify::event::DataChange::Any
+        )),
+        false
+    )]
+    fn filters_session_store_events(
+        #[case] path: &str,
+        #[case] kind: notify::EventKind,
+        #[case] expected: bool,
+    ) {
+        let event = notify::Event {
+            kind,
+            paths: vec![std::path::PathBuf::from(path)],
+            attrs: Default::default(),
+        };
+
+        assert_eq!(is_session_store_change(&event), expected);
     }
 
     async fn next_chunk(
