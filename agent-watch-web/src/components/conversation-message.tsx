@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { PeerMessage } from '#components/peer-message'
 import {
   type PendingPermissionAction,
   PermissionCard,
@@ -57,6 +58,29 @@ export function renderConversationMessage({
         onSelectSession={onSelectSession}
         sessions={sessions}
       />
+    )
+  }
+  if (message.type === 'peer') {
+    return (
+      <PeerMessage
+        key={`peer-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
+    )
+  }
+  if (message.type === 'event') {
+    return (
+      <div
+        className="chat-event"
+        data-failed={message.failed ? 'true' : undefined}
+        data-kind={message.kind}
+        key={`event-${String(index)}`}
+        title={message.text}
+      >
+        {message.text}
+      </div>
     )
   }
   if (message.type === 'assistant') {

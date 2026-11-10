@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 mod background_tasks;
+mod questions;
 mod transcript_branch;
 mod user_input;
 
@@ -13,16 +14,18 @@ use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
 use super::super::parser::{
-    ToolSummary, append_text_with_image_directory,
-    append_text_with_user_marker_and_image_directory, for_each_jsonl_record,
-    peer_message_item_with_user_marker_and_image_directory, tool_target,
-    user_item_with_image_directory,
+    ToolSummary, append_classification_with_image_directory,
+    append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
+    classifier::{self, MessageKind},
+    for_each_jsonl_record, tool_target,
 };
 use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
+use questions::{
+    append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
+};
 use transcript_branch::{BranchMembership, TranscriptNode, is_inactive_branch, mark_active_branch};
 use user_input::{
-    UserOrigin, content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
-    user_origin,
+    content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
 };
 
 #[cfg(test)]
@@ -135,7 +138,7 @@ fn parse_with_background_tasks_and_image_directory(
                 return;
             }
         }
-        (|| match record.get("type").and_then(Value::as_str) {
+        match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
                 .and_then(|attachment| attachment.get("type"))
@@ -149,13 +152,14 @@ fn parse_with_background_tasks_and_image_directory(
                     let (text, images) = user_content(Some(prompt));
                     if !text.is_empty() || !images.is_empty() {
                         tools.flush_into(&mut items);
-                        append_text_with_user_marker_and_image_directory(
+                        append_record_with_user_marker_and_image_directory(
                             &mut items,
+                            &record,
                             text,
-                            parent,
                             user_marker,
                             images,
                             image_directory,
+                            parent,
                         );
                     }
                 }
@@ -187,49 +191,73 @@ fn parse_with_background_tasks_and_image_directory(
                             .position(|tool_use: &ToolUse| tool_use.id == id)
                         {
                             let tool_use = tool_uses.remove(index);
-                            tools.record(&tool_use.name, tool_use.input.as_ref());
-                            background_tasks.complete_tool_use(&tool_use, &record, block, now);
-                        }
-                    }
-                    let Some(origin) = user_origin(&record, message) else {
-                        return;
-                    };
-                    let (text, images) = user_content(message.get("content"));
-                    if !text.is_empty() || !images.is_empty() {
-                        if origin == UserOrigin::Peer {
-                            let Some(item) = peer_message_item_with_user_marker_and_image_directory(
-                                &text,
-                                parent,
-                                user_marker,
-                                images,
-                                image_directory,
-                            ) else {
-                                return;
-                            };
-                            tools.flush_into(&mut items);
-                            items.push(item);
-                        } else {
-                            tools.flush_into(&mut items);
-                            let text = slash_command_text(&text).unwrap_or(text);
-                            if images.is_empty() {
-                                append_text_with_image_directory(
-                                    &mut items,
-                                    text,
-                                    true,
-                                    parent,
-                                    image_directory,
-                                );
+                            if classifier::is_peer_notify_tool(
+                                &tool_use.name,
+                                tool_use.input.as_ref(),
+                            ) {
+                                let text = block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .unwrap_or_default();
+                                if tool_result_failed(&record, block)
+                                    || classifier::peer_notification_failed(&record, &text)
+                                {
+                                    append_classification_with_image_directory(
+                                        &mut items,
+                                        classifier::failed_peer_notification(&text),
+                                        Vec::new(),
+                                        image_directory,
+                                        parent,
+                                    );
+                                } else if let Some(peer) = classifier::peer_out_from_tool(
+                                    &tool_use.name,
+                                    tool_use.input.as_ref(),
+                                    parent.map(|parent| parent.session_id.as_str()),
+                                ) {
+                                    super::append_peer_out(&mut items, peer);
+                                }
                             } else {
-                                items.push(user_item_with_image_directory(
-                                    text,
-                                    None,
-                                    images,
-                                    image_directory,
-                                ));
+                                tools.record(&tool_use.name, tool_use.input.as_ref());
+                                background_tasks.complete_tool_use(&tool_use, &record, block, now);
                             }
                         }
                     }
+                    let (text, images) = user_content(message.get("content"));
+                    if !text.is_empty() || !images.is_empty() {
+                        tools.flush_into(&mut items);
+                        let classification =
+                            classifier::classify_inbound(&record, &text, user_marker);
+                        let classification = match classification {
+                            MessageKind::User { text } => MessageKind::User {
+                                text: slash_command_text(&text).unwrap_or(text),
+                            },
+                            classification => classification,
+                        };
+                        append_classification_with_image_directory(
+                            &mut items,
+                            classification,
+                            images,
+                            image_directory,
+                            parent,
+                        );
+                    }
                 }
+            }
+            Some("system") => {
+                tools.flush_into(&mut items);
+                let text = record
+                    .get("message")
+                    .map(user_input::user_text)
+                    .unwrap_or_default();
+                append_record_with_user_marker_and_image_directory(
+                    &mut items,
+                    &record,
+                    text,
+                    None,
+                    Vec::new(),
+                    image_directory,
+                    parent,
+                );
             }
             Some("assistant") => {
                 if let Some(content) = record
@@ -256,7 +284,17 @@ fn parse_with_background_tasks_and_image_directory(
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
                                 let input = block.get("input");
-                                if name == "AskUserQuestion" {
+                                if classifier::is_peer_notify_tool(name, input) {
+                                    tools.flush_into(&mut items);
+                                    if let Some(id) = block.get("id").and_then(Value::as_str) {
+                                        tool_uses.push(ToolUse {
+                                            id: id.to_owned(),
+                                            name: name.to_owned(),
+                                            input: input.cloned(),
+                                            started_at: record_timestamp(&record),
+                                        });
+                                    }
+                                } else if name == "AskUserQuestion" {
                                     tools.flush_into(&mut items);
                                     if let Some(id) = block.get("id").and_then(Value::as_str) {
                                         let indices = append_questions(&mut items, input);
@@ -280,22 +318,24 @@ fn parse_with_background_tasks_and_image_directory(
                 }
             }
             _ => {}
-        })();
+        }
     })?;
 
     tools.flush_into(&mut items);
     // Permission state must be tied to an unanswered call ID, not a reused tool name.
     if let Some(tool_use) = pending_tool.and_then(|pending| {
-        tool_uses
-            .iter()
-            .rev()
-            .find(|tool_use| matches_pending_tool(tool_use, pending))
+        tool_uses.iter().rev().find(|tool_use| {
+            matches_pending_tool(tool_use, pending)
+                && !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
+        })
     }) {
         items.push(ChatItem::Permission {
             tool: tool_use.name.clone(),
             description: tool_detail(&tool_use.name, tool_use.input.as_ref()),
         });
-    } else if let Some(tool_use) = tool_uses.last() {
+    } else if let Some(tool_use) = tool_uses.last().filter(|tool_use| {
+        !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
+    }) {
         items.push(ChatItem::ToolInProgress {
             tool: tool_use.name.clone(),
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
@@ -335,85 +375,15 @@ fn tool_result_text(content: &Value) -> Option<String> {
     }
 }
 
-fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
-    let mut remaining = content
-        .strip_prefix("Your questions have been answered:")
-        .or_else(|| content.strip_prefix("The user answered:"))?
-        .trim_start();
-    let mut answers = Vec::new();
-
-    loop {
-        let (question, after_question) = parse_quoted_json_string(remaining)?;
-        let after_equals = after_question.strip_prefix('=')?;
-        let (answer, after_answer) = parse_quoted_json_string(after_equals)?;
-        answers.push((question, answer));
-
-        remaining = after_answer.trim_start();
-        if let Some(after_comma) = remaining.strip_prefix(',') {
-            remaining = after_comma.trim_start();
-        } else if !remaining.starts_with('"') {
-            break;
-        }
-    }
-
-    (!answers.is_empty()).then_some(answers)
-}
-
-fn tool_use_result_answers(tool_use_result: &Value) -> Option<Vec<(String, String)>> {
-    let answers = tool_use_result.get("answers")?.as_object()?;
-    let answers = answers
-        .iter()
-        .filter_map(|(question, answer)| {
-            answer
-                .as_str()
-                .map(|answer| (question.clone(), answer.to_owned()))
+fn tool_result_failed(record: &Value, block: &Value) -> bool {
+    [Some(block), record.get("toolUseResult")]
+        .into_iter()
+        .flatten()
+        .any(|result| {
+            ["is_error", "isError"]
+                .into_iter()
+                .any(|key| result.get(key).and_then(Value::as_bool) == Some(true))
         })
-        .collect::<Vec<_>>();
-    (!answers.is_empty()).then_some(answers)
-}
-
-fn parse_quoted_json_string(value: &str) -> Option<(String, &str)> {
-    if !value.starts_with('"') {
-        return None;
-    }
-
-    let mut escaped = false;
-    for (index, character) in value.char_indices().skip(1) {
-        if escaped {
-            escaped = false;
-        } else if character == '\\' {
-            escaped = true;
-        } else if character == '"' {
-            let end = index + character.len_utf8();
-            let parsed = serde_json::from_str(&value[..end]).ok()?;
-            return Some((parsed, &value[end..]));
-        }
-    }
-
-    None
-}
-
-fn apply_question_answers(
-    items: &mut [ChatItem],
-    question_indices: &[usize],
-    answers: &[(String, String)],
-) {
-    let mut remaining_answers = answers.to_vec();
-    for index in question_indices {
-        let Some(ChatItem::Question {
-            question, answer, ..
-        }) = items.get_mut(*index)
-        else {
-            continue;
-        };
-        if let Some(answer_index) = remaining_answers
-            .iter()
-            .position(|(asked, _)| asked == question)
-        {
-            let (_, selected_answer) = remaining_answers.remove(answer_index);
-            *answer = Some(selected_answer);
-        }
-    }
 }
 
 fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
@@ -447,36 +417,6 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
     format!("{name}: {target}")
 }
 
-fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>) -> Vec<usize> {
-    let Some(questions) = input
-        .and_then(|input| input.get("questions"))
-        .and_then(Value::as_array)
-    else {
-        return Vec::new();
-    };
-    let mut indices = Vec::new();
-    for question in questions {
-        let Some(text) = question.get("question").and_then(Value::as_str) else {
-            continue;
-        };
-        let choices = question
-            .get("options")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|option| option.get("label").and_then(Value::as_str))
-            .map(str::to_owned)
-            .collect();
-        indices.push(items.len());
-        items.push(ChatItem::Question {
-            question: text.to_owned(),
-            choices,
-            answer: None,
-        });
-    }
-    indices
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
@@ -486,7 +426,9 @@ mod tests {
     use serde_json::json;
 
     use super::{parse, parse_with_image_directory};
-    use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession, UserContentPart};
+    use crate::commands::agent::watch_web::messages::{
+        ChatItem, ParentSession, PeerDirection, UserContentPart,
+    };
 
     #[test]
     fn parses_a_marked_peer_message_with_a_saved_image() {
@@ -537,6 +479,180 @@ mod tests {
                 ],
                 from: None,
             }]
+        );
+    }
+
+    #[test]
+    fn parses_an_unmarked_peer_message_with_a_saved_image() {
+        let directory = tempfile::tempdir().unwrap();
+        let image_directory = directory.path().canonicalize().unwrap();
+        let image_name = "00000000-0000-4000-8000-000000000003.png";
+        let image_path = image_directory.join(image_name);
+        std::fs::write(
+            &image_path,
+            [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A],
+        )
+        .unwrap();
+        let content = formatdoc! {"
+            <peer-message>
+            - From session_id: fixture-peer-session
+            - Sender engine: fixture-engine
+
+            Inspect this image.
+
+            Attached image(s):
+            - {}
+            </peer-message>
+        ", image_path.display()};
+        let transcript = serde_json::to_string(&json!({
+            "type": "user",
+            "origin": {"kind": "peer", "from": "fixture-peer-session"},
+            "message": {"content": content},
+        }))
+        .unwrap();
+
+        assert_eq!(
+            parse_with_image_directory(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Some(&image_directory),
+            )
+            .unwrap(),
+            vec![ChatItem::Peer {
+                direction: PeerDirection::From,
+                session_id: "fixture-peer-session".to_string(),
+                session_title: None,
+                content: vec![
+                    UserContentPart::Text {
+                        text: "Inspect this image.".to_string(),
+                    },
+                    UserContentPart::Image {
+                        source: format!("/api/images/{image_name}"),
+                        available: true,
+                    },
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn classifies_peer_messages_events_and_outgoing_notifications() {
+        let transcript = indoc! {r#"
+            {"attachment":{"type":"queued_command","prompt":"<peer-message>\n- From session_id: fixture-remote-session\n- Sender engine: fixture-engine\n\nReview the fictional output.\n</peer-message>"}}
+            {"type":"user","isMeta":true,"message":{"content":"<delegation-update>Worker completed the fictional check.</delegation-update>"}}
+            {"type":"user","message":{"content":"<task-notification>Background task failed while checking a fixture.</task-notification>"}}
+            {"type":"user","message":{"content":"<local-command-stdout>Fictional hook output.\nSecond line.</local-command-stdout>"}}
+            {"type":"user","message":{"content":"<future-notice>Unknown wrapped notice.</future-notice>"}}
+            {"type":"user","message":{"content":"<system-reminder>Internal-only context.</system-reminder>"}}
+            {"type":"system","subtype":"compact_boundary"}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify --message 'Please verify the fictional result.' fixture-target-session"}}]}}
+            {"type":"user","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}
+        "#};
+        let parent = ParentSession {
+            session_id: "fixture-parent-session".to_string(),
+            title: "Fixture parent session".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
+            vec![
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-remote-session".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Review the fictional output.".to_string(),
+                    }],
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::Armyknife,
+                    text: "Worker completed the fictional check.".to_string(),
+                    failed: false,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Background task failed while checking a fixture.".to_string(),
+                    failed: true,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::Hook,
+                    text: "Fictional hook output. Second line.".to_string(),
+                    failed: false,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Unknown wrapped notice.".to_string(),
+                    failed: false,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Context compacted".to_string(),
+                    failed: false,
+                },
+                ChatItem::Peer {
+                    direction: PeerDirection::To,
+                    session_id: "fixture-target-session".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Please verify the fictional result.".to_string(),
+                    }],
+                },
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::tool_error(
+        true,
+        "The fictional target was unavailable.\nPlease retry later.",
+        "The fictional target was unavailable. Please retry later."
+    )]
+    #[case::saved_for_retry(
+        false,
+        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours.",
+        "Failed to deliver to session fixture-parent-session: synthetic transport error. Saved the message; a agent sweep retries it for 24 hours."
+    )]
+    fn shows_failed_parent_peer_notifications_as_failed_events(
+        #[case] is_error: bool,
+        #[case] result_text: &str,
+        #[case] expected_text: &str,
+    ) {
+        let tool_call = serde_json::to_string(&json!({
+            "type": "assistant",
+            "message": {"content": [{
+                "type": "tool_use",
+                "id": "fixture-peer-notify-call",
+                "name": "Bash",
+                "input": {"command": "a agent peer notify --parent -m 'Please verify the fictional result.'"},
+            }]},
+        }))
+        .unwrap();
+        let tool_result = serde_json::to_string(&json!({
+            "type": "user",
+            "toolUseResult": {},
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-peer-notify-call",
+                "is_error": is_error,
+                "content": result_text,
+            }]},
+        }))
+        .unwrap();
+        let transcript = format!("{tool_call}\n{tool_result}");
+        let parent = ParentSession {
+            session_id: "fixture-parent-session".to_string(),
+            title: "Fixture parent session".to_string(),
+        };
+
+        assert_eq!(
+            parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::Armyknife,
+                text: expected_text.to_string(),
+                failed: true,
+            }],
         );
     }
 
@@ -653,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn queued_peer_messages_use_the_existing_sender_label() {
+    fn queued_peer_messages_keep_the_sender_session_id() {
         let transcript = indoc! {r#"
             {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":[{"type":"text","text":"<peer-message>\n- From session_id: fixture-parent-id\n- Sender engine: fixture-engine\n\nPlease group these fictional events.\n</peer-message>"}]}}
         "#};
@@ -664,9 +780,13 @@ mod tests {
 
         assert_eq!(
             parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
-            vec![ChatItem::User {
-                text: "Please group these fictional events.".to_string(),
-                from: Some("fixture-parent-title".to_string()),
+            vec![ChatItem::Peer {
+                direction: PeerDirection::From,
+                session_id: "fixture-parent-id".to_string(),
+                session_title: Some("fixture-parent-title".to_string()),
+                content: vec![UserContentPart::Text {
+                    text: "Please group these fictional events.".to_string(),
+                }],
             }]
         );
     }
@@ -757,13 +877,21 @@ mod tests {
                     choices: vec!["Yes".to_string(), "No".to_string()],
                     answer: None,
                 },
-                ChatItem::User {
-                    text: "Group the events by source.".to_string(),
-                    from: Some("fixture-parent-title".to_string()),
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: Some("fixture-parent-title".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: "Group the events by source.".to_string(),
+                    }],
                 },
-                ChatItem::User {
-                    text: "This came from another child.".to_string(),
-                    from: None,
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-other-id".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "This came from another child.".to_string(),
+                    }],
                 },
             ]
         );
@@ -932,6 +1060,16 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "synthetic notification".to_string(),
+                    failed: false,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::Hook,
+                    text: "synthetic output".to_string(),
+                    failed: false,
+                },
                 ChatItem::User {
                     text: "/inspect fixture-argument".to_string(),
                     from: None,
@@ -962,10 +1100,45 @@ mod tests {
 
         assert_eq!(
             parse(Cursor::new(transcript), Some(&parent), None, None).unwrap(),
-            vec![ChatItem::User {
-                text: "Synthetic peer request contains </peer-message> inside.".to_string(),
-                from: Some("fixture-parent-title".to_string()),
-            }]
+            vec![
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: Some("fixture-parent-title".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: "Synthetic peer request contains </peer-message> inside.".to_string(),
+                    }],
+                },
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-other-id".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Synthetic unrelated request.".to_string(),
+                    }],
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Synthetic task notification.".to_string(),
+                    failed: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn unknown_origin_kinds_are_shown_as_system_events() {
+        let transcript = indoc! {r#"
+            {"type":"user","origin":{"kind":"future-kind"},"message":{"content":"Future automation notice."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::System,
+                text: "Future automation notice.".to_string(),
+                failed: false,
+            }],
         );
     }
 
@@ -1044,6 +1217,11 @@ mod tests {
                     text: "Keep this pre-compact message.".to_string(),
                     from: None,
                 },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Context compacted".to_string(),
+                    failed: false,
+                },
                 ChatItem::User {
                     text: "Keep this post-compact message.".to_string(),
                     from: None,
@@ -1068,6 +1246,11 @@ mod tests {
                 ChatItem::User {
                     text: "Keep the earlier history.".to_string(),
                     from: None,
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::System,
+                    text: "Context compacted".to_string(),
+                    failed: false,
                 },
                 ChatItem::User {
                     text: "Keep the post-compact context.".to_string(),
@@ -1226,14 +1409,22 @@ mod tests {
                     text: "Queued user request.".to_string(),
                     from: None,
                 },
-                ChatItem::User {
-                    text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."
-                        .to_string(),
-                    from: None,
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "unknown".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."
+                            .to_string(),
+                    }],
                 },
-                ChatItem::User {
-                    text: "Missing queued marker request.".to_string(),
-                    from: None,
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "unknown".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Missing queued marker request.".to_string(),
+                    }],
                 },
                 ChatItem::User {
                     text: "Direct user request.".to_string(),
@@ -1243,13 +1434,40 @@ mod tests {
                     text: "Queued user request.".to_string(),
                     from: None,
                 },
-                ChatItem::User {
-                    text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request.".to_string(),
-                    from: Some("Fixture parent".to_string()),
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "unknown".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown direct request."
+                            .to_string(),
+                    }],
                 },
-                ChatItem::User {
-                    text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request.".to_string(),
-                    from: Some("Fixture parent".to_string()),
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "unknown".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Missing marker request.".to_string(),
+                    }],
+                },
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: Some("Fixture parent".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request."
+                            .to_string(),
+                    }],
+                },
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-parent-id".to_string(),
+                    session_title: Some("Fixture parent".to_string()),
+                    content: vec![UserContentPart::Text {
+                        text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request."
+                            .to_string(),
+                    }],
                 },
             ],
         );

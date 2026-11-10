@@ -849,6 +849,205 @@ it('links known session IDs in user, rich user, and assistant messages', () => {
   expect(getActual()).toEqual(expected)
 })
 
+it('shows peer images and supports keyboard navigation', () => {
+  const linkedSession: Session = {
+    ...session,
+    id: 'fictional-peer-session',
+    category: 'in_progress',
+    title: 'Build verification',
+  }
+  const onSelectSession = vi.fn<(id: string) => void>()
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    onSelectSession,
+    [
+      {
+        type: 'peer',
+        direction: 'to',
+        session_id: linkedSession.id,
+        content: [
+          { type: 'text', text: 'Please check the fictional output.' },
+          {
+            type: 'image',
+            source: '/api/images/fixture-peer-image.png',
+            available: false,
+          },
+        ],
+      },
+      {
+        type: 'peer',
+        direction: 'from',
+        session_id: linkedSession.id,
+        content: [
+          { type: 'text', text: 'The fictional output passed.' },
+          {
+            type: 'image',
+            source: '/api/images/fixture-peer-image.png',
+            available: true,
+          },
+          { type: 'file', name: 'fixture-peer-layout.html' },
+        ],
+      },
+      {
+        type: 'event',
+        kind: 'hook',
+        text: 'A fictional hook completed.',
+        failed: false,
+      },
+      {
+        type: 'event',
+        kind: 'system',
+        text: 'A fictional operation was blocked.',
+        failed: true,
+      },
+    ],
+    actions,
+    false,
+    [],
+    [linkedSession],
+  )
+
+  const peerLink = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-peer-message-from .session-link-trigger',
+    ),
+  )
+  const fromContent = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-peer-message-from .chat-peer-content',
+    ),
+  )
+  const toContent = requireElement(
+    container.querySelector<HTMLElement>(
+      '.chat-peer-message-to .chat-peer-content',
+    ),
+  )
+  act(() => {
+    toContent.click()
+  })
+  dispatchKeyInAct(fromContent, 'Enter')
+  dispatchKeyInAct(toContent, ' ')
+
+  const snapshot = () => ({
+    sessionLinkHref: peerLink.getAttribute('href'),
+    items: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.chat-peer-message, .chat-event',
+      ),
+      (element) => ({
+        className: element.className,
+        text: element.textContent,
+        failed: element.getAttribute('data-failed'),
+        kind: element.getAttribute('data-kind'),
+        imageSources: Array.from(
+          element.querySelectorAll<HTMLImageElement>('img'),
+          (image) => image.getAttribute('src'),
+        ),
+        unavailableImageText: element.querySelector(
+          '.chat-peer-image-unavailable',
+        )?.textContent,
+        fileNames: Array.from(
+          element.querySelectorAll<HTMLElement>('.chat-peer-file'),
+          (file) => file.textContent,
+        ),
+      }),
+    ),
+    selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+  })
+  const expected = {
+    sessionLinkHref: `?session=${linkedSession.id}`,
+    items: [
+      {
+        className: 'chat-peer-message chat-peer-message-to',
+        text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
+        failed: null,
+        kind: null,
+        imageSources: [],
+        unavailableImageText: '画像はもうありません',
+        fileNames: [],
+      },
+      {
+        className: 'chat-peer-message chat-peer-message-from',
+        text: 'FROMBuild verificationThe fictional output passed.fixture-peer-layout.html',
+        failed: null,
+        kind: null,
+        imageSources: ['/api/images/fixture-peer-image.png'],
+        unavailableImageText: undefined,
+        fileNames: ['fixture-peer-layout.html'],
+      },
+      {
+        className: 'chat-event',
+        text: 'A fictional hook completed.',
+        failed: null,
+        kind: 'hook',
+        imageSources: [],
+        unavailableImageText: undefined,
+        fileNames: [],
+      },
+      {
+        className: 'chat-event',
+        text: 'A fictional operation was blocked.',
+        failed: 'true',
+        kind: 'system',
+        imageSources: [],
+        unavailableImageText: undefined,
+        fileNames: [],
+      },
+    ],
+    selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('refreshes peer session labels when the linked session title changes', () => {
+  const linkedSession: Session = {
+    ...session,
+    id: 'fictional-peer-session',
+    title: 'Earlier task name',
+  }
+  const message: ChatItem = {
+    type: 'peer',
+    direction: 'from',
+    session_id: linkedSession.id,
+    content: [{ type: 'text', text: 'A fictional update.' }],
+  }
+  const onAction = vi.fn().mockResolvedValue(true)
+  renderView(
+    onAction,
+    session,
+    undefined,
+    [message],
+    actions,
+    false,
+    [],
+    [linkedSession],
+  )
+  const labelBeforeRefresh = requireElement(
+    container.querySelector<HTMLElement>('.chat-peer-label'),
+  ).textContent
+
+  renderView(
+    onAction,
+    session,
+    undefined,
+    [message],
+    actions,
+    false,
+    [],
+    [{ ...linkedSession, title: 'Updated task name' }],
+  )
+
+  const snapshot = () => ({
+    labelBeforeRefresh,
+    labelAfterRefresh: container.querySelector('.chat-peer-label')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    labelBeforeRefresh: 'FROMEarlier task name',
+    labelAfterRefresh: 'FROMUpdated task name',
+  })
+})
+
 it('renders file attachments returned by the messages endpoint', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -896,7 +1095,6 @@ it('renders file attachments returned by the messages endpoint', async () => {
     alert: null,
   })
 })
-
 it('shows elapsed time while the session is working without an active tool', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
@@ -1095,7 +1293,7 @@ it('keeps background tasks visible while the session waits for input', () => {
   })
 })
 
-it('accepts the active tool returned by the messages endpoint', async () => {
+it('accepts classified messages and the active tool from messages endpoint', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
@@ -1106,6 +1304,27 @@ it('accepts the active tool returned by the messages endpoint', async () => {
       jsonResponse(
         messagesResponse(
           [
+            {
+              type: 'peer',
+              direction: 'from',
+              session_id: 'fixture-peer-session',
+              session_title: 'Fixture peer session',
+              content: [
+                { type: 'text', text: 'A fictional peer update.' },
+                {
+                  type: 'image',
+                  source: '/api/images/fixture-peer-image.png',
+                  available: true,
+                },
+                { type: 'file', name: 'fixture-peer-layout.html' },
+              ],
+            },
+            {
+              type: 'event',
+              kind: 'armyknife',
+              text: 'A fictional event was blocked.',
+              failed: true,
+            },
             {
               type: 'tool_in_progress',
               tool: 'exec',
@@ -1151,6 +1370,18 @@ it('accepts the active tool returned by the messages endpoint', async () => {
       ?.children[1]?.textContent,
     activeTool: container.querySelector('.conversation-working-tool')
       ?.textContent,
+    peerMessage: container.querySelector('.chat-peer-message')?.textContent,
+    peerImage: container
+      .querySelector<HTMLImageElement>('.chat-peer-message img')
+      ?.getAttribute('src'),
+    peerFile: container.querySelector('.chat-peer-file')?.textContent,
+    event: Array.from(
+      container.querySelectorAll<HTMLElement>('.chat-event'),
+      (element) => ({
+        text: element.textContent,
+        failed: element.getAttribute('data-failed'),
+      }),
+    ),
     backgroundTasks: container.querySelector(
       '.conversation-background-tasks summary',
     )?.textContent,
@@ -1158,6 +1389,11 @@ it('accepts the active tool returned by the messages endpoint', async () => {
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 30s',
     activeTool: 'execcargo test',
+    peerMessage:
+      'FROMFixture peer sessionA fictional peer update.fixture-peer-layout.html',
+    peerImage: '/api/images/fixture-peer-image.png',
+    peerFile: 'fixture-peer-layout.html',
+    event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
     backgroundTasks: 'Background tasks (1)',
   })
 })

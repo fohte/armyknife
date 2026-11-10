@@ -305,6 +305,18 @@ enum ChatItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
+    Peer {
+        direction: PeerDirection,
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_title: Option<String>,
+        content: Vec<UserContentPart>,
+    },
+    Event {
+        kind: EventKind,
+        text: String,
+        failed: bool,
+    },
     Assistant {
         text: String,
     },
@@ -328,6 +340,21 @@ enum ChatItem {
     },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum PeerDirection {
+    From,
+    To,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EventKind {
+    Armyknife,
+    System,
+    Hook,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ConversationResponse {
@@ -342,7 +369,6 @@ pub(super) struct BackgroundTask {
     pub(super) description: String,
     pub(super) elapsed_seconds: u64,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum UserContentPart {
@@ -493,7 +519,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_message_route_attributes_only_the_stored_parent() {
+    async fn peer_message_route_includes_the_resolved_session_title() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let record = json!({
@@ -554,7 +580,7 @@ mod tests {
             (
                 axum::http::StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}],"backgroundTasks":[]}"#
+                r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[]}"#
                     .to_string(),
             )
         );

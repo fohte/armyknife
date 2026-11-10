@@ -58,7 +58,8 @@ export type Session = {
 export type SessionLinkTarget = Pick<
   Session,
   'id' | 'category' | 'isPaused' | 'task' | 'repo'
->
+> &
+  Partial<Pick<Session, 'title'>>
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
@@ -66,6 +67,19 @@ export type ChatItem =
       type: 'user_with_content'
       content: UserContentPart[]
       from?: string
+    }
+  | {
+      type: 'peer'
+      direction: 'from' | 'to'
+      session_id: string
+      session_title?: string
+      content: UserContentPart[]
+    }
+  | {
+      type: 'event'
+      kind: 'armyknife' | 'system' | 'hook'
+      text: string
+      failed: boolean
     }
   | { type: 'assistant'; text: string }
   | {

@@ -1,3 +1,4 @@
+pub(super) mod classifier;
 pub(super) mod claude;
 pub(super) mod codex;
 
@@ -6,11 +7,6 @@ use std::io::BufRead;
 use std::path::Path;
 
 use super::{ChatItem, ParentSession, ToolOperation, UserContentPart};
-
-const PEER_MESSAGE_HEADER_SEPARATOR: &str = concat!("\n", "\n");
-const PEER_MESSAGE_END: &str = concat!("\n", "</peer-message>");
-const PEER_TRAILING_NOTICE_SEPARATOR: &str =
-    concat!("\n", "\n", "This came from another Claude session");
 
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
@@ -66,6 +62,9 @@ pub(super) struct ToolSummary {
 
 impl ToolSummary {
     pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>) {
+        if classifier::is_peer_notify_tool(name, input) {
+            return;
+        }
         self.actions += 1;
         self.operations.push(ToolOperation {
             tool: name.to_owned(),
@@ -219,39 +218,17 @@ fn append_text_with_image_directory(
         return;
     }
     if is_user {
-        append_user_text_with_images(items, text, parent, Vec::new(), image_directory);
+        append_text_with_user_marker_and_image_directory(
+            items,
+            text,
+            parent,
+            None,
+            Vec::new(),
+            image_directory,
+        );
     } else {
         items.push(ChatItem::Assistant { text });
     }
-}
-
-pub(super) fn peer_message_item(message: &str, parent: Option<&ParentSession>) -> Option<ChatItem> {
-    let (sender_id, body) = peer_message_parts(message)?;
-    let parent = parent.filter(|parent| parent.session_id == sender_id)?;
-    if body.trim().is_empty() {
-        return None;
-    }
-    Some(ChatItem::User {
-        text: body.to_owned(),
-        from: Some(parent.title.clone()),
-    })
-}
-
-fn marked_peer_message_body<'a>(message: &'a str, marker: Option<&str>) -> Option<&'a str> {
-    let marker = marker?;
-    if let Some((_, body)) = peer_message_parts(message) {
-        return crate::commands::agent::watch_web_user_marker::strip_message(marker, body);
-    }
-
-    let marker_offset = message.match_indices(marker).find_map(|(offset, _)| {
-        let prefix = &message[..offset];
-        (offset == 0 || prefix.ends_with('\n')).then_some(offset)
-    })?;
-    let body = message[marker_offset + marker.len()..].strip_prefix('\n')?;
-    let body = body
-        .rsplit_once(PEER_TRAILING_NOTICE_SEPARATOR)
-        .map_or(body, |(body, _)| body);
-    Some(body)
 }
 
 fn append_text_with_user_marker_and_image_directory(
@@ -262,76 +239,134 @@ fn append_text_with_user_marker_and_image_directory(
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
 ) {
-    if let Some(body) = marked_peer_message_body(&text, marker) {
-        if !body.trim().is_empty() || !images.is_empty() {
+    let classification =
+        classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, marker);
+    append_classification(items, classification, images, image_directory, parent);
+}
+
+pub(in crate::commands::agent::watch_web::messages::parser) fn append_peer_out(
+    items: &mut Vec<ChatItem>,
+    peer: classifier::PeerOut,
+) {
+    items.push(peer_item(
+        peer.session_id,
+        super::PeerDirection::To,
+        None,
+        peer.text,
+        Vec::new(),
+        None,
+    ));
+}
+
+fn append_classification(
+    items: &mut Vec<ChatItem>,
+    classification: classifier::MessageKind,
+    images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+    parent: Option<&ParentSession>,
+) {
+    match classification {
+        classifier::MessageKind::User { text } if !text.trim().is_empty() || !images.is_empty() => {
             items.push(user_item_with_image_directory(
-                body.to_owned(),
+                text,
                 None,
                 images,
                 image_directory,
             ));
         }
-        return;
+        classifier::MessageKind::PeerIn { session_id, text }
+            if !text.trim().is_empty() || !images.is_empty() =>
+        {
+            let session_title = parent
+                .filter(|parent| parent.session_id == session_id)
+                .map(|parent| parent.title.clone());
+            items.push(peer_item(
+                session_id,
+                super::PeerDirection::From,
+                session_title,
+                text,
+                images,
+                image_directory,
+            ));
+        }
+        classifier::MessageKind::Event { kind, text, failed } => {
+            if !text.trim().is_empty() {
+                items.push(ChatItem::Event {
+                    kind: match kind {
+                        classifier::EventKind::Armyknife => super::EventKind::Armyknife,
+                        classifier::EventKind::System => super::EventKind::System,
+                        classifier::EventKind::Hook => super::EventKind::Hook,
+                    },
+                    text,
+                    failed,
+                });
+            }
+        }
+        classifier::MessageKind::User { .. }
+        | classifier::MessageKind::PeerIn { .. }
+        | classifier::MessageKind::Hidden => {}
     }
-    append_user_text_with_images(items, text, parent, images, image_directory);
 }
 
-fn peer_message_item_with_user_marker_and_image_directory(
-    message: &str,
-    parent: Option<&ParentSession>,
+pub(in crate::commands::agent::watch_web::messages::parser) fn append_record_with_user_marker_and_image_directory(
+    items: &mut Vec<ChatItem>,
+    record: &serde_json::Value,
+    text: String,
     marker: Option<&str>,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
-) -> Option<ChatItem> {
-    if let Some(body) = marked_peer_message_body(message, marker) {
-        return (!body.trim().is_empty() || !images.is_empty()).then(|| {
-            user_item_with_image_directory(body.to_owned(), None, images, image_directory)
-        });
-    }
-    let ChatItem::User { text, from } = peer_message_item(message, parent)? else {
-        return None;
-    };
-    Some(user_item_with_image_directory(
-        text,
-        from,
-        images,
-        image_directory,
-    ))
+    parent: Option<&ParentSession>,
+) {
+    let classification = classifier::classify_inbound(record, &text, marker);
+    append_classification(items, classification, images, image_directory, parent);
 }
 
-fn append_user_text_with_images(
+pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_image_directory(
     items: &mut Vec<ChatItem>,
-    text: String,
-    parent: Option<&ParentSession>,
+    classification: classifier::MessageKind,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
+    parent: Option<&ParentSession>,
 ) {
-    let (text, from) = if let Some((sender_id, body)) = peer_message_parts(&text) {
-        (
-            body.to_owned(),
-            parent
-                .filter(|parent| parent.session_id == sender_id)
-                .map(|parent| parent.title.clone()),
-        )
-    } else {
-        (text, None)
-    };
-    if !text.trim().is_empty() || !images.is_empty() {
-        items.push(user_item_with_image_directory(
-            text,
-            from,
-            images,
-            image_directory,
-        ));
+    append_classification(items, classification, images, image_directory, parent);
+}
+
+fn peer_item(
+    session_id: String,
+    direction: super::PeerDirection,
+    session_title: Option<String>,
+    text: String,
+    images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+) -> ChatItem {
+    let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
+    let content = content.unwrap_or_else(|| vec![UserContentPart::Text { text }]);
+    ChatItem::Peer {
+        direction,
+        session_id,
+        session_title,
+        content,
     }
 }
 
 fn user_item_with_image_directory(
-    mut text: String,
+    text: String,
     from: Option<String>,
-    mut images: Vec<UserContentPart>,
+    images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
 ) -> ChatItem {
+    let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
+    match content {
+        Some(content) => ChatItem::UserWithContent { content, from },
+        None => ChatItem::User { text, from },
+    }
+}
+
+fn user_content_parts_with_image_directory(
+    mut text: String,
+    mut images: Vec<UserContentPart>,
+    image_directory: Option<&Path>,
+) -> (String, Option<Vec<UserContentPart>>) {
     if let Some(directory) = image_directory
         && let Some((visible_text, references)) =
             super::super::image_attachments::extract_references(&text, directory)
@@ -348,7 +383,7 @@ fn user_item_with_image_directory(
     }
 
     if images.is_empty() {
-        return ChatItem::User { text, from };
+        return (text, None);
     }
 
     let mut content = Vec::new();
@@ -374,7 +409,7 @@ fn user_item_with_image_directory(
         });
     }
     content.extend(remaining_images);
-    ChatItem::UserWithContent { content, from }
+    (text, Some(content))
 }
 
 fn image_placeholder(text: &str) -> Option<(usize, usize)> {
@@ -395,24 +430,6 @@ fn image_placeholder(text: &str) -> Option<(usize, usize)> {
     None
 }
 
-fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
-    let envelope = message.split_once("<peer-message>")?.1;
-    let end = envelope.rfind(PEER_MESSAGE_END)?;
-    let envelope = envelope[..end].strip_prefix('\n')?;
-    let (header, body) = envelope.split_once(PEER_MESSAGE_HEADER_SEPARATOR)?;
-    let mut header_lines = header.lines();
-    let sender_id = header_lines.next()?.strip_prefix("- From session_id: ")?;
-    if sender_id.is_empty()
-        || header_lines
-            .next()
-            .is_some_and(|line| !line.starts_with("- Sender engine: "))
-        || header_lines.next().is_some()
-    {
-        return None;
-    }
-    Some((sender_id, body))
-}
-
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
@@ -422,8 +439,7 @@ mod tests {
 
     use super::{
         ChatItem, ToolSummary, UserContentPart, append_text_with_image_directory,
-        append_text_with_user_marker_and_image_directory, marked_peer_message_body,
-        operation_target,
+        append_text_with_user_marker_and_image_directory, operation_target,
     };
 
     #[fixture]
@@ -593,8 +609,12 @@ mod tests {
         };
 
         assert_eq!(
-            marked_peer_message_body(&message, Some(marker)),
-            Some(expected.as_str())
+            super::classifier::classify_inbound(
+                &serde_json::json!({"type":"user"}),
+                &message,
+                Some(marker),
+            ),
+            super::classifier::MessageKind::User { text: expected },
         );
     }
 
