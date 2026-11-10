@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import type { BoardProject } from '#board-model'
 import { SessionPausedBadge } from '#components/session-paused-badge'
+import { formatLinkedTaskCount } from '#session-task-count'
 
 type BoardViewProps = {
   projects: readonly BoardProject[]
@@ -63,8 +64,7 @@ function taskLabel(session: BoardProject['sessions'][number]) {
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  const taskCount = session.tasks?.length ?? 1
-  const linkedTaskCount = taskCount > 1 ? ` +${String(taskCount - 1)}` : ''
+  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
   return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
 }
 

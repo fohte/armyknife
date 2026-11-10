@@ -34,6 +34,8 @@ const sessions: Session[] = [
       },
     ],
     repo: 'example/web-app',
+    branch: 'feature/notification-rollout',
+    canOpenInTerminal: true,
     project: 'notification refresh',
     parent: null,
     ancestorSessionIds: [],
@@ -55,6 +57,7 @@ const sessions: Session[] = [
       priority: 1,
     },
     repo: 'example/web-app',
+    branch: 'feature/retry-coverage',
     project: 'notification refresh',
     parent: null,
     ancestorSessionIds: [],
@@ -71,6 +74,7 @@ const sessions: Session[] = [
     unread: false,
     task: null,
     repo: 'example/handbook',
+    branch: null,
     project: 'developer guides',
     parent: null,
     ancestorSessionIds: [],
@@ -83,9 +87,10 @@ const meta = {
   args: {
     sessions,
     recentSessionIds: ['session-tests'],
-    inboxFilterQuery: '',
     onClose: () => undefined,
     onOpenSession: () => undefined,
+    onLater: () => undefined,
+    onOpenInTerminal: () => undefined,
     onOpenProject: () => undefined,
     onRunCommand: () => undefined,
   },
@@ -106,4 +111,12 @@ export const SearchShowsMatchingDestinations: Story = {
 export const TaskScopeShowsMatchingTasks: Story = {
   name: 'The task scope shows matching tq tasks',
   args: { initialQuery: '#notification' },
+}
+
+export const BranchSearchShowsSessionActions: Story = {
+  name: 'A branch search shows its session action menu',
+  args: {
+    initialQuery: 'feature/notification-rollout',
+    initialActionItemId: 'session-review',
+  },
 }

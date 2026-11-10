@@ -261,7 +261,7 @@ export function ConversationPaneView({
     >
       {fileDropActive || isFileDragActive ? (
         <div className="conversation-drop-target" role="status">
-          Drop PNG, JPEG, GIF, or WebP images to attach
+          Drop files to attach
         </div>
       ) : null}
       <header className="conversation-header">

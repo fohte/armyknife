@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.565](https://github.com/fohte/armyknife/compare/v0.1.564...v0.1.565) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** support file attachments ([#1487](https://github.com/fohte/armyknife/issues/1487)) ([6f5e0c1](https://github.com/fohte/armyknife/commit/6f5e0c1a7df23ff169b9edc68e2f130c84430e30))
+
+## [0.1.564](https://github.com/fohte/armyknife/compare/v0.1.563...v0.1.564) (2026-11-10)
+
+
+### Features
+
+* **agent-watch-web:** find sessions by branch ([#1483](https://github.com/fohte/armyknife/issues/1483)) ([b59e39c](https://github.com/fohte/armyknife/commit/b59e39c8dee7af7b9ed33afe9cf7d6215fdf9b1b))
+
+## [0.1.563](https://github.com/fohte/armyknife/compare/v0.1.562...v0.1.563) (2026-11-10)
+
+
+### Features
+
+* **agent/watch-web:** show background tasks ([#1484](https://github.com/fohte/armyknife/issues/1484)) ([db7bef0](https://github.com/fohte/armyknife/commit/db7bef04c826328bc4a14cdc02dfd3406c1f5814))
+
 ## [0.1.562](https://github.com/fohte/armyknife/compare/v0.1.561...v0.1.562) (2026-11-10)
 
 

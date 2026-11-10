@@ -44,6 +44,8 @@ export type Session = {
   task: SessionTask | null
   tasks?: SessionTask[]
   repo: string
+  branch?: string | null
+  canOpenInTerminal?: boolean
   project: string
   parent: ParentSession | null
   ancestorSessionIds: string[]
@@ -84,6 +86,7 @@ export type ChatItem =
 export type UserContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; source: string; available: boolean }
+  | { type: 'file'; name: string }
 
 export type ToolOperation = {
   tool: string

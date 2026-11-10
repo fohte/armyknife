@@ -16,9 +16,9 @@ use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
-use super::image_attachments;
+use super::attachments;
 
-const MAX_MESSAGE_BODY_BYTES: usize = 16 * 1024 * 1024;
+const MAX_MESSAGE_BODY_BYTES: usize = 72 * 1024 * 1024;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
@@ -231,7 +231,9 @@ async fn actions(
 struct MessageRequest {
     content: String,
     #[serde(default)]
-    images: Vec<image_attachments::Request>,
+    attachments: Vec<attachments::Request>,
+    #[serde(default)]
+    images: Vec<attachments::LegacyImageRequest>,
 }
 
 async fn send_message(
@@ -243,11 +245,14 @@ async fn send_message(
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
     }
-    if request.content.trim().is_empty() && request.images.is_empty() {
+    if request.content.trim().is_empty()
+        && request.attachments.is_empty()
+        && request.images.is_empty()
+    {
         return Err(ApiError::bad_request("message must not be empty"));
     }
 
-    let images = image_attachments::validate(request.images)
+    let attachments = attachments::validate(request.attachments, request.images)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
     let sessions_dir = if session.engine == Engine::Claude {
         Some(resolve_sessions_dir(state.sessions_dir.clone()).map_err(ApiError::internal)?)
@@ -261,18 +266,18 @@ async fn send_message(
     } else {
         None
     };
-    let image_paths =
-        run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
-    let content = image_attachments::append_paths_to_message(request.content, &image_paths);
+    let attachment_paths =
+        run_blocking(move || attachments::save(attachments, state.attachment_dir)).await?;
+    let content = attachments::append_paths_to_message(request.content, &attachment_paths);
     let queued_content = content.clone();
     let content = watch_web_message_content(&session, marker.as_deref(), &content);
-    let cleanup_paths = image_paths;
+    let cleanup_paths = attachment_paths;
     let runtime = state.runtime;
     run_blocking(move || {
         let sent_at = Utc::now();
         let result = runtime.send_message(&session, &content);
         if result.is_err() {
-            image_attachments::remove(&cleanup_paths);
+            attachments::remove(&cleanup_paths);
         } else if let Some(sessions_dir) = sessions_dir.as_ref()
             && let Err(error) = store::insert_watch_web_queued_prompt_from(
                 sessions_dir,
@@ -882,11 +887,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case::custom_message("Inspect this image")]
+    #[case::custom_message("Inspect this file")]
     #[case::empty_message("")]
     #[case::whitespace_message("   ")]
     #[tokio::test]
-    async fn send_message_stores_image_and_forwards_its_absolute_path(
+    async fn send_message_stores_file_and_forwards_its_absolute_path(
         #[case] content: &str,
         action_context: ActionContext,
     ) {
@@ -897,10 +902,11 @@ mod tests {
                 "/sessions/sample-session/messages",
                 json!({
                     "content": content,
-                    "images": [{
-                        "mimeType": "image/gif",
-                        "size": 6,
-                        "data": "R0lGODlh",
+                    "attachments": [{
+                        "name": "design.html",
+                        "mimeType": "text/html",
+                        "size": 9,
+                        "data": "TW9jayBIVE1M",
                     }],
                 }),
             ))
@@ -943,7 +949,7 @@ mod tests {
         };
         let expected_message = if content.trim().is_empty() {
             indoc::indoc! {"
-                Please inspect the attached image(s):
+                Please inspect the attached file(s):
                 - <attachment-path>
             "}
             .trim_end()
@@ -953,7 +959,7 @@ mod tests {
                 indoc::indoc! {"
                     {}
 
-                    Attached image(s):
+                    Attached file(s):
                     - <attachment-path>
                 "},
                 content
@@ -981,7 +987,7 @@ mod tests {
                 "referencesSavedPath": true,
                 "attachment": {
                     "isAbsolute": true,
-                    "bytes": [71, 73, 70, 56, 57, 97],
+                    "bytes": [77, 111, 99, 107, 32, 72, 84, 77, 76],
                 },
             }),
         );
@@ -989,7 +995,74 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
-    async fn send_message_removes_saved_images_when_runtime_fails(action_context: ActionContext) {
+    async fn send_message_accepts_legacy_image_payloads_during_page_restarts(
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": "",
+                    "images": [{
+                        "mimeType": "image/gif",
+                        "size": 6,
+                        "data": "R0lGODlh",
+                    }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let directory = action_context.temp_dir.path().join("attachments");
+        let path = std::fs::read_dir(&directory)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+        let mut response = response_snapshot(response, &action_context).await;
+        let path_string = path.display().to_string();
+        response["calls"][0]["content"] = response["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .replace(&path_string, "<attachment-path>")
+            .into();
+        let filename = path.file_name().unwrap().to_string_lossy();
+        let snapshot = || {
+            json!({
+                "response": response,
+                "pathIsAbsolute": path.is_absolute(),
+                "filename": filename.split_once("~image~").unwrap().1,
+                "bytes": std::fs::read(&path).unwrap(),
+            })
+        };
+
+        assert_eq!(
+            snapshot(),
+            json!({
+                "response": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": "Please inspect the attached file(s):\n- <attachment-path>",
+                    }],
+                },
+                "pathIsAbsolute": true,
+                "filename": "legacy-image.gif",
+                "bytes": [71, 73, 70, 56, 57, 97],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn send_message_removes_saved_files_when_runtime_fails(action_context: ActionContext) {
         action_context.save_session(&session("sample-session"));
         action_context.set_message_error("message transport failed");
         let response = action_context
@@ -997,11 +1070,12 @@ mod tests {
             .oneshot(post(
                 "/sessions/sample-session/messages",
                 json!({
-                    "content": "Inspect this image",
-                    "images": [{
-                        "mimeType": "image/gif",
-                        "size": 6,
-                        "data": "R0lGODlh",
+                    "content": "Inspect this file",
+                    "attachments": [{
+                        "name": "design.html",
+                        "mimeType": "text/html",
+                        "size": 9,
+                        "data": "TW9jayBIVE1M",
                     }],
                 }),
             ))
@@ -1035,9 +1109,9 @@ mod tests {
             "filesLeft": files_left,
         });
         let expected_message = indoc::indoc! {"
-            Inspect this image
+            Inspect this file
 
-            Attached image(s):
+            Attached file(s):
             - <attachment-path>
         "}
         .trim_end();
@@ -1061,41 +1135,37 @@ mod tests {
     }
 
     #[rstest]
-    #[case::non_image(
-        vec![("application/pdf", 0)],
-        "unsupported image type: application/pdf"
-    )]
     #[case::oversized(
-        vec![("image/png", image_attachments::MAX_IMAGE_BYTES + 1)],
-        "image attachments exceed the 10 MiB limit"
+        vec![("large.bin", attachments::MAX_ATTACHMENT_BYTES + 1)],
+        "file attachments exceed the 50 MiB limit"
     )]
-    #[case::too_many_images(
-        vec![("image/gif", 0); image_attachments::MAX_IMAGES_PER_MESSAGE + 1],
-        "a message cannot include more than 16 image attachments"
+    #[case::too_many_attachments(
+        vec![("file.bin", 0); attachments::MAX_ATTACHMENTS_PER_MESSAGE + 1],
+        "a message cannot include more than 16 file attachments"
     )]
     #[case::cumulative_size(
-        vec![("image/png", 6 * 1024 * 1024), ("image/png", 6 * 1024 * 1024)],
-        "image attachments exceed the 10 MiB limit"
+        vec![("large-a.bin", 30 * 1024 * 1024), ("large-b.bin", 21 * 1024 * 1024)],
+        "file attachments exceed the 50 MiB limit"
     )]
     #[tokio::test]
-    async fn send_message_rejects_invalid_image_attachments(
+    async fn send_message_rejects_invalid_file_attachments(
         #[case] attachments: Vec<(&str, usize)>,
         #[case] error: &str,
         action_context: ActionContext,
     ) {
         action_context.save_session(&session("sample-session"));
 
-        let images = attachments
+        let files = attachments
             .iter()
-            .map(|(mime_type, size)| json!({ "mimeType": mime_type, "size": size, "data": "" }))
+            .map(|(name, size)| json!({ "name": name, "mimeType": "application/octet-stream", "size": size, "data": "" }))
             .collect::<Vec<_>>();
         let response = action_context
             .router()
             .oneshot(post(
                 "/sessions/sample-session/messages",
                 json!({
-                    "content": "Inspect this image",
-                    "images": images,
+                    "content": "Inspect this file",
+                    "attachments": files,
                 }),
             ))
             .await

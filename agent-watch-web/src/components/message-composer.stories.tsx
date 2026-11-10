@@ -50,8 +50,23 @@ export const ComposerWithImageAttachment: Story = {
       {
         id: 'image-1',
         name: 'screenshot.gif',
+        size: 1024,
         previewUrl:
           'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+      },
+    ],
+  },
+}
+
+export const ComposerWithDocumentAttachment: Story = {
+  name: 'The composer shows a document name and size before sending',
+  args: {
+    attachments: [
+      {
+        id: 'document-1',
+        name: 'design-mock.html',
+        size: 12 * 1024 * 1024,
+        previewUrl: null,
       },
     ],
   },
