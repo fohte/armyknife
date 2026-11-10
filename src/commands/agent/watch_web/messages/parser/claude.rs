@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::BufRead;
 
 use serde_json::Value;
@@ -13,12 +14,21 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
 ) -> std::io::Result<Vec<ChatItem>> {
+    let mut records = Vec::new();
+    for_each_jsonl_record(reader, |record| records.push(record))?;
+    let active_uuids = active_branch_uuids(&records);
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
 
-    for_each_jsonl_record(reader, |record| {
-        match record.get("type").and_then(Value::as_str) {
+    for record in records {
+        if let Some(active_uuids) = &active_uuids
+            && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
+            && !active_uuids.contains(uuid)
+        {
+            continue;
+        }
+        (|| match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
                 .and_then(|attachment| attachment.get("type"))
@@ -106,8 +116,8 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 }
             }
             _ => {}
-        }
-    })?;
+        })();
+    }
 
     tools.flush_into(&mut items);
     // Permission state must be tied to an unanswered call ID, not a reused tool name.
@@ -123,6 +133,39 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         });
     }
     Ok(items)
+}
+
+fn active_branch_uuids(records: &[Value]) -> Option<BTreeSet<String>> {
+    let records_by_uuid: BTreeMap<_, _> = records
+        .iter()
+        .filter_map(|record| {
+            record
+                .get("uuid")
+                .and_then(Value::as_str)
+                .map(|uuid| (uuid, record))
+        })
+        .collect();
+    let mut uuid = records
+        .iter()
+        .rev()
+        .find_map(|record| record.get("uuid").and_then(Value::as_str))?;
+    let mut active_uuids = BTreeSet::new();
+
+    loop {
+        if !active_uuids.insert(uuid.to_owned()) {
+            return None;
+        }
+        let record = records_by_uuid.get(uuid)?;
+        let parent = match record.get("parentUuid")? {
+            Value::String(parent) => Some(parent.as_str()),
+            Value::Null => record.get("logicalParentUuid").and_then(Value::as_str),
+            _ => return None,
+        };
+        let Some(parent) = parent else {
+            return Some(active_uuids);
+        };
+        uuid = parent;
+    }
 }
 
 struct ToolUse {
@@ -506,6 +549,80 @@ mod tests {
                 text: "Synthetic peer request contains </peer-message> inside.".to_string(),
                 from: Some("fixture-parent-title".to_string()),
             }]
+        );
+    }
+
+    #[test]
+    fn shows_only_the_branch_containing_the_latest_user_message() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep this earlier message."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"type":"queue-operation","operation":"enqueue","content":"Show this queued text."}
+            {"attachment":{"type":"queued_command","prompt":"Show this queued text."}}
+            {"uuid":"fixture-active-id","parentUuid":"fixture-root-id","type":"user","message":{"content":"Keep this replacement message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this earlier message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Show this queued text.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this replacement message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn follows_logical_parent_across_compact_boundaries() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before-compact-id","parentUuid":null,"type":"user","message":{"content":"Keep this pre-compact message."}}
+            {"uuid":"fixture-compact-id","parentUuid":null,"logicalParentUuid":"fixture-before-compact-id","type":"system","subtype":"compact_boundary"}
+            {"uuid":"fixture-after-compact-id","parentUuid":"fixture-compact-id","type":"user","message":{"content":"Keep this post-compact message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep this pre-compact message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this post-compact message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn shows_all_messages_when_transcript_rows_have_no_uuids() {
+        let transcript = indoc! {r#"
+            {"type":"user","message":{"content":"Keep the first legacy message."}}
+            {"type":"user","message":{"content":"Keep the second legacy message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the first legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the second legacy message.".to_string(),
+                    from: None,
+                },
+            ]
         );
     }
 
