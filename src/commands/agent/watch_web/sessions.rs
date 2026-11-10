@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde::Serialize;
 
 use super::EnrichmentUpdates;
-use super::interrupted::is_waiting_after_user_interrupt;
+use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
@@ -169,10 +169,24 @@ async fn list_sessions<S: SessionSource>(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    let sessions_to_check = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.engine == Engine::Claude && session.status == SessionStatus::Running
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let interrupted_sessions =
+        tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
+
     let (task_metadata, pull_requests) = tokio::join!(
         source.fetch_task_metadata(&snapshot.sessions),
         source.fetch_pull_requests(&snapshot.sessions),
     );
+    let interrupted_session_ids = interrupted_sessions
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     let turn_kinds = user_turns(snapshot.sessions.iter(), &snapshot.agent_config)
         .into_iter()
         .map(|turn| (turn.session.session_id.as_str(), turn.kind))
@@ -231,7 +245,7 @@ async fn list_sessions<S: SessionSource>(
                 });
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
-            let interrupted = is_waiting_after_user_interrupt(session);
+            let interrupted = interrupted_session_ids.contains(&session.session_id);
             let category_when_not_later =
                 category_for_with_interruption(session, turn, interrupted);
             let state = state_by_id.get(&session.session_id);
@@ -1053,6 +1067,15 @@ mod tests {
         indoc::indoc! {r#"
             {"type":"user","message":{"content":"[Request interrupted by user]"}}
             {"type":"user","message":{"content":"Continue the task"}}
+        "#},
+        "in_progress"
+    )]
+    #[case::queued_command_after_interrupt(
+        SessionStatus::Running,
+        Engine::Claude,
+        indoc::indoc! {r#"
+            {"type":"user","message":{"content":"[Request interrupted by user]"}}
+            {"parentUuid":"fixture-turn-id","attachment":{"type":"queued_command","prompt":"Continue the task"}}
         "#},
         "in_progress"
     )]
