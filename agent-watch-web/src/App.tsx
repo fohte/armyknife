@@ -38,6 +38,7 @@ export function App() {
     selectedId,
     view,
     conversationOpen: mobileConversationOpen,
+    backToInbox,
     navigate,
   } = useSessionHistory()
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
@@ -396,12 +397,7 @@ export function App() {
                 session={selectedSession}
                 refreshKey={sessionsRevision}
                 isMobile={isMobile}
-                onBack={() => {
-                  navigate((current) => ({
-                    ...current,
-                    conversationOpen: false,
-                  }))
-                }}
+                onBack={backToInbox}
                 onLater={() => {
                   openLater(selectedSession.id)
                 }}

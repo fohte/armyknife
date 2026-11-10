@@ -376,6 +376,12 @@ function flushAsyncState() {
 }
 
 function changeHistory(direction: 'back' | 'forward') {
+  const popState = waitForPopState()
+  window.history[direction]()
+  return popState
+}
+
+function waitForPopState() {
   return new Promise<void>((resolve) => {
     window.addEventListener(
       'popstate',
@@ -384,7 +390,6 @@ function changeHistory(direction: 'back' | 'forward') {
       },
       { once: true },
     )
-    window.history[direction]()
   })
 }
 function readSelectedTitle() {
@@ -598,6 +603,93 @@ it('opens the session and screen encoded in a mobile URL', () => {
     screen: 'conversation',
     conversationTitle: 'Second session',
     url: '?session=session-b&screen=conversation',
+  })
+})
+
+it('uses browser back when Inbox is the previous entry for the same session', async () => {
+  window.history.replaceState(null, '', '/?session=session-b')
+  window.history.pushState(null, '', '/?session=session-a')
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+
+  const returnedFromConversation = waitForPopState()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Back to Inbox"]')
+      ?.click()
+  })
+  await act(async () => {
+    await returnedFromConversation
+  })
+  const inboxUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    inboxUrl,
+    previousUrl: window.location.search,
+    previousSelection: readSelectedTitle(),
+    previousScreen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+  })
+  expect(snapshot()).toEqual({
+    inboxUrl: '?session=session-a',
+    previousUrl: '?session=session-b',
+    previousSelection: 'Second session',
+    previousScreen: 'inbox',
+  })
+})
+
+it('replaces the conversation URL when it has no matching Inbox history', async () => {
+  window.history.replaceState(null, '', '/?session=session-b')
+  window.history.pushState(null, '', '/?session=session-a&screen=conversation')
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Back to Inbox"]')
+      ?.click()
+  })
+  const inboxUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    inboxUrl,
+    previousUrl: window.location.search,
+    previousSelection: readSelectedTitle(),
+    previousScreen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+  })
+  expect(snapshot()).toEqual({
+    inboxUrl: '?session=session-a',
+    previousUrl: '?session=session-b',
+    previousSelection: 'Second session',
+    previousScreen: 'inbox',
   })
 })
 
