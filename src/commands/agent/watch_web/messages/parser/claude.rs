@@ -39,15 +39,15 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         parent_uuids.insert(uuid.to_owned(), parent_uuid);
     })?;
     let active_uuids = active_branch_uuids(&parent_uuids, latest_uuid.as_deref());
+    let inactive_uuids = inactive_branch_uuids(&parent_uuids, &active_uuids);
     reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
 
     for_each_jsonl_record(&mut reader, |record| {
-        if let Some(active_uuids) = &active_uuids
-            && let Some(uuid) = record.get("uuid").and_then(Value::as_str)
-            && !active_uuids.contains(uuid)
+        if let Some(uuid) = record.get("uuid").and_then(Value::as_str)
+            && inactive_uuids.contains(uuid)
         {
             return;
         }
@@ -161,20 +161,52 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
 fn active_branch_uuids(
     parent_uuids: &BTreeMap<String, Option<String>>,
     latest_uuid: Option<&str>,
-) -> Option<BTreeSet<String>> {
-    let mut uuid = latest_uuid?;
+) -> BTreeSet<String> {
+    let Some(mut uuid) = latest_uuid else {
+        return BTreeSet::new();
+    };
     let mut active_uuids = BTreeSet::new();
 
     loop {
         if !active_uuids.insert(uuid.to_owned()) {
-            return None;
+            return active_uuids;
         }
-        let parent_uuid = parent_uuids.get(uuid)?;
-        let Some(parent_uuid) = parent_uuid else {
-            return Some(active_uuids);
+        let Some(Some(parent_uuid)) = parent_uuids.get(uuid) else {
+            return active_uuids;
         };
         uuid = parent_uuid;
     }
+}
+
+fn inactive_branch_uuids(
+    parent_uuids: &BTreeMap<String, Option<String>>,
+    active_uuids: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    let mut children_by_parent = BTreeMap::new();
+    for (uuid, parent_uuid) in parent_uuids {
+        if let Some(parent_uuid) = parent_uuid {
+            children_by_parent
+                .entry(parent_uuid.as_str())
+                .or_insert_with(Vec::new)
+                .push(uuid.as_str());
+        }
+    }
+
+    let mut pending = active_uuids
+        .iter()
+        .filter_map(|uuid| children_by_parent.get(uuid.as_str()))
+        .flat_map(|children| children.iter().copied())
+        .collect::<Vec<_>>();
+    let mut inactive_uuids = BTreeSet::new();
+    while let Some(uuid) = pending.pop() {
+        if active_uuids.contains(uuid) || !inactive_uuids.insert(uuid.to_owned()) {
+            continue;
+        }
+        if let Some(children) = children_by_parent.get(uuid) {
+            pending.extend(children.iter().copied());
+        }
+    }
+    inactive_uuids
 }
 
 struct ToolUse {
@@ -614,6 +646,35 @@ mod tests {
     }
 
     #[test]
+    fn keeps_unconnected_history_when_compact_parent_is_missing() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-earlier-history-id","parentUuid":null,"type":"user","message":{"content":"Keep the earlier history."}}
+            {"uuid":"fixture-compact-boundary-id","parentUuid":null,"logicalParentUuid":"fixture-unrecorded-parent-id","type":"system","subtype":"compact_boundary"}
+            {"uuid":"fixture-post-compact-context-id","parentUuid":"fixture-compact-boundary-id","type":"user","message":{"content":"Keep the post-compact context."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-post-compact-context-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"uuid":"fixture-current-id","parentUuid":"fixture-post-compact-context-id","type":"user","message":{"content":"Keep this replacement message."}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Keep the earlier history.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep the post-compact context.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this replacement message.".to_string(),
+                    from: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
     fn shows_all_messages_when_transcript_rows_have_no_uuids() {
         let transcript = indoc! {r#"
             {"type":"user","message":{"content":"Keep the first legacy message."}}
@@ -636,10 +697,12 @@ mod tests {
     }
 
     #[test]
-    fn shows_all_messages_when_the_latest_parent_cannot_be_found() {
+    fn keeps_the_reachable_branch_when_an_ancestor_is_missing() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-root-id","parentUuid":null,"type":"user","message":{"content":"Keep the first legacy message."}}
             {"uuid":"fixture-unreachable-id","parentUuid":"fixture-missing-parent-id","type":"user","message":{"content":"Keep the second legacy message."}}
+            {"uuid":"fixture-cancelled-id","parentUuid":"fixture-unreachable-id","type":"user","message":{"content":"Hide this cancelled message."}}
+            {"uuid":"fixture-active-id","parentUuid":"fixture-unreachable-id","type":"user","message":{"content":"Keep this current message."}}
         "#};
 
         assert_eq!(
@@ -651,6 +714,10 @@ mod tests {
                 },
                 ChatItem::User {
                     text: "Keep the second legacy message.".to_string(),
+                    from: None,
+                },
+                ChatItem::User {
+                    text: "Keep this current message.".to_string(),
                     from: None,
                 },
             ]
