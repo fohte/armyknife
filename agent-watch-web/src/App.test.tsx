@@ -76,14 +76,17 @@ it('keeps the Board updated from the session feed while it is active', () => {
       container.querySelectorAll<HTMLElement>('.board-project'),
       (element) => element.getAttribute('aria-label'),
     ),
-    updatedCard: container.querySelector('.board-card-title')?.textContent,
+    updatedCardTitles: Array.from(
+      container.querySelectorAll<HTMLElement>('.board-card-title'),
+      (element) => element.textContent,
+    ),
     activeView: readActiveView(),
   })
 
   expect(snapshot()).toEqual({
     projectsBeforeUpdate: ['alpha'],
     projectsAfterUpdate: ['beta', 'alpha'],
-    updatedCard: 'New session',
+    updatedCardTitles: ['New session', 'Updated session'],
     activeView: 'Board',
   })
 })

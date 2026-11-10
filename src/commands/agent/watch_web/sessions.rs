@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 
 use axum::Json;
@@ -276,10 +276,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .iter()
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
-    let repo_by_id = all_sessions
-        .iter()
-        .map(|session| (session.session_id.clone(), resolve_repo(&session.cwd)))
-        .collect();
+    let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
 
     Ok(SessionSnapshot {
         revision,
@@ -288,6 +285,33 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         repo_by_id,
         agent_config: config::load_config_or_default().agent,
     })
+}
+
+fn resolve_repos_for_sessions(
+    sessions: &[Session],
+    all_sessions: &[Session],
+    mut resolve_repo: impl FnMut(&std::path::Path) -> String,
+) -> HashMap<String, String> {
+    let relevant_ids = sessions
+        .iter()
+        .flat_map(|session| {
+            std::iter::once(session.session_id.clone())
+                .chain(session.ancestor_session_ids.iter().cloned())
+        })
+        .collect::<HashSet<_>>();
+    let mut repo_by_cwd = HashMap::<std::path::PathBuf, String>::new();
+
+    all_sessions
+        .iter()
+        .filter(|session| relevant_ids.contains(&session.session_id))
+        .map(|session| {
+            let repo = repo_by_cwd
+                .entry(session.cwd.clone())
+                .or_insert_with(|| resolve_repo(&session.cwd))
+                .clone();
+            (session.session_id.clone(), repo)
+        })
+        .collect()
 }
 
 fn resolve_repo(cwd: &std::path::Path) -> String {
@@ -631,6 +655,45 @@ mod tests {
             )]),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
+    }
+
+    #[test]
+    fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
+        let mut active = session(SessionStatus::Running);
+        active.session_id = "active-session".to_string();
+        active.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        let mut parent = session(SessionStatus::Ended);
+        parent.session_id = "parent-session".to_string();
+        parent.cwd = active.cwd.clone();
+
+        let mut unrelated = session(SessionStatus::Ended);
+        unrelated.session_id = "unrelated-session".to_string();
+        unrelated.cwd = PathBuf::from("/workspace/unrelated");
+
+        let all_sessions = vec![active.clone(), parent, unrelated];
+        let mut resolved_cwds = Vec::new();
+        let repos = resolve_repos_for_sessions(&[active.clone()], &all_sessions, |cwd| {
+            resolved_cwds.push(cwd.to_path_buf());
+            "example-org/sample-repo".to_string()
+        });
+
+        assert_eq!(
+            (repos, resolved_cwds),
+            (
+                HashMap::from([
+                    (
+                        "active-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                    (
+                        "parent-session".to_string(),
+                        "example-org/sample-repo".to_string(),
+                    ),
+                ]),
+                vec![active.cwd],
+            ),
+        );
     }
 
     #[tokio::test]

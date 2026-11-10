@@ -236,27 +236,31 @@ fn build_session_archive_args(session_id: &str) -> Vec<String> {
     args
 }
 
-/// Runs `tq session list --limit unlimited --session-id <id> ...` (one flag
-/// per id in `session_ids`) to completion and parses its stdout. Blocking, so
-/// callers must run it via [`tokio::task::spawn_blocking`].
-fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
-    let args = build_session_list_args(session_ids);
-
+fn run_tq_command(args: &[String]) -> Result<std::process::Output> {
     let mut command = ExternalTool::Tq.command();
-    command.args(&args);
+    command.args(args);
 
     let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
-        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
+        .map_err(|error| TqError::command_failed(args, error.to_string(), None))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(TqError::command_failed(
-            &args,
+            args,
             "command exited with non-zero status",
             Some(stderr),
         ));
     }
 
+    Ok(output)
+}
+
+/// Runs `tq session list --limit unlimited --session-id <id> ...` (one flag
+/// per id in `session_ids`) to completion and parses its stdout. Blocking, so
+/// callers must run it via [`tokio::task::spawn_blocking`].
+fn run_session_list(session_ids: &[String]) -> Result<Vec<SessionTasks>> {
+    let args = build_session_list_args(session_ids);
+    let output = run_tq_command(&args)?;
     parse_session_list(&String::from_utf8_lossy(&output.stdout))
 }
 
@@ -280,21 +284,7 @@ fn build_task_list_args(task_ids: &[String]) -> Vec<String> {
 
 fn run_task_list(task_ids: &[String]) -> Result<Vec<TqTaskSummary>> {
     let args = build_task_list_args(task_ids);
-    let mut command = ExternalTool::Tq.command();
-    command.args(&args);
-
-    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
-        .map_err(|e| TqError::command_failed(&args, e.to_string(), None))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TqError::command_failed(
-            &args,
-            "command exited with non-zero status",
-            Some(stderr),
-        ));
-    }
-
+    let output = run_tq_command(&args)?;
     parse_task_list(&String::from_utf8_lossy(&output.stdout))
 }
 
@@ -303,22 +293,11 @@ fn parse_task_list(stdout: &str) -> Result<Vec<TqTaskSummary>> {
 }
 
 fn run_project_list() -> Result<Vec<TqProjectSummary>> {
-    let args = PROJECT_LIST_ARGS;
-    let mut command = ExternalTool::Tq.command();
-    command.args(args);
-
-    let output = process::run_with_timeout(command, TQ_COMMAND_TIMEOUT)
-        .map_err(|e| TqError::command_failed(args, e.to_string(), None))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(TqError::command_failed(
-            args,
-            "command exited with non-zero status",
-            Some(stderr),
-        ));
-    }
-
+    let args = PROJECT_LIST_ARGS
+        .iter()
+        .map(|arg| arg.to_string())
+        .collect::<Vec<_>>();
+    let output = run_tq_command(&args)?;
     parse_project_list(&String::from_utf8_lossy(&output.stdout))
 }
 

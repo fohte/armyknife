@@ -109,3 +109,8 @@ export const BoardIsLoading: Story = {
   name: 'The board shows a loading state before projects arrive',
   args: { projects: [], loaded: false },
 }
+
+export const BoardShowsRefreshError: Story = {
+  name: 'The board keeps showing projects when metadata refresh fails',
+  args: { error: 'Project metadata could not be refreshed.' },
+}

@@ -227,9 +227,11 @@ export function BoardView({
         </p>
       ) : null}
       {!loaded ? (
-        <p className="board-message" role="status">
-          Loading projects…
-        </p>
+        error === null ? (
+          <p className="board-message" role="status">
+            Loading projects…
+          </p>
+        ) : null
       ) : visibleProjects.length === 0 ? (
         <p className="board-message">No projects to show.</p>
       ) : (

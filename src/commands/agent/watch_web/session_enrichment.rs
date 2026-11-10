@@ -14,7 +14,7 @@ use crate::infra::github::{BranchPrQuery, GitHubClient, PrInfo};
 use crate::infra::tq::{TqClient, TqProjectSummary, TqTaskSummary};
 
 const CACHE_TTL: Duration = Duration::from_secs(30);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
+const FETCH_TIMEOUT: Duration = Duration::from_secs(35);
 type BranchPrKey = (String, String, String);
 type FetchFuture<T> = Pin<Box<dyn Future<Output = Result<T, String>> + Send + 'static>>;
 type TaskMetadataFetcher = Arc<
@@ -246,17 +246,13 @@ async fn fetch_task_metadata(
     };
 
     let (priorities, priority_order) = task_priority_metadata(tasks.clone());
-    let task_projects = if tasks.iter().any(|task| task.project_id.is_some()) {
-        match client.list_projects().await {
-            Ok(projects) => task_project_names(tasks, projects),
-            Err(error) => {
-                tracing::warn!(%error, "Failed to fetch agent watch tq projects; keeping cached values");
-                previous.task_projects
-            }
-        }
-    } else {
-        HashMap::new()
-    };
+    let task_projects = fetch_task_projects(tasks, previous.task_projects, || async {
+        client
+            .list_projects()
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await;
 
     Ok(SessionTaskMetadata {
         links,
@@ -264,6 +260,28 @@ async fn fetch_task_metadata(
         priority_order,
         task_projects,
     })
+}
+
+async fn fetch_task_projects<F, Fut>(
+    tasks: Vec<TqTaskSummary>,
+    previous: HashMap<String, String>,
+    fetch_projects: F,
+) -> HashMap<String, String>
+where
+    F: FnOnce() -> Fut + Send,
+    Fut: Future<Output = Result<Vec<TqProjectSummary>, String>> + Send,
+{
+    if !tasks.iter().any(|task| task.project_id.is_some()) {
+        return HashMap::new();
+    }
+
+    match fetch_projects().await {
+        Ok(projects) => task_project_names(tasks, projects),
+        Err(error) => {
+            tracing::warn!(%error, "Failed to fetch agent watch tq projects; keeping cached values");
+            previous
+        }
+    }
 }
 
 fn task_project_names(
@@ -515,6 +533,85 @@ mod tests {
         assert_eq!(
             task_project_names(tasks, projects),
             HashMap::from([("task-a".to_string(), "Example project".to_string())]),
+        );
+    }
+
+    #[rstest]
+    #[case::project_list_succeeds(
+        Ok(vec![TqProjectSummary {
+            id: "project-a".to_string(),
+            title: "Sample project".to_string(),
+        }]),
+        HashMap::new(),
+        HashMap::from([("task-a".to_string(), "Sample project".to_string())]),
+    )]
+    #[case::project_list_failure_keeps_cached_values(
+        Err("temporary failure".to_string()),
+        HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
+        HashMap::from([("task-a".to_string(), "Cached project".to_string())]),
+    )]
+    #[tokio::test]
+    async fn fetches_project_names_or_keeps_cached_values_on_error(
+        #[case] project_result: std::result::Result<Vec<TqProjectSummary>, String>,
+        #[case] previous: HashMap<String, String>,
+        #[case] expected: HashMap<String, String>,
+    ) {
+        let mut linked_task = task("task-a", None);
+        linked_task.project_id = Some("project-a".to_string());
+
+        let actual = fetch_task_projects(vec![linked_task], previous, move || async move {
+            project_result
+        })
+        .await;
+
+        assert_eq!(actual, expected);
+    }
+
+    #[tokio::test]
+    async fn refresh_includes_ancestor_session_task_projects() {
+        let updates = EnrichmentUpdates::new();
+        let mut receiver = updates.subscribe();
+        let task_fetcher: TaskMetadataFetcher = Arc::new(|session_ids, _| {
+            Box::pin(async move {
+                let mut result = metadata(session_ids.clone());
+                result.task_projects = session_ids
+                    .iter()
+                    .map(|session_id| {
+                        (
+                            format!("task-{session_id}"),
+                            format!("project-{session_id}"),
+                        )
+                    })
+                    .collect();
+                Ok(result)
+            })
+        });
+        let pull_request_fetcher: PullRequestFetcher =
+            Arc::new(|_| Box::pin(async { Ok(HashMap::new()) }));
+        let cache = cache_with_fetchers(updates, FETCH_TIMEOUT, task_fetcher, pull_request_fetcher);
+        let mut child = session("child-session", None);
+        child.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        let initial = cache.task_metadata(std::slice::from_ref(&child)).await;
+        wait_for_refresh(&mut receiver).await;
+        let refreshed = cache.task_metadata(std::slice::from_ref(&child)).await;
+        let expected_ids =
+            HashSet::from(["child-session".to_string(), "parent-session".to_string()]);
+        let mut expected = metadata(expected_ids);
+        expected.task_projects = HashMap::from([
+            (
+                "task-child-session".to_string(),
+                "project-child-session".to_string(),
+            ),
+            (
+                "task-parent-session".to_string(),
+                "project-parent-session".to_string(),
+            ),
+        ]);
+
+        assert_eq!(
+            (initial, refreshed),
+            (SessionTaskMetadata::default(), expected)
         );
     }
 
