@@ -743,6 +743,9 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       ?.getAttribute('data-mobile-screen'),
     title: container.querySelector('.conversation-pane h1')?.textContent,
     navCount: container.querySelectorAll('.agent-watch-nav').length,
+    navSeparatorCount: container.querySelectorAll(
+      '[aria-label="Resize navigation and content"]',
+    ).length,
   }
 
   act(() => {
@@ -763,6 +766,9 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       .querySelector('.agent-watch-shell')
       ?.getAttribute('data-layout'),
     desktopNavCount: container.querySelectorAll('.agent-watch-nav').length,
+    desktopNavSeparatorCount: container.querySelectorAll(
+      '[aria-label="Resize navigation and content"]',
+    ).length,
   })
   expect(snapshot()).toEqual({
     mobileConversation: {
@@ -770,10 +776,61 @@ it('switches between the Inbox and conversation at the mobile breakpoint', () =>
       screen: 'conversation',
       title: 'Review the retry policy',
       navCount: 0,
+      navSeparatorCount: 0,
     },
     mobileInboxScreen: 'inbox',
     desktopLayout: 'desktop',
     desktopNavCount: 1,
+    desktopNavSeparatorCount: 1,
+  })
+})
+
+it('restores the desktop navigation width after keyboard resizing', () => {
+  const storageKey = 'agent-watch:navigation-width'
+  window.localStorage.removeItem(storageKey)
+  container.style.width = '1200px'
+  renderApp()
+
+  const resizeNavigation = () =>
+    container.querySelector<HTMLDivElement>(
+      '[aria-label="Resize navigation and content"]',
+    )
+  const separator = resizeNavigation()
+  if (separator === null) throw new Error('Expected the navigation separator')
+
+  act(() => {
+    separator.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'ArrowRight',
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+  })
+
+  const resizedWidth = separator.getAttribute('aria-valuenow')
+  const storedWidth = window.localStorage.getItem(storageKey)
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderApp()
+
+  const restoredSeparator = resizeNavigation()
+  const snapshot = () => ({
+    resizedWidth,
+    storedWidth,
+    restoredWidth: restoredSeparator?.getAttribute('aria-valuenow'),
+    navigationPaneWidth: container.querySelector<HTMLDivElement>(
+      '.resizable-columns-first-pane',
+    )?.style.flexBasis,
+  })
+
+  expect(snapshot()).toEqual({
+    resizedWidth: '250',
+    storedWidth: '250',
+    restoredWidth: '250',
+    navigationPaneWidth: '250px',
   })
 })
 
@@ -822,6 +879,7 @@ it('shows desktop review guidance without mounting crit on mobile', () => {
     resizerCount: 0,
     desktopIframeCount: 1,
     desktopResizers: [
+      'Resize navigation and content',
       'Resize session list and conversation',
       'Resize conversation and crit',
     ],
