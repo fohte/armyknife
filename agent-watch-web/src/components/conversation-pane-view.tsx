@@ -3,6 +3,7 @@ import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
+import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
 import { MessageComposer } from '#components/message-composer'
@@ -245,6 +246,7 @@ export function ConversationPaneView({
                 isPaused={session.isPaused}
               />
             </div>
+            <CopySessionIdControl sessionId={session.id} compact />
             <Button
               className="mobile-conversation-later cursor-pointer"
               type="button"
@@ -321,6 +323,7 @@ export function ConversationPaneView({
                   #{session.pullRequest.number} PR
                 </a>
               ) : null}
+              <CopySessionIdControl sessionId={session.id} />
               {actions?.openInTerminal === true ? (
                 <Button type="button" variant="plain" onClick={openInTerminal}>
                   Open in terminal
