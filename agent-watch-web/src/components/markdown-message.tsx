@@ -4,7 +4,7 @@ import { memo, type ReactNode } from 'react'
 import ReactMarkdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import type { Session } from '#types'
+import type { SessionLinkTarget } from '#types'
 
 type MarkdownNode = {
   children?: MarkdownNode[]
@@ -26,7 +26,7 @@ type MarkdownFile = {
 }
 
 type SessionLinkTextPart = {
-  session: Session | null
+  session: SessionLinkTarget | null
   text: string
 }
 
@@ -35,7 +35,7 @@ const sessionIdPattern =
 
 function splitSessionIds(
   value: string,
-  sessionsById: ReadonlyMap<string, Session>,
+  sessionsById: ReadonlyMap<string, SessionLinkTarget>,
 ): SessionLinkTextPart[] {
   const parts: SessionLinkTextPart[] = []
   let previousEnd = 0
@@ -64,7 +64,9 @@ function splitSessionIds(
   return parts.length > 0 ? parts : [{ session: null, text: value }]
 }
 
-function remarkLinkSessionIds(sessionsById: ReadonlyMap<string, Session>) {
+function remarkLinkSessionIds(
+  sessionsById: ReadonlyMap<string, SessionLinkTarget>,
+) {
   return (tree: MarkdownRoot) => {
     function visit(node: MarkdownNode) {
       const children = node.children
@@ -164,10 +166,10 @@ type MarkdownMessageProps = {
   className?: string
   inline?: boolean
   onSelectSession?: (id: string) => void
-  sessions?: readonly Session[]
+  sessions?: readonly SessionLinkTarget[]
 }
 
-function sessionStatus(session: Session) {
+function sessionStatus(session: SessionLinkTarget) {
   const categoryLabels: Record<string, string> = {
     needs_action: 'Needs action',
     later: 'Later',
@@ -185,7 +187,7 @@ function SessionLink({
 }: {
   children: ReactNode
   onSelectSession: ((id: string) => void) | undefined
-  session: Session
+  session: SessionLinkTarget
 }) {
   return (
     <a
@@ -212,7 +214,7 @@ function SessionLink({
 }
 
 function createMarkdownComponents(
-  sessionsById: ReadonlyMap<string, Session>,
+  sessionsById: ReadonlyMap<string, SessionLinkTarget>,
   onSelectSession?: (id: string) => void,
 ): { markdown: Components; inline: Components } {
   const renderLink = (href: string | undefined, children: ReactNode) => {
