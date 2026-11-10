@@ -416,6 +416,13 @@ mod project_tests {
         vec![],
         Some("parent-project")
     )]
+    #[case::single_parent_falls_back_to_its_repo(
+        vec!["parent"],
+        vec![],
+        vec![],
+        vec![("parent", "sample/parent-repo")],
+        Some("sample/parent-repo")
+    )]
     #[case::three_levels_use_the_root_project_first(
         vec!["root", "middle", "parent"],
         vec![("root", "root-task")],
