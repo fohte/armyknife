@@ -19,7 +19,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
 ) -> std::io::Result<Vec<ChatItem>> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
+    let mut queue = super::queue::Queue::default();
     for_each_jsonl_record(&mut reader, |record| {
+        queue.observe(&record);
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
             return;
         };
@@ -196,7 +198,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             target: tool_target(&tool_use.name, tool_use.input.as_ref()),
         });
     }
-    items.extend(super::queue::parse(&mut reader, parent, user_marker)?);
+    items.extend(queue.pending_items(parent, user_marker));
     Ok(items)
 }
 

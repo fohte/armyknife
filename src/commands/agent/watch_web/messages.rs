@@ -334,8 +334,8 @@ mod tests {
     use std::path::PathBuf;
 
     use axum::body::{Body, to_bytes};
-    use axum::http::Request;
     use axum::http::header::CONTENT_TYPE;
+    use axum::http::{Request, Response, StatusCode};
     use serde_json::json;
     use tower::ServiceExt;
 
@@ -375,6 +375,22 @@ mod tests {
         });
         std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
         (directory, transcript_path)
+    }
+
+    async fn response_snapshot(response: Response<Body>) -> (StatusCode, Option<String>, String) {
+        let status = response.status();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap().to_owned());
+        let body = String::from_utf8(
+            to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        (status, content_type, body)
     }
 
     #[test]
@@ -501,27 +517,48 @@ mod tests {
             )
             .await
             .unwrap();
-        let status = response.status();
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .map(|value| value.to_str().unwrap().to_owned());
-        let body = String::from_utf8(
-            to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-        .unwrap();
-
         assert_eq!(
-            (status, content_type, body),
+            response_snapshot(response).await,
             (
-                axum::http::StatusCode::OK,
+                StatusCode::OK,
                 Some("application/json".to_string()),
                 r#"[{"type":"user","text":"Synthetic peer request.","from":"Fixture parent"}]"#
                     .to_string(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn queued_prompt_route_serializes_the_frontend_item_shape() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let transcript = concat!(
+            r#"{"type":"queue-operation","operation":"enqueue","content":"Pending queued prompt."}"#,
+            "\n",
+        );
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.engine = Engine::Claude;
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with(move |_| Ok(Some(session.clone())), |_| Ok(None));
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"[{"type":"queued_user","text":"Pending queued prompt."}]"#.to_string(),
+            ),
         );
     }
 
@@ -553,23 +590,10 @@ mod tests {
             )
             .await
             .unwrap();
-        let status = response.status();
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .map(|value| value.to_str().unwrap().to_owned());
-        let body = String::from_utf8(
-            to_bytes(response.into_body(), usize::MAX)
-                .await
-                .unwrap()
-                .to_vec(),
-        )
-        .unwrap();
-
         assert_eq!(
-            (status, content_type, body),
+            response_snapshot(response).await,
             (
-                axum::http::StatusCode::OK,
+                StatusCode::OK,
                 Some("application/json".to_string()),
                 r#"[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}]"#.to_string(),
             )

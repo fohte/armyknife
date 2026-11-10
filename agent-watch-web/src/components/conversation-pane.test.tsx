@@ -835,21 +835,28 @@ it('marks a queued prompt below the delivered conversation', () => {
   ])
 
   const actual = Array.from(
-    container.querySelectorAll<HTMLElement>('.chat-user-group'),
-  ).map((group) => ({
-    className: group.querySelector('.chat-user-message')?.className,
-    label: group.querySelector('.chat-queued-label')?.textContent ?? null,
-    text: group.querySelector('.chat-user-message')?.textContent ?? null,
+    container.querySelectorAll<HTMLElement>(
+      '.chat-user-group, .chat-assistant-message',
+    ),
+  ).map((message) => ({
+    className: message.className,
+    label: message.querySelector('.chat-queued-label')?.textContent ?? null,
+    text: message.querySelector('.markdown-message')?.textContent ?? null,
   }))
 
   expect(actual).toEqual([
     {
-      className: 'markdown-message chat-user-message',
+      className: 'chat-user-group',
       label: null,
       text: 'Please summarize the current changes.',
     },
     {
-      className: 'markdown-message chat-user-message chat-user-message-queued',
+      className: 'chat-assistant-message',
+      label: null,
+      text: 'I am reviewing the current changes.',
+    },
+    {
+      className: 'chat-user-group',
       label: 'Queued',
       text: 'Also check the error handling.',
     },

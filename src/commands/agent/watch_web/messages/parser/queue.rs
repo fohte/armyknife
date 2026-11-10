@@ -1,25 +1,22 @@
 use std::collections::VecDeque;
-use std::io::{self, BufRead, Seek, SeekFrom};
 
 use serde_json::Value;
 
 use super::super::{ChatItem, ParentSession, claude_content_text};
-use super::{append_text_with_user_marker, for_each_jsonl_record};
+use super::append_text_with_user_marker;
 
-pub(super) fn parse(
-    reader: &mut (impl BufRead + Seek),
-    parent: Option<&ParentSession>,
-    user_marker: Option<&str>,
-) -> io::Result<Vec<ChatItem>> {
-    reader.seek(SeekFrom::Start(0))?;
-    let mut queued = VecDeque::new();
-    let mut recently_removed_prompt = None::<Option<String>>;
-    for_each_jsonl_record(reader, |record| {
+#[derive(Default)]
+pub(super) struct Queue {
+    pending: VecDeque<Option<String>>,
+    removed: VecDeque<Option<String>>,
+}
+
+impl Queue {
+    pub(super) fn observe(&mut self, record: &Value) {
         if record.get("type").and_then(Value::as_str) == Some("queue-operation") {
             match record.get("operation").and_then(Value::as_str) {
                 Some("enqueue") => {
-                    recently_removed_prompt = None;
-                    queued.push_back(
+                    self.pending.push_back(
                         record
                             .get("content")
                             .filter(|content| !content.is_null())
@@ -27,73 +24,109 @@ pub(super) fn parse(
                     );
                 }
                 Some("dequeue") => {
-                    recently_removed_prompt = queued.pop_front();
+                    if let Some(prompt) = self.pending.pop_front() {
+                        self.removed.push_back(prompt);
+                    }
                 }
                 Some("remove") => {
-                    recently_removed_prompt = None;
                     let content = record
                         .get("content")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
                     let index = content
                         .as_ref()
-                        .and_then(|content| matching_prompt_index(&queued, content));
+                        .and_then(|content| matching_prompt_index(&self.pending, content));
+                    // Claude Code can omit prompt text when enqueuing peer messages.
                     let index = index.or_else(|| {
                         content
                             .as_ref()
-                            .and_then(|_| queued.iter().position(Option::is_none))
+                            .and_then(|_| self.pending.iter().position(Option::is_none))
                     });
                     if let Some(index) = index {
-                        let removed = queued.remove(index).flatten();
-                        recently_removed_prompt = Some(removed.or(content));
+                        let removed = self.pending.remove(index).flatten().or(content);
+                        self.removed.push_back(removed);
                     }
                 }
                 Some("popAll") => {
-                    queued.clear();
-                    recently_removed_prompt = None;
+                    self.pending.clear();
+                    self.removed.clear();
                 }
-                _ => recently_removed_prompt = None,
+                _ => {}
             }
-            return;
-        }
-
-        if record
+        } else if record
             .get("attachment")
             .and_then(|attachment| attachment.get("type"))
             .and_then(Value::as_str)
             == Some("queued_command")
-            && let Some(prompt) = record
+        {
+            if let Some(prompt) = record
                 .get("attachment")
                 .and_then(|attachment| attachment.get("prompt"))
-        {
-            let prompt = claude_content_text(Some(prompt));
-            let already_removed = recently_removed_prompt
-                .as_ref()
-                .is_some_and(|removed| removed.as_deref().is_none_or(|text| text == prompt));
-            if !already_removed && let Some(index) = matching_prompt_index(&queued, &prompt) {
-                queued.remove(index);
+            {
+                let prompt = claude_content_text(Some(prompt));
+                if !self.consume_removed_prompt(&prompt)
+                    && let Some(index) = matching_prompt_index(&self.pending, &prompt)
+                {
+                    self.pending.remove(index);
+                }
             }
-        }
-        recently_removed_prompt = None;
-    })?;
-
-    let mut items = Vec::new();
-    for prompt in queued.into_iter().flatten() {
-        let start = items.len();
-        append_text_with_user_marker(&mut items, prompt, parent, user_marker);
-        if items.len() > start
-            && let Some(ChatItem::User { text, from }) = items.pop()
+        } else if record.get("type").and_then(Value::as_str) == Some("user")
+            && let Some(prompt) = user_prompt(record)
         {
-            items.push(ChatItem::QueuedUser { text, from });
+            self.consume_removed_prompt(&prompt);
         }
     }
-    Ok(items)
+
+    fn consume_removed_prompt(&mut self, prompt: &str) -> bool {
+        if let Some(index) = matching_prompt_index(&self.removed, prompt) {
+            self.removed.remove(index);
+            return true;
+        }
+
+        if let Some(index) = self.removed.iter().position(Option::is_none) {
+            self.removed.remove(index);
+            return true;
+        }
+
+        false
+    }
+
+    pub(super) fn pending_items(
+        self,
+        parent: Option<&ParentSession>,
+        user_marker: Option<&str>,
+    ) -> Vec<ChatItem> {
+        let mut items = Vec::new();
+        for prompt in self.pending.into_iter().flatten() {
+            let start = items.len();
+            append_text_with_user_marker(&mut items, prompt, parent, user_marker);
+            if items.len() > start
+                && let Some(ChatItem::User { text, from }) = items.pop()
+            {
+                items.push(ChatItem::QueuedUser { text, from });
+            }
+        }
+        items
+    }
 }
 
-fn matching_prompt_index(queued: &VecDeque<Option<String>>, prompt: &str) -> Option<usize> {
-    queued
+fn user_prompt(record: &Value) -> Option<String> {
+    let content = record.get("message")?.get("content")?;
+    if let Some(blocks) = content.as_array()
+        && blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+    {
+        return None;
+    }
+    let text = claude_content_text(Some(content));
+    (!text.trim().is_empty()).then_some(text)
+}
+
+fn matching_prompt_index(pending: &VecDeque<Option<String>>, prompt: &str) -> Option<usize> {
+    pending
         .iter()
-        .position(|queued_prompt| queued_prompt.as_deref() == Some(prompt))
+        .position(|pending_prompt| pending_prompt.as_deref() == Some(prompt))
 }
 
 #[cfg(test)]
@@ -103,7 +136,6 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
-    use super::parse;
     use crate::commands::agent::watch_web::messages::{ChatItem, ParentSession};
 
     #[rstest]
@@ -142,7 +174,7 @@ mod tests {
     )]
     fn parses_pending_prompts(#[case] transcript: &str, #[case] expected: Vec<ChatItem>) {
         assert_eq!(
-            parse(&mut Cursor::new(transcript), None, None).unwrap(),
+            super::super::claude::parse(Cursor::new(transcript), None, None, None).unwrap(),
             expected,
         );
     }
@@ -158,9 +190,10 @@ mod tests {
         };
 
         assert_eq!(
-            parse(
-                &mut Cursor::new(transcript),
+            super::super::claude::parse(
+                Cursor::new(transcript),
                 Some(&parent),
+                None,
                 Some("⟦armyknife-user:fixture-marker-cobalt⟧"),
             )
             .unwrap(),
@@ -172,11 +205,11 @@ mod tests {
     }
 
     #[test]
-    fn delivered_attachment_does_not_remove_a_duplicate_queued_prompt() {
+    fn enqueue_between_dequeue_and_attachment_keeps_duplicate_queued() {
         let transcript = indoc! {r#"
             {"type":"queue-operation","operation":"enqueue","content":"Repeated prompt."}
+            {"type":"queue-operation","operation":"dequeue"}
             {"type":"queue-operation","operation":"enqueue","content":"Repeated prompt."}
-            {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"Repeated prompt."}
             {"attachment":{"type":"queued_command","prompt":"Repeated prompt."}}
         "#};
 
