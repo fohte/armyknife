@@ -274,12 +274,23 @@ function requestUrl(input: RequestInfo | URL) {
   return input instanceof URL ? input.href : input.url
 }
 
+function isConversationPaneRequest(input: RequestInfo | URL) {
+  const url = requestUrl(input)
+  return url.endsWith('/messages') || url.endsWith('/actions')
+}
+
+function mockPendingResponse() {
+  return new Promise<Response>(() => undefined)
+}
+
 function mockSessionActionFetch(input: RequestInfo | URL) {
   const response =
     requestUrl(input) === '/api/sessions/later-options'
       ? new Response(JSON.stringify(laterPresetTimes), { status: 200 })
       : new Response(null, { status: 204 })
-  return Promise.resolve(response)
+  return isConversationPaneRequest(input)
+    ? mockPendingResponse()
+    : Promise.resolve(response)
 }
 
 function flushAsyncState() {
@@ -432,7 +443,14 @@ it('opens Later with L and selects a preset with its number key', async () => {
     await flushAsyncState()
   })
 
-  const snapshot = () => ({ menuItems, requests: fetchMock.mock.calls })
+  const snapshot = () => ({
+    menuItems,
+    requests: fetchMock.mock.calls.filter(([input]) =>
+      ['/api/sessions/later-options', '/api/sessions/session-a/later'].includes(
+        requestUrl(input),
+      ),
+    ),
+  })
 
   expect(snapshot()).toEqual({
     menuItems: [
@@ -497,7 +515,14 @@ it('returns a Later session immediately from the menu', async () => {
     await flushAsyncState()
   })
 
-  expect(fetchMock.mock.calls).toEqual([
+  expect(
+    fetchMock.mock.calls.filter(([input]) =>
+      [
+        '/api/sessions/later-options',
+        '/api/sessions/session-later/later',
+      ].includes(requestUrl(input)),
+    ),
+  ).toEqual([
     ['/api/sessions/later-options'],
     [
       '/api/sessions/session-later/later',
@@ -520,7 +545,13 @@ it.each([
     response: new Response('{', { status: 200 }),
   },
 ])('disables Later presets after $scenario', async ({ response }) => {
-  const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response)
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      isConversationPaneRequest(input)
+        ? mockPendingResponse()
+        : Promise.resolve(response),
+    )
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -556,10 +587,19 @@ it('ignores return times from an earlier Later menu request', async () => {
   const secondResponse = new Promise<Response>((resolve) => {
     resolveSecond = resolve
   })
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockReturnValueOnce(firstResponse)
-    .mockReturnValueOnce(secondResponse)
+  const optionResponses = [firstResponse, secondResponse]
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    if (isConversationPaneRequest(input)) {
+      return mockPendingResponse()
+    }
+    if (requestUrl(input) === '/api/sessions/later-options') {
+      return (
+        optionResponses.shift() ??
+        Promise.resolve(new Response(null, { status: 500 }))
+      )
+    }
+    return Promise.resolve(new Response(null, { status: 204 }))
+  })
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -614,7 +654,11 @@ it('ignores return times from an earlier Later menu request', async () => {
 it('saves a TODAY star from the session row', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
-    .mockResolvedValue(new Response(null, { status: 204 }))
+    .mockImplementation((input) =>
+      isConversationPaneRequest(input)
+        ? mockPendingResponse()
+        : Promise.resolve(new Response(null, { status: 204 })),
+    )
   vi.stubGlobal('fetch', fetchMock)
   renderApp()
   publishSessions({
@@ -630,7 +674,10 @@ it('saves a TODAY star from the session row', async () => {
     await flushAsyncState()
   })
 
-  const snapshot = () => fetchMock.mock.calls
+  const snapshot = () =>
+    fetchMock.mock.calls.filter(([input]) =>
+      requestUrl(input).endsWith('/today'),
+    )
   expect(snapshot()).toEqual([
     [
       '/api/sessions/session-a/today',
@@ -704,7 +751,9 @@ it('closes Later when its target session disappears', async () => {
     menu: container.querySelector('[role="menu"]'),
     selectedTitle: readSelectedTitle(),
     numberKeyPrevented: numberKeyEvent?.defaultPrevented,
-    requests: fetchMock.mock.calls,
+    requests: fetchMock.mock.calls.filter(
+      ([input]) => requestUrl(input) === '/api/sessions/later-options',
+    ),
   })
 
   expect(snapshot()).toEqual({
