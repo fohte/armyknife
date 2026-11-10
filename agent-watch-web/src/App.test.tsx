@@ -133,6 +133,26 @@ it('hides quiet projects by default and lets the filter reveal them', () => {
   })
 })
 
+it('toggles between the Board and Inbox with shifted B', () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'Sample session')],
+  })
+
+  const views: string[] = []
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  views.push(readActiveView())
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  views.push(readActiveView())
+
+  expect(views).toEqual(['Board', 'Inbox'])
+})
+
 function readSelectedTitle() {
   return (
     container.querySelector<HTMLElement>(

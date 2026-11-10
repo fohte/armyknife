@@ -198,21 +198,11 @@ async fn list_sessions<S: SessionSource>(
                 .get(&session.session_id)
                 .cloned()
                 .unwrap_or_default();
-            let parent_project = session
-                .ancestor_session_ids
-                .last()
-                .and_then(|parent_id| {
-                    task_metadata
-                        .links
-                        .get(parent_id)
-                        .and_then(|task| task_metadata.task_projects.get(&task.task_id))
-                })
-                .or_else(|| {
-                    session
-                        .ancestor_session_ids
-                        .last()
-                        .and_then(|parent_id| snapshot.repo_by_id.get(parent_id))
-                });
+            let parent_project = resolve_parent_project(
+                &session.ancestor_session_ids,
+                &task_metadata,
+                &snapshot.repo_by_id,
+            );
             let task_project = task
                 .as_ref()
                 .and_then(|task| task_metadata.task_projects.get(&task.id));
@@ -249,11 +239,7 @@ async fn list_sessions<S: SessionSource>(
                 unread: session.is_unread_stopped(),
                 task,
                 repo: repo.clone(),
-                project: resolve_project(
-                    parent_project.map(String::as_str),
-                    task_project.map(String::as_str),
-                    &repo,
-                ),
+                project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
                 pull_request,
             }
@@ -336,10 +322,58 @@ fn resolve_project(parent_project: Option<&str>, task_project: Option<&str>, rep
         .to_string()
 }
 
+fn resolve_parent_project<'a>(
+    ancestor_session_ids: &[String],
+    task_metadata: &'a SessionTaskMetadata,
+    repo_by_id: &'a HashMap<String, String>,
+) -> Option<&'a str> {
+    ancestor_session_ids.iter().find_map(|ancestor_id| {
+        task_metadata
+            .links
+            .get(ancestor_id)
+            .and_then(|task| task_metadata.task_projects.get(&task.task_id))
+            .map(String::as_str)
+            .filter(|project| !project.trim().is_empty())
+            .or_else(|| {
+                repo_by_id
+                    .get(ancestor_id)
+                    .map(String::as_str)
+                    .filter(|repo| !repo.trim().is_empty())
+            })
+    })
+}
+
 #[cfg(test)]
 mod project_tests {
-    use super::resolve_project;
+    use super::{SessionTaskMetadata, resolve_parent_project, resolve_project};
+    use crate::commands::agent::tq_session_tasks::SessionTask;
     use rstest::rstest;
+    use std::collections::HashMap;
+
+    fn task_metadata(links: &[(&str, &str)], projects: &[(&str, &str)]) -> SessionTaskMetadata {
+        SessionTaskMetadata {
+            links: links
+                .iter()
+                .map(|(session_id, task_id)| {
+                    (
+                        (*session_id).to_string(),
+                        SessionTask {
+                            task_id: (*task_id).to_string(),
+                            task_number: 1,
+                            task_title: "Sample task".to_string(),
+                            parent_task_id: None,
+                            is_closed: false,
+                        },
+                    )
+                })
+                .collect(),
+            task_projects: projects
+                .iter()
+                .map(|(task_id, project)| ((*task_id).to_string(), (*project).to_string()))
+                .collect(),
+            ..SessionTaskMetadata::default()
+        }
+    }
 
     #[rstest]
     #[case::parent_takes_precedence(
@@ -371,6 +405,62 @@ mod project_tests {
         assert_eq!(
             resolve_project(parent_project, task_project, repo),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::single_parent_uses_its_task_project(
+        vec!["parent"],
+        vec![("parent", "parent-task")],
+        vec![("parent-task", "parent-project")],
+        vec![],
+        Some("parent-project")
+    )]
+    #[case::three_levels_use_the_root_project_first(
+        vec!["root", "middle", "parent"],
+        vec![("root", "root-task")],
+        vec![("root-task", "root-project")],
+        vec![
+            ("root", "sample/root-repo"),
+            ("middle", "sample/middle-repo"),
+            ("parent", "sample/parent-repo"),
+        ],
+        Some("root-project")
+    )]
+    #[case::unknown_root_uses_the_next_available_ancestor(
+        vec!["unknown-root", "middle", "parent"],
+        vec![("middle", "middle-task")],
+        vec![("middle-task", "middle-project")],
+        vec![("parent", "sample/parent-repo")],
+        Some("middle-project")
+    )]
+    #[case::unknown_ancestors_fall_back_to_the_current_session(
+        vec!["unknown-root", "unknown-parent"],
+        vec![],
+        vec![],
+        vec![],
+        None
+    )]
+    fn resolves_parent_project_from_root_to_parent(
+        #[case] ancestor_ids: Vec<&str>,
+        #[case] links: Vec<(&str, &str)>,
+        #[case] projects: Vec<(&str, &str)>,
+        #[case] repos: Vec<(&str, &str)>,
+        #[case] expected: Option<&str>,
+    ) {
+        let ancestor_ids = ancestor_ids
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        let metadata = task_metadata(&links, &projects);
+        let repo_by_id = repos
+            .into_iter()
+            .map(|(session_id, repo)| (session_id.to_string(), repo.to_string()))
+            .collect::<HashMap<_, _>>();
+
+        assert_eq!(
+            resolve_parent_project(&ancestor_ids, &metadata, &repo_by_id),
+            expected,
         );
     }
 }

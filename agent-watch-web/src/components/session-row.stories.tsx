@@ -18,6 +18,8 @@ const session: Session = {
     priority: 1,
   },
   repo: 'example/service',
+  project: 'sample project',
+  parent: null,
   pullRequest: null,
 }
 

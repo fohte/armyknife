@@ -5,17 +5,19 @@ import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { InboxView } from '#components/inbox-view'
 import { startSessionFeed } from '#session-feed'
-import { getSessionShortcutAction, moveSelection } from '#session-navigation'
+import {
+  getSessionShortcutAction,
+  moveSelection,
+  type SessionView,
+} from '#session-navigation'
 import type { Session } from '#types'
-
-type View = 'inbox' | 'board'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [view, setView] = useState<View>('inbox')
+  const [view, setView] = useState<SessionView>('inbox')
   const [hideQuietProjects, setHideQuietProjects] = useState(true)
   const [showAllInProgress, setShowAllInProgress] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,7 +125,7 @@ export function App() {
         return
       }
 
-      const action = getSessionShortcutAction(event.key, event.shiftKey)
+      const action = getSessionShortcutAction(event.key, event.shiftKey, view)
       if (action?.type === 'view') {
         event.preventDefault()
         setView(action.view)

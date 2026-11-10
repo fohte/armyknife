@@ -36,8 +36,8 @@ export type Session = {
   unread: boolean
   task: SessionTask | null
   repo: string
-  project?: string
-  parent?: ParentSession | null
+  project: string
+  parent: ParentSession | null
   pullRequest: PullRequest | null
 }
 

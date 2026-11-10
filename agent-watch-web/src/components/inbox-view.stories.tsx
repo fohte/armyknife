@@ -19,6 +19,8 @@ const sessions: Session[] = [
       priority: 1,
     },
     repo: 'example/service',
+    project: 'sample project',
+    parent: null,
     pullRequest: null,
   },
   {
@@ -31,6 +33,8 @@ const sessions: Session[] = [
     unread: false,
     task: null,
     repo: 'example/observability',
+    project: 'sample project',
+    parent: null,
     pullRequest: null,
   },
   {
@@ -43,6 +47,8 @@ const sessions: Session[] = [
     unread: false,
     task: null,
     repo: 'example/observability',
+    project: 'sample project',
+    parent: null,
     pullRequest: null,
   },
   {
@@ -55,6 +61,8 @@ const sessions: Session[] = [
     unread: false,
     task: null,
     repo: 'example/observability',
+    project: 'sample project',
+    parent: null,
     pullRequest: null,
   },
   {
@@ -67,6 +75,8 @@ const sessions: Session[] = [
     unread: false,
     task: null,
     repo: 'example/service',
+    project: 'sample project',
+    parent: null,
     pullRequest: { number: 2049, state: 'Merged' },
   },
 ]

@@ -18,11 +18,7 @@ export function buildBoardProjects(
   const sessionsByProject = new Map<string, Session[]>()
 
   for (const session of sessions) {
-    const project = session.project
-    const name =
-      project === undefined || project.trim().length === 0
-        ? 'Unsorted'
-        : project.trim()
+    const name = session.project.trim() || 'Unsorted'
     const projectSessions = sessionsByProject.get(name) ?? []
     projectSessions.push(session)
     sessionsByProject.set(name, projectSessions)
