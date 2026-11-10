@@ -10,7 +10,13 @@ const meta = {
 Use \`retry()\` with the [request guide](https://example.com/guide).
 
 - Retry transient failures
+  - Wait before retrying
 - Stop after three attempts
+
+1. Check the request
+   1. Confirm the response
+   2. Record the result
+2. Continue after approval
 
 | Attempt | Delay |
 | --- | --- |
@@ -36,7 +42,7 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const FormatsCommonMarkdown: Story = {
-  name: 'A message formats headings, lists, tables, links, and code',
+  name: 'A message shows nested bullet and numbered lists',
 }
 
 export const RawHtmlStaysText: Story = {

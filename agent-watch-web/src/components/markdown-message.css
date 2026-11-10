@@ -44,6 +44,30 @@
   padding-left: 1.5rem;
 }
 
+.markdown-message ul {
+  list-style-type: disc;
+}
+
+.markdown-message ol {
+  list-style-type: decimal;
+}
+
+.markdown-message ul ul {
+  list-style-type: circle;
+}
+
+.markdown-message ol ol {
+  list-style-type: lower-alpha;
+}
+
+.markdown-message ul ul ul {
+  list-style-type: square;
+}
+
+.markdown-message ol ol ol {
+  list-style-type: lower-roman;
+}
+
 .markdown-message li + li {
   margin-top: 0.25rem;
 }
