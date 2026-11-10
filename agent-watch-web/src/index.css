@@ -42,7 +42,9 @@
 }
 
 .agent-watch-nav {
-  flex: 0 0 240px;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
   padding: 0 8px;
   background: #0f0f0f;
 }
