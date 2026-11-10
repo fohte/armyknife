@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.531](https://github.com/fohte/armyknife/compare/v0.1.530...v0.1.531) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show tool details ([#1415](https://github.com/fohte/armyknife/issues/1415)) ([f9d5cec](https://github.com/fohte/armyknife/commit/f9d5cec4887e535eea06a2ff3e2cec50e47fdf9e))
+
 ## [0.1.530](https://github.com/fohte/armyknife/compare/v0.1.529...v0.1.530) (2026-11-10)
 
 
