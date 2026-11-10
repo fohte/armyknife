@@ -374,6 +374,19 @@ function mockSessionActionFetch(input: RequestInfo | URL) {
 function flushAsyncState() {
   return new Promise<void>((resolve) => window.setTimeout(resolve, 0))
 }
+
+function changeHistory(direction: 'back' | 'forward') {
+  return new Promise<void>((resolve) => {
+    window.addEventListener(
+      'popstate',
+      () => {
+        resolve()
+      },
+      { once: true },
+    )
+    window.history[direction]()
+  })
+}
 function readSelectedTitle() {
   return (
     container.querySelector<HTMLElement>(
@@ -437,11 +450,163 @@ function dispatchKey(
   return event
 }
 
+it('restores the previous session with browser back and forward', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+  const rows =
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]')
+  act(() => {
+    rows[0]?.click()
+    rows[1]?.click()
+  })
+  const secondSessionUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+  const previousSession = readSelectedTitle()
+  const previousSessionUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('forward')
+  })
+
+  const snapshot = () => ({
+    previousSession,
+    previousSessionUrl,
+    forwardedSession: readSelectedTitle(),
+    forwardedUrl: window.location.search,
+    secondSessionUrl,
+  })
+
+  expect(snapshot()).toEqual({
+    previousSession: 'First session',
+    previousSessionUrl: '?session=session-a&screen=conversation',
+    forwardedSession: 'Second session',
+    forwardedUrl: secondSessionUrl,
+    secondSessionUrl: '?session=session-b&screen=conversation',
+  })
+})
+
+it('replaces the session URL while moving with j and k', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('[data-session-row]')?.click()
+  })
+  act(() => {
+    dispatchKey(window, 'j')
+  })
+  const movedForwardUrl = window.location.search
+  act(() => {
+    dispatchKey(window, 'k')
+    dispatchKey(window, 'j')
+  })
+  const movedSessionUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    movedForwardUrl,
+    movedSessionUrl,
+    selectedTitle: readSelectedTitle(),
+    returnedUrl: window.location.search,
+  })
+
+  expect(snapshot()).toEqual({
+    movedForwardUrl: '?session=session-b&screen=conversation',
+    movedSessionUrl: '?session=session-b&screen=conversation',
+    selectedTitle: 'First session',
+    returnedUrl: '?session=session-a',
+  })
+})
+
+it('restores the Board from its URL and browser history', async () => {
+  window.history.replaceState(null, '', '/?view=board')
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+  const initialView = readActiveView()
+
+  act(() => {
+    dispatchKey(window, 'B', { shiftKey: true })
+  })
+  const inboxUrl = window.location.search
+
+  await act(async () => {
+    await changeHistory('back')
+  })
+
+  const snapshot = () => ({
+    initialView,
+    inboxUrl,
+    restoredView: readActiveView(),
+    restoredUrl: window.location.search,
+  })
+  expect(snapshot()).toEqual({
+    initialView: 'Board',
+    inboxUrl: '?session=session-a',
+    restoredView: 'Board',
+    restoredUrl: '?session=session-a&view=board',
+  })
+})
+
+it('opens the session and screen encoded in a mobile URL', () => {
+  window.history.replaceState(
+    null,
+    '',
+    '/?session=session-b&screen=conversation',
+  )
+  mobileViewportMatches = true
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-a', 'First session'),
+      session('session-b', 'Second session'),
+    ],
+  })
+
+  const snapshot = () => ({
+    selectedTitle: readSelectedTitle(),
+    screen: container
+      .querySelector('.agent-watch-shell')
+      ?.getAttribute('data-mobile-screen'),
+    conversationTitle: container.querySelector('.conversation-pane h1')
+      ?.textContent,
+    url: window.location.search,
+  })
+
+  expect(snapshot()).toEqual({
+    selectedTitle: 'Second session',
+    screen: 'conversation',
+    conversationTitle: 'Second session',
+    url: '?session=session-b&screen=conversation',
+  })
+})
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   vi.stubGlobal('fetch', () => new Promise(() => undefined))
   vi.stubGlobal('matchMedia', matchMediaMock)
   mobileViewportMatches = false
+  window.history.replaceState(null, '', '/')
   mediaQueries.clear()
   container = document.createElement('div')
   document.body.append(container)
