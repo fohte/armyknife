@@ -585,6 +585,194 @@ it('keeps the message draft when sending fails', async () => {
   })
 })
 
+it('sends pasted file data with the message and keeps it when sending fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(false))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const file = new File(['payload'], 'clipboard.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
+  })
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          images: [
+            {
+              mimeType: 'application/octet-stream',
+              size: 7,
+              data: 'cGF5bG9hZA==',
+            },
+          ],
+        },
+      ],
+    ],
+    attachmentNames: ['clipboard.bin'],
+  })
+})
+
+it('clears pasted attachments after a successful send', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const file = new File(['payload'], 'clipboard.bin', {
+    type: 'application/octet-stream',
+  })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () => Promise.resolve(new TextEncoder().encode('payload').buffer),
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+  })
+
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    attachmentNames: Array.from(
+      container.querySelectorAll('.composer-attachment span'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [
+      [
+        'messages',
+        {
+          content: '',
+          images: [
+            {
+              mimeType: 'application/octet-stream',
+              size: 7,
+              data: 'cGF5bG9hZA==',
+            },
+          ],
+        },
+      ],
+    ],
+    attachmentNames: [],
+  })
+})
+
+it('shows a server image validation error and retains the rejected attachment', async () => {
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse([]))
+    .mockResolvedValueOnce(
+      jsonResponse({
+        message: true,
+        answerQuestion: false,
+        interrupt: false,
+        openInTerminal: true,
+      }),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse({ error: 'unsupported image type: application/pdf' }, 400),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const file = new File(['not an image'], 'document.pdf', {
+    type: 'application/pdf',
+  })
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: () =>
+      Promise.resolve(new TextEncoder().encode('not an image').buffer),
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const pasteEvent = new Event('paste', { bubbles: true, cancelable: true })
+  Object.defineProperty(pasteEvent, 'clipboardData', {
+    value: { files: [file] },
+  })
+  act(() => {
+    void textarea.dispatchEvent(pasteEvent)
+  })
+  act(() => {
+    void dispatchKey(textarea, 'Enter')
+  })
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('[role="alert"]')?.textContent ?? null,
+    attachmentName: container.querySelector('.composer-attachment span')
+      ?.textContent,
+    postBody: fetcher.mock.calls[2]?.[1]?.body,
+  })
+  expect(snapshot()).toEqual({
+    error: 'unsupported image type: application/pdf',
+    attachmentName: 'document.pdf',
+    postBody: JSON.stringify({
+      content: '',
+      images: [
+        {
+          mimeType: 'application/pdf',
+          size: 12,
+          data: 'bm90IGFuIGltYWdl',
+        },
+      ],
+    }),
+  })
+})
+
 it('clears the message draft after a successful send', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction)

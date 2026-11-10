@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use axum::extract::{Path as RoutePath, State};
+use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,10 +18,14 @@ use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
+use super::image_attachments;
+
+const MAX_MESSAGE_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
+        attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
     })
 }
@@ -29,7 +33,10 @@ pub(super) fn router() -> Router {
 fn router_with_state(state: ActionState) -> Router {
     Router::new()
         .route("/sessions/{id}/actions", get(actions))
-        .route("/sessions/{id}/messages", post(send_message))
+        .route(
+            "/sessions/{id}/messages",
+            post(send_message).layer(DefaultBodyLimit::max(MAX_MESSAGE_BODY_BYTES)),
+        )
         .route("/sessions/{id}/answer", post(answer_question))
         .route(
             "/sessions/{id}/permission/approve",
@@ -46,6 +53,7 @@ fn router_with_state(state: ActionState) -> Router {
 #[derive(Clone)]
 struct ActionState {
     sessions_dir: Option<PathBuf>,
+    attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
 }
 
@@ -225,6 +233,8 @@ async fn actions(
 #[derive(Deserialize)]
 struct MessageRequest {
     content: String,
+    #[serde(default)]
+    images: Vec<image_attachments::Request>,
 }
 
 async fn send_message(
@@ -233,11 +243,25 @@ async fn send_message(
     Json(request): Json<MessageRequest>,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
-    if request.content.trim().is_empty() {
+    if request.content.trim().is_empty() && request.images.is_empty() {
         return Err(ApiError::bad_request("message must not be empty"));
     }
+
+    let images = image_attachments::validate(request.images)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let image_paths =
+        run_blocking(move || image_attachments::save(images, state.attachment_dir)).await?;
+    let content = image_attachments::append_paths_to_message(request.content, &image_paths);
+    let cleanup_paths = image_paths;
     let runtime = state.runtime;
-    run_blocking(move || runtime.send_message(&session, &request.content)).await?;
+    run_blocking(move || {
+        let result = runtime.send_message(&session, &content);
+        if result.is_err() {
+            image_attachments::remove(&cleanup_paths);
+        }
+        result
+    })
+    .await?;
     Ok(Json(Success::new()))
 }
 
@@ -483,6 +507,7 @@ mod tests {
 
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
+        message_error: Mutex<Option<String>>,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -492,6 +517,7 @@ mod tests {
         fn default() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                message_error: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -506,6 +532,9 @@ mod tests {
                 "sessionId": session.session_id,
                 "content": content,
             }));
+            if let Some(message) = self.message_error.lock().unwrap().clone() {
+                return Err(anyhow::anyhow!(message));
+            }
             Ok(())
         }
 
@@ -567,6 +596,7 @@ mod tests {
         fn router(&self) -> Router {
             router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
+                attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
             })
         }
@@ -591,6 +621,10 @@ mod tests {
 
         fn set_pane_command_matches(&self, matches: bool) {
             *self.runtime.pane_command_matches.lock().unwrap() = matches;
+        }
+
+        fn set_message_error(&self, message: &str) {
+            *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
         }
     }
 
@@ -708,6 +742,220 @@ mod tests {
                     "sessionId": "sample-session",
                     "content": "  continue the investigation  ",
                 }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::custom_message("Inspect this image")]
+    #[case::empty_message("")]
+    #[case::whitespace_message("   ")]
+    #[tokio::test]
+    async fn send_message_stores_image_and_forwards_its_absolute_path(
+        #[case] content: &str,
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": content,
+                    "images": [{
+                        "mimeType": "image/gif",
+                        "size": 6,
+                        "data": "R0lGODlh",
+                    }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let attachment_dir = action_context.temp_dir.path().join("attachments");
+        let path = std::fs::read_dir(&attachment_dir)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path()
+            .canonicalize()
+            .unwrap();
+        let mut response_snapshot = response_snapshot(response, &action_context).await;
+        let path_string = path.display().to_string();
+        let references_saved_path = response_snapshot["calls"][0]["content"]
+            .as_str()
+            .is_some_and(|content| content.trim_end().ends_with(&path_string));
+        let message = response_snapshot["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .replace(&path_string, "<attachment-path>");
+        response_snapshot["calls"][0]["content"] = message.into();
+        let snapshot = || {
+            json!({
+                "response": response_snapshot,
+                "referencesSavedPath": references_saved_path,
+                "attachment": {
+                    "isAbsolute": path.is_absolute(),
+                    "bytes": std::fs::read(&path).unwrap(),
+                },
+            })
+        };
+        let expected_message = if content.trim().is_empty() {
+            indoc::indoc! {"
+                Please inspect the attached image(s):
+                - <attachment-path>
+            "}
+            .trim_end()
+            .to_string()
+        } else {
+            format!(
+                indoc::indoc! {"
+                    {}
+
+                    Attached image(s):
+                    - <attachment-path>
+                "},
+                content
+            )
+            .trim_end()
+            .to_string()
+        };
+        assert_eq!(
+            snapshot(),
+            json!({
+                "response": {
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message,
+                    }],
+                },
+                "referencesSavedPath": true,
+                "attachment": {
+                    "isAbsolute": true,
+                    "bytes": [71, 73, 70, 56, 57, 97],
+                },
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn send_message_removes_saved_images_when_runtime_fails(action_context: ActionContext) {
+        action_context.save_session(&session("sample-session"));
+        action_context.set_message_error("message transport failed");
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": "Inspect this image",
+                    "images": [{
+                        "mimeType": "image/gif",
+                        "size": 6,
+                        "data": "R0lGODlh",
+                    }],
+                }),
+            ))
+            .await
+            .unwrap();
+
+        let mut response = response_snapshot(response, &action_context).await;
+        let message = response["calls"][0]["content"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let path_line = message
+            .lines()
+            .rev()
+            .find(|line| line.starts_with("- "))
+            .unwrap_or_default();
+        let path = path_line.strip_prefix("- ").unwrap_or_default();
+        let path_is_absolute = PathBuf::from(path).is_absolute();
+        response["calls"][0]["content"] = message.replace(path, "<attachment-path>").into();
+        let files_left = std::fs::read_dir(action_context.temp_dir.path().join("attachments"))
+            .map(|entries| entries.count())
+            .unwrap_or_default();
+        let actual = json!({
+            "response": response,
+            "pathIsAbsolute": path_is_absolute,
+            "filesLeft": files_left,
+        });
+        let expected_message = indoc::indoc! {"
+            Inspect this image
+
+            Attached image(s):
+            - <attachment-path>
+        "}
+        .trim_end();
+        assert_eq!(
+            actual,
+            json!({
+                "response": {
+                    "status": StatusCode::BAD_GATEWAY.as_u16(),
+                    "body": { "error": "message transport failed" },
+                    "calls": [{
+                        "kind": "message",
+                        "sessionId": "sample-session",
+                        "content": expected_message,
+                    }],
+                },
+                "pathIsAbsolute": true,
+                "filesLeft": 0,
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::non_image(
+        vec![("application/pdf", 0)],
+        "unsupported image type: application/pdf"
+    )]
+    #[case::oversized(
+        vec![("image/png", image_attachments::MAX_IMAGE_BYTES + 1)],
+        "image attachments exceed the 10 MiB limit"
+    )]
+    #[case::too_many_images(
+        vec![("image/gif", 0); image_attachments::MAX_IMAGES_PER_MESSAGE + 1],
+        "a message cannot include more than 16 image attachments"
+    )]
+    #[case::cumulative_size(
+        vec![("image/png", 6 * 1024 * 1024), ("image/png", 6 * 1024 * 1024)],
+        "image attachments exceed the 10 MiB limit"
+    )]
+    #[tokio::test]
+    async fn send_message_rejects_invalid_image_attachments(
+        #[case] attachments: Vec<(&str, usize)>,
+        #[case] error: &str,
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+
+        let images = attachments
+            .iter()
+            .map(|(mime_type, size)| json!({ "mimeType": mime_type, "size": size, "data": "" }))
+            .collect::<Vec<_>>();
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/messages",
+                json!({
+                    "content": "Inspect this image",
+                    "images": images,
+                }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": error },
+                "calls": [],
             }),
         );
     }

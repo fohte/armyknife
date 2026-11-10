@@ -1,7 +1,7 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
-import type { KeyboardEvent, SubmitEvent } from 'react'
+import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useLayoutEffect, useRef } from 'react'
 
 type MessageComposerProps = {
@@ -11,10 +11,19 @@ type MessageComposerProps = {
   isSending: boolean
   isMobile: boolean
   canInterrupt: boolean
+  attachments: readonly ComposerAttachment[]
   onDraftChange: (draft: string) => void
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void
+  onPasteFiles: (files: File[]) => void
+  onRemoveAttachment: (id: string) => void
   onSend: () => void
   onInterrupt: () => void
+}
+
+export type ComposerAttachment = {
+  id: string
+  name: string
+  previewUrl: string | null
 }
 
 export function MessageComposer({
@@ -24,8 +33,11 @@ export function MessageComposer({
   isSending,
   isMobile,
   canInterrupt,
+  attachments,
   onDraftChange,
   onKeyDown,
+  onPasteFiles,
+  onRemoveAttachment,
   onSend,
   onInterrupt,
 }: MessageComposerProps) {
@@ -50,6 +62,13 @@ export function MessageComposer({
     onSend()
   }
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files)
+    if (files.length === 0) return
+    event.preventDefault()
+    onPasteFiles(files)
+  }
+
   return (
     <form
       className="conversation-composer"
@@ -65,9 +84,32 @@ export function MessageComposer({
           onDraftChange(event.currentTarget.value)
         }}
         onKeyDown={onKeyDown}
+        onPaste={handlePaste}
         disabled={disabled}
         rows={2}
       />
+      {attachments.length > 0 ? (
+        <ul className="composer-attachments" aria-label="Attachments">
+          {attachments.map((attachment) => (
+            <li className="composer-attachment" key={attachment.id}>
+              {attachment.previewUrl === null ? null : (
+                <img src={attachment.previewUrl} alt="" />
+              )}
+              <span>{attachment.name}</span>
+              <Button
+                type="button"
+                variant="plain"
+                aria-label={`Remove ${attachment.name}`}
+                onClick={() => {
+                  onRemoveAttachment(attachment.id)
+                }}
+              >
+                ×
+              </Button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="composer-footer">
         {!isMobile ? (
           <span role={isSending ? 'status' : undefined}>
@@ -92,7 +134,11 @@ export function MessageComposer({
           type="submit"
           variant="plain"
           aria-label="Send message"
-          disabled={draft.trim() === '' || disabled || isSending}
+          disabled={
+            (draft.trim() === '' && attachments.length === 0) ||
+            disabled ||
+            isSending
+          }
         >
           ↑
         </Button>

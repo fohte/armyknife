@@ -25,7 +25,10 @@ pub fn load_plan_if_present(task_id: &str) -> Result<Option<PrSeriesPlan>> {
 
 fn plan_storage() -> Result<PrSeriesPlanStorage> {
     Ok(PrSeriesPlanStorage::new(
-        state_dir()?.join("armyknife").join(PLAN_DIRECTORY),
+        crate::shared::dirs::state_dir()
+            .context("user state directory is unavailable")?
+            .join("armyknife")
+            .join(PLAN_DIRECTORY),
     ))
 }
 
@@ -229,25 +232,6 @@ fn reject_symlink(path: &Path) -> Result<()> {
         Err(error) => Err(error)
             .with_context(|| format!("failed to inspect PR series plan: {}", path.display())),
     }
-}
-
-#[cfg(target_os = "macos")]
-fn state_dir() -> Result<PathBuf> {
-    crate::shared::dirs::home_dir()
-        .map(|home| home.join("Library").join("Application Support"))
-        .context("user state directory is unavailable")
-}
-
-#[cfg(not(target_os = "macos"))]
-fn state_dir() -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os("XDG_STATE_HOME")
-        && !path.is_empty()
-    {
-        return Ok(PathBuf::from(path));
-    }
-    crate::shared::dirs::home_dir()
-        .map(|home| home.join(".local").join("state"))
-        .context("user state directory is unavailable")
 }
 
 fn create_dir_secure(directory: &Path) -> std::io::Result<()> {

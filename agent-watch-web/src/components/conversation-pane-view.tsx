@@ -9,6 +9,7 @@ import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
+import { useComposerMessage } from '#components/use-composer-message'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -19,6 +20,7 @@ type ConversationPaneViewProps = {
   loading: boolean
   sending?: boolean
   error: string | null
+  onClearError?: () => void
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -37,6 +39,7 @@ export function ConversationPaneView({
   loading,
   sending = false,
   error,
+  onClearError = () => undefined,
   onAction,
   onSelectSession,
   isMobile = false,
@@ -45,9 +48,21 @@ export function ConversationPaneView({
 }: ConversationPaneViewProps) {
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
-  const [sendPending, setSendPending] = useState(false)
+  const {
+    attachments,
+    error: attachmentError,
+    isSending,
+    onPasteFiles,
+    removeAttachment,
+    sendMessage,
+  } = useComposerMessage({
+    draft,
+    messageEnabled: actions?.message === true,
+    externalSending: sending,
+    clearDraftIfUnchanged,
+    onAction,
+  })
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
-  const sendingRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
   const activeQuestionIndex = messages.findLastIndex(
@@ -55,31 +70,15 @@ export function ConversationPaneView({
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
-  const isSending = sending || sendPending
   const isReview = session.kind === 'Review'
   const critUrl =
     isReview && session.category === 'needs_action' ? session.critUrl : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
 
-  const sendMessage = () => {
-    if (
-      draft.trim() === '' ||
-      actions?.message !== true ||
-      isSending ||
-      sendingRef.current
-    )
-      return
-    const sentDraft = draft
-    sendingRef.current = true
-    setSendPending(true)
-    void onAction('messages', { content: sentDraft }).then((succeeded) => {
-      if (succeeded) {
-        clearDraftIfUnchanged(sentDraft)
-      }
-      sendingRef.current = false
-      setSendPending(false)
-    })
+  const handlePasteFiles = (files: File[]) => {
+    onPasteFiles(files)
+    onClearError()
   }
 
   const onComposerKeyDown = (
@@ -433,9 +432,10 @@ export function ConversationPaneView({
         })}
       </div>
 
-      {error != null && error !== '' ? (
+      {(error ?? attachmentError) != null &&
+      (error ?? attachmentError) !== '' ? (
         <p className="conversation-error" role="alert">
-          {error}
+          {error ?? attachmentError}
         </p>
       ) : null}
       {!storageAvailable ? (
@@ -454,8 +454,11 @@ export function ConversationPaneView({
         isSending={isSending}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
+        attachments={attachments}
         onDraftChange={updateDraft}
         onKeyDown={onComposerKeyDown}
+        onPasteFiles={handlePasteFiles}
+        onRemoveAttachment={removeAttachment}
         onSend={sendMessage}
         onInterrupt={() => {
           void onAction('interrupt')

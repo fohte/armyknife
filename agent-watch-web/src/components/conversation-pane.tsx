@@ -210,6 +210,9 @@ export function ConversationPane({
       actionsReady={actionsReady}
       loading={loading}
       error={error}
+      onClearError={() => {
+        setError(null)
+      }}
       onAction={onAction}
       onSelectSession={onSelectSession}
       isMobile={isMobile}

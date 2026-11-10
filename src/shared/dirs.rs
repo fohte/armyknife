@@ -24,6 +24,23 @@ pub fn config_dir() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".config"))
 }
 
+/// Returns the user's state directory for application data.
+#[cfg(target_os = "macos")]
+pub fn state_dir() -> Option<PathBuf> {
+    home_dir().map(|home| home.join("Library").join("Application Support"))
+}
+
+/// Returns the user's state directory for application data.
+#[cfg(not(target_os = "macos"))]
+pub fn state_dir() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("XDG_STATE_HOME")
+        && !path.is_empty()
+    {
+        return Some(PathBuf::from(path));
+    }
+    home_dir().map(|home| home.join(".local").join("state"))
+}
+
 /// Returns the value of an environment variable, treating empty strings as unset.
 fn non_empty_env(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.is_empty())
@@ -32,6 +49,8 @@ fn non_empty_env(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(target_os = "macos"))]
+    use rstest::rstest;
 
     #[test]
     fn home_dir_returns_home_env() {
@@ -105,5 +124,38 @@ mod tests {
                 assert_eq!(config_dir(), Some(PathBuf::from("/test/home/.config")));
             },
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn state_dir_uses_application_support_under_home() {
+        temp_env::with_vars(
+            [
+                ("HOME", Some("/test/home")),
+                ("XDG_STATE_HOME", Some("/custom/state")),
+            ],
+            || {
+                assert_eq!(
+                    state_dir(),
+                    Some(PathBuf::from("/test/home/Library/Application Support")),
+                );
+            },
+        );
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[rstest]
+    #[case::xdg_state_home(Some("/custom/state"), Some("/test/home"), Some("/custom/state"))]
+    #[case::empty_xdg_falls_back(Some(""), Some("/test/home"), Some("/test/home/.local/state"))]
+    #[case::home_fallback(None, Some("/test/home"), Some("/test/home/.local/state"))]
+    #[case::no_directory(None, None, None)]
+    fn state_dir_uses_xdg_or_home(
+        #[case] xdg_state_home: Option<&str>,
+        #[case] home: Option<&str>,
+        #[case] expected: Option<&str>,
+    ) {
+        temp_env::with_vars([("XDG_STATE_HOME", xdg_state_home), ("HOME", home)], || {
+            assert_eq!(state_dir(), expected.map(PathBuf::from));
+        });
     }
 }
