@@ -6,7 +6,11 @@ import { BoardView } from '#components/board-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { LaterMenu } from '#components/later-menu'
 import { ResizableColumns } from '#components/resizable-columns'
-import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import {
+  filterInboxSessions,
+  formatInboxFilterQuery,
+  parseInboxFilterQuery,
+} from '#inbox-filter'
 import { useMobileLayout, useMobileNavigation } from '#mobile-layout'
 import {
   getLaterPresetTimes,
@@ -19,6 +23,7 @@ import { useSessionKeyboardNavigation } from '#session-keyboard-navigation'
 import { type LaterPreset, type LaterPresetTimes } from '#session-navigation'
 import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
+import { useSavedInboxViews } from '#use-saved-inbox-views'
 
 export function App() {
   const {
@@ -97,13 +102,20 @@ export function App() {
     ],
     [sessionsWithElapsedTime],
   )
+  const inboxFilters = useMemo(
+    () => parseInboxFilterQuery(inboxFilterQuery),
+    [inboxFilterQuery],
+  )
   const filteredOrderedSessions = useMemo(
-    () =>
-      filterInboxSessions(
-        orderedSessions,
-        parseInboxFilterQuery(inboxFilterQuery),
-      ),
-    [inboxFilterQuery, orderedSessions],
+    () => filterInboxSessions(orderedSessions, inboxFilters),
+    [inboxFilters, orderedSessions],
+  )
+  const normalizedInboxFilterQuery = formatInboxFilterQuery(inboxFilters)
+  const savedViews = useSavedInboxViews(
+    sessionsWithElapsedTime,
+    normalizedInboxFilterQuery,
+    view === 'inbox',
+    setError,
   )
   const navigableSessions = useMemo(
     () =>
@@ -341,6 +353,15 @@ export function App() {
     },
     [navigate],
   )
+  const selectInboxSavedView = useCallback(
+    (id: string) => {
+      const query = savedViews.selectView(id)
+      if (query === null) return
+      setInboxFilterQuery(query)
+      navigate((current) => ({ ...current, view: 'inbox' }))
+    },
+    [navigate, savedViews.selectView],
+  )
   const { showConversation: showMobileConversation } = useMobileNavigation({
     isMobile,
     conversationOpen: mobileConversationOpen,
@@ -351,12 +372,21 @@ export function App() {
     setConversationOpen,
   })
   const inboxProps = {
-    error,
+    error: error ?? savedViews.storageError,
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,
     filterQuery: inboxFilterQuery,
     onFilterQueryChange: setInboxFilterQuery,
+    saveViewOpen: savedViews.saveViewOpen,
+    saveViewName: savedViews.saveViewName,
+    onSaveViewOpenChange: savedViews.setSaveViewOpen,
+    onSaveViewNameChange: savedViews.setSaveViewName,
+    onSaveView: savedViews.saveView,
+    savedViews: savedViews.savedViewsForNav,
+    selectedSavedViewId: savedViews.activeSavedViewId,
+    onSelectSavedView: selectInboxSavedView,
+    onDeleteSavedView: savedViews.deleteView,
     showAllInProgress,
     onShowMore: () => {
       setShowAllInProgress(true)
@@ -383,11 +413,15 @@ export function App() {
     <AgentWatchNav
       activeView={view}
       needsActionCount={needsActionCount}
+      savedViews={savedViews.savedViewsForNav}
+      selectedSavedViewId={savedViews.activeSavedViewId}
       todaySessions={todaySessions}
       workTypeNavGroups={workTypeNavGroups}
       onViewChange={(nextView) => {
         navigate((current) => ({ ...current, view: nextView }))
       }}
+      onSelectSavedView={selectInboxSavedView}
+      onDeleteSavedView={savedViews.deleteView}
       onSelectToday={openSessionInInbox}
       onSelectSession={openSessionInInbox}
     />
