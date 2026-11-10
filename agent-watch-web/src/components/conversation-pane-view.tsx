@@ -10,6 +10,7 @@ import { MessageComposer } from '#components/message-composer'
 import { QuestionCard } from '#components/question-card'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
+import { SessionTaskLinks } from '#components/session-task-links'
 import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
@@ -88,6 +89,8 @@ export function ConversationPaneView({
     isReview && session.category === 'needs_action' ? session.critUrl : null
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
+  const linkedTasks =
+    session.tasks ?? (session.task === null ? [] : [session.task])
 
   const handlePasteFiles = (files: File[]) => {
     onPasteFiles(files)
@@ -230,15 +233,13 @@ export function ConversationPaneView({
             </Button>
             <div className="mobile-conversation-heading">
               <div className="mobile-conversation-context">
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                {session.task ? <span aria-hidden="true">·</span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
-                task={session.task}
-                tasks={
-                  session.tasks ?? (session.task === null ? [] : [session.task])
-                }
               />
             </div>
             <CopySessionIdControl sessionId={session.id} compact />
@@ -255,6 +256,7 @@ export function ConversationPaneView({
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
+                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}
@@ -279,10 +281,6 @@ export function ConversationPaneView({
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
-                task={session.task}
-                tasks={
-                  session.tasks ?? (session.task === null ? [] : [session.task])
-                }
               />
             </div>
             <div className="conversation-header-actions">

@@ -2,7 +2,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
-import { SessionHeading } from '#components/session-heading'
+import { SessionTaskLinks } from '#components/session-task-links'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -12,10 +12,9 @@ function snapshot() {
     expanded: container.querySelector('details')?.open,
     primary: {
       href: container
-        .querySelector('.session-heading-task-line > a')
+        .querySelector('.session-task-line > a')
         ?.getAttribute('href'),
-      text: container.querySelector('.session-heading-task-line > a')
-        ?.textContent,
+      text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
     linkedTasks: Array.from(
@@ -53,9 +52,7 @@ it('lists all linked tasks and marks completed tasks', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <SessionHeading
-        title="Investigate a failing build"
-        isPaused={false}
+      <SessionTaskLinks
         task={task}
         tasks={[
           task,
