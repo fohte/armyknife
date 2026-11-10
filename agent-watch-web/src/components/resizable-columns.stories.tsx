@@ -56,6 +56,8 @@ export const NavigationHasAnAdjustableBoundary: Story = {
       <AgentWatchNav
         activeView="inbox"
         needsActionCount={1}
+        savedViews={[]}
+        selectedSavedViewId={null}
         todaySessions={[todaySession]}
         workTypeNavGroups={[
           {
@@ -71,6 +73,8 @@ export const NavigationHasAnAdjustableBoundary: Story = {
           },
         ]}
         onViewChange={() => undefined}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
         onSelectToday={() => undefined}
         onSelectSession={() => undefined}
         onOpenPalette={() => undefined}

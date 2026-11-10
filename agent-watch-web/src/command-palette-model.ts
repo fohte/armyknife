@@ -5,27 +5,27 @@ import type { Session } from '#types'
 export type PaletteScope =
   'all' | 'sessions' | 'tasks' | 'projects' | 'commands'
 
-export type PaletteSessionItem = {
+type PaletteSessionItem = {
   type: 'session'
   id: string
   session: Session
 }
 
-export type PaletteTaskItem = {
+type PaletteTaskItem = {
   type: 'task'
   id: string
   task: NonNullable<Session['task']>
   sessions: Session[]
 }
 
-export type PaletteProjectItem = {
+type PaletteProjectItem = {
   type: 'project'
   id: string
   name: string
   sessions: Session[]
 }
 
-export type PaletteCommandItem = {
+type PaletteCommandItem = {
   type: 'command'
   id: string
   label: string

@@ -59,7 +59,7 @@ type MobileNavigationOptions = {
   setConversationOpen: (open: boolean) => void
 }
 
-export function useMobileNavigation({
+function useMobileNavigation({
   isMobile,
   conversationOpen,
   navigableSessions,

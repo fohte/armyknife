@@ -26,6 +26,8 @@ const meta = {
   args: {
     activeView: 'inbox',
     needsActionCount: 3,
+    savedViews: [],
+    selectedSavedViewId: null,
     workTypeNavGroups: [
       {
         label: 'Guides',
@@ -56,6 +58,8 @@ const meta = {
       },
     ],
     onViewChange: () => undefined,
+    onSelectSavedView: () => undefined,
+    onDeleteSavedView: () => undefined,
     todaySessions: [todaySession],
     onSelectToday: () => undefined,
     onSelectSession: () => undefined,
@@ -78,4 +82,46 @@ export const BoardIsSelected: Story = {
 export const NoWorkTypeIsConfigured: Story = {
   name: 'No work type list appears when no display labels are configured',
   args: { workTypeNavGroups: [] },
+}
+
+export const NoSavedViews: Story = {
+  name: 'The navigation hides the views section when no views are saved',
+}
+
+export const SavedViewsShowCountsAndStatusColors: Story = {
+  name: 'Saved views show matching session counts in their status colors',
+  args: {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+      {
+        id: 'errors',
+        name: 'Errors',
+        query: 'kind:error',
+        count: 1,
+        countTone: 'error',
+      },
+    ],
+  },
+}
+
+export const AViewIsSelected: Story = {
+  name: 'The selected saved view is highlighted in the navigation',
+  args: {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    selectedSavedViewId: 'reviews',
+  },
 }

@@ -3,17 +3,27 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
+import { Filter, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import { cn } from '#lib/utils'
+import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
+type SavedViewNavItem = SavedInboxView & {
+  count: number
+  countTone: 'needs-action' | 'error' | null
+}
 type AgentWatchNavProps = {
   activeView: View
   needsActionCount: number
+  savedViews: readonly SavedViewNavItem[]
+  selectedSavedViewId: string | null
   workTypeNavGroups: readonly WorkTypeNavGroup[]
   onViewChange: (view: View) => void
+  onSelectSavedView: (id: string) => void
+  onDeleteSavedView: (id: string) => void
   todaySessions: readonly Session[]
   onSelectToday: (id: string) => void
   onSelectSession: (id: string) => void
@@ -23,8 +33,12 @@ type AgentWatchNavProps = {
 export function AgentWatchNav({
   activeView,
   needsActionCount,
+  savedViews,
+  selectedSavedViewId,
   workTypeNavGroups,
   onViewChange,
+  onSelectSavedView,
+  onDeleteSavedView,
   todaySessions,
   onSelectToday,
   onSelectSession,
@@ -79,6 +93,55 @@ export function AgentWatchNav({
           Board
         </Button>
       </div>
+      {savedViews.length > 0 ? (
+        <section
+          className="saved-views-nav"
+          aria-labelledby="saved-views-title"
+        >
+          <h2 id="saved-views-title">VIEWS</h2>
+          <ul>
+            {savedViews.map((savedView) => (
+              <li key={savedView.id} className="saved-view-item">
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-pressed={selectedSavedViewId === savedView.id}
+                  className={cn(
+                    'saved-view-link cursor-pointer',
+                    selectedSavedViewId === savedView.id && 'is-active',
+                  )}
+                  onClick={() => {
+                    onSelectSavedView(savedView.id)
+                  }}
+                >
+                  <Filter aria-hidden="true" size={13} />
+                  <span className="saved-view-name">{savedView.name}</span>
+                  <span
+                    className={cn(
+                      'saved-view-count',
+                      savedView.countTone !== null &&
+                        `is-${savedView.countTone}`,
+                    )}
+                  >
+                    {savedView.count}
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  variant="plain"
+                  aria-label={`Delete ${savedView.name} view`}
+                  className="saved-view-delete cursor-pointer"
+                  onClick={() => {
+                    onDeleteSavedView(savedView.id)
+                  }}
+                >
+                  <X aria-hidden="true" size={13} />
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <section className="today-nav" aria-labelledby="today-nav-title">
         <h2 id="today-nav-title">TODAY</h2>
         {todaySessions.map((session) => (

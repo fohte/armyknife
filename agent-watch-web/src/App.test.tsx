@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { App } from '#App'
+import { readSavedInboxViews } from '#saved-inbox-views'
 import type { Session, SessionsResponse } from '#types'
 
 const capturedFeed = vi.hoisted(() => ({
@@ -700,6 +701,7 @@ beforeEach(() => {
   vi.stubGlobal('matchMedia', matchMediaMock)
   mobileViewportMatches = false
   window.history.replaceState(null, '', '/')
+  window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   mediaQueries.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -716,9 +718,366 @@ afterEach(() => {
   root = null
   window.localStorage.removeItem('agent-watch:navigation-width')
   container.remove()
+  window.localStorage.removeItem('agent-watch-web:saved-inbox-views')
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+})
+
+it('saves a filtered view, restores it, and opens it from navigation', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const persistedView = readSavedInboxViews().views.map(({ name, query }) => ({
+    name,
+    query,
+  }))
+
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
+  })
+
+  const snapshot = () => ({
+    persistedView,
+    savedViewNames: Array.from(
+      container.querySelectorAll('.saved-view-name'),
+      (element) => element.textContent,
+    ),
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    activeView: readActiveView(),
+    visibleTitles: readSessionTitles(),
+  })
+
+  expect(snapshot()).toEqual({
+    persistedView: [{ name: 'Worker reviews', query: 'project:worker' }],
+    savedViewNames: ['Worker reviews'],
+    selectedView: 'true',
+    activeView: 'Inbox',
+    visibleTitles: ['Worker project session'],
+  })
+})
+
+it('deletes a saved view from navigation and storage', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      {
+        id: 'saved-view',
+        name: 'Sample reviews',
+        query: 'project:sample-project',
+      },
+    ]),
+  )
+  renderApp()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    savedViewItems: container.querySelectorAll('.saved-view-item').length,
+    storedViews: window.localStorage.getItem(
+      'agent-watch-web:saved-inbox-views',
+    ),
+  })
+
+  expect(snapshot()).toEqual({ savedViewItems: 0, storedViews: '[]' })
+})
+
+it('clears the saved view highlight when the inbox filter changes', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      {
+        name: 'Sample reviews',
+        query: 'project:sample-project',
+      },
+    ]),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample-project',
+      ),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Remove Project filter"]')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    activeView: readActiveView(),
+    filterChips: container.querySelector('.inbox-filter-chips'),
+  })
+
+  expect(snapshot()).toEqual({
+    selectedView: 'false',
+    activeView: 'Inbox',
+    filterChips: null,
+  })
+})
+
+it('opens saved views from the mobile inbox', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([{ name: 'Worker reviews', query: 'project:worker' }]),
+  )
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session(
+        'session-sample',
+        'Sample project session',
+        'needs_action',
+        8,
+        'sample-project',
+      ),
+      session(
+        'session-worker',
+        'Worker project session',
+        'needs_action',
+        8,
+        'worker',
+      ),
+    ],
+  })
+  act(() => {
+    setMobileViewport(true)
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    viewNames: Array.from(
+      container.querySelectorAll('.mobile-saved-view-name'),
+      (element) => element.textContent,
+    ),
+    selectedView: container
+      .querySelector<HTMLButtonElement>('.mobile-saved-view-link')
+      ?.getAttribute('aria-pressed'),
+    visibleTitles: readSessionTitles(),
+  })
+
+  expect(snapshot()).toEqual({
+    viewNames: ['Worker reviews'],
+    selectedView: 'true',
+    visibleTitles: ['Worker project session'],
+  })
+})
+
+it('reports a failed save without adding the view', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-worker', 'Worker session', 'needs_action', 8, 'worker'),
+    ],
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('Storage is unavailable')
+  })
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.load-message.is-error')?.textContent,
+    savedViews: container.querySelectorAll('.saved-view-item').length,
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not save the view.',
+    savedViews: 0,
+  })
+})
+
+it('reports a failed delete and keeps the saved view visible', () => {
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([
+      { name: 'Sample reviews', query: 'project:sample-project' },
+    ]),
+  )
+  renderApp()
+  vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    throw new Error('Storage is unavailable')
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>(
+        '[aria-label="Delete Sample reviews view"]',
+      )
+      ?.click()
+  })
+
+  const snapshot = () => ({
+    message: container.querySelector('.load-message.is-error')?.textContent,
+    savedViewNames: Array.from(
+      container.querySelectorAll('.saved-view-name'),
+      (element) => element.textContent,
+    ),
+    stored: readSavedInboxViews().views.map(({ name, query }) => ({
+      name,
+      query,
+    })),
+  })
+
+  expect(snapshot()).toEqual({
+    message: 'Could not delete the view.',
+    savedViewNames: ['Sample reviews'],
+    stored: [{ name: 'Sample reviews', query: 'project:sample-project' }],
+  })
+})
+
+it('preserves views written to storage after this tab was opened', async () => {
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-worker', 'Worker session', 'needs_action', 8, 'worker'),
+    ],
+  })
+  window.localStorage.setItem(
+    'agent-watch-web:saved-inbox-views',
+    JSON.stringify([{ name: 'Existing', query: 'project:existing' }]),
+  )
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-filter-open')?.click()
+  })
+  const filterInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Inbox filter query"]',
+  )
+  if (filterInput === null) throw new Error('Expected the filter input')
+  await act(async () => {
+    await userEvent.fill(filterInput, 'project:worker')
+    await userEvent.keyboard('{Enter}')
+  })
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.inbox-save-view')?.click()
+  })
+  const nameInput = container.querySelector<HTMLInputElement>(
+    '[aria-label="Saved view name"]',
+  )
+  if (nameInput === null) throw new Error('Expected the saved view name input')
+  await act(async () => {
+    await userEvent.fill(nameInput, 'Worker reviews')
+    await userEvent.keyboard('{Enter}')
+  })
+
+  const snapshot = () =>
+    readSavedInboxViews().views.map(({ name, query }) => ({ name, query }))
+
+  expect(snapshot()).toEqual([
+    { name: 'Existing', query: 'project:existing' },
+    { name: 'Worker reviews', query: 'project:worker' },
+  ])
 })
 
 it('switches between the Inbox and conversation at the mobile breakpoint', () => {
