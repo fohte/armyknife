@@ -1,15 +1,51 @@
 import { Button } from '@fohte/ui/button'
+import { ResultAsync } from 'neverthrow'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { MarkdownMessage } from '#components/markdown-message'
-import { MessageComposer } from '#components/message-composer'
+import {
+  type ComposerAttachment,
+  MessageComposer,
+} from '#components/message-composer'
 import { renderConversationCritColumns } from '#components/resizable-columns'
 import { SessionHeading } from '#components/session-heading'
 import { ToolSummary } from '#components/tool-summary'
 import { useComposerDraft } from '#components/use-composer-draft'
 import type { ChatItem, Session, SessionActions } from '#types'
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const PREVIEW_MIME_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+])
+
+type SelectedAttachment = ComposerAttachment & { file: File }
+
+function encodeAttachment(file: File) {
+  if (file.size > MAX_IMAGE_BYTES) {
+    return Promise.resolve({ mimeType: file.type, size: file.size, data: '' })
+  }
+  return file.arrayBuffer().then((buffer) => {
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000))
+    }
+    return {
+      mimeType: file.type,
+      size: file.size,
+      data: window.btoa(binary),
+    }
+  })
+}
+
+function toError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
+}
 
 type ConversationPaneViewProps = {
   session: Session
@@ -46,10 +82,14 @@ export function ConversationPaneView({
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
   const [sendPending, setSendPending] = useState(false)
+  const [attachments, setAttachments] = useState<SelectedAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const followLatestRef = useRef(true)
+  const attachmentsRef = useRef(attachments)
+  attachmentsRef.current = attachments
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
   )
@@ -62,24 +102,90 @@ export function ConversationPaneView({
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
 
+  useEffect(
+    () => () => {
+      attachmentsRef.current.forEach((attachment) => {
+        if (attachment.previewUrl !== null) {
+          URL.revokeObjectURL(attachment.previewUrl)
+        }
+      })
+    },
+    [],
+  )
+
+  const addAttachments = (files: File[]) => {
+    const added = files.map((file) => ({
+      id: crypto.randomUUID(),
+      name: file.name || 'Pasted file',
+      file,
+      previewUrl: PREVIEW_MIME_TYPES.has(file.type)
+        ? URL.createObjectURL(file)
+        : null,
+    }))
+    setAttachments((current) => [...current, ...added])
+    setAttachmentError(null)
+  }
+
+  const removeAttachment = (id: string) => {
+    const removed = attachments.find((attachment) => attachment.id === id)
+    if (removed?.previewUrl !== null && removed?.previewUrl !== undefined) {
+      URL.revokeObjectURL(removed.previewUrl)
+    }
+    setAttachments(attachments.filter((attachment) => attachment.id !== id))
+  }
+
   const sendMessage = () => {
     if (
-      draft.trim() === '' ||
+      (draft.trim() === '' && attachments.length === 0) ||
       actions?.message !== true ||
       isSending ||
       sendingRef.current
     )
       return
     const sentDraft = draft
+    const sentAttachments = attachments
     sendingRef.current = true
     setSendPending(true)
-    void onAction('messages', { content: sentDraft }).then((succeeded) => {
-      if (succeeded) {
-        clearDraftIfUnchanged(sentDraft)
-      }
+    const finishSending = () => {
       sendingRef.current = false
       setSendPending(false)
-    })
+    }
+    if (sentAttachments.length === 0) {
+      void onAction('messages', { content: sentDraft }).then((succeeded) => {
+        if (succeeded) clearDraftIfUnchanged(sentDraft)
+        finishSending()
+      })
+      return
+    }
+    void ResultAsync.fromPromise(
+      Promise.all(sentAttachments.map(({ file }) => encodeAttachment(file))),
+      toError,
+    ).match(
+      async (images) => {
+        const succeeded = await onAction('messages', {
+          content: sentDraft,
+          images,
+        })
+        if (succeeded) {
+          clearDraftIfUnchanged(sentDraft)
+          const sentIds = new Set(sentAttachments.map(({ id }) => id))
+          sentAttachments.forEach((attachment) => {
+            if (attachment.previewUrl !== null) {
+              URL.revokeObjectURL(attachment.previewUrl)
+            }
+          })
+          setAttachments((current) =>
+            current.filter((attachment) => !sentIds.has(attachment.id)),
+          )
+          setAttachmentError(null)
+        }
+        finishSending()
+      },
+      (error) => {
+        setAttachmentError(error.message)
+        finishSending()
+      },
+    )
   }
 
   const onComposerKeyDown = (
@@ -433,9 +539,10 @@ export function ConversationPaneView({
         })}
       </div>
 
-      {error != null && error !== '' ? (
+      {(error ?? attachmentError) != null &&
+      (error ?? attachmentError) !== '' ? (
         <p className="conversation-error" role="alert">
-          {error}
+          {error ?? attachmentError}
         </p>
       ) : null}
       {!storageAvailable ? (
@@ -454,8 +561,11 @@ export function ConversationPaneView({
         isSending={isSending}
         isMobile={isMobile}
         canInterrupt={actions?.interrupt === true}
+        attachments={attachments}
         onDraftChange={updateDraft}
         onKeyDown={onComposerKeyDown}
+        onPasteFiles={addAttachments}
+        onRemoveAttachment={removeAttachment}
         onSend={sendMessage}
         onInterrupt={() => {
           void onAction('interrupt')

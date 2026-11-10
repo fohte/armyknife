@@ -26,6 +26,49 @@
   color: var(--muted-foreground-ghost);
 }
 
+.composer-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0 12px 8px;
+  list-style: none;
+}
+
+.composer-attachment {
+  display: flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border: 1px solid #3f3f46;
+  border-radius: 6px;
+  color: #d4d4d8;
+  font-size: 12px;
+}
+
+.composer-attachment img {
+  width: 44px;
+  height: 36px;
+  border-radius: 3px;
+  object-fit: cover;
+}
+
+.composer-attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment [data-slot='button'] {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  background: transparent;
+  color: #d4d4d8;
+  font-size: 16px;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;

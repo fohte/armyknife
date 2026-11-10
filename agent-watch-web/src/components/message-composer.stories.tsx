@@ -11,8 +11,11 @@ const meta = {
     isSending: false,
     isMobile: false,
     canInterrupt: false,
+    attachments: [],
     onDraftChange: () => undefined,
     onKeyDown: () => undefined,
+    onPasteFiles: () => undefined,
+    onRemoveAttachment: () => undefined,
     onSend: () => undefined,
     onInterrupt: () => undefined,
   },
@@ -37,6 +40,20 @@ export const ComposerWithDraft: Story = {
   args: {
     draft:
       'Add bounded retries to the request client. Keep the original error when all attempts fail, and make the delay grow between attempts.',
+  },
+}
+
+export const ComposerWithImageAttachment: Story = {
+  name: 'The composer shows a pasted image before sending',
+  args: {
+    attachments: [
+      {
+        id: 'image-1',
+        name: 'screenshot.gif',
+        previewUrl:
+          'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=',
+      },
+    ],
   },
 }
 
