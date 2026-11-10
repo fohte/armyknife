@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.539](https://github.com/fohte/armyknife/compare/v0.1.538...v0.1.539) (2026-11-10)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** trim list markers and links ([#1430](https://github.com/fohte/armyknife/issues/1430)) ([789517c](https://github.com/fohte/armyknife/commit/789517c015730dc697679fe8acfda273d812a2da))
+
 ## [0.1.538](https://github.com/fohte/armyknife/compare/v0.1.537...v0.1.538) (2026-11-10)
 
 
