@@ -14,12 +14,18 @@ function renderNav(
   selectedSavedViewId: string | null = null,
   onSelectSavedView: (id: string) => void = () => undefined,
   onDeleteSavedView: (id: string) => void = () => undefined,
+  paletteShortcut: ComponentProps<typeof AgentWatchNav>['paletteShortcut'] = {
+    modifier: 'ctrlKey',
+    label: 'Ctrl K',
+    ariaLabel: 'Control K',
+  },
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <AgentWatchNav
         activeView="inbox"
+        paletteShortcut={paletteShortcut}
         needsActionCount={0}
         savedViews={savedViews}
         selectedSavedViewId={selectedSavedViewId}
@@ -103,6 +109,51 @@ it('renders no work type sections without configured groups', () => {
     ),
   ).toEqual([])
 })
+
+it.each([
+  {
+    platform: 'macOS',
+    paletteShortcut: {
+      modifier: 'metaKey',
+      label: '⌘K',
+      ariaLabel: 'Command K',
+    },
+    label: '⌘K',
+    ariaLabel: 'Jump to with Command K',
+  },
+  {
+    platform: 'other platforms',
+    paletteShortcut: {
+      modifier: 'ctrlKey',
+      label: 'Ctrl K',
+      ariaLabel: 'Control K',
+    },
+    label: 'Ctrl K',
+    ariaLabel: 'Jump to with Control K',
+  },
+] as const)(
+  'shows the $label shortcut on $platform',
+  ({ paletteShortcut, label, ariaLabel }) => {
+    renderNav(
+      [],
+      () => undefined,
+      [],
+      null,
+      () => undefined,
+      () => undefined,
+      paletteShortcut,
+    )
+
+    const shortcut = container.querySelector<HTMLButtonElement>(
+      '.agent-watch-command-key',
+    )
+    const snapshot = () => ({
+      label: shortcut?.textContent,
+      ariaLabel: shortcut?.getAttribute('aria-label'),
+    })
+    expect(snapshot()).toEqual({ label, ariaLabel })
+  },
+)
 
 it('selects the active saved view and shows its needs-action count color', () => {
   const onSelectSavedView = vi.fn<(id: string) => void>()
