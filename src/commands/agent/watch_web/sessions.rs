@@ -71,6 +71,7 @@ struct PullRequestView {
 struct SessionView {
     id: String,
     engine: Engine,
+    work_type: Option<String>,
     category: SessionCategory,
     category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
@@ -94,6 +95,7 @@ struct SessionView {
 #[serde(rename_all = "camelCase")]
 struct SessionsResponse {
     revision: i64,
+    work_type_nav_labels: HashMap<String, String>,
     sessions: Vec<SessionView>,
 }
 
@@ -233,6 +235,7 @@ async fn list_sessions<S: SessionSource>(
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
+                work_type: session.work_type.clone(),
                 category,
                 category_when_not_later,
                 kind: kind_for(session, turn),
@@ -269,8 +272,21 @@ async fn list_sessions<S: SessionSource>(
 
     sort_session_views(&mut sessions);
 
+    let work_type_nav_labels = snapshot
+        .agent_config
+        .work_types
+        .iter()
+        .filter_map(|(work_type, config)| {
+            config
+                .nav_label
+                .as_ref()
+                .map(|label| (work_type.clone(), label.clone()))
+        })
+        .collect();
+
     Ok(Json(SessionsResponse {
         revision: snapshot.revision,
+        work_type_nav_labels,
         sessions,
     }))
 }
@@ -605,7 +621,10 @@ fn sort_session_views(sessions: &mut [SessionView]) {
 mod tests {
     use super::*;
     use crate::commands::agent::types::{AgentStatus, TmuxInfo};
-    use crate::shared::config::{AgentStatusConfig, AgentStatusState};
+    use crate::shared::config::{
+        AgentStatusConfig, AgentStatusState, AgentWorkTypeColor, AgentWorkTypeConfig,
+        AgentWorkTypeNamedColor,
+    };
     use axum::body::{Body, to_bytes};
     use axum::http::{Request, StatusCode};
     use chrono::TimeZone;
@@ -660,6 +679,7 @@ mod tests {
         SessionView {
             id: id.to_string(),
             engine: Engine::Claude,
+            work_type: None,
             category,
             category_when_not_later: category,
             kind: None,
@@ -698,6 +718,7 @@ mod tests {
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
+        work_type_nav_labels: HashMap<String, String>,
         now: DateTime<Utc>,
     }
 
@@ -709,7 +730,23 @@ mod tests {
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
-                agent_config: AgentConfig::default(),
+                agent_config: AgentConfig {
+                    work_types: self
+                        .work_type_nav_labels
+                        .iter()
+                        .map(|(work_type, nav_label)| {
+                            (
+                                work_type.clone(),
+                                AgentWorkTypeConfig {
+                                    icon: "◇".to_string(),
+                                    color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                                    nav_label: Some(nav_label.clone()),
+                                },
+                            )
+                        })
+                        .collect(),
+                    ..AgentConfig::default()
+                },
             })
         }
 
@@ -809,6 +846,7 @@ mod tests {
                     url: "https://example.com/pull/42".to_string(),
                 }),
             )]),
+            work_type_nav_labels: HashMap::new(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
     }
@@ -875,26 +913,34 @@ mod tests {
         crit_url: Option<&'a str>,
     }
 
+    struct ExpectedSessionResponse<'a> {
+        work_type: Option<&'a str>,
+        work_type_nav_labels: serde_json::Value,
+        updated_at: &'a str,
+        elapsed_seconds: u64,
+    }
+
     fn expected_response(
         category: &str,
         later_until: Option<&str>,
         is_today: bool,
         details: ExpectedSessionDetails<'_>,
-        updated_at: &str,
-        elapsed_seconds: u64,
+        response: ExpectedSessionResponse<'_>,
     ) -> serde_json::Value {
         serde_json::json!({
             "revision": 7,
+            "workTypeNavLabels": response.work_type_nav_labels,
             "sessions": [{
                 "id": "child-session",
                 "engine": "claude",
+                "workType": response.work_type,
                 "category": category,
                 "categoryWhenNotLater": "needs_action",
                 "kind": details.kind,
                 "title": "child title",
                 "preview": "last message",
-                "updatedAt": updated_at,
-                "elapsedSeconds": elapsed_seconds,
+                "updatedAt": response.updated_at,
+                "elapsedSeconds": response.elapsed_seconds,
                 "unread": details.unread,
                 "task": {
                     "id": "task-id",
@@ -927,6 +973,10 @@ mod tests {
         source.web_states[0].is_today = false;
         source.sessions[0].status = SessionStatus::WaitingInput;
         source.sessions[0].crit_urls = vec!["http://127.0.0.1:6000".to_string()];
+        source.sessions[0].work_type = Some("release-guide".to_string());
+        source
+            .work_type_nav_labels
+            .insert("release-guide".to_string(), "Guides".to_string());
 
         assert_eq!(
             sessions_response(source).await,
@@ -941,8 +991,12 @@ mod tests {
                         unread: false,
                         crit_url: Some("http://127.0.0.1:6000"),
                     },
-                    "1970-01-01T00:16:40Z",
-                    100,
+                    ExpectedSessionResponse {
+                        work_type: Some("release-guide"),
+                        work_type_nav_labels: serde_json::json!({"release-guide": "Guides"}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
                 ),
             ),
         );
@@ -964,8 +1018,12 @@ mod tests {
                         unread: true,
                         crit_url: None,
                     },
-                    "1970-01-01T00:16:40Z",
-                    100,
+                    ExpectedSessionResponse {
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                    },
                 ),
             ),
         );
@@ -991,8 +1049,12 @@ mod tests {
                         unread: true,
                         crit_url: None,
                     },
-                    "1970-01-01T00:16:40Z",
-                    3_700,
+                    ExpectedSessionResponse {
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 3_700,
+                    },
                 ),
             ),
         );
@@ -1025,8 +1087,12 @@ mod tests {
                             unread: true,
                             crit_url: None,
                         },
-                        "1970-01-01T00:16:40Z",
-                        100,
+                        ExpectedSessionResponse {
+                            work_type: None,
+                            work_type_nav_labels: serde_json::json!({}),
+                            updated_at: "1970-01-01T00:16:40Z",
+                            elapsed_seconds: 100,
+                        },
                     ),
                 ),
                 (
@@ -1040,8 +1106,12 @@ mod tests {
                             unread: true,
                             crit_url: None,
                         },
-                        "1970-01-01T00:16:41Z",
-                        99,
+                        ExpectedSessionResponse {
+                            work_type: None,
+                            work_type_nav_labels: serde_json::json!({}),
+                            updated_at: "1970-01-01T00:16:41Z",
+                            elapsed_seconds: 99,
+                        },
                     ),
                 ),
             ),

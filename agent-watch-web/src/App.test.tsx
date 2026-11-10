@@ -27,12 +27,14 @@ function session(
   title: string,
   category: Session['category'] = 'needs_action',
   elapsedSeconds = 8,
-  project = 'service refresh',
+  project = 'sample project',
   parent: Session['parent'] = null,
   ancestorSessionIds = parent === null ? [] : [parent.id],
+  workType: string | null = null,
 ): Session {
   return {
     id,
+    workType,
     category,
     kind: category === 'needs_action' ? 'Question' : null,
     title,
@@ -50,18 +52,37 @@ function session(
 
 function projectSessions(): Session[] {
   return [
-    session('session-pm', 'Project manager', 'in_progress', 30),
+    session(
+      'session-guide-old',
+      'Review the release notes',
+      'in_progress',
+      30,
+      'sample project',
+      null,
+      [],
+      'release-guide',
+    ),
     session(
       'session-worker',
       'Handle an alert',
       'needs_action',
       8,
-      'service refresh',
+      'sample project',
       {
-        id: 'session-owner',
-        title: 'Project owner',
+        id: 'session-parent',
+        title: 'Session parent',
       },
-      ['session-pm', 'session-owner'],
+      ['session-guide-old', 'session-parent'],
+    ),
+    session(
+      'session-guide-new',
+      'Prepare a launch checklist',
+      'needs_action',
+      8,
+      'sample project',
+      null,
+      [],
+      'release-guide',
     ),
   ]
 }
@@ -80,15 +101,15 @@ const openSessionCases = [
     activation: 'keyboard',
   },
   {
-    target: 'project PM row',
-    selector: '[aria-label="Open service refresh PM session in Inbox"]',
-    expectedTitle: 'Project manager',
+    target: 'configured work type row',
+    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    expectedTitle: 'Prepare a launch checklist',
     activation: 'click',
   },
   {
-    target: 'project PM row',
-    selector: '[aria-label="Open service refresh PM session in Inbox"]',
-    expectedTitle: 'Project manager',
+    target: 'configured work type row',
+    selector: '[aria-label="Open sample project Guides session in Inbox"]',
+    expectedTitle: 'Prepare a launch checklist',
     activation: 'keyboard',
   },
 ] as const
@@ -206,7 +227,11 @@ it.each(openSessionCases)(
   'opens $target in Inbox with $activation activation',
   async ({ selector, expectedTitle, activation }) => {
     renderApp()
-    publishSessions({ revision: 1, sessions: projectSessions() })
+    publishSessions({
+      revision: 1,
+      sessions: projectSessions(),
+      workTypeNavLabels: { 'release-guide': 'Guides' },
+    })
     act(() => {
       dispatchKey(window, 'B', { shiftKey: true })
     })
@@ -235,28 +260,26 @@ it.each(openSessionCases)(
   },
 )
 
-it('disables a PM row when its project has no PM session', () => {
+it('omits the work type list when no display labels are configured', () => {
   renderApp()
   publishSessions({
     revision: 1,
-    sessions: [session('session-alone', 'Unmanaged session')],
-  })
-  act(() => {
-    dispatchKey(window, 'B', { shiftKey: true })
+    sessions: [
+      session(
+        'session-guide',
+        'Prepare a launch checklist',
+        'needs_action',
+        8,
+        'sample project',
+        null,
+        [],
+        'release-guide',
+      ),
+    ],
+    workTypeNavLabels: {},
   })
 
-  const pmButton = container.querySelector<HTMLButtonElement>('.pm-project')
-  const disabled = pmButton?.disabled
-  act(() => {
-    pmButton?.click()
-  })
-
-  const snapshot = () => ({ disabled, activeView: readActiveView() })
-
-  expect(snapshot()).toEqual({
-    disabled: true,
-    activeView: 'Board',
-  })
+  expect(container.querySelectorAll('.work-type-nav')).toHaveLength(0)
 })
 
 const laterPresetTimes = {
@@ -340,7 +363,7 @@ function publishSessions(response: SessionsResponse) {
   }
 
   act(() => {
-    onSessions(response)
+    onSessions({ workTypeNavLabels: {}, ...response })
   })
 }
 

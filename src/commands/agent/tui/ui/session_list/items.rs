@@ -347,7 +347,7 @@ pub(super) fn tree_branch_text(tree_prefix: Option<&[bool]>, is_last_sibling: bo
     branch
 }
 
-/// `◐ {user turns}/{children}` on roots that have children (PM-style rows).
+/// `◐ {user turns}/{children}` on roots that have children.
 fn child_badge_text(child_count: usize, child_user_turn_count: usize) -> String {
     if child_count == 0 {
         String::new()

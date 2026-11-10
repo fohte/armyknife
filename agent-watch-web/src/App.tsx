@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
-import { buildBoardProjects, sortPmProjects } from '#board-model'
+import { buildBoardProjects, buildWorkTypeNavGroups } from '#board-model'
 import { AgentWatchNav } from '#components/agent-watch-nav'
 import { BoardView } from '#components/board-view'
 import { ConversationPane } from '#components/conversation-pane'
@@ -25,6 +25,9 @@ import type { Session } from '#types'
 
 export function App() {
   const [sessions, setSessions] = useState<Session[]>([])
+  const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
+    Record<string, string>
+  >({})
   const [sessionsRevision, setSessionsRevision] = useState(0)
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
@@ -91,26 +94,9 @@ export function App() {
     () => buildBoardProjects(sessionsWithElapsedTime),
     [sessionsWithElapsedTime],
   )
-  const pmProjects = useMemo(
-    () =>
-      sortPmProjects(projects).map((project) => {
-        const descendantAncestorIds = new Set(
-          project.sessions.flatMap((session) => session.ancestorSessionIds),
-        )
-        const pmSessionId =
-          project.sessions.find(
-            (session) =>
-              session.parent === null && descendantAncestorIds.has(session.id),
-          )?.id ?? null
-
-        return {
-          name: project.name,
-          status: project.status,
-          needsActionCount: project.needsActionCount,
-          sessionId: pmSessionId,
-        }
-      }),
-    [projects],
+  const workTypeNavGroups = useMemo(
+    () => buildWorkTypeNavGroups(sessionsWithElapsedTime, workTypeNavLabels),
+    [sessionsWithElapsedTime, workTypeNavLabels],
   )
 
   const openLater = useCallback((id: string) => {
@@ -204,6 +190,7 @@ export function App() {
     () =>
       startSessionFeed((response) => {
         const receivedAt = Date.now()
+        setWorkTypeNavLabels(response.workTypeNavLabels ?? {})
         setSessions(
           response.sessions.filter(
             (session) =>
@@ -362,7 +349,7 @@ export function App() {
         todaySessions={sessionsWithElapsedTime.filter(
           (session) => session.isToday === true,
         )}
-        pmProjects={pmProjects}
+        workTypeNavGroups={workTypeNavGroups}
         onViewChange={setView}
         onSelectToday={(id) => {
           setView('inbox')

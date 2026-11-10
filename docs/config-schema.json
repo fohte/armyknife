@@ -455,6 +455,13 @@
         "icon": {
           "description": "Icon shown in the agent watch marker.",
           "type": "string"
+        },
+        "nav_label": {
+          "description": "Heading used for this work type's session list in the agent watch navigation.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "additionalProperties": false,

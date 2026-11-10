@@ -187,6 +187,7 @@ mod tests {
                 color: AgentWorkTypeColor::Named(
                     crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
                 ),
+                nav_label: None,
             },
         );
         let output =
@@ -242,6 +243,7 @@ mod tests {
             color: AgentWorkTypeColor::Named(
                 crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
             ),
+            nav_label: None,
         };
         let agent_config = AgentConfig {
             vibe_marker: Some(marker_config),
@@ -338,6 +340,7 @@ mod tests {
                     color: AgentWorkTypeColor::Named(
                         crate::shared::config::AgentWorkTypeNamedColor::Red,
                     ),
+                    nav_label: None,
                 },
             );
         });
@@ -392,6 +395,7 @@ mod tests {
                 color: AgentWorkTypeColor::Named(
                     crate::shared::config::AgentWorkTypeNamedColor::LightBlue,
                 ),
+                nav_label: None,
             };
             if let Some(work_type) = configured_work_type {
                 app.agent_config

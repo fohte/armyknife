@@ -4,21 +4,15 @@ import '#components/later-today.css'
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
 
+import type { WorkTypeNavGroup } from '#board-model'
 import { cn } from '#lib/utils'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
-type PmProject = {
-  name: string
-  status: 'Review' | 'Working' | 'Idle'
-  needsActionCount: number
-  sessionId: string | null
-}
-
 type AgentWatchNavProps = {
   activeView: View
   needsActionCount: number
-  pmProjects: readonly PmProject[]
+  workTypeNavGroups: readonly WorkTypeNavGroup[]
   onViewChange: (view: View) => void
   todaySessions: readonly Session[]
   onSelectToday: (id: string) => void
@@ -28,7 +22,7 @@ type AgentWatchNavProps = {
 export function AgentWatchNav({
   activeView,
   needsActionCount,
-  pmProjects,
+  workTypeNavGroups,
   onViewChange,
   todaySessions,
   onSelectToday,
@@ -115,41 +109,41 @@ export function AgentWatchNav({
           </div>
         ))}
       </section>
-      <section className="pm-project-list" aria-labelledby="pm-projects-title">
-        <h2 id="pm-projects-title">PM</h2>
-        <ul>
-          {pmProjects.map((project) => (
-            <li key={project.name}>
-              <Button
-                type="button"
-                variant="plain"
-                disabled={project.sessionId === null}
-                className={cn(
-                  'pm-project grid w-full',
-                  'pm-project-' + project.status.toLowerCase(),
-                  project.needsActionCount > 0 && 'has-needs-action',
-                  project.sessionId !== null &&
+      {workTypeNavGroups.map((group, index) => (
+        <section
+          key={group.label}
+          className="work-type-nav"
+          aria-labelledby={`work-type-nav-title-${String(index)}`}
+        >
+          <h2 id={`work-type-nav-title-${String(index)}`}>{group.label}</h2>
+          <ul>
+            {group.projects.map((project) => (
+              <li key={project.name}>
+                <Button
+                  type="button"
+                  variant="plain"
+                  className={cn(
+                    'work-type-project grid w-full',
+                    'work-type-project-' + project.status.toLowerCase(),
+                    project.needsActionCount > 0 && 'has-needs-action',
                     'cursor-pointer hover:text-foreground',
-                )}
-                aria-label={
-                  project.sessionId === null
-                    ? `${project.name}: no PM session`
-                    : `Open ${project.name} PM session in Inbox`
-                }
-                onClick={() => {
-                  if (project.sessionId !== null) {
+                  )}
+                  aria-label={`Open ${project.name} ${group.label} session in Inbox`}
+                  onClick={() => {
                     onSelectSession(project.sessionId)
-                  }
-                }}
-              >
-                <span className="pm-project-dot" aria-hidden="true" />
-                <span className="pm-project-name">{project.name}</span>
-                <span className="pm-project-status">{project.status}</span>
-              </Button>
-            </li>
-          ))}
-        </ul>
-      </section>
+                  }}
+                >
+                  <span className="work-type-project-dot" aria-hidden="true" />
+                  <span className="work-type-project-name">{project.name}</span>
+                  <span className="work-type-project-status">
+                    {project.status}
+                  </span>
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
     </nav>
   )
 }

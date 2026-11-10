@@ -1345,6 +1345,7 @@ mod tests {
             Some(AgentWorkTypeConfig {
                 icon: "◈".to_string(),
                 color: AgentWorkTypeColor::Rgb([12, 34, 56]),
+                nav_label: None,
             })
         );
     }
@@ -1375,6 +1376,7 @@ mod tests {
                 Some(AgentWorkTypeConfig {
                     icon: "∅".to_string(),
                     color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                    nav_label: None,
                 }),
                 HashMap::from([
                     (
@@ -1382,6 +1384,7 @@ mod tests {
                         AgentWorkTypeConfig {
                             icon: "◇".to_string(),
                             color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                            nav_label: None,
                         },
                     ),
                     (
@@ -1389,6 +1392,7 @@ mod tests {
                         AgentWorkTypeConfig {
                             icon: "◆".to_string(),
                             color: AgentWorkTypeColor::Rgb([12, 34, 56]),
+                            nav_label: None,
                         },
                     ),
                     (
@@ -1396,6 +1400,7 @@ mod tests {
                         AgentWorkTypeConfig {
                             icon: "○".to_string(),
                             color: AgentWorkTypeColor::Indexed(123),
+                            nav_label: None,
                         },
                     ),
                 ])
@@ -1427,6 +1432,7 @@ mod tests {
                     AgentWorkTypeConfig {
                         icon: "◇".to_string(),
                         color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                        nav_label: None,
                     },
                 ),
                 (
@@ -1434,6 +1440,7 @@ mod tests {
                     AgentWorkTypeConfig {
                         icon: "∅".to_string(),
                         color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Yellow),
+                        nav_label: None,
                     },
                 ),
             ]),

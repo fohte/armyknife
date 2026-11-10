@@ -1,8 +1,8 @@
-.pm-project-list {
+.work-type-nav {
   margin-top: 22px;
 }
 
-.pm-project-list h2 {
+.work-type-nav h2 {
   height: 26px;
   margin: 0;
   padding: 5px 8px 0;
@@ -12,13 +12,13 @@
   letter-spacing: 0.04em;
 }
 
-.pm-project-list ul {
+.work-type-nav ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.pm-project {
+.work-type-project {
   display: grid;
   width: 100%;
   height: 28px;
@@ -35,50 +35,50 @@
   text-align: left;
 }
 
-.pm-project:not(:disabled):hover {
+.work-type-project:not(:disabled):hover {
   background: #161616;
 }
 
-.pm-project:disabled {
+.work-type-project:disabled {
   cursor: default;
   opacity: 0.65;
 }
 
-.pm-project-dot {
+.work-type-project-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: transparent;
 }
 
-.pm-project.has-needs-action .pm-project-dot {
+.work-type-project.has-needs-action .work-type-project-dot {
   background: #fbbf24;
 }
 
-.pm-project-name {
+.work-type-project-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pm-project.has-needs-action .pm-project-name {
+.work-type-project.has-needs-action .work-type-project-name {
   color: #fafafa;
   font-weight: 700;
 }
 
-.pm-project-idle .pm-project-name {
+.work-type-project-idle .work-type-project-name {
   color: #a1a1aa;
 }
 
-.pm-project-status {
+.work-type-project-status {
   color: #8b8b94;
   font-size: 10.5px;
 }
 
-.pm-project-review .pm-project-status {
+.work-type-project-review .work-type-project-status {
   color: #fbbf24;
 }
 
-.pm-project-working .pm-project-status {
+.work-type-project-working .work-type-project-status {
   color: #60a5fa;
 }

@@ -10,6 +10,10 @@ pub struct AgentWorkTypeConfig {
 
     /// Terminal color used in the agent watch marker.
     pub color: AgentWorkTypeColor,
+
+    /// Heading used for this work type's session list in the agent watch navigation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav_label: Option<String>,
 }
 
 /// A terminal color accepted for an agent watch marker.
@@ -83,7 +87,40 @@ impl From<AgentWorkTypeNamedColor> for ratatui::style::Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use rstest::rstest;
+
+    #[rstest]
+    #[case::omitted(
+        indoc! {"
+            icon: '◇'
+            color: cyan
+        "},
+        None
+    )]
+    #[case::configured(
+        indoc! {"
+            icon: '◇'
+            color: cyan
+            nav_label: Workflows
+        "},
+        Some("Workflows")
+    )]
+    fn work_type_config_deserializes_optional_nav_label(
+        #[case] yaml: &str,
+        #[case] nav_label: Option<&str>,
+    ) {
+        let actual: AgentWorkTypeConfig = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            actual,
+            AgentWorkTypeConfig {
+                icon: "◇".to_owned(),
+                color: AgentWorkTypeColor::Named(AgentWorkTypeNamedColor::Cyan),
+                nav_label: nav_label.map(str::to_owned),
+            },
+        );
+    }
 
     #[rstest]
     #[case::reset(
