@@ -1,10 +1,10 @@
 import { Button } from '@fohte/ui/button'
-import { Result } from 'neverthrow'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import { MessageComposer } from '#components/message-composer'
+import { useComposerDraft } from '#components/use-composer-draft'
 import type { ChatItem, Session, SessionActions } from '#types'
 
 type ConversationPaneViewProps = {
@@ -25,32 +25,6 @@ type ConversationPaneViewProps = {
   onLater?: () => void
 }
 
-function readComposerDraft(key: string) {
-  return Result.fromThrowable(
-    () => window.localStorage.getItem(key),
-    (error: unknown) => error,
-  )().match(
-    (draft) => draft ?? '',
-    () => '',
-  )
-}
-
-function writeComposerDraft(key: string, draft: string) {
-  Result.fromThrowable(
-    () => {
-      if (draft === '') {
-        window.localStorage.removeItem(key)
-      } else {
-        window.localStorage.setItem(key, draft)
-      }
-    },
-    (error: unknown) => error,
-  )().match(
-    () => undefined,
-    () => undefined,
-  )
-}
-
 export function ConversationPaneView({
   session,
   messages,
@@ -65,9 +39,9 @@ export function ConversationPaneView({
   onBack,
   onLater,
 }: ConversationPaneViewProps) {
-  const draftStorageKey = `agent-watch-web:composer-draft:${session.id}`
-  const [draft, setDraft] = useState(() => readComposerDraft(draftStorageKey))
-  const draftRef = useRef(draft)
+  const { draft, updateDraft, clearDraftIfUnchanged } = useComposerDraft(
+    session.id,
+  )
   const [sendPending, setSendPending] = useState(false)
   const [openCritUrl, setOpenCritUrl] = useState<string | null>(null)
   const sendingRef = useRef(false)
@@ -85,12 +59,6 @@ export function ConversationPaneView({
   const hasCritUrl = typeof critUrl === 'string' && critUrl !== ''
   const critOpen = hasCritUrl && openCritUrl === critUrl
 
-  const updateDraft = (value: string) => {
-    draftRef.current = value
-    setDraft(value)
-    writeComposerDraft(draftStorageKey, value)
-  }
-
   const sendMessage = () => {
     if (
       draft.trim() === '' ||
@@ -104,7 +72,7 @@ export function ConversationPaneView({
     setSendPending(true)
     void onAction('messages', { content: sentDraft }).then((succeeded) => {
       if (succeeded) {
-        if (draftRef.current === sentDraft) updateDraft('')
+        clearDraftIfUnchanged(sentDraft)
       }
       sendingRef.current = false
       setSendPending(false)
