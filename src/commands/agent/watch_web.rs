@@ -3,11 +3,13 @@ mod assets;
 mod events;
 mod image_attachments;
 mod messages;
+mod restart;
 mod security;
 mod session_enrichment;
 mod session_state;
 mod sessions;
 
+use std::ffi::OsString;
 use std::net::{Ipv4Addr, SocketAddr};
 use tokio::sync::watch;
 
@@ -57,16 +59,27 @@ impl EnrichmentUpdates {
 }
 
 pub async fn run(_args: &WatchWebArgs) -> Result<()> {
+    let executable = std::env::current_exe()?;
+    let executable_identity = restart::ExecutableIdentity::read(&executable)?;
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
     let listener = TcpListener::bind(address).await?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
-    if let Err(error) = browser::open_url(&url) {
+    if !restart::is_restarted_process()
+        && let Err(error) = browser::open_url(&url)
+    {
         eprintln!("Could not open a browser automatically: {error}");
     }
 
-    axum::serve(listener, app()).await?;
-    Ok(())
+    let server = async {
+        axum::serve(listener, app()).await?;
+        Ok::<_, std::io::Error>(())
+    };
+    tokio::select! {
+        result = server => result.map_err(Into::into),
+        result = restart::restart_when_replaced(executable, executable_identity, args) => result,
+    }
 }
 
 fn app() -> Router {

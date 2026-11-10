@@ -11,6 +11,7 @@ type SessionEventSource = {
 type SessionFeedDependencies = {
   fetcher?: typeof fetch
   createEventSource?: (url: string) => SessionEventSource
+  reloadPage?: () => void
   requestRetryDelayMs?: number
 }
 
@@ -104,6 +105,9 @@ export function startSessionFeed(
   {
     fetcher = fetch,
     createEventSource = (url) => new EventSource(url),
+    reloadPage = () => {
+      window.location.reload()
+    },
     requestRetryDelayMs = 2_000,
   }: SessionFeedDependencies = {},
 ) {
@@ -197,12 +201,17 @@ export function startSessionFeed(
     }
   }
   const onConnectionOpen: EventListener = () => {
+    const reconnected = streamError
     streamError = false
     if (reconnectPollTimer !== null) {
       clearInterval(reconnectPollTimer)
       reconnectPollTimer = null
     }
     reportStatus()
+    if (reconnected) {
+      reloadPage()
+      return
+    }
     refresh()
   }
 
