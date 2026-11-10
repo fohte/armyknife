@@ -857,15 +857,17 @@ it('renders file attachments returned by the messages endpoint', async () => {
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
-      jsonResponse([
-        {
-          type: 'user_with_content',
-          content: [
-            { type: 'text', text: 'Inspect this document.' },
-            { type: 'file', name: 'sample-layout.html' },
-          ],
-        },
-      ]),
+      jsonResponse(
+        messagesResponse([
+          {
+            type: 'user_with_content',
+            content: [
+              { type: 'text', text: 'Inspect this document.' },
+              { type: 'file', name: 'sample-layout.html' },
+            ],
+          },
+        ]),
+      ),
     )
     .mockResolvedValueOnce(jsonResponse(actions))
   vi.stubGlobal('fetch', fetcher)
