@@ -5,7 +5,9 @@ use super::common::{DraftFile, PrDraftError, RepoInfo, contains_japanese, repo_a
 use super::hooks::{HookContext, HookRunner, PRE_PR_SUBMIT_HOOK, default_runner, run_pr_hook};
 use super::stack::stack_created_pull_request;
 use crate::commands::agent::{ensure_repo_vibe_access, is_vibe_enabled};
-use crate::commands::ai::pr_series::preserve_managed_section;
+use crate::commands::ai::pr_series::{
+    PrSeriesPlan, has_managed_section, load_plan_if_present, preserve_managed_section,
+};
 use crate::commands::ai::pr_series_aftercare::{
     SubmitSyncFailure, SubmitSyncOutcome, SubmitSyncStage, link_and_sync_after_submit,
 };
@@ -14,8 +16,15 @@ use crate::infra::github::{
     CreatePrParams, GitHubClient, PrBodyClient, PrClient, PrStackClient, PrState, RepoClient,
     UpdatePrParams,
 };
+use crate::infra::tq::TqClient;
 use crate::shared::config::{Config, load_config};
 use crate::shared::human_in_the_loop::LockGuard;
+
+const SERIES_MARKERS_REQUIRED_ERROR: &str = indoc::indoc! {"
+    A PR series plan with at least two pull requests requires both markers in the PR body. Add them on their own lines after the bullet list in the changes section:
+    <!-- pr-series:start -->
+    <!-- pr-series:end -->
+"};
 
 #[derive(Args, Clone, PartialEq, Eq)]
 pub struct SubmitArgs {
@@ -49,16 +58,23 @@ struct TqBranchMetadata {
     checklist_item_id: String,
 }
 
+#[derive(Clone)]
+struct SavedPrSeriesPlan {
+    task_id: String,
+    plan: PrSeriesPlan,
+}
+
 trait PostSubmitProcessor {
     fn metadata_for_branch(&self, branch: &str) -> Option<TqBranchMetadata>;
 
-    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool;
+    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan>;
 
     async fn link_and_sync(
         &self,
         metadata: &TqBranchMetadata,
         target: &PrTarget,
         pr_url: &str,
+        saved_plan: Option<SavedPrSeriesPlan>,
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure>;
 }
 
@@ -71,17 +87,49 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         read_current_branch_tq_metadata(branch)
     }
 
-    fn has_saved_plan(&self, metadata: &TqBranchMetadata) -> bool {
-        match crate::commands::ai::pr_series::load_plan_if_present(&metadata.task_id) {
-            Ok(plan) => plan.is_some(),
+    async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+        match load_plan_if_present(&metadata.task_id) {
+            Ok(Some(plan)) => Some(SavedPrSeriesPlan {
+                task_id: metadata.task_id.clone(),
+                plan,
+            }),
+            Ok(None) if metadata.task_id.parse::<u32>().is_ok() => {
+                let Some(tq_client) = TqClient::detect() else {
+                    tracing::warn!(
+                        event = "pr_draft.submit.plan_task_resolution_failed",
+                        task_id = %metadata.task_id,
+                        "tq CLI is unavailable for resolving the canonical task ID"
+                    );
+                    return None;
+                };
+                let task = match tq_client.task_details(&metadata.task_id).await {
+                    Ok(task) => task,
+                    Err(error) => {
+                        tracing::warn!(
+                            event = "pr_draft.submit.plan_task_resolution_failed",
+                            task_id = %metadata.task_id,
+                            error = %error,
+                            "failed to resolve the canonical tq task ID"
+                        );
+                        return None;
+                    }
+                };
+                match load_plan_if_present(&task.id) {
+                    Ok(Some(plan)) => Some(SavedPrSeriesPlan {
+                        task_id: task.id,
+                        plan,
+                    }),
+                    Ok(None) => None,
+                    Err(error) => {
+                        warn_plan_lookup_failure(metadata, &error);
+                        None
+                    }
+                }
+            }
+            Ok(None) => None,
             Err(error) => {
-                tracing::warn!(
-                    event = "pr_draft.submit.plan_check_failed",
-                    task_id = %metadata.task_id,
-                    error = %error,
-                    "failed to check for a PR series plan"
-                );
-                false
+                warn_plan_lookup_failure(metadata, &error);
+                None
             }
         }
     }
@@ -91,17 +139,31 @@ impl PostSubmitProcessor for PrSeriesPostSubmitProcessor<'_> {
         metadata: &TqBranchMetadata,
         target: &PrTarget,
         pr_url: &str,
+        saved_plan: Option<SavedPrSeriesPlan>,
     ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
+        let Some(saved_plan) = saved_plan else {
+            return Ok(SubmitSyncOutcome::NoPlan);
+        };
         link_and_sync_after_submit(
             self.github,
-            &metadata.task_id,
+            &saved_plan.task_id,
             &metadata.checklist_item_id,
             &target.owner,
             &target.repo,
             pr_url,
+            saved_plan.plan,
         )
         .await
     }
+}
+
+fn warn_plan_lookup_failure(metadata: &TqBranchMetadata, error: &anyhow::Error) {
+    tracing::warn!(
+        event = "pr_draft.submit.plan_check_failed",
+        task_id = %metadata.task_id,
+        error = %error,
+        "failed to check for a PR series plan"
+    );
 }
 
 pub async fn run(args: &SubmitArgs) -> anyhow::Result<()> {
@@ -205,16 +267,6 @@ async fn run_impl(
         }
     }
 
-    // Check if PR already exists for this branch
-    let existing_pr = gh_client
-        .get_pr_for_branch(&target.owner, &target.repo, &target.branch)
-        .await?;
-
-    let update_target = match &existing_pr {
-        Some(pr_info) if pr_info.state == PrState::Open => Some(pr_info.number),
-        _ => None,
-    };
-
     let target_is_current_repo = if args.filepath.is_some() {
         current_repo_identity()
             .is_some_and(|(owner, repo)| owner == target.owner && repo == target.repo)
@@ -225,6 +277,31 @@ async fn run_impl(
         post_submit_processor.metadata_for_branch(&target.branch)
     } else {
         None
+    };
+    let saved_plan = if let Some(metadata) = &tq_metadata {
+        post_submit_processor.saved_plan(metadata).await
+    } else {
+        None
+    };
+    if saved_plan
+        .as_ref()
+        .is_some_and(|saved_plan| saved_plan.plan.pull_requests.len() >= 2)
+    {
+        match has_managed_section(&draft.body) {
+            Ok(true) => {}
+            Ok(false) => anyhow::bail!("{SERIES_MARKERS_REQUIRED_ERROR}"),
+            Err(error) => anyhow::bail!("{error}\n{SERIES_MARKERS_REQUIRED_ERROR}"),
+        }
+    }
+
+    // Check if PR already exists for this branch
+    let existing_pr = gh_client
+        .get_pr_for_branch(&target.owner, &target.repo, &target.branch)
+        .await?;
+
+    let update_target = match &existing_pr {
+        Some(pr_info) if pr_info.state == PrState::Open => Some(pr_info.number),
+        _ => None,
     };
     // Fire pre-pr-submit hook before any network call. The hook script can
     // inspect the title/body and abort submission with a non-zero exit, which
@@ -253,7 +330,7 @@ async fn run_impl(
                 &target.repo,
                 number,
                 &draft.body,
-                post_submit_processor,
+                saved_plan.is_some(),
                 tq_metadata.as_ref(),
             )
             .await;
@@ -313,7 +390,7 @@ async fn run_impl(
 
     if let Some(metadata) = tq_metadata
         && let Err(failure) = post_submit_processor
-            .link_and_sync(&metadata, &target, &pr_url)
+            .link_and_sync(&metadata, &target, &pr_url, saved_plan)
             .await
     {
         eprintln!(
@@ -334,15 +411,15 @@ async fn body_for_existing_pr_update(
     repo: &str,
     number: u64,
     submitted_body: &str,
-    post_submit_processor: &impl PostSubmitProcessor,
+    has_saved_plan: bool,
     metadata: Option<&TqBranchMetadata>,
 ) -> String {
+    if !has_saved_plan {
+        return submitted_body.to_string();
+    }
     let Some(metadata) = metadata else {
         return submitted_body.to_string();
     };
-    if !post_submit_processor.has_saved_plan(metadata) {
-        return submitted_body.to_string();
-    }
 
     let existing_body = match gh_client.get_pull_request_body(owner, repo, number).await {
         Ok(body) => body,
@@ -486,6 +563,23 @@ mod tests {
         Ok(())
     }
 
+    fn series_plan(pull_request_count: usize) -> PrSeriesPlan {
+        PrSeriesPlan {
+            name: "sample series".to_string(),
+            purpose: "exercise submit checks".to_string(),
+            pull_requests: (0..pull_request_count)
+                .map(|index| crate::commands::ai::pr_series::PrSeriesEntry {
+                    id: format!("sample-{index}"),
+                    summary: format!("Sample change {index}"),
+                    depends_on: Vec::new(),
+                    repository: "example-owner/example-repo".to_string(),
+                    tq_leaf_id: format!("sample-leaf-{index}"),
+                })
+                .collect(),
+            steps: None,
+        }
+    }
+
     struct NoopPostSubmitProcessor;
 
     impl PostSubmitProcessor for NoopPostSubmitProcessor {
@@ -493,8 +587,8 @@ mod tests {
             None
         }
 
-        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
-            false
+        async fn saved_plan(&self, _metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+            None
         }
 
         async fn link_and_sync(
@@ -502,6 +596,7 @@ mod tests {
             _metadata: &TqBranchMetadata,
             _target: &PrTarget,
             _pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
         ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
             Ok(SubmitSyncOutcome::NoPlan)
         }
@@ -531,7 +626,7 @@ mod tests {
         calls: Mutex<Vec<PostSubmitCall>>,
         failure_stage: Option<SubmitSyncStage>,
         metadata: Option<TqBranchMetadata>,
-        saved_plan: bool,
+        plan_pull_request_count: Option<usize>,
     }
 
     impl PostSubmitProcessor for PostSubmitSpy {
@@ -539,8 +634,11 @@ mod tests {
             self.metadata.clone()
         }
 
-        fn has_saved_plan(&self, _metadata: &TqBranchMetadata) -> bool {
-            self.saved_plan
+        async fn saved_plan(&self, metadata: &TqBranchMetadata) -> Option<SavedPrSeriesPlan> {
+            self.plan_pull_request_count.map(|count| SavedPrSeriesPlan {
+                task_id: metadata.task_id.clone(),
+                plan: series_plan(count),
+            })
         }
 
         async fn link_and_sync(
@@ -548,6 +646,7 @@ mod tests {
             metadata: &TqBranchMetadata,
             target: &PrTarget,
             pr_url: &str,
+            _saved_plan: Option<SavedPrSeriesPlan>,
         ) -> std::result::Result<SubmitSyncOutcome, SubmitSyncFailure> {
             self.calls.lock().expect("post-submit spy mutex").push((
                 metadata.task_id.clone(),
@@ -573,9 +672,160 @@ mod tests {
                 task_id: "sample-task-id".to_string(),
                 checklist_item_id: "sample-leaf-id".to_string(),
             }),
-            saved_plan,
+            plan_pull_request_count: saved_plan.then_some(1),
             ..PostSubmitSpy::default()
         }
+    }
+
+    #[rstest]
+    #[case::series_without_markers(
+        "series-marker-missing",
+        Some(2),
+        true,
+        false,
+        "Body content",
+        Err(SERIES_MARKERS_REQUIRED_ERROR.to_string()),
+        false,
+    )]
+    #[case::series_with_only_one_marker(
+        "series-marker-partial",
+        Some(2),
+        true,
+        false,
+        "<!-- pr-series:start -->",
+        Err(format!(
+            "PR series markers must occur exactly once\n{SERIES_MARKERS_REQUIRED_ERROR}"
+        )),
+        false,
+    )]
+    #[case::series_with_markers(
+        "series-marker-present",
+        Some(2),
+        true,
+        false,
+        indoc! {"
+            ## What changed
+
+            - Add a sample change.
+
+            <!-- pr-series:start -->
+            <!-- pr-series:end -->
+        "},
+        Ok(()),
+        true,
+    )]
+    #[case::single_pr_series_without_markers(
+        "series-marker-single",
+        Some(1),
+        true,
+        false,
+        "Body content",
+        Ok(()),
+        true
+    )]
+    #[case::standalone_pr_without_markers(
+        "series-marker-standalone",
+        None,
+        false,
+        false,
+        "Body content",
+        Ok(()),
+        true
+    )]
+    #[case::existing_series_without_markers(
+        "series-marker-existing",
+        Some(2),
+        true,
+        true,
+        "Body content",
+        Err(SERIES_MARKERS_REQUIRED_ERROR.to_string()),
+        false
+    )]
+    #[tokio::test]
+    async fn submit_requires_series_markers_only_for_plans_with_multiple_pull_requests(
+        #[case] repo: &str,
+        #[case] plan_pull_request_count: Option<usize>,
+        #[case] has_tq_metadata: bool,
+        #[case] existing_pr: bool,
+        #[case] body: &str,
+        #[case] expected_result: Result<(), String>,
+        #[case] expected_pr_mutation: bool,
+    ) {
+        let env = if existing_pr {
+            setup_test_env_with_existing_pr(
+                "example-owner",
+                repo,
+                "feature/sample-change",
+                42,
+                ExistingPrBody::Text("Existing body"),
+                body,
+            )
+            .await
+        } else {
+            setup_test_env("example-owner", repo).await
+        };
+        let draft_path = create_approved_draft(
+            &env.owner,
+            &env.repo,
+            "feature/sample-change",
+            "Add a sample change",
+            body,
+        );
+        let args = SubmitArgs {
+            filepath: Some(draft_path),
+            base: None,
+            draft: false,
+            no_review: false,
+        };
+        let processor = PostSubmitSpy {
+            metadata: has_tq_metadata.then(|| TqBranchMetadata {
+                task_id: "sample-task-id".to_string(),
+                checklist_item_id: "sample-leaf-id".to_string(),
+            }),
+            plan_pull_request_count,
+            ..PostSubmitSpy::default()
+        };
+        let client = env.mock.client();
+        let result = run_impl(
+            &args,
+            &client,
+            &noop_hook,
+            noop_config,
+            || Some((env.owner.clone(), env.repo.clone())),
+            &processor,
+            no_vibe_access,
+        )
+        .await
+        .map_err(|error| error.to_string());
+        let mutations = env
+            .mock
+            .received_requests()
+            .await
+            .iter()
+            .filter(|request| {
+                matches!(request.method.as_str(), "POST" | "PATCH")
+                    && request.url.path().contains("/pulls")
+            })
+            .map(|request| (request.method.to_string(), request.url.path().to_string()))
+            .collect::<Vec<_>>();
+        let expected_mutations = if expected_pr_mutation {
+            vec![(
+                if existing_pr {
+                    "PATCH".to_string()
+                } else {
+                    "POST".to_string()
+                },
+                if existing_pr {
+                    format!("/repos/example-owner/{repo}/pulls/42")
+                } else {
+                    format!("/repos/example-owner/{repo}/pulls")
+                },
+            )]
+        } else {
+            Vec::new()
+        };
+
+        assert_eq!((result, mutations), (expected_result, expected_mutations));
     }
 
     #[derive(Clone)]
