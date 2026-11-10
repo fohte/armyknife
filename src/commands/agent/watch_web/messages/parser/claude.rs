@@ -23,15 +23,19 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         match record.get("type").and_then(Value::as_str) {
             Some("user") => {
                 if let Some(message) = record.get("message") {
+                    let tool_use_result = record.get("toolUseResult");
                     for block in tool_result_blocks(message) {
                         let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
                             continue;
                         };
                         if let Some(indices) = question_uses.remove(id) {
-                            let answers = block
-                                .get("content")
-                                .and_then(tool_result_text)
-                                .and_then(|text| parse_question_answers(&text));
+                            let answers = match tool_use_result {
+                                Some(result) => tool_use_result_answers(result),
+                                None => block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .and_then(|text| parse_question_answers(&text)),
+                            };
                             if let Some(answers) = answers {
                                 apply_question_answers(&mut items, &indices, &answers);
                             }
@@ -158,7 +162,8 @@ fn tool_result_text(content: &Value) -> Option<String> {
 
 fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
     let mut remaining = content
-        .strip_prefix("Your questions have been answered:")?
+        .strip_prefix("Your questions have been answered:")
+        .or_else(|| content.strip_prefix("The user answered:"))?
         .trim_start();
     let mut answers = Vec::new();
 
@@ -176,6 +181,19 @@ fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
         }
     }
 
+    (!answers.is_empty()).then_some(answers)
+}
+
+fn tool_use_result_answers(tool_use_result: &Value) -> Option<Vec<(String, String)>> {
+    let answers = tool_use_result.get("answers")?.as_object()?;
+    let answers = answers
+        .iter()
+        .filter_map(|(question, answer)| {
+            answer
+                .as_str()
+                .map(|answer| (question.clone(), answer.to_owned()))
+        })
+        .collect::<Vec<_>>();
     (!answers.is_empty()).then_some(answers)
 }
 
@@ -469,12 +487,23 @@ mod tests {
     #[case::answer_outside_choices(
         indoc! {r#"
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-custom","name":"AskUserQuestion","input":{"questions":[{"question":"How should the cache expire?","options":[{"label":"After one hour"},{"label":"After one day"}]}]}}]}}
-            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"Your questions have been answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"The user answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
         "#},
         vec![ChatItem::Question {
             question: "How should the cache expire?".to_string(),
             choices: vec!["After one hour".to_string(), "After one day".to_string()],
             answer: Some("Keep it until deployment".to_string()),
+        }]
+    )]
+    #[case::tool_use_result_answers(
+        indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-structured","name":"AskUserQuestion","input":{"questions":[{"question":"Which color theme?","options":[{"label":"Light"},{"label":"Dark"}]}]}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-structured","content":"Your questions have been answered: \"Which color theme?\"=\"Dark\". You can now continue with these answers in mind."}]},"toolUseResult":{"questions":[{"question":"Which color theme?"}],"answers":{"Which color theme?":"Use a fictional palette"},"annotations":{}}}
+        "#},
+        vec![ChatItem::Question {
+            question: "Which color theme?".to_string(),
+            choices: vec!["Light".to_string(), "Dark".to_string()],
+            answer: Some("Use a fictional palette".to_string()),
         }]
     )]
     #[case::no_answer(
