@@ -57,3 +57,13 @@ it('keeps raw HTML as text and blocks unsafe link protocols', () => {
     '<div class="markdown-message"><p>&lt;img src=x onerror=alert(1)&gt; <a href="" target="_blank" rel="noopener noreferrer">unsafe</a></p></div>',
   )
 })
+
+it('trims non-ASCII text from automatic links and preserves explicit links', () => {
+  const html = renderMessage(
+    'http://localhost:43127。承認後に処理する [http://localhost:43127。承認後に処理する](http://localhost:43127。承認後に処理する) and http://example.com and http://example.com/日本語',
+  )
+
+  expect(html).toBe(
+    '<div class="markdown-message"><p><a href="http://localhost:43127" target="_blank" rel="noopener noreferrer">http://localhost:43127</a>。承認後に処理する <a href="http://localhost:43127%E3%80%82%E6%89%BF%E8%AA%8D%E5%BE%8C%E3%81%AB%E5%87%A6%E7%90%86%E3%81%99%E3%82%8B" target="_blank" rel="noopener noreferrer">http://localhost:43127。承認後に処理する</a> and <a href="http://example.com" target="_blank" rel="noopener noreferrer">http://example.com</a> and <a href="http://example.com/" target="_blank" rel="noopener noreferrer">http://example.com/</a>日本語</p></div>',
+  )
+})

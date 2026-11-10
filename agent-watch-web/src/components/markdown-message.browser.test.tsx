@@ -80,3 +80,36 @@ let attempts = 3;
     [12, 12, 12, 12],
   ])
 })
+
+it('shows distinct markers for nested unordered and ordered lists', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>{`- First item
+  - Nested item
+    - Third-level item
+  1. Nested numbered item
+     1. Third-level numbered item
+
+1. First step
+   - Nested unordered item
+     1. Third-level numbered item`}</MarkdownMessage>,
+    )
+  })
+
+  const listMarkers = Array.from(
+    container.querySelectorAll('ul, ol'),
+    (list) => [list.tagName, getComputedStyle(list).listStyleType],
+  )
+
+  expect(listMarkers).toEqual([
+    ['UL', 'disc'],
+    ['UL', 'circle'],
+    ['UL', 'square'],
+    ['OL', 'lower-alpha'],
+    ['OL', 'lower-roman'],
+    ['OL', 'decimal'],
+    ['UL', 'circle'],
+    ['OL', 'lower-roman'],
+  ])
+})
