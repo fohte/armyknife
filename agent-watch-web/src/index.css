@@ -318,7 +318,8 @@
 [data-slot='chip'][data-session-kind='question'],
 [data-slot='chip'][data-session-kind='approve'],
 [data-slot='chip'][data-session-kind='review'],
-[data-slot='chip'][data-session-kind='plan'] {
+[data-slot='chip'][data-session-kind='plan'],
+[data-slot='chip'][data-session-kind='proposal'] {
   color: var(--aw-color-warning);
 }
 

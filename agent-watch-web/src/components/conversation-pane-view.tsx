@@ -144,6 +144,12 @@ export function ConversationPaneView({
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
   )
+  const hasUnansweredProposal = messages.some(
+    (message) =>
+      message.type === 'proposal' &&
+      message.answer === null &&
+      !message.resolved,
+  )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
@@ -431,9 +437,11 @@ export function ConversationPaneView({
       <MessageComposer
         draft={draft}
         placeholder={
-          session.pullRequest
-            ? `Message PR ${String(session.pullRequest.number)}`
-            : 'Message session'
+          hasUnansweredProposal
+            ? 'Choose an option above, or message the session'
+            : session.pullRequest
+              ? `Message PR ${String(session.pullRequest.number)}`
+              : 'Message session'
         }
         disabled={actions?.message !== true}
         isSending={isSending}

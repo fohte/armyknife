@@ -7,6 +7,7 @@ type SessionKind =
   | 'Review'
   | 'Error'
   | 'Plan'
+  | 'Proposal'
   | 'Stopped'
   | (string & {})
 
@@ -95,7 +96,29 @@ export type ChatItem =
       choices: string[]
       answer: string | null
     }
+  | {
+      type: 'proposal'
+      seq: number
+      title: string
+      summary: string | null
+      options: ProposalOption[]
+      answer: ProposalAnswer | null
+      resolved: boolean
+    }
   | { type: 'permission'; tool: string; description: string }
+
+export type ProposalOption = {
+  label: string
+  description: string | null
+  pros: string[]
+  cons: string[]
+  recommended: boolean
+}
+
+export type ProposalAnswer = {
+  choice: number | null
+  comment: string | null
+}
 
 export type UserContentPart =
   | { type: 'text'; text: string }
