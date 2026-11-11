@@ -77,33 +77,6 @@ static MIGRATION_ENTRIES: [M<'static>; 8] = [
             BEGIN
                 DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
             END;
-        CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
-            id INTEGER PRIMARY KEY,
-            from_session_id TEXT NOT NULL,
-            to_session_id TEXT NOT NULL,
-            content TEXT NOT NULL,
-            sent_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS watch_web_peer_out_message_sender_target_time
-            ON watch_web_peer_out_message (from_session_id, to_session_id, sent_at, id);",
-    ),
-    M::up(
-        "CREATE TABLE IF NOT EXISTS agent_proposal (
-            session_id TEXT NOT NULL,
-            seq INTEGER NOT NULL,
-            body TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            answer TEXT,
-            resolved_at TEXT,
-            PRIMARY KEY (session_id, seq)
-        );
-        CREATE INDEX IF NOT EXISTS agent_proposal_unresolved_session_id
-            ON agent_proposal (session_id) WHERE resolved_at IS NULL;
-        CREATE TRIGGER IF NOT EXISTS agent_proposal_delete_session
-            AFTER DELETE ON sessions
-            BEGIN
-                DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
-            END;
         CREATE TABLE IF NOT EXISTS agent_decision (
             session_id TEXT NOT NULL,
             seq INTEGER NOT NULL,
@@ -115,8 +88,10 @@ static MIGRATION_ENTRIES: [M<'static>; 8] = [
             review TEXT,
             reviewed_at TEXT,
             PRIMARY KEY (session_id, seq)
-        );
-        CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
+        );",
+    ),
+    M::up(
+        "CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
             id INTEGER PRIMARY KEY,
             from_session_id TEXT NOT NULL,
             to_session_id TEXT NOT NULL,
