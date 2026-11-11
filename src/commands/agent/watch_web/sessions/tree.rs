@@ -49,17 +49,6 @@ fn session_parent_ids(
     parent_ids
 }
 
-pub(super) fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
-    let mut related_ids = HashSet::new();
-    for session in sessions {
-        if !session.ancestor_session_ids.is_empty() {
-            related_ids.insert(session.session_id.clone());
-        }
-        related_ids.extend(session.ancestor_session_ids.iter().cloned());
-    }
-    related_ids
-}
-
 fn remove_parent_cycles(parent_ids: &mut HashMap<String, Option<String>>) {
     let mut completed = HashSet::new();
     let mut starts = parent_ids.keys().cloned().collect::<Vec<_>>();

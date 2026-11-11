@@ -260,7 +260,7 @@ async fn list_sessions<S: SessionSource>(
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
-    let tree_related_session_ids = tree::session_tree_related_ids(&snapshot.all_sessions);
+    let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
 
     let mut sessions = snapshot
         .sessions
@@ -461,6 +461,17 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         unanswered_proposal_titles,
         agent_config: config::load_config_or_default().agent,
     })
+}
+
+fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
+    let mut related_ids = HashSet::new();
+    for session in sessions {
+        if !session.ancestor_session_ids.is_empty() {
+            related_ids.insert(session.session_id.clone());
+        }
+        related_ids.extend(session.ancestor_session_ids.iter().cloned());
+    }
+    related_ids
 }
 
 #[cfg(test)]
@@ -1011,7 +1022,7 @@ mod tests {
         child.ancestor_session_ids = vec!["parent-session".to_string()];
 
         assert_eq!(
-            super::tree::session_tree_related_ids(&[parent, child]),
+            super::session_tree_related_ids(&[parent, child]),
             HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
         );
     }
