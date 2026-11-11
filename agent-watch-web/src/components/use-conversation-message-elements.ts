@@ -1,6 +1,6 @@
 import { createElement, useMemo } from 'react'
 
-import { ConversationMessageRow } from '#components/conversation-message'
+import { ConversationMessageRow } from '#components/conversation-message-row'
 import type { PendingPermissionAction } from '#components/permission-card'
 import type {
   ChatItem,
@@ -83,7 +83,10 @@ export function useConversationMessageElements({
           : null
 
       return createElement(ConversationMessageRow, {
-        key: String(index),
+        key:
+          message.type === 'proposal'
+            ? `proposal-${String(message.seq)}`
+            : String(index),
         actions,
         actionsReady,
         activeQuestion:

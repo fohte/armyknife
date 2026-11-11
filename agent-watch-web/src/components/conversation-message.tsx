@@ -1,6 +1,6 @@
 import '#components/conversation-message.css'
 
-import { memo, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -22,7 +22,7 @@ import type {
   SessionLinkTarget,
 } from '#types'
 
-type RenderConversationMessageOptions = {
+export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
   activeQuestion: boolean
@@ -60,7 +60,7 @@ export function renderConversationMessage({
   onSelectSession,
   sessionEngine,
   sessions,
-}: RenderConversationMessageOptions): ReactNode {
+}: ConversationMessageRowProps): ReactNode {
   if (
     message.type === 'user' ||
     message.type === 'queued_user' ||
@@ -230,66 +230,3 @@ export function renderConversationMessage({
     />
   )
 }
-
-function areConversationMessagePropsEqual(
-  previous: RenderConversationMessageOptions,
-  next: RenderConversationMessageOptions,
-): boolean {
-  if (
-    previous.message !== next.message ||
-    previous.index !== next.index ||
-    previous.isMobile !== next.isMobile
-  ) {
-    return false
-  }
-
-  switch (previous.message.type) {
-    case 'user':
-    case 'queued_user':
-    case 'user_with_content':
-    case 'peer':
-    case 'subagent_report':
-    case 'assistant':
-      return (
-        previous.onSelectSession === next.onSelectSession &&
-        previous.sessions === next.sessions
-      )
-    case 'question':
-      return (
-        previous.activeQuestion === next.activeQuestion &&
-        previous.actions === next.actions &&
-        previous.actionsReady === next.actionsReady &&
-        previous.onAction === next.onAction &&
-        previous.onOpenInTerminal === next.onOpenInTerminal &&
-        previous.sessionEngine === next.sessionEngine
-      )
-    case 'decision':
-      return (
-        previous.selected === next.selected &&
-        previous.decisionPosition === next.decisionPosition &&
-        previous.onSelectDecision === next.onSelectDecision &&
-        previous.onAction === next.onAction
-      )
-    case 'proposal':
-      return previous.onAction === next.onAction
-    case 'permission':
-      return (
-        previous.actions === next.actions &&
-        previous.actionsReady === next.actionsReady &&
-        previous.pendingAction === next.pendingAction &&
-        previous.onAction === next.onAction &&
-        previous.onOpenInTerminal === next.onOpenInTerminal &&
-        previous.sessionEngine === next.sessionEngine
-      )
-    case 'event':
-    case 'tool_summary':
-    case 'tool_in_progress':
-      return true
-  }
-}
-
-export const ConversationMessageRow = memo(function ConversationMessageRow(
-  props: RenderConversationMessageOptions,
-) {
-  return renderConversationMessage(props)
-}, areConversationMessagePropsEqual)
