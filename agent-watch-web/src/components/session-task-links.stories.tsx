@@ -33,8 +33,17 @@ const meta = {
   component: SessionTaskLinks,
   args: { task: openTask, tasks: [openTask] },
   decorators: [
-    (Story) => (
-      <div style={{ width: '760px', minHeight: '140px' }}>
+    (Story, context) => (
+      <div
+        className="conversation-pane"
+        style={{
+          width:
+            typeof context.parameters['conversationPaneWidth'] === 'number'
+              ? context.parameters['conversationPaneWidth']
+              : 760,
+          height: '140px',
+        }}
+      >
         <div className="conversation-context-line">
           <Story />
         </div>
@@ -61,9 +70,15 @@ export const SessionHasMultipleLinkedTasks: Story = {
     taskListOpen: true,
   },
   name: 'A session lists linked tasks and marks completed work',
+}
+
+export const SessionHasMultipleLinkedTasksInNarrowPane: Story = {
+  args: {
+    tasks: linkedTasks,
+    taskListOpen: true,
+  },
+  name: 'A narrow conversation pane keeps the task menu visible',
   parameters: {
-    overflowCheck: {
-      ignoreSelectors: ['.session-task-line', '.session-task-links'],
-    },
+    conversationPaneWidth: 240,
   },
 }

@@ -1,68 +1,3 @@
-.session-task-links {
-  position: relative;
-  flex: 0 0 auto;
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-.session-task-links summary {
-  cursor: pointer;
-  list-style: none;
-}
-
-.session-task-links summary::-webkit-details-marker {
-  display: none;
-}
-
-.session-task-links[open] {
-  box-sizing: border-box;
-  width: min(240px, 80vw);
-  margin-left: calc(22px - min(240px, 80vw));
-}
-
-.session-task-links[open] summary {
-  position: absolute;
-  right: 0;
-}
-
-.session-task-links ul {
-  position: absolute;
-  z-index: 5;
-  top: calc(100% + 7px);
-  left: 0;
-  display: grid;
-  box-sizing: border-box;
-  width: 100%;
-  gap: 8px;
-  margin: 0;
-  padding: 10px;
-  border: 1px solid var(--aw-border-control);
-  border-radius: var(--aw-radius);
-  background: var(--aw-bg-surface);
-  box-shadow: var(--aw-shadow);
-  list-style: none;
-}
-
-.session-task-links li {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.session-task-links a {
-  overflow: hidden;
-  color: var(--aw-text-body);
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-task-completed {
-  flex: 0 0 auto;
-  color: var(--aw-text-muted);
-}
-
 .conversation-task-link {
   overflow: hidden;
   color: var(--aw-text-muted);
@@ -71,26 +6,7 @@
   white-space: nowrap;
 }
 
-.conversation-task-link {
-  font-size: 11.5px;
-}
-
-.conversation-task-link span {
-  font-family: var(--font-mono);
-}
-
-.conversation-context-line,
-.mobile-conversation-context {
-  container-type: inline-size;
-}
-
-.session-task-links[data-task-links] {
-  position: relative;
-  color: var(--aw-text-muted);
-  font-size: 12px;
-}
-
-.session-task-line[data-session-task-links-root] .conversation-task-link {
+.session-task-line .conversation-task-link {
   color: var(--aw-text-body);
   font-size: 12px;
 }
@@ -100,37 +16,40 @@
   font-weight: 700;
 }
 
-.session-task-links[data-task-links] summary {
+.session-task-links {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.session-task-links summary {
   box-sizing: border-box;
   display: inline-flex;
   height: 22px;
   align-items: center;
   padding: 0 7px;
-  border: 1px solid var(--aw-border-emphasis);
+  border: 1px solid var(--aw-border-control);
   background: transparent;
   color: var(--aw-text-body);
+  cursor: pointer;
   font: inherit;
+  list-style: none;
   white-space: nowrap;
 }
 
-.session-task-links[data-task-links][open] {
-  width: auto;
-  margin-left: 0;
+.session-task-links summary::-webkit-details-marker {
+  display: none;
 }
 
-.session-task-links[data-task-links][open] summary {
-  position: relative;
-  right: auto;
+.session-task-links[open] > summary {
   border-color: var(--aw-border-emphasis);
   background: var(--aw-bg-pressed);
 }
 
-.session-task-links[data-task-links] .session-task-links-menu {
-  position: absolute;
+.session-task-links-menu {
+  position: fixed;
   z-index: 5;
-  top: calc(100% + 8px);
-  left: 0;
-  width: min(420px, 100cqw);
+  box-sizing: border-box;
   border: 1px solid var(--aw-border-control);
   background: var(--aw-bg-popover);
   color: var(--aw-text-primary);
@@ -143,7 +62,7 @@
   font-size: 12px;
 }
 
-.session-task-links[data-task-links] .session-task-links-menu ul {
+.session-task-links-menu ul {
   position: static;
   display: grid;
   width: auto;
@@ -153,11 +72,10 @@
   border: 0;
   background: transparent;
   box-shadow: none;
+  list-style: none;
 }
 
-.session-task-links[data-task-links]
-  .session-task-links-menu
-  li.session-task-links-item {
+.session-task-links-item {
   display: flex;
   min-width: 0;
   align-items: center;
@@ -165,7 +83,7 @@
   padding: 8px 14px;
 }
 
-.session-task-links-item[data-primary='true'] {
+.session-task-links-item--primary {
   background: var(--aw-bg-selected);
 }
 
@@ -175,10 +93,14 @@
   color: var(--aw-text-primary);
 }
 
-.session-task-links[data-task-links] .session-task-links-menu a {
+.session-task-links-menu a {
+  overflow: hidden;
   min-width: 0;
   flex: 1 1 auto;
   color: var(--aw-text-primary);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .session-task-links-primary {
@@ -187,10 +109,7 @@
   font-size: 11.5px;
 }
 
-@container (width < 420px) {
-  .session-task-links[data-task-links] .session-task-links-menu {
-    right: 0;
-    left: auto;
-    width: min(420px, 100cqw);
-  }
+.session-task-completed {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
 }
