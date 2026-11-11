@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { SessionLink } from '#components/session-link'
 import type { Session } from '#types'
 
@@ -27,6 +28,10 @@ const linkedSession: Session = {
   ancestorSessionIds: [],
   pullRequest: null,
 }
+const openBesideModifier =
+  getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
+    ? '⌘'
+    : 'Ctrl'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -68,8 +73,7 @@ it('shows session details on hover', async () => {
   expect(getActual()).toEqual({
     linkClass: 'session-link-trigger',
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    cardText:
-      'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    cardText: `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
   })
 })
 
@@ -96,7 +100,7 @@ it('keeps the card open while the pointer is over it', async () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
   )
 })
 
@@ -111,7 +115,7 @@ it('labels a paused session in the detail card', () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-service',
+    `Inspect an example workflowIn progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
   )
 })
 
@@ -126,7 +130,7 @@ it('explains when no tq task is linked', () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progressNo linked tq taskrepo sample-org/example-service',
+    `Inspect an example workflowIn progressNo linked tq taskrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
   )
 })
 
@@ -156,11 +160,48 @@ it('opens the session when clicked while the card is visible', async () => {
   })
   expect(getActual()).toEqual({
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    cardText:
-      'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    cardText: `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
     selectedIds: [linkedSession.id],
   })
 })
+
+it.each([
+  ['Meta', { metaKey: true }],
+  ['Control', { ctrlKey: true }],
+] as const)(
+  '%s-click keeps the native session link behavior',
+  (_, modifiers) => {
+    root = createRoot(container)
+    const onSelectSession = vi.fn<(id: string) => void>()
+
+    act(() => {
+      root?.render(
+        <SessionLink onSelectSession={onSelectSession} session={linkedSession}>
+          sample-session
+        </SessionLink>,
+      )
+    })
+
+    const link = container.querySelector('a')
+    if (link === null) throw new Error('Expected a session link')
+    link.removeAttribute('href')
+    const click = new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    })
+    link.dispatchEvent(click)
+
+    const getActual = () => ({
+      defaultPrevented: click.defaultPrevented,
+      selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+    })
+    expect(getActual()).toEqual({
+      defaultPrevented: false,
+      selectedIds: [],
+    })
+  },
+)
 
 it('shows the card when a keyboard user focuses the link', async () => {
   root = createRoot(container)
@@ -175,6 +216,6 @@ it('shows the card when a keyboard user focuses the link', async () => {
   await act(async () => userEvent.tab())
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
   )
 })

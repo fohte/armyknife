@@ -17,6 +17,7 @@ mod codex;
 pub(crate) mod codex_steer;
 mod codex_subagent_stop;
 mod crit;
+mod decision;
 mod display;
 mod error;
 mod focus;
@@ -156,10 +157,13 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Status(StatusCommands),
 
+    /// Record provisional decisions made by the calling session
+    #[command(subcommand)]
+    Decision(decision::DecisionCommands),
+
     /// Record structured proposals for watch-web
     #[command(subcommand)]
     Proposal(ProposalCommands),
-
     /// Internal: infer a missing stop status from a forked session.
     #[command(name = "status-inference", hide = true)]
     StatusInference(StatusInferenceArgs),
@@ -242,6 +246,7 @@ impl AgentCommands {
             Self::Focus(args) => focus::run(args)?,
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
+            Self::Decision(command) => decision::run(command)?,
             Self::Proposal(command) => proposal::run(command)?,
             Self::StatusInference(args) => status_inference::run(args)?,
             Self::Profile(command) => profile::run(command)?,

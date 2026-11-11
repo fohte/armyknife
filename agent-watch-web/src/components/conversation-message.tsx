@@ -9,6 +9,7 @@ import {
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
+import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
 import { SubagentReport } from '#components/subagent-report'
 import { ToolSummary } from '#components/tool-summary'
@@ -154,6 +155,26 @@ export function renderConversationMessage({
           void onAction('answer', { choice })
         }}
         onOpenInTerminal={onOpenInTerminal}
+      />
+    )
+  }
+  if (message.type === 'proposal') {
+    return (
+      <ProposalCard
+        key={`proposal-${String(message.seq)}`}
+        seq={message.seq}
+        title={message.title}
+        summary={message.summary}
+        options={message.options}
+        answer={message.answer}
+        resolved={message.resolved}
+        isMobile={isMobile}
+        onAnswer={(answer) =>
+          onAction(`proposals/${String(message.seq)}/answer`, {
+            choice: answer.choice,
+            comment: answer.comment,
+          })
+        }
       />
     )
   }
