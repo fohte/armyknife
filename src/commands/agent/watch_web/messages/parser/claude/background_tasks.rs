@@ -55,7 +55,7 @@ impl BackgroundTaskTracker {
         let Some(status) = tagged_value(body, "status") else {
             return;
         };
-        if matches!(status, "completed" | "failed" | "killed") {
+        if matches!(status, "completed" | "failed" | "killed" | "stopped") {
             self.tasks.retain(|task| task.id != task_id);
         }
     }
@@ -312,6 +312,7 @@ mod tests {
     #[case::completed("completed", Vec::new(), true, false)]
     #[case::failed("failed", Vec::new(), true, true)]
     #[case::killed("killed", Vec::new(), true, false)]
+    #[case::stopped("stopped", Vec::new(), true, false)]
     #[case::still_running("running", vec![BackgroundTask {
         id: "fixture-task-id".to_string(),
         description: "Watch the synthetic build".to_string(),
