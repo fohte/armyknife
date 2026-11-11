@@ -6,8 +6,6 @@ import type { ChatItem, SessionLinkTarget } from '#types'
 const target: SessionLinkTarget = {
   id: 'linked-session',
   title: 'Build verification',
-  category: 'in_progress',
-  isPaused: false,
   task: null,
   repo: 'example/project',
 }

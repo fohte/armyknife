@@ -74,20 +74,34 @@ export type SessionTreeNode = {
   pullRequest: PullRequest | null
 }
 
-export type SessionLinkTarget = Omit<
-  Pick<Session, 'id' | 'category' | 'isPaused' | 'task' | 'repo'>,
-  'task'
-> & {
-  task: Pick<SessionTask, 'id' | 'number' | 'title'> | null
-} & Partial<Pick<Session, 'title'>>
+export type SessionLinkTarget = Pick<Session, 'id' | 'repo'> & {
+  task:
+    | (Pick<SessionTask, 'id' | 'number' | 'title'> &
+        Partial<Pick<SessionTask, 'priority'>>)
+    | null
+  linkedTaskCount?: number | undefined
+} & {
+  title?: Session['title'] | undefined
+  engine?: Session['engine'] | undefined
+  workType?: Session['workType'] | undefined
+  kind?: Session['kind'] | undefined
+  preview?: Session['preview'] | undefined
+  elapsedSeconds?: Session['elapsedSeconds'] | undefined
+}
 
 export type ChatItem =
-  | { type: 'user'; text: string; from?: string }
-  | { type: 'queued_user'; content: UserContentPart[]; from?: string }
+  | { type: 'user'; text: string; from?: string; timestamp?: string }
+  | {
+      type: 'queued_user'
+      content: UserContentPart[]
+      from?: string
+      timestamp?: string
+    }
   | {
       type: 'user_with_content'
       content: UserContentPart[]
       from?: string
+      timestamp?: string
     }
   | {
       type: 'peer'
@@ -95,6 +109,7 @@ export type ChatItem =
       session_id: string
       session_title?: string
       content: UserContentPart[]
+      timestamp?: string
     }
   | {
       type: 'subagent_report'
@@ -108,6 +123,7 @@ export type ChatItem =
       kind: 'armyknife' | 'system' | 'hook'
       text: string
       failed: boolean
+      timestamp?: string
     }
   | { type: 'assistant'; text: string }
   | {

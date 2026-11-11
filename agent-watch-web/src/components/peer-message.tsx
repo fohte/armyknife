@@ -1,6 +1,7 @@
 import '#components/peer-message.css'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { formatMessageTime } from '#components/message-time'
 import { SessionLink } from '#components/session-link'
 import type { ChatItem, SessionLinkTarget } from '#types'
 
@@ -24,6 +25,7 @@ export function PeerMessage({
       ? 'armyknife'
       : `${message.session_title ?? message.session_id} (ended)`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
+  const time = formatMessageTime(message.timestamp)
   const openSession = () => {
     if (foundTarget === undefined) return
     onSelectSession(message.session_id)
@@ -42,6 +44,7 @@ export function PeerMessage({
             {sessionName}
           </SessionLink>
         )}
+        {time !== null && <time dateTime={message.timestamp}>{time}</time>}
       </div>
       <div
         className={`chat-peer-content${foundTarget === undefined ? ' chat-peer-content-unavailable' : ''}`}

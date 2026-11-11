@@ -6,7 +6,18 @@ pub(super) mod queue;
 use std::io::BufRead;
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+
 use super::{ChatItem, ParentSession, ToolOperation, UserContentPart};
+
+pub(super) fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
+    record
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
 
 pub(super) fn for_each_jsonl_record(
     reader: impl BufRead,
@@ -254,9 +265,17 @@ pub(super) fn append_text(
     text: String,
     is_user: bool,
     parent: Option<&ParentSession>,
+    timestamp: Option<DateTime<Utc>>,
 ) {
     let image_directory = super::super::image_attachments::storage_directory().ok();
-    append_text_with_image_directory(items, text, is_user, parent, image_directory.as_deref());
+    append_text_with_image_directory(
+        items,
+        text,
+        is_user,
+        parent,
+        image_directory.as_deref(),
+        timestamp,
+    );
 }
 
 fn append_text_with_image_directory(
@@ -265,6 +284,7 @@ fn append_text_with_image_directory(
     is_user: bool,
     parent: Option<&ParentSession>,
     image_directory: Option<&Path>,
+    timestamp: Option<DateTime<Utc>>,
 ) {
     if text.trim().is_empty() {
         return;
@@ -277,6 +297,7 @@ fn append_text_with_image_directory(
             None,
             Vec::new(),
             image_directory,
+            timestamp,
         );
     } else {
         items.push(ChatItem::Assistant { text });
@@ -290,15 +311,24 @@ fn append_text_with_user_marker_and_image_directory(
     marker: Option<&str>,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
+    timestamp: Option<DateTime<Utc>>,
 ) {
     let classification =
         classifier::classify_inbound(&serde_json::json!({"type":"user"}), &text, marker);
-    append_classification(items, classification, images, image_directory, parent);
+    append_classification(
+        items,
+        classification,
+        images,
+        image_directory,
+        parent,
+        timestamp,
+    );
 }
 
 pub(in crate::commands::agent::watch_web::messages::parser) fn append_peer_out(
     items: &mut Vec<ChatItem>,
     peer: classifier::PeerOut,
+    timestamp: Option<DateTime<Utc>>,
 ) {
     items.push(peer_item(
         peer.session_id,
@@ -307,6 +337,7 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_peer_out(
         peer.text,
         Vec::new(),
         None,
+        timestamp,
     ));
 }
 
@@ -316,6 +347,7 @@ fn append_classification(
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
     parent: Option<&ParentSession>,
+    timestamp: Option<DateTime<Utc>>,
 ) {
     match classification {
         classifier::MessageKind::User { text } if !text.trim().is_empty() || !images.is_empty() => {
@@ -324,6 +356,7 @@ fn append_classification(
                 None,
                 images,
                 image_directory,
+                timestamp,
             ));
         }
         classifier::MessageKind::PeerIn { session_id, text }
@@ -339,6 +372,7 @@ fn append_classification(
                 text,
                 images,
                 image_directory,
+                timestamp,
             ));
         }
         classifier::MessageKind::SubagentReport {
@@ -355,14 +389,20 @@ fn append_classification(
         }
         classifier::MessageKind::Event { kind, text, failed } => {
             if !text.trim().is_empty() {
+                let kind = match kind {
+                    classifier::EventKind::Armyknife => super::EventKind::Armyknife,
+                    classifier::EventKind::System => super::EventKind::System,
+                    classifier::EventKind::Hook => super::EventKind::Hook,
+                };
                 items.push(ChatItem::Event {
-                    kind: match kind {
-                        classifier::EventKind::Armyknife => super::EventKind::Armyknife,
-                        classifier::EventKind::System => super::EventKind::System,
-                        classifier::EventKind::Hook => super::EventKind::Hook,
-                    },
+                    kind,
                     text,
                     failed,
+                    timestamp: if kind == super::EventKind::Hook {
+                        None
+                    } else {
+                        timestamp.map(|timestamp| timestamp.to_rfc3339())
+                    },
                 });
             }
         }
@@ -383,7 +423,14 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_record_wit
     parent: Option<&ParentSession>,
 ) {
     let classification = classifier::classify_inbound(record, &text, marker);
-    append_classification(items, classification, images, image_directory, parent);
+    append_classification(
+        items,
+        classification,
+        images,
+        image_directory,
+        parent,
+        record_timestamp(record),
+    );
 }
 
 pub(in crate::commands::agent::watch_web::messages::parser) fn append_classification_with_image_directory(
@@ -392,8 +439,16 @@ pub(in crate::commands::agent::watch_web::messages::parser) fn append_classifica
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
     parent: Option<&ParentSession>,
+    timestamp: Option<DateTime<Utc>>,
 ) {
-    append_classification(items, classification, images, image_directory, parent);
+    append_classification(
+        items,
+        classification,
+        images,
+        image_directory,
+        parent,
+        timestamp,
+    );
 }
 
 fn peer_item(
@@ -403,6 +458,7 @@ fn peer_item(
     text: String,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
+    timestamp: Option<DateTime<Utc>>,
 ) -> ChatItem {
     let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
     let content = content.unwrap_or_else(|| vec![UserContentPart::Text { text }]);
@@ -411,6 +467,7 @@ fn peer_item(
         session_id,
         session_title,
         content,
+        timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
     }
 }
 
@@ -419,11 +476,20 @@ fn user_item_with_image_directory(
     from: Option<String>,
     images: Vec<UserContentPart>,
     image_directory: Option<&Path>,
+    timestamp: Option<DateTime<Utc>>,
 ) -> ChatItem {
     let (text, content) = user_content_parts_with_image_directory(text, images, image_directory);
     match content {
-        Some(content) => ChatItem::UserWithContent { content, from },
-        None => ChatItem::User { text, from },
+        Some(content) => ChatItem::UserWithContent {
+            content,
+            from,
+            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+        },
+        None => ChatItem::User {
+            text,
+            from,
+            timestamp: timestamp.map(|timestamp| timestamp.to_rfc3339()),
+        },
     }
 }
 
@@ -631,9 +697,17 @@ mod tests {
                 None,
                 Vec::new(),
                 Some(&image_directory),
+                None,
             );
         } else {
-            append_text_with_image_directory(&mut items, text, true, None, Some(&image_directory));
+            append_text_with_image_directory(
+                &mut items,
+                text,
+                true,
+                None,
+                Some(&image_directory),
+                None,
+            );
         }
 
         assert_eq!(
@@ -648,6 +722,7 @@ mod tests {
                         available: true,
                     },
                 ],
+                timestamp: None,
                 from: None,
             }]
         );
@@ -678,7 +753,14 @@ mod tests {
         };
         let mut items = Vec::new();
 
-        append_text_with_image_directory(&mut items, text, true, None, Some(&image_directory));
+        append_text_with_image_directory(
+            &mut items,
+            text,
+            true,
+            None,
+            Some(&image_directory),
+            None,
+        );
 
         assert_eq!(
             items,
@@ -695,6 +777,7 @@ mod tests {
                         name: "design-mock.html".to_string(),
                     },
                 ],
+                timestamp: None,
                 from: None,
             }]
         );
@@ -710,9 +793,16 @@ mod tests {
         "};
         let mut items = Vec::new();
 
-        append_text_with_image_directory(&mut items, text.clone(), true, None, None);
+        append_text_with_image_directory(&mut items, text.clone(), true, None, None, None);
 
-        assert_eq!(items, vec![ChatItem::User { text, from: None }]);
+        assert_eq!(
+            items,
+            vec![ChatItem::User {
+                text,
+                from: None,
+                timestamp: None,
+            }],
+        );
     }
 
     #[test]

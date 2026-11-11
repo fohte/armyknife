@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.611](https://github.com/fohte/armyknife/compare/v0.1.610...v0.1.611) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** improve session link cards ([#1587](https://github.com/fohte/armyknife/issues/1587)) ([03ee18d](https://github.com/fohte/armyknife/commit/03ee18dd31f60ed0ddb1049baea7dc5b33847f45))
+
+## [0.1.610](https://github.com/fohte/armyknife/compare/v0.1.609...v0.1.610) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** show chat timestamps ([#1586](https://github.com/fohte/armyknife/issues/1586)) ([564ed03](https://github.com/fohte/armyknife/commit/564ed03e4529c86639a0986b1491c68d07b4ad15))
+
 ## [0.1.609](https://github.com/fohte/armyknife/compare/v0.1.608...v0.1.609) (2026-11-11)
 
 

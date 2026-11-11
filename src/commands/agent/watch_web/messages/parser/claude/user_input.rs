@@ -166,6 +166,7 @@ mod tests {
                             text: " request.".to_string(),
                         },
                     ],
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::UserWithContent {
@@ -181,6 +182,7 @@ mod tests {
                             text: " prompt.".to_string(),
                         },
                     ],
+                    timestamp: None,
                     from: None,
                 },
             ],

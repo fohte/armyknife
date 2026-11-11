@@ -75,15 +75,49 @@ it('renders the sender, text, and image in message order', () => {
 })
 
 it('labels a queued prompt as You and keeps the user bubble style', () => {
+  const timestamp = '2026-06-01T12:00:00Z'
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(timestamp))
   render({
     type: 'queued_user',
     content: [{ type: 'text', text: 'Please rerun the example check.' }],
+    timestamp,
   })
 
   expect(snapshot()).toEqual([
     {
       className: 'chat-from',
-      text: 'You · Queued',
+      text: `You · Queued · ${localTime}`,
+      source: null,
+    },
+    {
+      className: 'markdown-message chat-user-message',
+      text: 'Please rerun the example check.',
+      source: null,
+    },
+  ])
+})
+
+it('shows the local send time above a user message', () => {
+  const timestamp = '2026-06-01T12:00:00Z'
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(timestamp))
+  render({
+    type: 'user',
+    text: 'Please rerun the example check.',
+    timestamp,
+  })
+
+  expect(snapshot()).toEqual([
+    {
+      className: 'chat-from',
+      text: `You · ${localTime}`,
       source: null,
     },
     {

@@ -21,6 +21,43 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+it('shows the send time in the peer card header', () => {
+  root = createRoot(container)
+  const timestamp = '2026-06-01T12:00:00Z'
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(timestamp))
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'to',
+          session_id: 'fixture-peer-session',
+          session_title: 'Fixture peer',
+          timestamp,
+          content: [{ type: 'text', text: 'A fictional peer message.' }],
+        }}
+        onSelectSession={() => undefined}
+        sessions={[]}
+      />,
+    )
+  })
+
+  const getActual = () => ({
+    label: container.querySelector('.chat-peer-label')?.textContent ?? null,
+    time: container.querySelector('time')?.textContent ?? null,
+    dateTime: container.querySelector('time')?.getAttribute('dateTime') ?? null,
+  })
+  expect(getActual()).toEqual({
+    label: `TOFixture peer (ended)${localTime}`,
+    time: localTime,
+    dateTime: timestamp,
+  })
+})
+
 it.each([
   {
     sessionId: 'fixture-untracked-session',
