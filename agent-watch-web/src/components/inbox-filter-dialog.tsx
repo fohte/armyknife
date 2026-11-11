@@ -163,7 +163,9 @@ export function InboxFilterDialog({
         </div>
         <p className="inbox-filter-example">
           Type to filter:{' '}
-          <code>project:web-app kind:review,question task:#123</code>
+          <code>
+            project:web-app kind:review,question task:#123 has:decision
+          </code>
         </p>
       </section>
     </div>
