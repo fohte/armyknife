@@ -79,7 +79,7 @@ async fn close_default_target(target: DefaultTarget, args: &CloseArgs) -> Result
             session_close::close_session_value(&session, args, None).await
         }
         DefaultTarget::Worktree(worktree_root) => {
-            ensure_keep_worktree_session_target(args)?;
+            ensure_keep_worktree_session_target(args, None)?;
             close_worktree(&worktree_root, args, false, None).await
         }
     }
@@ -122,7 +122,7 @@ async fn close_target(
         return session_close::close_session_value(&session, args, child_parent_session_id).await;
     }
 
-    ensure_keep_worktree_session_target(args)?;
+    ensure_keep_worktree_session_target(args, Some(target))?;
 
     let config = load_config()?;
     let worktree_path = worktree_delete::resolve_worktree_path(
@@ -135,17 +135,30 @@ async fn close_target(
     close_worktree(&worktree_root, args, false, child_parent_session_id).await
 }
 
-fn ensure_keep_worktree_session_target(args: &CloseArgs) -> Result<()> {
+fn ensure_keep_worktree_session_target(args: &CloseArgs, target: Option<&str>) -> Result<()> {
     if args.keep_worktree {
+        if let Some(target) = target {
+            bail!(
+                "Target `{target}` is not a tracked agent session; --keep-worktree requires a session target"
+            );
+        }
         bail!("--keep-worktree requires a session target");
     }
     Ok(())
 }
 
 fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
+    close_tracked_session_with_runtime(session, force, &LiveCloseRuntime)
+}
+
+fn close_tracked_session_with_runtime<R: CloseRuntime>(
+    session: &Session,
+    force: bool,
+    runtime: &R,
+) -> Result<()> {
     let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, force, &LiveCloseRuntime)
+    close_session(&session, force, runtime)
 }
 
 trait CloseRuntime {
@@ -1457,7 +1470,7 @@ mod tests {
 
         assert_eq!(
             result.unwrap_err().to_string(),
-            "--keep-worktree requires a session target"
+            "Target `feature/worktree` is not a tracked agent session; --keep-worktree requires a session target"
         );
     }
 
