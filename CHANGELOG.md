@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.577](https://github.com/fohte/armyknife/compare/v0.1.576...v0.1.577) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** support proposal choices ([#1513](https://github.com/fohte/armyknife/issues/1513)) ([85ad36a](https://github.com/fohte/armyknife/commit/85ad36acc52835f0cac9027e362786e0a9d0a2b0))
+
 ## [0.1.576](https://github.com/fohte/armyknife/compare/v0.1.575...v0.1.576) (2026-11-11)
 
 
