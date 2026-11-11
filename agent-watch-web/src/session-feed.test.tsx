@@ -46,7 +46,7 @@ function jsonResponse(body: unknown) {
   })
 }
 
-it('delivers configured work type metadata from a session response', async () => {
+it('delivers tree availability and work type metadata from a session response', async () => {
   const source = new FakeEventSource()
   const received = deferred<undefined>()
   const responses: unknown[] = []
@@ -59,6 +59,7 @@ it('delivers configured work type metadata from a session response', async () =>
         {
           id: 'sample-session',
           isPaused: false,
+          hasSessionTree: true,
           workType: 'release-guide',
           category: 'in_progress',
           kind: null,
@@ -99,6 +100,7 @@ it('delivers configured work type metadata from a session response', async () =>
           {
             id: 'sample-session',
             isPaused: false,
+            hasSessionTree: true,
             workType: 'release-guide',
             category: 'in_progress',
             kind: null,

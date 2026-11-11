@@ -29,6 +29,59 @@ pub(super) struct SessionTreeResponse {
     sessions: Vec<TreeSessionView>,
 }
 
+fn session_parent_ids(
+    tree_sessions: &[Session],
+    tree_session_ids: &HashSet<&str>,
+) -> HashMap<String, Option<String>> {
+    let mut parent_ids = tree_sessions
+        .iter()
+        .map(|session| {
+            let parent_id = session
+                .ancestor_session_ids
+                .iter()
+                .rev()
+                .find(|ancestor_id| tree_session_ids.contains(ancestor_id.as_str()))
+                .cloned();
+            (session.session_id.clone(), parent_id)
+        })
+        .collect::<HashMap<_, _>>();
+    remove_parent_cycles(&mut parent_ids);
+    parent_ids
+}
+
+fn remove_parent_cycles(parent_ids: &mut HashMap<String, Option<String>>) {
+    let mut completed = HashSet::new();
+    let mut starts = parent_ids.keys().cloned().collect::<Vec<_>>();
+    starts.sort();
+    for start in starts {
+        if completed.contains(&start) {
+            continue;
+        }
+        let mut path = Vec::<String>::new();
+        let mut path_positions = HashMap::<String, usize>::new();
+        let mut current_id = start;
+        loop {
+            if completed.contains(&current_id) {
+                break;
+            }
+            if let Some(cycle_start) = path_positions.get(&current_id).copied() {
+                // A stable root keeps inconsistent ancestry renderable.
+                if let Some(root_id) = path[cycle_start..].iter().min() {
+                    parent_ids.insert(root_id.clone(), None);
+                }
+                break;
+            }
+            path_positions.insert(current_id.clone(), path.len());
+            path.push(current_id.clone());
+            let Some(parent_id) = parent_ids.get(&current_id).cloned().flatten() else {
+                break;
+            };
+            current_id = parent_id;
+        }
+        completed.extend(path);
+    }
+}
+
 pub(super) async fn session_tree<S: SessionSource>(
     Path(session_id): Path<String>,
     State(source): State<S>,
@@ -74,6 +127,7 @@ pub(super) async fn session_tree<S: SessionSource>(
         .iter()
         .map(|session| session.session_id.as_str())
         .collect::<HashSet<_>>();
+    let parent_ids = session_parent_ids(&tree_sessions, &tree_session_ids);
     let sessions_to_check = tree_sessions
         .iter()
         .filter(|session| {
@@ -153,12 +207,7 @@ pub(super) async fn session_tree<S: SessionSource>(
             );
             TreeSessionView {
                 id: session.session_id.clone(),
-                parent_id: session
-                    .ancestor_session_ids
-                    .iter()
-                    .rev()
-                    .find(|ancestor_id| tree_session_ids.contains(ancestor_id.as_str()))
-                    .cloned(),
+                parent_id: parent_ids.get(&session.session_id).cloned().flatten(),
                 category,
                 is_active: session.status != SessionStatus::Ended,
                 kind: kind_for(
@@ -205,4 +254,33 @@ pub(super) async fn session_tree<S: SessionSource>(
         revision: snapshot.revision,
         sessions,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::remove_parent_cycles;
+
+    #[test]
+    fn session_tree_parent_cycles_fall_back_to_the_smallest_session_id() {
+        let mut parent_ids = HashMap::from([
+            ("cycle-a".to_string(), Some("cycle-b".to_string())),
+            ("cycle-b".to_string(), Some("cycle-a".to_string())),
+            ("cycle-child".to_string(), Some("cycle-a".to_string())),
+            ("self-cycle".to_string(), Some("self-cycle".to_string())),
+        ]);
+
+        remove_parent_cycles(&mut parent_ids);
+
+        assert_eq!(
+            parent_ids,
+            HashMap::from([
+                ("cycle-a".to_string(), None),
+                ("cycle-b".to_string(), Some("cycle-a".to_string())),
+                ("cycle-child".to_string(), Some("cycle-a".to_string())),
+                ("self-cycle".to_string(), None),
+            ]),
+        );
+    }
 }
