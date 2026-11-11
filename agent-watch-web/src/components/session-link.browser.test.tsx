@@ -5,50 +5,25 @@ import { userEvent } from 'vitest/browser'
 
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { SessionLink } from '#components/session-link'
-import type { Session } from '#types'
+import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
+import type { SessionLinkTarget } from '#types'
 
-const linkedSession: Session = {
+const linkedSession: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  category: 'in_progress',
-  isPaused: false,
   engine: 'Claude',
   workType: 'PM',
   kind: 'Plan',
   title: 'Inspect an example workflow',
   preview: 'Review the sample configuration.',
   elapsedSeconds: 120,
-  unread: false,
   task: {
     id: 'sample-task',
     number: 24,
     title: 'Inspect the example workflow',
     priority: 2,
   },
-  tasks: [
-    {
-      id: 'sample-task',
-      number: 24,
-      title: 'Inspect the example workflow',
-      priority: 2,
-    },
-    {
-      id: 'sample-task-extra',
-      number: 25,
-      title: 'Improve the example workflow',
-      priority: 3,
-    },
-    {
-      id: 'sample-task-another',
-      number: 26,
-      title: 'Document the example workflow',
-      priority: 4,
-    },
-  ],
+  linkedTaskCount: 3,
   repo: 'sample-org/example-service',
-  project: 'Example service',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
 }
 const openBesideModifier =
   getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
@@ -177,21 +152,29 @@ it('hides unavailable session details', () => {
   })
 })
 
-it('updates the elapsed time with the session', () => {
+it('updates elapsed time without changing the session target', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <SessionLink open session={linkedSession}>
-        sample-session
-      </SessionLink>,
+      <SessionLinkElapsedSecondsContext.Provider
+        value={new Map([[linkedSession.id, 120]])}
+      >
+        <SessionLink open session={linkedSession}>
+          sample-session
+        </SessionLink>
+      </SessionLinkElapsedSecondsContext.Provider>,
     )
   })
 
   act(() => {
     root?.render(
-      <SessionLink open session={{ ...linkedSession, elapsedSeconds: 180 }}>
-        sample-session
-      </SessionLink>,
+      <SessionLinkElapsedSecondsContext.Provider
+        value={new Map([[linkedSession.id, 180]])}
+      >
+        <SessionLink open session={linkedSession}>
+          sample-session
+        </SessionLink>
+      </SessionLinkElapsedSecondsContext.Provider>,
     )
   })
 

@@ -58,14 +58,12 @@ export type Session = {
   unreviewedDecisionCount?: number
 }
 
-export type SessionLinkTarget = Omit<
-  Pick<Session, 'id' | 'category' | 'isPaused' | 'task' | 'repo'>,
-  'task'
-> & {
+export type SessionLinkTarget = Pick<Session, 'id' | 'repo'> & {
   task:
     | (Pick<SessionTask, 'id' | 'number' | 'title'> &
         Partial<Pick<SessionTask, 'priority'>>)
     | null
+  linkedTaskCount?: number | undefined
 } & {
   title?: Session['title'] | undefined
   engine?: Session['engine'] | undefined
@@ -73,7 +71,6 @@ export type SessionLinkTarget = Omit<
   kind?: Session['kind'] | undefined
   preview?: Session['preview'] | undefined
   elapsedSeconds?: Session['elapsedSeconds'] | undefined
-  tasks?: Session['tasks'] | undefined
 }
 
 export type ChatItem =

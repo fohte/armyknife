@@ -1,50 +1,24 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionLink } from '#components/session-link'
-import type { Session } from '#types'
+import type { SessionLinkTarget } from '#types'
 
-const session: Session = {
+const session: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  category: 'needs_action',
-  isPaused: false,
   engine: 'Claude',
   workType: 'PM',
   kind: 'Review',
   title: 'Review a sample change',
   preview: 'Please review the sample design.',
   elapsedSeconds: 120,
-  unread: false,
   task: {
     id: 'sample-task',
     number: 24,
     title: 'Inspect the example workflow',
     priority: 2,
   },
-  tasks: [
-    {
-      id: 'sample-task',
-      number: 24,
-      title: 'Inspect the example workflow',
-      priority: 2,
-    },
-    {
-      id: 'sample-task-extra',
-      number: 25,
-      title: 'Improve the example workflow',
-      priority: 3,
-    },
-    {
-      id: 'sample-task-another',
-      number: 26,
-      title: 'Document the example workflow',
-      priority: 4,
-    },
-  ],
+  linkedTaskCount: 3,
   repo: 'sample-org/example-service',
-  project: 'Example service',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
 }
 
 const meta = {
@@ -74,6 +48,7 @@ export const SessionHasNoTask: Story = {
       preview: null,
       elapsedSeconds: undefined,
       task: null,
+      linkedTaskCount: 0,
       repo: '',
     },
   },

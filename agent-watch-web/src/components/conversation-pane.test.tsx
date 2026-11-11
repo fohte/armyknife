@@ -5595,7 +5595,7 @@ it('skips committing an unchanged memoized conversation row', () => {
   expect(renderMessage).toHaveBeenCalledTimes(1)
 })
 
-it('keeps message rows memoized when linked session details stay unchanged', () => {
+it('keeps message rows memoized for elapsed and closed-task updates', () => {
   const message: ChatItem = {
     type: 'assistant',
     text: 'The conversation is unchanged.',
@@ -5619,12 +5619,16 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
       id: 'fixture-linked-task',
       number: 17,
       title: 'Refresh linked sessions',
-      priority: 2,
+      priority: 1,
       isClosed: true,
     },
   }
   const initialSessions = [initialSession]
-  const refreshedSessions = [refreshedSession]
+  const priorityChangedSession = {
+    ...refreshedSession,
+    task: { ...refreshedSession.task, priority: 2 },
+  }
+  const priorityChangedSessions = [priorityChangedSession]
   const onAction = () => Promise.resolve(true)
   const onSelectSession = () => undefined
   const renderMessage = vi.mocked(renderConversationMessage)
@@ -5650,7 +5654,23 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
     root?.render(
       <ConversationPaneView
         session={refreshedSession}
-        sessions={refreshedSessions}
+        sessions={[refreshedSession]}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+  const renderCountAfterUnrelatedRefresh = renderMessage.mock.calls.length
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={priorityChangedSession}
+        sessions={priorityChangedSessions}
         messages={messages}
         actions={null}
         loading={false}
@@ -5662,7 +5682,14 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
     )
   })
 
-  expect(renderMessage).toHaveBeenCalledTimes(1)
+  const getActual = () => ({
+    afterUnrelatedRefresh: renderCountAfterUnrelatedRefresh,
+    afterPriorityChange: renderMessage.mock.calls.length,
+  })
+  expect(getActual()).toEqual({
+    afterUnrelatedRefresh: 1,
+    afterPriorityChange: 2,
+  })
 })
 
 it('keeps an unsent proposal comment when its position changes after refresh', async () => {
