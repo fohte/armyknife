@@ -63,6 +63,14 @@ export function useConversationScroll({
   const onScroll = useCallback(() => {
     const scrollContainer = scrollRef.current
     if (scrollContainer === null) return
+    const pendingAnchor = pendingScrollAnchorRef.current
+    if (pendingAnchor !== null) {
+      pendingScrollAnchorRef.current = {
+        scrollHeight: scrollContainer.scrollHeight,
+        scrollTop: scrollContainer.scrollTop,
+        start: pendingAnchor.start,
+      }
+    }
     followLatestRef.current =
       scrollContainer.scrollHeight -
         scrollContainer.scrollTop -

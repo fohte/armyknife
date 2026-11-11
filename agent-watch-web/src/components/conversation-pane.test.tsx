@@ -4936,10 +4936,6 @@ it('prepends an older page without moving existing messages in the viewport', as
 })
 
 it('loads an older page near the top and ignores repeated scrolls while it loads', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
   const visibleMessages = [
     { type: 'assistant', text: 'First visible message.' },
     { type: 'assistant', text: 'Latest visible message.' },
@@ -4988,6 +4984,10 @@ it('loads an older page near the top and ignores repeated scrolls while it loads
     scroll.dispatchEvent(new Event('scroll'))
     scroll.dispatchEvent(new Event('scroll'))
   })
+  act(() => {
+    scroll.scrollTop = 80
+    scroll.dispatchEvent(new Event('scroll'))
+  })
   await waitForState(() => fetcher.mock.calls.length === 3)
   const loadingState = {
     requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
@@ -5029,7 +5029,7 @@ it('loads an older page near the top and ignores repeated scrolls while it loads
       ],
       loadingLabel: 'Loading older messages…',
     },
-    scrollTop: 70,
+    scrollTop: 120,
     messages: [
       'Older message.',
       'First visible message.',
@@ -5040,10 +5040,6 @@ it('loads an older page near the top and ignores repeated scrolls while it loads
 })
 
 it('prunes to the latest 200 messages at the bottom and can load the discarded range again', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
   const assistantMessage = (index: number): ChatItem => ({
     type: 'assistant',
     text: `Message ${String(index)}.`,
@@ -5077,6 +5073,10 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
   const refetchedOlderMessages = Array.from({ length: 100 }, (_, index) =>
     assistantMessage(index + 1),
   )
+  const conversationMessageCount = () =>
+    container.querySelectorAll(
+      '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+    ).length
   let refreshKey = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
@@ -5133,9 +5133,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     )
   }
   act(renderConversation)
-  await waitForState(
-    () => container.querySelectorAll('.chat-assistant-message').length === 100,
-  )
+  await waitForState(() => conversationMessageCount() === 100)
   const scroll = requireElement(
     container.querySelector<HTMLDivElement>('.conversation-scroll'),
   )
@@ -5157,17 +5155,13 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
       .querySelector<HTMLButtonElement>('.conversation-load-older')
       ?.click()
   })
-  await waitForState(
-    () => container.querySelectorAll('.chat-assistant-message').length === 200,
-  )
+  await waitForState(() => conversationMessageCount() === 200)
   act(() => {
     container
       .querySelector<HTMLButtonElement>('.conversation-load-older')
       ?.click()
   })
-  await waitForState(
-    () => container.querySelectorAll('.chat-assistant-message').length === 300,
-  )
+  await waitForState(() => conversationMessageCount() === 300)
   const retainedMessage = requireElement(
     Array.from(container.querySelectorAll('.chat-assistant-message')).find(
       (element) => element.textContent === 'Message 101.',
@@ -5175,9 +5169,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
   )
   refreshKey += 1
   act(renderConversation)
-  await waitForState(
-    () => container.querySelectorAll('.chat-assistant-message').length === 200,
-  )
+  await waitForState(() => conversationMessageCount() === 200)
   const retainedMessageReused =
     retainedMessage === container.querySelector('.chat-assistant-message')
   const prunedState = {
@@ -5207,12 +5199,11 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
     scroll.scrollTop = 0
     scroll.dispatchEvent(new Event('scroll'))
   })
-  await waitForState(
-    () => container.querySelectorAll('.chat-assistant-message').length === 300,
-  )
+  await waitForState(() => conversationMessageCount() === 300)
 
   const snapshot = () => ({
     requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    loadedMessageCount: conversationMessageCount(),
     prunedState,
     reloadedFirstMessage: container.querySelector('.chat-assistant-message')
       ?.textContent,
@@ -5229,6 +5220,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
       '/api/sessions/sample-session/actions',
       '/api/sessions/sample-session/messages?before=101&limit=100',
     ],
+    loadedMessageCount: 300,
     prunedState: {
       startOfMessages: 'Message 101.',
       endOfMessages: 'Message 299.',
