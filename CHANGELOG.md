@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.613](https://github.com/fohte/armyknife/compare/v0.1.612...v0.1.613) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** classify stopped sessions ([#1593](https://github.com/fohte/armyknife/issues/1593)) ([3059264](https://github.com/fohte/armyknife/commit/3059264585c715393494b65bab631648487d692b))
+
 ## [0.1.612](https://github.com/fohte/armyknife/compare/v0.1.611...v0.1.612) (2026-11-11)
 
 
