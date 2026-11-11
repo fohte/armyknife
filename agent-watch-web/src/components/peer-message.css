@@ -1,7 +1,7 @@
 .chat-peer-message {
   display: flex;
   box-sizing: border-box;
-  width: fit-content;
+  width: 88%;
   max-width: 88%;
   flex-direction: column;
   border-radius: var(--aw-radius);
@@ -15,8 +15,7 @@
 
 .chat-peer-message-to {
   align-self: flex-end;
-  width: 88%;
-  border: 1px dotted var(--aw-border-dashed);
+  border: 1px dashed var(--aw-border-dashed);
 }
 
 .chat-peer-label {
