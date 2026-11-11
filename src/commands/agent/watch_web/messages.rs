@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
@@ -26,9 +26,11 @@ use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod parser;
 mod proposals;
+mod range;
 mod subagent_reports;
 
 use self::proposals::proposal_chat_item;
+use self::range::MessageRange;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -604,67 +606,6 @@ struct ConversationResponse {
     active_question_index: Option<usize>,
 }
 
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
-struct MessageRange {
-    limit: Option<usize>,
-    before: Option<usize>,
-    from: Option<usize>,
-}
-
-impl MessageRange {
-    fn is_valid(self) -> bool {
-        matches!(
-            (self.limit, self.before, self.from),
-            (None, None, None)
-                | (Some(_), None, None)
-                | (Some(_), Some(_), None)
-                | (None, None, Some(_))
-        )
-    }
-}
-
-impl ConversationResponse {
-    fn update_metadata(&mut self) {
-        self.total = self.messages.len();
-        self.decisions = self
-            .messages
-            .iter()
-            .filter(|message| matches!(message, ChatItem::Decision { .. }))
-            .cloned()
-            .collect();
-        self.has_unanswered_proposal = self.messages.iter().any(|message| {
-            matches!(
-                message,
-                ChatItem::Proposal {
-                    answer: None,
-                    resolved: false,
-                    ..
-                }
-            )
-        });
-        self.active_question_index = self
-            .messages
-            .iter()
-            .rposition(|message| matches!(message, ChatItem::Question { .. }));
-    }
-
-    fn apply_range(&mut self, range: MessageRange) {
-        let (start, end) = if let Some(before) = range.before {
-            let end = before.min(self.total);
-            (end.saturating_sub(range.limit.unwrap_or_default()), end)
-        } else if let Some(from) = range.from {
-            (from.min(self.total), self.total)
-        } else if let Some(limit) = range.limit {
-            (self.total.saturating_sub(limit), self.total)
-        } else {
-            (0, self.total)
-        };
-
-        self.messages = self.messages[start..end].to_vec();
-        self.start = start;
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct BackgroundTask {
@@ -861,9 +802,11 @@ mod tests {
         (status, content_type, body)
     }
 
-    async fn response_value(response: Response<Body>) -> serde_json::Value {
-        let (_, _, body) = response_snapshot(response).await;
-        serde_json::from_str(&body).unwrap()
+    async fn response_json_snapshot(
+        response: Response<Body>,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
+        let (status, content_type, body) = response_snapshot(response).await;
+        (status, content_type, serde_json::from_str(&body).unwrap())
     }
 
     fn fixture_decision(seq: i64) -> AgentDecision {
@@ -936,22 +879,44 @@ mod tests {
                 )
                 .await
                 .unwrap();
-            responses.push(response_value(response).await);
+            responses.push(response_json_snapshot(response).await);
         }
 
         assert_eq!(
             responses,
             vec![
-                ranged_response(0, &[1, 2, 3, 4]),
-                ranged_response(2, &[3, 4]),
-                ranged_response(0, &[1, 2]),
-                ranged_response(2, &[3, 4]),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    ranged_response(0, &[1, 2, 3, 4]),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    ranged_response(2, &[3, 4]),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    ranged_response(0, &[1, 2]),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    ranged_response(2, &[3, 4]),
+                ),
             ],
         );
     }
 
+    #[rstest]
+    #[case::before_requires_limit("/sessions/fixture-session/messages?before=2")]
+    #[case::from_rejects_limit("/sessions/fixture-session/messages?from=2&limit=1")]
+    #[case::before_and_from_are_exclusive(
+        "/sessions/fixture-session/messages?before=2&from=1&limit=1"
+    )]
     #[tokio::test]
-    async fn messages_route_rejects_incompatible_range_parameters() {
+    async fn messages_route_rejects_incompatible_range_parameters(#[case] uri: &str) {
         let session = stored_session();
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
@@ -962,12 +927,7 @@ mod tests {
             |_, _| Ok(()),
         );
         let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages?before=2")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
             .await
             .unwrap();
 
