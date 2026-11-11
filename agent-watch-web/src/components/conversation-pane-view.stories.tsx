@@ -175,6 +175,25 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
   ],
 }
 
+export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
+  name: 'The iPhone conversation header shows the active TODAY toggle',
+  args: {
+    isMobile: true,
+    isToday: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const PermissionWaitsForApproval: Story = {
   name: 'A permission request offers approval and rejection',
   args: {

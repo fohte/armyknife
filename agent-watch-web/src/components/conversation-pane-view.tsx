@@ -57,6 +57,8 @@ type ConversationPaneViewProps = {
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
+  isToday?: boolean
+  onToggleToday?: (isToday: boolean) => void
 }
 
 function useSessionLinkTargets(
@@ -120,6 +122,8 @@ export function ConversationPaneView({
   fileDropActive = false,
   onBack,
   onLater,
+  isToday = false,
+  onToggleToday,
 }: ConversationPaneViewProps) {
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
@@ -308,6 +312,18 @@ export function ConversationPaneView({
               onClick={onLater}
             >
               Later
+            </Button>
+            <Button
+              className="mobile-conversation-today cursor-pointer"
+              type="button"
+              variant="plain"
+              aria-label={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
+              aria-pressed={isToday}
+              onClick={() => {
+                onToggleToday?.(!isToday)
+              }}
+            >
+              {isToday ? '★' : '☆'}
             </Button>
           </>
         ) : (

@@ -402,6 +402,7 @@ export function App() {
     })
   const inboxProps = {
     error: error ?? savedViews.storageError,
+    lastUpdatedAt: sessionsReceivedAt,
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,

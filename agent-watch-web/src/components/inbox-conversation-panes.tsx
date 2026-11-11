@@ -52,6 +52,10 @@ export function InboxConversationPanes({
         onLater={() => {
           onLater(selectedSession.id)
         }}
+        isToday={selectedSession.isToday === true}
+        onToggleToday={(isToday) => {
+          inboxProps.onToggleToday(selectedSession.id, isToday)
+        }}
         onSelectSession={onSelectSession}
       />
     ) : null

@@ -100,6 +100,7 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         selectedId={null}
         loaded
         error={null}
+        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
         showAllInProgress
         onShowMore={() => undefined}
         onSelect={() => undefined}
@@ -131,6 +132,26 @@ function sectionSnapshot() {
     ).map((title) => title.textContent),
     resultCount: container.querySelector('.inbox-filter-result-count')
       ?.textContent,
+  }
+}
+
+function connectionSnapshot() {
+  return {
+    label: container.querySelector('.mobile-inbox-connection')?.textContent,
+    dotClassName: container.querySelector('.mobile-inbox-connection-dot')
+      ?.className,
+  }
+}
+
+function doneRowSnapshot() {
+  return {
+    text: container.querySelector('.mobile-done-row')?.textContent,
+    expanded: container
+      .querySelector('.mobile-done-row')
+      ?.getAttribute('aria-expanded'),
+    chevronHidden: container
+      .querySelector('.mobile-done-row .mobile-collapse-chevron')
+      ?.getAttribute('aria-hidden'),
   }
 }
 
@@ -240,6 +261,24 @@ it('omits quick actions from iPhone inbox rows', () => {
   expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
 })
 
+it('shows the connection time while the iPhone inbox is connected', () => {
+  renderInbox({ isMobile: true })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Connected · 22:00',
+    dotClassName: 'mobile-inbox-connection-dot',
+  })
+})
+
+it('shows the last update time and error dot while the iPhone inbox is disconnected', () => {
+  renderInbox({ isMobile: true, error: 'The session feed disconnected.' })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Disconnected · Last updated 22:00',
+    dotClassName: 'mobile-inbox-connection-dot is-disconnected',
+  })
+})
+
 it('shows the combined review count in the collapsed iPhone Done row', () => {
   const secondDoneSession: Session = {
     id: 'sample-done-secondary',
@@ -272,9 +311,11 @@ it('shows the combined review count in the collapsed iPhone Done row', () => {
     ],
   })
 
-  expect(container.querySelector('.mobile-done-row')?.textContent).toBe(
-    'Done2◇ 2 to review ›',
-  )
+  expect(doneRowSnapshot()).toEqual({
+    text: 'Done2◇ 2 to review›',
+    expanded: 'false',
+    chevronHidden: 'true',
+  })
 })
 
 it('opens the filter dialog from its button', () => {

@@ -17,6 +17,7 @@ type InboxViewProps = {
   selectedId: string | null
   loaded: boolean
   error: string | null
+  lastUpdatedAt: number
   showAllInProgress: boolean
   onShowMore: () => void
   onSelect: (id: string) => void
@@ -103,6 +104,7 @@ export function InboxView({
   selectedId,
   loaded,
   error,
+  lastUpdatedAt,
   showAllInProgress,
   onShowMore,
   onSelect,
@@ -152,6 +154,8 @@ export function InboxView({
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
   )
+  const connected = error === null
+  const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
     (session) => session.category === 'later',
   )
@@ -222,8 +226,13 @@ export function InboxView({
         </span>
         <span>agent watch</span>
         <span className="mobile-inbox-connection">
-          <span className="mobile-inbox-connection-dot" aria-hidden="true" />
-          Connected
+          <span
+            className={`mobile-inbox-connection-dot${connected ? '' : ' is-disconnected'}`}
+            aria-hidden="true"
+          />
+          {connected
+            ? `Connected · ${lastUpdatedTime}`
+            : `Disconnected · Last updated ${lastUpdatedTime}`}
         </span>
       </div>
       <header className="view-header">
@@ -343,14 +352,17 @@ export function InboxView({
           <span className="later-section-count">{later.length}</span>
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
-              {later.length > 0 ? nextReturnLabel(later) : 'Next activity'}{' '}
-              {isMobile
-                ? laterExpanded
-                  ? '⌄'
-                  : '›'
-                : laterExpanded
-                  ? '▾'
-                  : '▸'}
+              {later.length > 0 ? nextReturnLabel(later) : 'Next activity'}
+              {isMobile ? (
+                <>
+                  {' '}
+                  <span className="mobile-collapse-chevron" aria-hidden="true">
+                    {laterExpanded ? '⌄' : '›'}
+                  </span>
+                </>
+              ) : (
+                ` ${laterExpanded ? '▾' : '▸'}`
+              )}
             </span>
           ) : null}
         </Button>
@@ -417,14 +429,16 @@ export function InboxView({
           <span className="mobile-collapse-count">{done.length}</span>
           {unreviewedDoneCount > 0 ? (
             <span className="mobile-done-review-count">
-              ◇ {String(unreviewedDoneCount)} to review ›
+              ◇ {String(unreviewedDoneCount)} to review
+              <span className="mobile-collapse-chevron" aria-hidden="true">
+                ›
+              </span>
             </span>
-          ) : null}
-          {unreviewedDoneCount === 0 ? (
+          ) : (
             <span className="mobile-collapse-chevron" aria-hidden="true">
               {doneExpanded ? '⌄' : '›'}
             </span>
-          ) : null}
+          )}
         </Button>
         {renderSessionSection({
           title: 'Done',
@@ -471,4 +485,9 @@ export function InboxView({
       ) : null}
     </section>
   )
+}
+
+function formatMobileConnectionTime(timestamp: number) {
+  const date = new Date(timestamp)
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
 }

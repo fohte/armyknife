@@ -84,6 +84,10 @@
   background: var(--aw-text-muted);
 }
 
+.mobile-inbox-connection-dot.is-disconnected {
+  background: var(--aw-color-error);
+}
+
 .agent-watch-shell[data-layout='mobile'] .view-header,
 .story-mobile-layout .view-header {
   min-height: 0;
@@ -215,6 +219,11 @@
 .story-mobile-layout .session-title {
   color: var(--aw-text-primary);
   font-size: 15px;
+  font-weight: 400;
+}
+
+.agent-watch-shell[data-layout='mobile'] .session-title.is-unread,
+.story-mobile-layout .session-title.is-unread {
   font-weight: 700;
 }
 
@@ -232,8 +241,24 @@
 
 .agent-watch-shell[data-layout='mobile'] .session-meta-line,
 .story-mobile-layout .session-meta-line {
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 4px;
   color: var(--aw-text-secondary);
+}
+
+.agent-watch-shell[data-layout='mobile'] .session-task,
+.story-mobile-layout .session-task {
+  flex: 0 1 auto;
+}
+
+.mobile-session-meta-separator {
+  flex: 0 0 auto;
+  color: var(--aw-text-secondary);
+}
+
+.agent-watch-shell[data-layout='mobile'] .session-repo,
+.story-mobile-layout .session-repo {
+  font-family: var(--font-mono);
 }
 
 .agent-watch-shell[data-layout='mobile'] .session-task-reference,
@@ -294,7 +319,7 @@
 
 .mobile-collapse-count,
 .mobile-collapse-chevron {
-  color: var(--aw-text-muted);
+  color: var(--aw-text-crit-line);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -307,6 +332,9 @@
 }
 
 .mobile-done-review-count {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
   color: var(--aw-text-secondary);
   font-size: 12.5px;
@@ -325,12 +353,37 @@
   background: transparent;
   border-radius: var(--aw-radius);
   border-top: 1px solid var(--aw-border);
+  color: var(--aw-text-primary);
   font-size: 14px;
 }
 
 .mobile-collapse-chevron {
   margin-left: auto;
-  font-size: 20px;
+}
+
+.later-next-return .mobile-collapse-chevron {
+  margin-left: 0;
+}
+
+.mobile-done-row:has(.mobile-done-review-count) .mobile-collapse-chevron {
+  margin-left: 0;
+}
+
+.agent-watch-shell[data-layout='mobile'] .mobile-conversation-today,
+.story-mobile-layout .mobile-conversation-today {
+  width: 36px;
+  min-width: 36px;
+  min-height: 36px;
+  padding: 0;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-body);
+  font-size: 16px;
+}
+
+.agent-watch-shell[data-layout='mobile']
+  .mobile-conversation-today[aria-pressed='true'],
+.story-mobile-layout .mobile-conversation-today[aria-pressed='true'] {
+  color: var(--aw-color-warning);
 }
 
 .agent-watch-shell[data-layout='mobile']

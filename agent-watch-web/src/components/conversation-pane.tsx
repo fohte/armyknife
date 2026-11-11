@@ -267,6 +267,8 @@ type ConversationPaneProps = {
   runningCount?: number
   onBack?: () => void
   onLater?: () => void
+  isToday?: boolean
+  onToggleToday?: (isToday: boolean) => void
 }
 
 export function ConversationPane({
@@ -281,6 +283,8 @@ export function ConversationPane({
   runningCount = 0,
   onBack = () => undefined,
   onLater = () => undefined,
+  isToday = false,
+  onToggleToday = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
   const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
@@ -506,6 +510,8 @@ export function ConversationPane({
       runningCount={runningCount}
       onBack={onBack}
       onLater={onLater}
+      isToday={isToday}
+      onToggleToday={onToggleToday}
     />
   )
 

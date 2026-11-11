@@ -146,6 +146,14 @@ export function SessionRow({
                   </>
                 )}
               </span>
+              {isMobile ? (
+                <span
+                  className="mobile-session-meta-separator"
+                  aria-hidden="true"
+                >
+                  ·
+                </span>
+              ) : null}
               <span className="session-repo">
                 {compactRepo
                   ? session.repo.split('/').at(-1)

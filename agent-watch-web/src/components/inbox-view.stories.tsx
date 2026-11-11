@@ -197,6 +197,7 @@ const meta = {
     selectedId: 'sample-question',
     loaded: true,
     error: null,
+    lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
     showAllInProgress: false,
     onShowMore: () => undefined,
     onSelect: () => undefined,
@@ -303,6 +304,30 @@ export const InboxFitsAnIPhone: Story = {
     todaySessions: sessions.filter(
       (session) => session.id === 'sample-question',
     ),
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxShowsItsLastUpdateWhenDisconnected: Story = {
+  name: 'The iPhone inbox shows its last update when disconnected',
+  args: {
+    isMobile: true,
+    error: 'The session feed disconnected.',
+    selectedId: null,
   },
   decorators: [
     (Story) => (
