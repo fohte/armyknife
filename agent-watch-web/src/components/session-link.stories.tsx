@@ -28,7 +28,7 @@ const session: Session = {
 const meta = {
   component: SessionLink,
   args: {
-    children: 'sample-session',
+    children: session.title,
     session,
   },
 } satisfies Meta<typeof SessionLink>
