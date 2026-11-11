@@ -4726,6 +4726,56 @@ it('skips committing an unchanged memoized conversation row', () => {
   expect(renderMessage).toHaveBeenCalledTimes(1)
 })
 
+it('keeps message rows memoized when linked sessions only change elapsed time', () => {
+  const message: ChatItem = {
+    type: 'assistant',
+    text: 'The conversation is unchanged.',
+  }
+  const messages = [message]
+  const initialSession = { ...session, elapsedSeconds: 1 }
+  const refreshedSession = { ...session, elapsedSeconds: 2 }
+  const initialSessions = [initialSession]
+  const refreshedSessions = [refreshedSession]
+  const onAction = () => Promise.resolve(true)
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={initialSession}
+        sessions={initialSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={refreshedSession}
+        sessions={refreshedSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+
+  expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
 it('keeps an unsent proposal comment when its position changes after refresh', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {

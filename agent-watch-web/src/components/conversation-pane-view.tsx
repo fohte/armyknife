@@ -5,6 +5,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useLayoutEffect, useRef } from 'react'
 
+import { reuseEqualValue } from '#components/conversation-message-sharing'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
@@ -66,7 +67,7 @@ function useSessionLinkTargets(
   sessions: readonly Session[],
 ): readonly SessionLinkTarget[] {
   // Elapsed-time updates replace session objects even when link details are unchanged.
-  const targetsRef = useRef<readonly SessionLinkTarget[]>([])
+  const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
   const nextTargets = sessions.map(
     ({ id, category, isPaused, task, repo, title }) => ({
       id,
@@ -77,24 +78,7 @@ function useSessionLinkTargets(
       title,
     }),
   )
-  const targetsAreUnchanged =
-    targetsRef.current.length === nextTargets.length &&
-    targetsRef.current.every((target, index) => {
-      const nextTarget = nextTargets[index]
-      return (
-        nextTarget !== undefined &&
-        target.id === nextTarget.id &&
-        target.category === nextTarget.category &&
-        target.isPaused === nextTarget.isPaused &&
-        target.task?.id === nextTarget.task?.id &&
-        target.task?.number === nextTarget.task?.number &&
-        target.task?.title === nextTarget.task?.title &&
-        target.repo === nextTarget.repo &&
-        target.title === nextTarget.title
-      )
-    })
-
-  if (!targetsAreUnchanged) targetsRef.current = nextTargets
+  targetsRef.current = reuseEqualValue(targetsRef.current, nextTargets)
   return targetsRef.current
 }
 
