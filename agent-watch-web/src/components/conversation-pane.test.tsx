@@ -283,7 +283,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
 
   const desktopButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      '.conversation-header-actions .conversation-copy-session-id',
+      '.conversation-header-copy .session-heading-title-row .conversation-copy-session-id',
     ),
   )
   await act(async () => {

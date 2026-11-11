@@ -1,5 +1,14 @@
-.conversation-header-copy h1 {
+.session-heading-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-heading-title-row h1 {
   overflow: hidden;
+  min-width: 0;
+  flex: 0 1 auto;
   margin: 0;
   color: var(--aw-text-primary);
   font-size: 15px;

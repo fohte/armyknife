@@ -331,6 +331,7 @@ export function ConversationPaneView({
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                sessionId={session.id}
               />
             </div>
             <div className="conversation-header-actions">
@@ -358,7 +359,6 @@ export function ConversationPaneView({
                   #{session.pullRequest.number} PR
                 </a>
               ) : null}
-              <CopySessionIdControl sessionId={session.id} />
               {actions?.openInTerminal === true ? (
                 <Button type="button" variant="plain" onClick={openInTerminal}>
                   Open in terminal
