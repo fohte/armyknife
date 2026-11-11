@@ -745,7 +745,7 @@ mod tests {
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nDelivered fixture request."}}"#,
+            r#"{"type":"user","origin":{"kind":"peer","from":"unknown"},"timestamp":"2026-01-01T00:00:01Z","message":{"content":"⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nDelivered fixture request."}}"#,
         )
         .unwrap();
         let mut session = stored_session();

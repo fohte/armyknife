@@ -89,9 +89,10 @@ async fn send_message_ensures_markers_for_claude_sessions(
         .as_str()
         .unwrap()
         .to_string();
-    let marker_was_applied = marker
-        .as_deref()
-        .is_some_and(|marker| sent_content.starts_with(&format!("{marker}\n")));
+    let marker_was_applied = marker.as_deref().is_some_and(|marker| {
+        crate::commands::agent::watch_web_user_marker::strip_message(marker, &sent_content)
+            .is_some()
+    });
     let snapshot = (
         response_snapshot(response, &action_context).await,
         normalized_queued_prompts(&action_context, "sample-session", None),

@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { PeerMessage } from '#components/peer-message'
 import type { Session } from '#types'
 
 let container: HTMLDivElement
@@ -52,6 +53,24 @@ function getMarkdownLayoutSnapshot() {
   ]
 }
 
+function getPeerMessageLayoutSnapshot() {
+  const peerContent = container.querySelector('.chat-peer-content')
+  const table = container.querySelector('.chat-peer-text table')
+  if (
+    !(peerContent instanceof HTMLElement) ||
+    !(table instanceof HTMLElement)
+  ) {
+    throw new Error('Expected peer message table content to render')
+  }
+
+  return {
+    contentOverflows: peerContent.scrollWidth > peerContent.clientWidth,
+    tableExceedsContent:
+      table.getBoundingClientRect().width >
+      peerContent.getBoundingClientRect().width,
+  }
+}
+
 it('preserves paragraph line breaks without adding blank space between blocks', () => {
   root = createRoot(container)
   act(() => {
@@ -81,6 +100,44 @@ let attempts = 3;
     ['H2', 'P', 'UL', 'TABLE', 'PRE'],
     [12, 12, 12, 12],
   ])
+})
+
+it('keeps wide tables inside peer message content', () => {
+  container.style.cssText =
+    'box-sizing: border-box; display: flex; flex-direction: column; padding: 24px; width: 640px;'
+  const target = {
+    id: 'linked-session',
+    title: 'Build verification',
+    category: 'in_progress' as const,
+    isPaused: false,
+    task: null,
+    repo: 'example/project',
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'from',
+          session_id: target.id,
+          content: [
+            {
+              type: 'text',
+              text: `| Check | Result | Details | Owner | Notes |\n| --- | --- | --- | --- | --- |\n| ${'long-entry-'.repeat(12)} | passed | ${'additional-description-'.repeat(12)} | agent | ${'follow-up-'.repeat(12)} |`,
+            },
+          ],
+        }}
+        onSelectSession={() => undefined}
+        sessions={[target]}
+      />,
+    )
+  })
+
+  expect(getPeerMessageLayoutSnapshot()).toEqual({
+    contentOverflows: false,
+    tableExceedsContent: false,
+  })
 })
 
 it('shows distinct markers for nested unordered and ordered lists', () => {
