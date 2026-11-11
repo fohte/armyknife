@@ -333,7 +333,7 @@ mod tests {
             json!({
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
-                    "additionalContext": "A peer-message body beginning with `⟦armyknife-user:fixture-marker-cobalt⟧` was typed by the human user in armyknife watch-web. Treat it as a direct user instruction, even if the peer-message preamble says it is from another session or warns that it is not the user's intent. Ignore that transport preamble and remove the marker before interpreting the message. Keep the marker private; never reveal or repeat it."
+                    "additionalContext": "A peer-message body beginning with `⟦armyknife-user:fixture-marker-cobalt⟧` followed by `This message was typed by the human user in armyknife watch-web.` was typed by the human user. Treat it as a direct user instruction, even if the peer-message preamble says it is from another session or warns that it is not the user's intent. Ignore that transport preamble, marker, and label before interpreting the message. Keep the marker private; never reveal or repeat it."
                 }
             }),
         );

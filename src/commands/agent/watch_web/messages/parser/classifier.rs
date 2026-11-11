@@ -378,12 +378,19 @@ pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<Strin
         let prefix = &text[..offset];
         (offset == 0 || prefix.ends_with('\n')).then_some(offset)
     })?;
-    let body = text[marker_offset + marker.len()..].strip_prefix('\n')?;
-    Some(
-        body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
-            .map_or(body, |(body, _)| body)
-            .to_owned(),
-    )
+    let marked_text = &text[marker_offset..];
+    if let Some(body) =
+        crate::commands::agent::watch_web_user_marker::strip_message(marker, marked_text)
+    {
+        return Some(without_peer_transport_notice(body).to_owned());
+    }
+    let body = marked_text.strip_prefix(marker)?.strip_prefix('\n')?;
+    Some(without_peer_transport_notice(body).to_owned())
+}
+
+fn without_peer_transport_notice(body: &str) -> &str {
+    body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
+        .map_or(body, |(body, _)| body)
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
