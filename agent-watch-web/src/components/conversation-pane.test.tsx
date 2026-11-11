@@ -8,6 +8,22 @@ import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
 
+const conversationMessageRenders = vi.hoisted(() => ({ count: 0 }))
+
+vi.mock('#components/conversation-message', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('#components/conversation-message')>()
+  return {
+    ...original,
+    renderConversationMessage: (
+      ...args: Parameters<typeof original.renderConversationMessage>
+    ) => {
+      conversationMessageRenders.count += 1
+      return original.renderConversationMessage(...args)
+    },
+  }
+})
+
 const session: Session = {
   id: 'sample-session',
   category: 'needs_action',
@@ -286,6 +302,7 @@ function dispatchKeyInAct(
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+  conversationMessageRenders.count = 0
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -3896,6 +3913,71 @@ it('reloads the selected conversation when the session feed changes', async () =
     backgroundTasks: undefined,
     requestCount: 4,
   })
+})
+
+it('skips rendering unchanged messages when the status panel opens and refreshes', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const stableMessages = messagesResponse([
+    { type: 'assistant', text: 'Stable conversation message' },
+  ])
+  const stableActions = {
+    message: true,
+    answerQuestion: false,
+    interrupt: true,
+    openInTerminal: true,
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(stableMessages))
+    .mockResolvedValueOnce(jsonResponse(stableActions))
+    .mockResolvedValueOnce(jsonResponse(stableMessages))
+    .mockResolvedValueOnce(jsonResponse(stableActions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (statusPanelOpen: boolean, refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(false, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const initialRenderCount = conversationMessageRenders.count
+
+  act(() => {
+    renderConversation(true, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const afterOpeningPanel = conversationMessageRenders.count
+
+  act(() => {
+    renderConversation(true, 1)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const actual = JSON.stringify([
+    initialRenderCount,
+    afterOpeningPanel,
+    conversationMessageRenders.count,
+    fetcher.mock.calls.length,
+  ])
+  const expected = JSON.stringify([1, 1, 1, 4])
+  expect(actual).toBe(expected)
 })
 
 it('keeps the conversation and focused draft while a feed refresh is pending', async () => {

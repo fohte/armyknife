@@ -5,7 +5,6 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useLayoutEffect, useRef } from 'react'
 
-import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
 import type {
@@ -17,6 +16,7 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
@@ -146,30 +146,31 @@ export function ConversationPaneView({
   const selectLinkedSession = useCallback((id: string) => {
     onSelectSessionRef.current(id)
   }, [])
-  const activeQuestionIndex = messages.findLastIndex(
-    (message) => message.type === 'question',
-  )
-  const activeTool = messages.findLast(
-    (message) => message.type === 'tool_in_progress',
-  )
-  const conversationMessages = messages.filter(
-    (message) =>
-      message.type !== 'tool_in_progress' ||
-      (session.category !== 'in_progress' && session.isCompacting !== true),
-  )
-  const decisions = conversationMessages.filter(
-    (message) => message.type === 'decision',
-  )
-  const decisionPositions = new Map(
-    decisions.map((decision, index) => [decision.seq, index + 1]),
-  )
   const decisionLabel = formatSessionDecisionCount(session)
-  const hasUnansweredProposal = messages.some(
-    (message) =>
-      message.type === 'proposal' &&
-      message.answer === null &&
-      !message.resolved,
-  )
+  const onOpenInTerminal = useCallback(() => {
+    void onAction('focus')
+  }, [onAction])
+  const {
+    activeTool,
+    conversationMessageCount,
+    elements: conversationMessageElements,
+    hasUnansweredProposal,
+  } = useConversationMessageElements({
+    messages,
+    sessionCategory: session.category,
+    isCompacting: session.isCompacting === true,
+    sessionEngine: session.engine,
+    actions,
+    actionsReady,
+    isMobile,
+    selectedDecisionSeq,
+    onSelectDecision,
+    onAction,
+    onOpenInTerminal,
+    onSelectSession: selectLinkedSession,
+    pendingAction: pendingPermissionAction,
+    sessions: sessionLinkTargets,
+  })
   const parent = session.parent
   const isReview = session.kind === 'Review'
   const linkedTasks =
@@ -205,10 +206,6 @@ export function ConversationPaneView({
       event.preventDefault()
       sendMessage()
     }
-  }
-
-  const openInTerminal = () => {
-    void onAction('focus')
   }
 
   useLayoutEffect(() => {
@@ -367,7 +364,7 @@ export function ConversationPaneView({
                     <Button
                       type="button"
                       variant="plain"
-                      onClick={openInTerminal}
+                      onClick={onOpenInTerminal}
                     >
                       Open in terminal
                     </Button>
@@ -402,31 +399,10 @@ export function ConversationPaneView({
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
         ) : null}
-        {!loading && conversationMessages.length === 0 && activeTool == null ? (
+        {!loading && conversationMessageCount === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {conversationMessages.map((message, index) =>
-          renderConversationMessage({
-            actions,
-            actionsReady,
-            activeQuestionIndex,
-            index,
-            isMobile,
-            selectedDecisionSeq,
-            decisionPosition:
-              message.type === 'decision' && decisionPositions.has(message.seq)
-                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
-                : undefined,
-            onSelectDecision,
-            message,
-            onAction,
-            onOpenInTerminal: openInTerminal,
-            onSelectSession: selectLinkedSession,
-            pendingAction: pendingPermissionAction,
-            session,
-            sessions: sessionLinkTargets,
-          }),
-        )}
+        {conversationMessageElements}
       </div>
 
       {session.isCompacting === true ||
