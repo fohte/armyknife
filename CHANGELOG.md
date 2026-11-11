@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.605](https://github.com/fohte/armyknife/compare/v0.1.604...v0.1.605) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** load older chat on scroll ([#1574](https://github.com/fohte/armyknife/issues/1574)) ([ad85560](https://github.com/fohte/armyknife/commit/ad855600083313598aa952b98b65e31d25df756e))
+
 ## [0.1.604](https://github.com/fohte/armyknife/compare/v0.1.603...v0.1.604) (2026-11-11)
 
 
