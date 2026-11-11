@@ -1326,6 +1326,40 @@ it('marks a queued prompt below the delivered conversation', () => {
   ])
 })
 
+it('shows a local time on system event rows', () => {
+  const timestamp = '2026-06-01T12:00:00Z'
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(timestamp))
+  renderView(() => Promise.resolve(true), session, undefined, [
+    {
+      type: 'event',
+      kind: 'system',
+      text: 'A synthetic operation was blocked.',
+      failed: true,
+      timestamp,
+    },
+  ])
+
+  const event = container.querySelector<HTMLElement>('.chat-event')
+  const getActual = () => ({
+    text: event?.querySelector('.chat-event-text')?.textContent ?? null,
+    time: event?.querySelector('time')?.textContent ?? null,
+    dateTime: event?.querySelector('time')?.getAttribute('dateTime') ?? null,
+    kind: event?.getAttribute('data-kind') ?? null,
+    failed: event?.getAttribute('data-failed') ?? null,
+  })
+  expect(getActual()).toEqual({
+    text: 'A synthetic operation was blocked.',
+    time: localTime,
+    dateTime: timestamp,
+    kind: 'system',
+    failed: 'true',
+  })
+})
+
 it('shows peer images and supports keyboard navigation', () => {
   const linkedSession: Session = {
     ...session,
@@ -1334,12 +1368,6 @@ it('shows peer images and supports keyboard navigation', () => {
     title: 'Build verification',
   }
   const onSelectSession = vi.fn<(id: string) => void>()
-  const eventTimestamp = '2026-06-01T12:00:00Z'
-  const eventTime = new Intl.DateTimeFormat(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(new Date(eventTimestamp))
   renderView(
     vi.fn().mockResolvedValue(true),
     session,
@@ -1372,19 +1400,6 @@ it('shows peer images and supports keyboard navigation', () => {
           { type: 'file', name: 'fixture-peer-layout.html' },
         ],
       },
-      {
-        type: 'event',
-        kind: 'hook',
-        text: 'A fictional hook completed.',
-        failed: false,
-      },
-      {
-        type: 'event',
-        kind: 'system',
-        text: 'A fictional operation was blocked.',
-        failed: true,
-        timestamp: eventTimestamp,
-      },
     ],
     actions,
     false,
@@ -1416,15 +1431,10 @@ it('shows peer images and supports keyboard navigation', () => {
   const snapshot = () => ({
     sessionLinkHref: peerLink.getAttribute('href'),
     items: Array.from(
-      container.querySelectorAll<HTMLElement>(
-        '.chat-peer-message, .chat-event',
-      ),
+      container.querySelectorAll<HTMLElement>('.chat-peer-message'),
       (element) => ({
         className: element.className,
         text: element.textContent,
-        failed: element.getAttribute('data-failed'),
-        kind: element.getAttribute('data-kind'),
-        time: element.querySelector('time')?.textContent ?? null,
         imageSources: Array.from(
           element.querySelectorAll<HTMLImageElement>('img'),
           (image) => image.getAttribute('src'),
@@ -1446,9 +1456,6 @@ it('shows peer images and supports keyboard navigation', () => {
       {
         className: 'chat-peer-message chat-peer-message-to',
         text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
-        failed: null,
-        kind: null,
-        time: null,
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
@@ -1456,32 +1463,9 @@ it('shows peer images and supports keyboard navigation', () => {
       {
         className: 'chat-peer-message chat-peer-message-from',
         text: 'FROMBuild verificationThe fictional output passed.fixture-peer-layout.html',
-        failed: null,
-        kind: null,
-        time: null,
         imageSources: ['/api/images/fixture-peer-image.png'],
         unavailableImageText: undefined,
         fileNames: ['fixture-peer-layout.html'],
-      },
-      {
-        className: 'chat-event',
-        text: 'A fictional hook completed.',
-        time: null,
-        failed: null,
-        kind: 'hook',
-        imageSources: [],
-        unavailableImageText: undefined,
-        fileNames: [],
-      },
-      {
-        className: 'chat-event',
-        text: `A fictional operation was blocked. ${eventTime}`,
-        time: eventTime,
-        failed: 'true',
-        kind: 'system',
-        imageSources: [],
-        unavailableImageText: undefined,
-        fileNames: [],
       },
     ],
     selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],

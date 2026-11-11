@@ -1584,6 +1584,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hook_events_ignore_transcript_timestamps() {
+        let transcript = indoc! {r#"
+            {"type":"user","timestamp":"2026-11-11T10:00:00Z","message":{"content":"<local-command-stdout>Synthetic hook output.</local-command-stdout>"}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::Event {
+                kind: super::super::super::EventKind::Hook,
+                text: "Synthetic hook output.".to_string(),
+                failed: false,
+                timestamp: None,
+            }],
+        );
+    }
+
     #[rstest]
     #[case::tool_error(
         true,
