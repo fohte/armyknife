@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.609](https://github.com/fohte/armyknife/compare/v0.1.608...v0.1.609) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** archive Done sessions ([#1582](https://github.com/fohte/armyknife/issues/1582)) ([a2183ef](https://github.com/fohte/armyknife/commit/a2183ef3dd2a051e6d3dcb102cf3b3c2b4974bf4))
+
 ## [0.1.608](https://github.com/fohte/armyknife/compare/v0.1.607...v0.1.608) (2026-11-11)
 
 

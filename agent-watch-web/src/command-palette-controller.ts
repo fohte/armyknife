@@ -7,7 +7,10 @@ import {
   recordRecentSessionId,
 } from '#command-palette-model'
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
-import { archiveSession, openSessionInTerminal } from '#session-actions'
+import {
+  archiveDoneSessions as archiveDoneSessionsRequest,
+  openSessionInTerminal,
+} from '#session-actions'
 import type { HistoryMode, SessionHistoryState } from '#session-history'
 import { createSessionNavigationActions } from '#session-navigation-actions'
 import type { Session } from '#types'
@@ -16,6 +19,11 @@ type Navigate = (
   update: (current: SessionHistoryState) => SessionHistoryState,
   mode?: HistoryMode,
 ) => void
+
+type ArchiveBatch = {
+  sessions: readonly Session[]
+  resolve: () => void
+}
 
 type CommandPaletteControllerOptions = {
   sessions: readonly Session[]
@@ -46,7 +54,68 @@ export function useCommandPaletteController({
   const [recentSessionIds, setRecentSessionIds] = useState(() =>
     readRecentSessionIds(getRecentSessionStorage()),
   )
+  const archiveQueue = useRef<ArchiveBatch[]>([])
+  const pendingArchiveSessionIds = useRef(new Set<string>())
   const archiveBatchInFlight = useRef(false)
+  const archiveDoneSessions = useCallback(
+    async (sessionsToArchive: readonly Session[]) => {
+      const seenSessionIds = new Set<string>()
+      const newDoneSessions = sessionsToArchive.filter((session) => {
+        if (
+          session.category !== 'done' ||
+          pendingArchiveSessionIds.current.has(session.id) ||
+          seenSessionIds.has(session.id)
+        ) {
+          return false
+        }
+        seenSessionIds.add(session.id)
+        return true
+      })
+      if (newDoneSessions.length === 0) return
+
+      for (const session of newDoneSessions) {
+        pendingArchiveSessionIds.current.add(session.id)
+      }
+
+      let resolveBatch: () => void = () => undefined
+      const batchComplete = new Promise<void>((resolve) => {
+        resolveBatch = resolve
+      })
+      archiveQueue.current.push({
+        sessions: newDoneSessions,
+        resolve: resolveBatch,
+      })
+
+      if (!archiveBatchInFlight.current) {
+        archiveBatchInFlight.current = true
+        let lastFailure: string | null = null
+        while (archiveQueue.current.length > 0) {
+          const batch = archiveQueue.current.shift()
+          if (batch === undefined) continue
+
+          const failure = await archiveDoneSessionsRequest(batch.sessions)
+          for (const session of batch.sessions) {
+            pendingArchiveSessionIds.current.delete(session.id)
+          }
+          if (failure !== null) {
+            lastFailure = failure
+            setError(failure)
+          } else if (
+            archiveQueue.current.length === 0 &&
+            lastFailure === null
+          ) {
+            setError(null)
+          }
+          batch.resolve()
+        }
+        archiveBatchInFlight.current = false
+        if (lastFailure !== null) setError(lastFailure)
+      }
+
+      await batchComplete
+    },
+    [setError],
+  )
   const recordRecentSession = useCallback((id: string) => {
     recordRecentSessionId(getRecentSessionStorage(), id)
     setRecentSessionIds(readRecentSessionIds(getRecentSessionStorage()))
@@ -114,31 +183,14 @@ export function useCommandPaletteController({
           navigate((current) => ({ ...current, view: 'inbox' }))
           return
         case 'archive-done': {
-          if (archiveBatchInFlight.current) return
-          archiveBatchInFlight.current = true
-          const doneSessions = sessions.filter(
-            (session) => session.category === 'done',
-          )
-          let failure: string | null = null
-          for (const session of doneSessions) {
-            const archived = await archiveSession(session.id).match(
-              () => true,
-              () => false,
-            )
-            if (!archived) {
-              failure = `Could not archive ${session.title}.`
-              break
-            }
-          }
-          archiveBatchInFlight.current = false
-          setError(failure)
+          await archiveDoneSessions(sessions)
           return
         }
         default:
           return
       }
     },
-    [navigate, sessions, setError, setFocusedProjectName],
+    [archiveDoneSessions, navigate, sessions, setError, setFocusedProjectName],
   )
 
   useEffect(() => {
@@ -163,6 +215,7 @@ export function useCommandPaletteController({
     openSessionInInbox,
     openTodaySession,
     focusSession,
+    archiveDoneSessions,
     toggleToday,
     runCommand,
   }

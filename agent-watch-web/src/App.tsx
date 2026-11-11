@@ -165,6 +165,7 @@ export function App() {
     openSessionInInbox,
     openTodaySession,
     focusSession,
+    archiveDoneSessions,
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
@@ -292,6 +293,18 @@ export function App() {
     [beginLaterMutation, closeLater, finishLaterMutation],
   )
 
+  const archiveDoneSession = useCallback(
+    (sessionId: string) => {
+      const session = sessionsWithElapsedTime.find(
+        (candidate) => candidate.id === sessionId,
+      )
+      if (session !== undefined) {
+        void archiveDoneSessions([session])
+      }
+    },
+    [archiveDoneSessions, sessionsWithElapsedTime],
+  )
+
   useEffect(
     () =>
       startSessionFeed((response) => {
@@ -358,6 +371,7 @@ export function App() {
     laterSessionId,
     laterSubmissionInFlight,
     closeLater,
+    archiveSession: archiveDoneSession,
     submitLater,
     navigableSessions,
     openLater,
@@ -439,6 +453,9 @@ export function App() {
     onToggleDone: () => {
       setDoneExpanded((expanded) => !expanded)
     },
+    onArchiveDone: (doneSessions: readonly Session[]) => {
+      void archiveDoneSessions(doneSessions)
+    },
   }
   const navigation = !isMobile ? (
     <AgentWatchNav
@@ -481,6 +498,7 @@ export function App() {
           }}
           onBack={backToInbox}
           onLater={openLater}
+          onArchiveSession={archiveDoneSession}
           onSelectSession={(id) => {
             if (orderedSessions.some((session) => session.id === id)) {
               navigate((current) => ({ ...current, selectedId: id }))

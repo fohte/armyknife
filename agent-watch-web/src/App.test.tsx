@@ -1851,7 +1851,7 @@ it('keeps Later, In progress, and Done collapsed until opened on mobile', () => 
   })
   const afterInProgress = visibleTitles()
   act(() => {
-    container.querySelector<HTMLButtonElement>('.mobile-done-row')?.click()
+    container.querySelector<HTMLButtonElement>('.mobile-done-toggle')?.click()
   })
   const afterDone = visibleTitles()
 
@@ -2230,6 +2230,7 @@ it('archives each done session from the palette command', async () => {
   publishSessions({
     revision: 1,
     sessions: [
+      session('session-active', 'Active session', 'needs_action'),
       session('session-done-a', 'First finished session', 'done'),
       session('session-done-b', 'Second finished session', 'done'),
     ],
@@ -2300,6 +2301,133 @@ it('stops the archive batch and reports the failed session', async () => {
   })
 })
 
+it('archives all Done sessions from the Inbox heading and reports failures', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      requestUrl(input).endsWith('/archive')
+        ? Promise.resolve(new Response(null, { status: 500 }))
+        : mockSessionActionFetch(input),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-failed-archive', 'Unarchivable session', 'done'),
+      session('session-not-attempted', 'Later done session', 'done'),
+    ],
+  })
+
+  await act(async () => {
+    container
+      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      ?.click()
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    error: container.querySelector('.load-message.is-error')?.textContent,
+    archiveUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive')),
+  })
+  expect(snapshot()).toEqual({
+    error: 'Could not archive Unarchivable session.',
+    archiveUrls: ['/api/sessions/session-failed-archive/archive'],
+  })
+})
+
+it('archives the selected Done session with E and leaves other categories alone', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-active', 'Active session', 'needs_action'),
+      session('session-done', 'Finished session', 'done'),
+    ],
+  })
+
+  const rows =
+    container.querySelectorAll<HTMLButtonElement>('[data-session-row]')
+  act(() => {
+    rows[0]?.click()
+  })
+  act(() => {
+    dispatchKey(window, 'e')
+  })
+  act(() => {
+    rows[1]?.click()
+  })
+  act(() => {
+    dispatchKey(window, 'e')
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+
+  const archiveUrls = fetchMock.mock.calls
+    .map(([request]) => requestUrl(request))
+    .filter((url) => url.endsWith('/archive'))
+  expect(archiveUrls).toEqual(['/api/sessions/session-done/archive'])
+})
+
+it('shows and runs Archive in a Done conversation header', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation(mockSessionActionFetch)
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-active', 'Active session', 'needs_action'),
+      session('session-done', 'Finished session', 'done'),
+    ],
+  })
+
+  act(() => {
+    container
+      .querySelectorAll<HTMLButtonElement>('[data-session-row]')[0]
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  expect(container.querySelector('.conversation-archive')).toBeNull()
+
+  act(() => {
+    container
+      .querySelectorAll<HTMLButtonElement>('[data-session-row]')[1]
+      ?.click()
+  })
+  await act(async () => {
+    await flushAsyncState()
+  })
+  const archiveButton = container.querySelector<HTMLButtonElement>(
+    '.conversation-archive',
+  )
+  await act(async () => {
+    archiveButton?.click()
+    await flushAsyncState()
+  })
+
+  const snapshot = () => ({
+    archiveButtonText: archiveButton?.textContent,
+    archiveUrls: fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive')),
+  })
+  expect(snapshot()).toEqual({
+    archiveButtonText: 'Archive',
+    archiveUrls: ['/api/sessions/session-done/archive'],
+  })
+})
+
 it('does not start a second archive batch while the first is pending', async () => {
   const archiveRequest = {
     resolve: null as ((response: Response) => void) | null,
@@ -2348,6 +2476,82 @@ it('does not start a second archive batch while the first is pending', async () 
   expect(urlsBeforeCompletion).toEqual([
     '/api/sessions/session-pending-archive/archive',
   ])
+})
+
+it('queues an Archive action for another Done session while one is pending', async () => {
+  const archiveResolvers = new Map<string, (response: Response) => void>()
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url = requestUrl(input)
+    return url.endsWith('/archive')
+      ? new Promise<Response>((resolve) => {
+          archiveResolvers.set(url, resolve)
+        })
+      : mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+
+  async function selectDoneSession(index: number) {
+    act(() => {
+      container
+        .querySelectorAll<HTMLButtonElement>('[data-session-row]')
+        [index]?.click()
+    })
+    await act(async () => {
+      await flushAsyncState()
+    })
+  }
+
+  async function archiveSelectedSession() {
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('.conversation-archive')
+        ?.click()
+      await flushAsyncState()
+    })
+  }
+
+  await selectDoneSession(0)
+  await archiveSelectedSession()
+  await selectDoneSession(1)
+  await archiveSelectedSession()
+
+  const archiveUrls = () =>
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive'))
+  expect(archiveUrls()).toEqual(['/api/sessions/session-done-a/archive'])
+
+  const resolveFirstArchive = archiveResolvers.get(
+    '/api/sessions/session-done-a/archive',
+  )
+  if (resolveFirstArchive === undefined)
+    throw new Error('First archive request was not started')
+  await act(async () => {
+    resolveFirstArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+  expect(archiveUrls()).toEqual([
+    '/api/sessions/session-done-a/archive',
+    '/api/sessions/session-done-b/archive',
+  ])
+
+  const resolveSecondArchive = archiveResolvers.get(
+    '/api/sessions/session-done-b/archive',
+  )
+  if (resolveSecondArchive === undefined)
+    throw new Error('Second archive request was not started')
+  await act(async () => {
+    resolveSecondArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
 })
 
 it('opens Later with L and selects a preset with its number key', async () => {
