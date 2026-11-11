@@ -110,9 +110,195 @@ it('shows the primary task and the count of other linked tasks for a session', (
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
   ).toBe(
-    'P1 #42 Improve notifications +1 · feature/notification-preferences · notification refresh · example/web-app',
+    'P1 #42 Improve notifications +1 · example/web-app · feature/notification-preferences',
   )
 })
+
+it.each([
+  ['needs action', 'needs_action', 'Question', 300, '◆', 'Question', '5m'],
+  [
+    'needs action without a kind',
+    'needs_action',
+    null,
+    300,
+    '◆',
+    'Needs action',
+    '5m',
+  ],
+  ['error', 'needs_action', 'Error', 720, '×', 'Error', '12m'],
+  ['in progress', 'in_progress', null, 30, '●', 'Working', '30s'],
+  ['later', 'later', null, 90, '◷', 'Later', ''],
+  ['done', 'done', null, 360, '✓', 'Done', ''],
+  ['short session', 'needs_action', 'Question', 8, '◆', 'Question', '8s'],
+  ['59 seconds', 'needs_action', 'Question', 59, '◆', 'Question', '59s'],
+  ['60 seconds', 'needs_action', 'Question', 60, '◆', 'Question', '1m'],
+  ['59 minutes', 'needs_action', 'Question', 3_540, '◆', 'Question', '59m'],
+  ['60 minutes', 'needs_action', 'Question', 3_600, '◆', 'Question', '1h'],
+  ['90 minutes', 'needs_action', 'Question', 5_400, '◆', 'Question', '1h'],
+  ['24 hours', 'needs_action', 'Question', 86_400, '◆', 'Question', '1d'],
+  ['unknown category', 'blocked', null, 60, '•', 'blocked', '1m'],
+] as const)(
+  'renders the %s session icon, kind, and elapsed time',
+  (
+    _name,
+    category,
+    kind,
+    elapsedSeconds,
+    icon,
+    expectedKind,
+    expectedDetail,
+  ) => {
+    renderPalette({
+      sessions: [{ ...session, category, kind, elapsedSeconds }],
+      initialQuery: 'Review notification settings',
+    })
+
+    const item = container.querySelector('.command-palette-item')
+    const snapshot = () => ({
+      detail: item?.querySelector('.command-palette-item-detail')?.textContent,
+      icon: item?.querySelector('.command-palette-status')?.textContent,
+      kind: item?.querySelector('.command-palette-item-kind')?.textContent,
+      title: item?.querySelector('.command-palette-item-heading strong')
+        ?.textContent,
+    })
+    expect(snapshot()).toEqual({
+      detail: expectedDetail,
+      icon,
+      kind: expectedKind,
+      title: 'Review notification settings',
+    })
+  },
+)
+
+it.each([
+  ['task', '#notification', '#', '#42 Improve notifications'],
+  ['project', '@notification', '▤', 'notification refresh'],
+  ['command', '>Switch to Board', '›', 'Switch to Board'],
+] as const)(
+  'renders a %s result with its marker and title',
+  (_type, query, icon, title) => {
+    renderPalette({ initialQuery: query })
+
+    const item = container.querySelector('.command-palette-item')
+    const actualIcon =
+      item?.querySelector('.command-palette-status')?.textContent ?? ''
+    const actualTitle =
+      item?.querySelector('.command-palette-item-heading strong')
+        ?.textContent ?? ''
+    const actual = `${actualIcon}${actualTitle}`
+    expect(actual).toEqual(`${icon}${title}`)
+  },
+)
+
+it('adds the task number to result rows but not action headings', async () => {
+  renderPalette({ initialQuery: '#notification' })
+
+  expect(
+    container.querySelector('.command-palette-item-heading strong')
+      ?.textContent,
+  ).toBe('#42 Improve notifications')
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}')
+  })
+
+  const snapshot = () => ({
+    actionHeading: container.querySelector('[role="menu"] h2')?.textContent,
+    actionLabel: container
+      .querySelector('[role="menu"]')
+      ?.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    actionHeading: 'Improve notifications',
+    actionLabel: 'Improve notifications actions',
+  })
+})
+
+it('shows task priority before the task result summary', () => {
+  renderPalette({ initialQuery: '#notification' })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toBe('P1 · 1 sessions · 1 need action · example/web-app')
+})
+
+it('shows an em dash when a task has no priority', () => {
+  renderPalette({
+    initialQuery: '#57',
+    sessions: [
+      {
+        ...session,
+        task: {
+          id: 'task-rollout',
+          number: 57,
+          title: 'Prepare a rollout plan',
+          priority: null,
+        },
+      },
+    ],
+  })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toBe('P— · 1 sessions · 1 need action · example/web-app')
+})
+
+it.each([
+  ['switch board', '>Switch to Board'],
+  ['switch inbox', '>Switch to Inbox'],
+  ['archive done', '>Archive all done'],
+] as const)(
+  'does not show an inactive keyboard shortcut for the %s command',
+  (_name, query) => {
+    renderPalette({ initialQuery: query })
+
+    expect(
+      container.querySelector('.command-palette-item-detail')?.textContent,
+    ).toBe('')
+  },
+)
+
+it('renders every result detail with monospace styling', () => {
+  renderPalette({ initialQuery: 'notification' })
+
+  const actual = Array.from(
+    container.querySelectorAll('.command-palette-item-detail'),
+  ).map((item) => item.className)
+  expect(actual).toEqual([
+    'command-palette-item-detail is-monospace',
+    'command-palette-item-detail is-monospace',
+    'command-palette-item-detail is-monospace',
+  ])
+})
+
+it.each([
+  [
+    'results',
+    undefined,
+    ['↵ Open', '→ Actions', 'Tab Scope', '# task · @ project · > command'],
+    'command-palette-hint-legend',
+  ],
+  ['actions', 'session-alerts', ['↵ Select', '← Back', '↑↓ Navigate'], ''],
+] as const)(
+  'renders %s footer hints with the right alignment only on the legend',
+  (_name, initialActionItemId, expectedHints, expectedLegendClass) => {
+    renderPalette(
+      initialActionItemId === undefined ? {} : { initialActionItemId },
+    )
+
+    const snapshot = () => {
+      const hints = container.querySelectorAll('.command-palette-hints > span')
+      return {
+        labels: Array.from(hints).map((hint) => hint.textContent),
+        lastClassName: hints[hints.length - 1]?.className ?? '',
+      }
+    }
+    expect(snapshot()).toEqual({
+      labels: expectedHints,
+      lastClassName: expectedLegendClass,
+    })
+  },
+)
 
 it('opens a matching project from the project scope with Enter', async () => {
   const onOpenProject = vi.fn<(name: string) => void>()
@@ -156,11 +342,11 @@ it('runs the selected command with Ctrl-n and Enter', async () => {
   ])
 })
 
-it('matches a session by branch name and shows its task and repository', () => {
+it('matches a session by branch name and shows its task, branch, and repository', () => {
   renderPalette({ initialQuery: 'feature/notification-preferences' })
 
   expect(container.querySelector('.command-palette-item')?.textContent).toEqual(
-    'Review notification settingsQuestionP1 #42 Improve notifications · feature/notification-preferences · notification refresh · example/web-appQuestion · 5m',
+    '◆Review notification settingsQuestionP1 #42 Improve notifications · example/web-app · feature/notification-preferences5m',
   )
 })
 
@@ -179,9 +365,23 @@ it.each([
 
   expect(
     container.querySelector('.command-palette-item-subtitle')?.textContent,
-  ).toEqual(
-    'P1 #42 Improve notifications · notification refresh · example/web-app',
-  )
+  ).toEqual('P1 #42 Improve notifications · example/web-app')
+})
+
+it('keeps the branch after the task when the repository is blank', () => {
+  renderPalette({
+    sessions: [
+      {
+        ...session,
+        repo: '   ',
+        branch: 'feature/notification-preferences',
+      },
+    ],
+  })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toEqual('P1 #42 Improve notifications · feature/notification-preferences')
 })
 
 it.each([
