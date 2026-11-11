@@ -22,10 +22,61 @@ const todaySession: Session = {
   isToday: true,
 }
 
+function navigation(activeView: 'inbox' | 'board') {
+  return (
+    <AgentWatchNav
+      activeView={activeView}
+      paletteShortcut={{
+        modifier: 'metaKey',
+        label: '⌘K',
+        ariaLabel: 'Command K',
+      }}
+      needsActionCount={3}
+      savedViews={[
+        {
+          id: 'needs-review',
+          name: 'Needs review',
+          query: 'kind:review',
+          count: 2,
+          countTone: 'needs-action',
+        },
+        {
+          id: 'errors',
+          name: 'Errors',
+          query: 'kind:error',
+          count: 1,
+          countTone: 'error',
+        },
+      ]}
+      selectedSavedViewId="needs-review"
+      todaySessions={[todaySession]}
+      workTypeNavGroups={[
+        {
+          label: 'PM',
+          projects: [
+            {
+              name: 'sample project',
+              status: 'Review',
+              needsActionCount: 1,
+              sessionId: todaySession.id,
+            },
+          ],
+        },
+      ]}
+      onViewChange={() => undefined}
+      onSelectSavedView={() => undefined}
+      onDeleteSavedView={() => undefined}
+      onSelectToday={() => undefined}
+      onSelectSession={() => undefined}
+      onOpenPalette={() => undefined}
+    />
+  )
+}
+
 const meta = {
   component: ResizableColumns,
   args: {
-    first: <div style={{ padding: '16px' }}>Session list</div>,
+    first: navigation('inbox'),
     second: <div style={{ padding: '16px' }}>Conversation</div>,
     storageKey: null,
     firstSize: 360,
@@ -35,7 +86,7 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '900px', height: '560px' }}>
+      <div style={{ width: '100vw', height: '100vh' }}>
         <Story />
       </div>
     ),
@@ -55,41 +106,9 @@ export const FirstPaneIsCollapsed: Story = {
 }
 
 export const NavigationHasAnAdjustableBoundary: Story = {
-  name: 'The navigation and main content have an adjustable boundary',
+  name: 'The navigation and main content meet at 240px',
   args: {
-    first: (
-      <AgentWatchNav
-        activeView="inbox"
-        paletteShortcut={{
-          modifier: 'metaKey',
-          label: '⌘K',
-          ariaLabel: 'Command K',
-        }}
-        needsActionCount={1}
-        savedViews={[]}
-        selectedSavedViewId={null}
-        todaySessions={[todaySession]}
-        workTypeNavGroups={[
-          {
-            label: 'PM',
-            projects: [
-              {
-                name: 'sample project',
-                status: 'Review',
-                needsActionCount: 1,
-                sessionId: todaySession.id,
-              },
-            ],
-          },
-        ]}
-        onViewChange={() => undefined}
-        onSelectSavedView={() => undefined}
-        onDeleteSavedView={() => undefined}
-        onSelectToday={() => undefined}
-        onSelectSession={() => undefined}
-        onOpenPalette={() => undefined}
-      />
-    ),
+    first: navigation('inbox'),
     second: (
       <main className="agent-watch-main">
         <div style={{ padding: '16px' }}>Inbox and conversation panes</div>
@@ -99,5 +118,21 @@ export const NavigationHasAnAdjustableBoundary: Story = {
     firstMinSize: 160,
     secondMinSize: 508,
     label: 'Resize navigation and content',
+  },
+}
+
+export const BoardHasTheSameNavigationBoundary: Story = {
+  name: 'The Board view keeps the navigation at 240px',
+  args: {
+    first: navigation('board'),
+    second: (
+      <main className="agent-watch-main">
+        <div style={{ padding: '16px' }}>Board</div>
+      </main>
+    ),
+    firstSize: 240,
+    firstMinSize: 160,
+    secondMinSize: 508,
+    label: 'Resize navigation and Board',
   },
 }

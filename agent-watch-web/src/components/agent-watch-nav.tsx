@@ -3,7 +3,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
+import { Filter, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
@@ -58,14 +58,17 @@ export function AgentWatchNav({
           &gt;
         </span>
         <span className="brand-name">agent watch</span>
-        <button
-          aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
-          className="agent-watch-command-key"
-          onClick={onOpenPalette}
-          type="button"
-        >
-          {paletteShortcut.label}
-        </button>
+        <div className="agent-watch-command">
+          <Search aria-hidden="true" size={12} />
+          <button
+            aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
+            className="agent-watch-command-key"
+            onClick={onOpenPalette}
+            type="button"
+          >
+            {paletteShortcut.label}
+          </button>
+        </div>
         <button
           aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
           aria-pressed={inboxCollapsed}

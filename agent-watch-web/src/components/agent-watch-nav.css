@@ -95,8 +95,15 @@
   margin-top: 22px;
 }
 
-.agent-watch-command-key {
+.agent-watch-command {
+  display: flex;
+  align-items: center;
+  gap: 4px;
   margin-left: auto;
+  color: var(--aw-text-secondary);
+}
+
+.agent-watch-command-key {
   padding: 2px 5px;
   border: 1px solid var(--aw-border-control);
   border-radius: var(--aw-radius);
