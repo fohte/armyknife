@@ -7,6 +7,7 @@ type SessionKind =
   | 'Review'
   | 'Error'
   | 'Plan'
+  | 'Proposal'
   | 'Stopped'
   | (string & {})
 
@@ -77,6 +78,13 @@ export type ChatItem =
       content: UserContentPart[]
     }
   | {
+      type: 'subagent_report'
+      agent_id: string
+      agent_name: string
+      description?: string
+      text: string
+    }
+  | {
       type: 'event'
       kind: 'armyknife' | 'system' | 'hook'
       text: string
@@ -97,11 +105,33 @@ export type ChatItem =
       multi_select?: boolean
       answer: string | null
     }
+  | {
+      type: 'proposal'
+      seq: number
+      title: string
+      summary: string | null
+      options: ProposalOption[]
+      answer: ProposalAnswer | null
+      resolved: boolean
+    }
   | { type: 'permission'; tool: string; description: string }
 
 export type QuestionChoice = {
   label: string
   description?: string
+}
+
+export type ProposalOption = {
+  label: string
+  description: string | null
+  pros: string[]
+  cons: string[]
+  recommended: boolean
+}
+
+export type ProposalAnswer = {
+  choice: number | null
+  comment: string | null
 }
 
 export type UserContentPart =

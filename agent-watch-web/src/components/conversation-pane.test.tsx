@@ -38,6 +38,31 @@ const question: ChatItem = {
   answer: null,
 }
 
+const proposal: ChatItem = {
+  type: 'proposal',
+  seq: 3,
+  title: 'When should the setting take effect?',
+  summary: 'Choose how the change is introduced.',
+  options: [
+    {
+      label: 'Use the existing flow',
+      description: 'Explain the change before applying it.',
+      pros: ['Small change'],
+      cons: ['Adds one step'],
+      recommended: true,
+    },
+    {
+      label: 'Show the choice earlier',
+      description: null,
+      pros: [],
+      cons: [],
+      recommended: false,
+    },
+  ],
+  answer: null,
+  resolved: false,
+}
+
 function messagesResponse(messages: unknown, backgroundTasks: unknown = []) {
   return { messages, backgroundTasks }
 }
@@ -71,6 +96,16 @@ type ActionHandler = (
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
+}
+
+async function waitForState(condition: () => boolean) {
+  const deadline = Date.now() + 1000
+  await act(async () => {
+    while (!condition() && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 10))
+    }
+  })
+  return condition()
 }
 
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -597,6 +632,58 @@ it('does not send a freeform answer when skipping the question fails', async () 
   })
 
   expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+})
+
+it('keeps the message composer available while a proposal waits for a choice', () => {
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [proposal],
+  )
+
+  const snapshot = () => ({
+    placeholder: container
+      .querySelector<HTMLTextAreaElement>('.conversation-composer textarea')
+      ?.getAttribute('placeholder'),
+    composerDisabled: container.querySelector<HTMLTextAreaElement>(
+      '.conversation-composer textarea',
+    )?.disabled,
+  })
+
+  expect(snapshot()).toEqual({
+    placeholder: 'Choose an option above, or message the session',
+    composerDisabled: false,
+  })
+})
+
+it('sends Command-Enter from the message composer without answering the proposal', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [proposal])
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).click()
+  })
+  const messageField = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.conversation-composer textarea',
+    ),
+  )
+  setTextareaValue(messageField, 'Send a direct message.')
+  const submitEvent = dispatchKeyInAct(messageField, 'Enter', { metaKey: true })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    submitPrevented: submitEvent.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    submitPrevented: true,
+    actionCalls: [['messages', { content: 'Send a direct message.' }]],
+  })
 })
 
 it('shows a selected answer, dims other choices, and renders Markdown', () => {
@@ -1204,6 +1291,136 @@ it('renders file attachments returned by the messages endpoint', async () => {
     alert: null,
   })
 })
+it('posts a proposal answer to its sequence route and refreshes the conversation', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const requests: Array<{
+    url: string
+    method: string
+    body: string | null
+  }> = []
+  const fetcher = vi.fn<typeof fetch>((input, init) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+    const method = init?.method ?? 'GET'
+    requests.push({
+      url,
+      method,
+      body: typeof init?.body === 'string' ? init.body : null,
+    })
+    return Promise.resolve(
+      method === 'POST'
+        ? new Response(null, { status: 204 })
+        : url.endsWith('/messages')
+          ? jsonResponse(messagesResponse([proposal]))
+          : jsonResponse(actions),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    requireElement(
+      container.querySelectorAll<HTMLInputElement>(
+        '.chat-proposal-option input',
+      )[1] ?? null,
+    ).click()
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-proposal-actions .aw-button--primary',
+      ),
+    ).click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    post: requests.find((request) => request.method === 'POST') ?? null,
+    placeholder: container
+      .querySelector<HTMLTextAreaElement>('.conversation-composer textarea')
+      ?.getAttribute('placeholder'),
+    status: container.querySelector('.chat-proposal-card h2')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    post: {
+      url: '/api/sessions/sample-session/proposals/3/answer',
+      method: 'POST',
+      body: '{"choice":1,"comment":null}',
+    },
+    placeholder: 'Choose an option above, or message the session',
+    status: 'Proposal · chose B',
+  })
+})
+
+it('accepts a subagent report without a description from the messages endpoint', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([
+          {
+            type: 'subagent_report',
+            agent_id: 'fixture-agent-id',
+            agent_name: 'general-purpose',
+            text: 'The fictional task is complete.',
+          },
+        ]),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    summary: container.querySelector('.chat-tool-summary summary')?.textContent,
+    body: container.querySelector('.chat-tool-summary .markdown-message')
+      ?.textContent,
+    open: container.querySelector('.chat-tool-summary')?.hasAttribute('open'),
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    summary: 'general-purpose',
+    body: 'The fictional task is complete.',
+    open: false,
+    alert: null,
+  })
+})
+
 it('shows elapsed time while the session is working without an active tool', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
@@ -1878,12 +2095,23 @@ it('clears pasted attachments after a successful send', async () => {
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
+  expect(
+    await waitForState(
+      () =>
+        onAction.mock.calls.length === 1 &&
+        container.querySelector('.composer-attachment') === null,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,

@@ -33,6 +33,31 @@ function isUserContentPart(value: unknown): boolean {
   )
 }
 
+function isProposalOption(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value['label'] === 'string' &&
+    (value['description'] === null ||
+      typeof value['description'] === 'string') &&
+    Array.isArray(value['pros']) &&
+    value['pros'].every((pro) => typeof pro === 'string') &&
+    Array.isArray(value['cons']) &&
+    value['cons'].every((con) => typeof con === 'string') &&
+    typeof value['recommended'] === 'boolean'
+  )
+}
+
+function isProposalAnswer(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    (value['choice'] === null ||
+      (typeof value['choice'] === 'number' &&
+        Number.isInteger(value['choice']) &&
+        value['choice'] >= 0)) &&
+    (value['comment'] === null || typeof value['comment'] === 'string')
+  )
+}
+
 function isChatItem(value: unknown): value is ChatItem {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   switch (value['type']) {
@@ -54,6 +79,14 @@ function isChatItem(value: unknown): value is ChatItem {
           typeof value['session_title'] === 'string') &&
         Array.isArray(value['content']) &&
         value['content'].every(isUserContentPart)
+      )
+    case 'subagent_report':
+      return (
+        typeof value['agent_id'] === 'string' &&
+        typeof value['agent_name'] === 'string' &&
+        (value['description'] === undefined ||
+          typeof value['description'] === 'string') &&
+        typeof value['text'] === 'string'
       )
     case 'event':
       return (
@@ -97,6 +130,18 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['multi_select'] === undefined ||
           typeof value['multi_select'] === 'boolean') &&
         (value['answer'] === null || typeof value['answer'] === 'string')
+      )
+    case 'proposal':
+      return (
+        typeof value['seq'] === 'number' &&
+        Number.isInteger(value['seq']) &&
+        value['seq'] > 0 &&
+        typeof value['title'] === 'string' &&
+        (value['summary'] === null || typeof value['summary'] === 'string') &&
+        Array.isArray(value['options']) &&
+        value['options'].every(isProposalOption) &&
+        (value['answer'] === null || isProposalAnswer(value['answer'])) &&
+        typeof value['resolved'] === 'boolean'
       )
     case 'permission':
       return (

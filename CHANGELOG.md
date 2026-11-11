@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.1.577](https://github.com/fohte/armyknife/compare/v0.1.576...v0.1.577) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** support proposal choices ([#1513](https://github.com/fohte/armyknife/issues/1513)) ([85ad36a](https://github.com/fohte/armyknife/commit/85ad36acc52835f0cac9027e362786e0a9d0a2b0))
+
+## [0.1.576](https://github.com/fohte/armyknife/compare/v0.1.575...v0.1.576) (2026-11-11)
+
+
+### Features
+
+* **agent:** record provisional decisions ([#1512](https://github.com/fohte/armyknife/issues/1512)) ([5050ec5](https://github.com/fohte/armyknife/commit/5050ec51b7537aeab8c84f1aad3bc66eb63610ee))
+
+## [0.1.575](https://github.com/fohte/armyknife/compare/v0.1.574...v0.1.575) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align nav and frame to mock ([#1510](https://github.com/fohte/armyknife/issues/1510)) ([cae09b6](https://github.com/fohte/armyknife/commit/cae09b6d17f351b74d0494c39de0fc0110c105bc))
+* **agent-watch-web:** match inbox filters to mock ([#1507](https://github.com/fohte/armyknife/issues/1507)) ([e8354ae](https://github.com/fohte/armyknife/commit/e8354ae14ac794248fb83d9ef28dcddaa9869668))
+
+## [0.1.574](https://github.com/fohte/armyknife/compare/v0.1.573...v0.1.574) (2026-11-11)
+
+
+### Features
+
+* **watch-web:** collapse subagent reports ([#1508](https://github.com/fohte/armyknife/issues/1508)) ([3fe74f2](https://github.com/fohte/armyknife/commit/3fe74f290d601c45751b1e22f9caa1342ddb437a))
+
+## [0.1.573](https://github.com/fohte/armyknife/compare/v0.1.572...v0.1.573) (2026-11-11)
+
+
+### Features
+
+* **agent/proposal:** allow proposal recording ([#1505](https://github.com/fohte/armyknife/issues/1505)) ([30b219a](https://github.com/fohte/armyknife/commit/30b219afb3ead46c9e42bf87f931d7ae7c03ed51))
+
 ## [0.1.572](https://github.com/fohte/armyknife/compare/v0.1.571...v0.1.572) (2026-11-11)
 
 
