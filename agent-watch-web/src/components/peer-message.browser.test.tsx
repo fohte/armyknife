@@ -26,19 +26,19 @@ it.each([
     sessionId: 'fixture-untracked-session',
     sessionTitle: undefined,
     direction: 'to',
-    label: 'TOfixture-untracked-session',
+    label: 'TOfixture-untracked-session (ended)',
   },
   {
     sessionId: 'fixture-parent-session',
     sessionTitle: 'Fixture parent',
     direction: 'from',
-    label: 'FROMFixture parent (fixture-parent-session)',
+    label: 'FROMFixture parent (ended)',
   },
   {
     sessionId: 'unknown',
     sessionTitle: undefined,
     direction: 'from',
-    label: 'FROMUnknown session',
+    label: 'FROMarmyknife',
   },
 ] as const)(
   'shows $label without a session card',
@@ -89,3 +89,55 @@ it.each([
     })
   },
 )
+
+it('keeps Markdown block spacing inside peer messages', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <PeerMessage
+        message={{
+          type: 'peer',
+          direction: 'from',
+          session_id: 'unknown',
+          content: [
+            {
+              type: 'text',
+              text: `<delegation-update>\nA summary.\n\n- First item\n- Second item\n</delegation-update>`,
+            },
+          ],
+        }}
+        onSelectSession={() => undefined}
+        sessions={[]}
+      />,
+    )
+  })
+
+  const markdown = container.querySelector('.chat-peer-text')
+  if (!(markdown instanceof HTMLElement)) {
+    throw new Error('Expected peer Markdown content to render')
+  }
+  const blocks = Array.from(markdown.children)
+  const paragraph = markdown.querySelector('p')
+  if (paragraph === null) throw new Error('Expected a Markdown paragraph')
+  const blockGaps = blocks.slice(1).map((block, index) => {
+    const previous = blocks[index]
+    if (previous === undefined) throw new Error('Expected a preceding block')
+    return Math.round(
+      block.getBoundingClientRect().top -
+        previous.getBoundingClientRect().bottom,
+    )
+  })
+
+  const getActual = () => ({
+    blockGaps,
+    blockTags: blocks.map((block) => block.tagName),
+    markdownWhiteSpace: getComputedStyle(markdown).whiteSpace,
+    paragraphWhiteSpace: getComputedStyle(paragraph).whiteSpace,
+  })
+  expect(getActual()).toEqual({
+    blockGaps: [12, 12],
+    blockTags: ['H2', 'P', 'UL'],
+    markdownWhiteSpace: 'normal',
+    paragraphWhiteSpace: 'pre-line',
+  })
+})

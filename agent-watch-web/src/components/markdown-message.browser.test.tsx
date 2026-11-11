@@ -71,6 +71,31 @@ function getPeerMessageLayoutSnapshot() {
   }
 }
 
+function getTaggedMarkdownSnapshot() {
+  const message = container.firstElementChild
+  if (!(message instanceof HTMLElement)) {
+    throw new Error('Expected a tagged Markdown message to render')
+  }
+  const blocks = Array.from(message.children)
+  const blockGaps = blocks.slice(1).map((block, index) => {
+    const previous = blocks[index]
+    if (previous === undefined) throw new Error('Expected a preceding block')
+    return Math.round(
+      block.getBoundingClientRect().top -
+        previous.getBoundingClientRect().bottom,
+    )
+  })
+
+  return {
+    blockGaps,
+    blockTags: blocks.map((block) => block.tagName),
+    heading: message.querySelector('h2')?.textContent ?? null,
+    hasOuterTag: message.querySelector('delegation-update') !== null,
+    text: message.textContent,
+    whiteSpace: getComputedStyle(message).whiteSpace,
+  }
+}
+
 it('preserves paragraph line breaks without adding blank space between blocks', () => {
   root = createRoot(container)
   act(() => {
@@ -100,6 +125,34 @@ let attempts = 3;
     ['H2', 'P', 'UL', 'TABLE', 'PRE'],
     [12, 12, 12, 12],
   ])
+})
+
+it('renders a single outer tag as a label and formatted Markdown body', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <MarkdownMessage>{`<delegation-update>
+A summary.
+
+- First item
+- Second item
+</delegation-update>`}</MarkdownMessage>,
+    )
+  })
+
+  expect(getTaggedMarkdownSnapshot()).toEqual({
+    blockGaps: [12, 12],
+    blockTags: ['H2', 'P', 'UL'],
+    heading: 'delegation-update',
+    hasOuterTag: false,
+    text: `delegation-update
+A summary.
+
+First item
+Second item
+`,
+    whiteSpace: 'normal',
+  })
 })
 
 it('keeps wide tables inside peer message content', () => {

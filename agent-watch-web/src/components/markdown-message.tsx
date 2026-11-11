@@ -189,6 +189,17 @@ type MarkdownMessageProps = {
   sessions?: readonly SessionLinkTarget[]
 }
 
+function unwrapTaggedMessage(value: string): string {
+  const match = value
+    .trim()
+    .match(/^<([A-Za-z_][A-Za-z0-9._:-]*)>\r?\n?([\s\S]*?)\r?\n?<\/\1>$/)
+  const tag = match?.[1]
+  const body = match?.[2]
+  return tag === undefined || body === undefined
+    ? value
+    : `## ${tag}\n\n${body.trim()}`
+}
+
 function createMarkdownComponents(
   sessionsById: ReadonlyMap<string, SessionLinkTarget>,
   onSelectSession?: (id: string) => void,
@@ -284,6 +295,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
     sessions.map((session) => [session.id.toLowerCase(), session]),
   )
   const components = createMarkdownComponents(sessionsById, onSelectSession)
+  const markdownSource = inline ? children : unwrapTaggedMessage(children)
   const message = (
     <ReactMarkdown
       components={inline ? components.inline : components.markdown}
@@ -294,7 +306,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
         remarkTrimNonAsciiAutolinks,
       ]}
     >
-      {children}
+      {markdownSource}
     </ReactMarkdown>
   )
 

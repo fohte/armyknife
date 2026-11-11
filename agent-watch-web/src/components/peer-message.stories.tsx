@@ -73,8 +73,8 @@ export const PeerMessageNamesAnUntrackedSession: Story = {
   },
 }
 
-export const PeerMessageNamesAnUnknownSession: Story = {
-  name: 'A peer message identifies its session as unknown',
+export const PeerMessageNamesArmyknife: Story = {
+  name: 'A peer notification identifies armyknife as its source',
   args: {
     message: {
       type: 'peer',

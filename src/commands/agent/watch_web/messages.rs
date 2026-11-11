@@ -16,7 +16,6 @@ use axum::routing::get;
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::commands::agent::claude_sessions;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{
     AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
@@ -34,6 +33,8 @@ use self::range::MessageRange;
 
 mod cache;
 use self::cache::{MessageCache, MessageCacheKey};
+mod session_titles;
+use self::session_titles::{parent_session, resolve_peer_session_titles};
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -248,6 +249,7 @@ fn load_conversation_with_queued_prompts(
         if let Some(path) = session.transcript_path.as_deref() {
             subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
         }
+        resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cache::delete_resolved_queued_prompts(
             loaders,
             session_id,
@@ -269,6 +271,7 @@ fn load_conversation_with_queued_prompts(
                 proposals: &proposal_items,
             },
         })?;
+    resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     let messages = &mut conversation.messages;
     if main_permission_pending
@@ -319,33 +322,6 @@ fn load_conversation_with_queued_prompts(
         resolved_queued_prompt_ids,
     );
     Ok(Some(conversation))
-}
-
-fn parent_session(
-    session: &Session,
-    load_session: &mut impl FnMut(&str) -> Result<Option<Session>>,
-) -> Result<Option<ParentSession>> {
-    let Some(parent_id) = session.ancestor_session_ids.last() else {
-        return Ok(None);
-    };
-    let Some(parent) = load_session(parent_id)? else {
-        return Ok(None);
-    };
-    let title = parent
-        .label
-        .or_else(|| claude_sessions::get_session_title(&parent.cwd, &parent.session_id))
-        .or_else(|| {
-            parent
-                .cwd
-                .file_name()
-                .and_then(|name| name.to_str())
-                .map(str::to_owned)
-        })
-        .unwrap_or_else(|| "parent session".to_string());
-    Ok(Some(ParentSession {
-        session_id: parent.session_id,
-        title,
-    }))
 }
 
 struct TranscriptInput<'a> {
@@ -676,6 +652,7 @@ struct ParentSession {
 mod tests {
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
     use axum::body::{Body, to_bytes};
@@ -1714,7 +1691,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_message_route_includes_the_resolved_session_title() {
+    async fn peer_message_route_includes_a_resolved_sender_title() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let record = json!({
@@ -1732,17 +1709,16 @@ mod tests {
 
         let mut child = stored_session();
         child.session_id = "fixture-child-id".to_string();
-        child.ancestor_session_ids = vec!["fixture-parent-id".to_string()];
         child.transcript_path = Some(transcript_path);
-        let mut parent = stored_session();
-        parent.session_id = "fixture-parent-id".to_string();
-        parent.label = Some("Fixture parent".to_string());
+        let mut sender = stored_session();
+        sender.session_id = "fixture-parent-id".to_string();
+        sender.label = Some("Fixture parent".to_string());
 
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
-                    "fixture-parent-id" => Some(parent.clone()),
+                    "fixture-parent-id" => Some(sender.clone()),
                     _ => None,
                 })
             },
@@ -1769,6 +1745,146 @@ mod tests {
                 r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
                     .to_string(),
             )
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_title_resolution_refreshes_a_cached_conversation() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let record = json!({
+            "type": "user",
+            "message": {
+                "content": concat!(
+                    "<peer-message>", "\n",
+                    "- From session_id: fixture-sender-id", "\n", "\n",
+                    "Synthetic peer request.", "\n",
+                    "</peer-message>",
+                ),
+            },
+        });
+        std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let mut child = stored_session();
+        child.transcript_path = Some(transcript_path);
+        let mut sender = stored_session();
+        sender.session_id = "fixture-sender-id".to_string();
+        sender.label = Some("Fixture sender".to_string());
+        let sender_is_available = Arc::new(AtomicBool::new(false));
+        let sender_availability = Arc::clone(&sender_is_available);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| {
+                Ok(match id {
+                    "fixture-session" => Some(child.clone()),
+                    "fixture-sender-id" if sender_availability.load(Ordering::SeqCst) => {
+                        Some(sender.clone())
+                    }
+                    _ => None,
+                })
+            },
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        let without_sender = message_response(&router).await;
+        sender_is_available.store(true, Ordering::SeqCst);
+        let with_sender = message_response(&router).await;
+
+        assert_eq!(
+            (without_sender, with_sender),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [{
+                            "type": "peer",
+                            "direction": "from",
+                            "session_id": "fixture-sender-id",
+                            "content": [{"type": "text", "text": "Synthetic peer request."}],
+                        }],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 1,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({
+                        "messages": [{
+                            "type": "peer",
+                            "direction": "from",
+                            "session_id": "fixture-sender-id",
+                            "session_title": "Fixture sender",
+                            "content": [{"type": "text", "text": "Synthetic peer request."}],
+                        }],
+                        "backgroundTasks": [],
+                        "start": 0,
+                        "total": 1,
+                        "decisions": [],
+                        "hasUnansweredProposal": false,
+                        "activeQuestionIndex": null,
+                    }),
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn peer_message_route_ignores_malformed_sender_ids() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let record = json!({
+            "type": "user",
+            "message": {
+                "content": concat!(
+                    "<peer-message>", "\n",
+                    "- From session_id: ../fixture-id", "\n", "\n",
+                    "Synthetic peer request.", "\n",
+                    "</peer-message>",
+                ),
+            },
+        });
+        std::fs::write(&transcript_path, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        assert_eq!(
+            message_response(&router).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [{
+                        "type": "peer",
+                        "direction": "from",
+                        "session_id": "../fixture-id",
+                        "content": [{"type": "text", "text": "Synthetic peer request."}],
+                    }],
+                    "backgroundTasks": [],
+                    "start": 0,
+                    "total": 1,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                }),
+            ),
         );
     }
 
