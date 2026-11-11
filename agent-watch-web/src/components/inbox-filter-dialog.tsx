@@ -109,7 +109,7 @@ export function InboxFilterDialog({
                 type="button"
                 variant="plain"
                 aria-current={selectedKey === field.key ? 'true' : undefined}
-                className={`inbox-filter-field${selectedKey === field.key ? ' is-selected aw-button--pressed' : ''}`}
+                className={`inbox-filter-field${selectedKey === field.key ? ' is-selected' : ''}`}
                 onClick={() => {
                   setSelectedKey(field.key)
                 }}
