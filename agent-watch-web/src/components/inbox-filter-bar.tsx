@@ -100,7 +100,7 @@ export function InboxFilterBar({
             {matchingNeedsActionCount} of {totalNeedsActionCount}
           </span>
           {onSaveView !== undefined ? (
-            <div className="inbox-save-view-row">
+            <div>
               {saveViewOpen ? (
                 <form
                   className="inbox-save-view-form"
