@@ -15,7 +15,6 @@ type SessionRowProps = {
   onLater?: (id: string) => void
   onToggleToday?: (id: string, isToday: boolean) => void
   compactRepo?: boolean
-  showActions?: boolean
   actionsVisible?: boolean
 }
 
@@ -58,13 +57,16 @@ function sessionStatus(session: Session) {
 
 function sessionTaskLabel(session: Session) {
   if (session.task === null) {
-    return '— No task'
+    return null
   }
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
-  return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
+  return {
+    reference: `${priority} #${String(session.task.number)}`,
+    title: session.task.title,
+    linkedTaskCount: formatLinkedTaskCount(session.tasks),
+  }
 }
 
 function sessionKind(session: Session) {
@@ -78,10 +80,10 @@ export function SessionRow({
   onLater,
   onToggleToday,
   compactRepo = false,
-  showActions = true,
   actionsVisible = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
+  const taskLabel = sessionTaskLabel(session)
 
   return (
     <li className="session-list-item">
@@ -128,7 +130,18 @@ export function SessionRow({
               </span>
             ) : null}
             <span className="session-meta-line">
-              <span className="session-task">{sessionTaskLabel(session)}</span>
+              <span className="session-task">
+                {taskLabel === null ? (
+                  '— No task'
+                ) : (
+                  <>
+                    <span className="session-task-reference">
+                      {taskLabel.reference}
+                    </span>
+                    {` · ${taskLabel.title}${taskLabel.linkedTaskCount}`}
+                  </>
+                )}
+              </span>
               <span className="session-repo">
                 {compactRepo
                   ? session.repo.split('/').at(-1)
@@ -137,41 +150,37 @@ export function SessionRow({
             </span>
           </span>
         </Button>
-        {showActions ? (
-          <div className="session-row-actions">
-            {onToggleToday ? (
-              <Button
-                type="button"
-                variant="plain"
-                aria-label={
-                  session.isToday === true
-                    ? 'Remove from TODAY'
-                    : 'Add to TODAY'
-                }
-                aria-pressed={session.isToday ?? false}
-                className="session-action-button cursor-pointer"
-                onClick={() => {
-                  onToggleToday(session.id, session.isToday !== true)
-                }}
-              >
-                {session.isToday === true ? '★' : '☆'}
-              </Button>
-            ) : null}
-            {onLater ? (
-              <Button
-                type="button"
-                variant="plain"
-                aria-label={`Later: ${session.title}`}
-                className="session-action-button cursor-pointer"
-                onClick={() => {
-                  onLater(session.id)
-                }}
-              >
-                ◷
-              </Button>
-            ) : null}
-          </div>
-        ) : null}
+        <div className="session-row-actions">
+          {onToggleToday ? (
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={
+                session.isToday === true ? 'Remove from TODAY' : 'Add to TODAY'
+              }
+              aria-pressed={session.isToday ?? false}
+              className="session-action-button cursor-pointer"
+              onClick={() => {
+                onToggleToday(session.id, session.isToday !== true)
+              }}
+            >
+              {session.isToday === true ? '★' : '☆'}
+            </Button>
+          ) : null}
+          {onLater ? (
+            <Button
+              type="button"
+              variant="plain"
+              aria-label={`Later: ${session.title}`}
+              className="session-action-button cursor-pointer"
+              onClick={() => {
+                onLater(session.id)
+              }}
+            >
+              ◷
+            </Button>
+          ) : null}
+        </div>
       </div>
     </li>
   )

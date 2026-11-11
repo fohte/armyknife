@@ -179,7 +179,6 @@ export const RepositoryNameIsCompactOnIPhone: Story = {
   name: 'The repository name fits on an iPhone row',
   args: {
     compactRepo: true,
-    showActions: false,
     onLater: () => undefined,
     onToggleToday: () => undefined,
   },
