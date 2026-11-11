@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.598](https://github.com/fohte/armyknife/compare/v0.1.597...v0.1.598) (2026-11-11)
+
+
+### Performance Improvements
+
+* **agent-watch-web:** speed up message responses ([#1559](https://github.com/fohte/armyknife/issues/1559)) ([218934b](https://github.com/fohte/armyknife/commit/218934b568a9548bd88b33151ce613e6a87e3fbb))
+
 ## [0.1.597](https://github.com/fohte/armyknife/compare/v0.1.596...v0.1.597) (2026-11-11)
 
 
