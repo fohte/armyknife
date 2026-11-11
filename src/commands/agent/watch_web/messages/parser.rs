@@ -290,6 +290,18 @@ fn append_classification(
                 image_directory,
             ));
         }
+        classifier::MessageKind::SubagentReport {
+            agent_id,
+            agent_name,
+            text,
+        } if !text.trim().is_empty() => {
+            items.push(ChatItem::SubagentReport {
+                agent_id,
+                agent_name,
+                description: None,
+                text,
+            });
+        }
         classifier::MessageKind::Event { kind, text, failed } => {
             if !text.trim().is_empty() {
                 items.push(ChatItem::Event {
@@ -305,6 +317,7 @@ fn append_classification(
         }
         classifier::MessageKind::User { .. }
         | classifier::MessageKind::PeerIn { .. }
+        | classifier::MessageKind::SubagentReport { .. }
         | classifier::MessageKind::Hidden => {}
     }
 }

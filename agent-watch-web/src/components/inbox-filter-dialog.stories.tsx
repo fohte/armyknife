@@ -49,15 +49,40 @@ const meta = {
   component: InboxFilterDialog,
   args: {
     sessions,
-    query: 'project:web-app',
+    query: 'kind:Question,Review',
+    initialSelectedKey: 'kind',
     onQueryChange: () => undefined,
     onApply: () => undefined,
     onClose: () => undefined,
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '100vw', height: '100vh', background: '#09090b' }}>
-        <Story />
+      <div
+        style={{
+          display: 'flex',
+          width: '100vw',
+          height: '100vh',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <div
+          aria-hidden="true"
+          style={{
+            width: '240px',
+            flex: '0 0 240px',
+            background: 'var(--aw-bg-nav)',
+          }}
+        />
+        <div
+          style={{
+            position: 'relative',
+            width: 'calc(100vw - 240px)',
+            height: '100%',
+            background: 'var(--aw-bg-inbox)',
+          }}
+        >
+          <Story />
+        </div>
       </div>
     ),
   ],
@@ -67,5 +92,5 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const ProjectAndKindValuesAreSelected: Story = {
-  name: 'The dialog keeps the selected project beside its count',
+  name: 'The dialog shows selected kinds and their available counts',
 }

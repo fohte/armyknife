@@ -3,7 +3,7 @@ import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
 import { Chip } from '@fohte/ui/chip'
-import { Filter, PanelLeftClose, PanelLeftOpen, X } from 'lucide-react'
+import { Filter, PanelLeftClose, PanelLeftOpen, Search, X } from 'lucide-react'
 
 import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
@@ -60,11 +60,12 @@ export function AgentWatchNav({
         <span className="brand-name">agent watch</span>
         <button
           aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
-          className="agent-watch-command-key"
+          className="agent-watch-command agent-watch-command-key"
           onClick={onOpenPalette}
           type="button"
         >
-          {paletteShortcut.label}
+          <Search aria-hidden="true" size={13} />
+          <span>{paletteShortcut.label}</span>
         </button>
         <button
           aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
@@ -77,9 +78,9 @@ export function AgentWatchNav({
           type="button"
         >
           {inboxCollapsed ? (
-            <PanelLeftOpen aria-hidden="true" size={13} />
+            <PanelLeftOpen aria-hidden="true" size={15} />
           ) : (
-            <PanelLeftClose aria-hidden="true" size={13} />
+            <PanelLeftClose aria-hidden="true" size={15} />
           )}
         </button>
       </div>
@@ -96,7 +97,7 @@ export function AgentWatchNav({
             onViewChange('inbox')
           }}
         >
-          <span>Inbox</span>
+          <span>Inbox&nbsp;</span>
           <Chip data-view-count="" tone="strong">
             {needsActionCount}
           </Chip>
@@ -137,7 +138,7 @@ export function AgentWatchNav({
                     onSelectSavedView(savedView.id)
                   }}
                 >
-                  <Filter aria-hidden="true" size={13} />
+                  <Filter aria-hidden="true" size={12} />
                   <span className="saved-view-name">{savedView.name}</span>
                   <span
                     className={cn(
