@@ -569,8 +569,8 @@ mod tests {
         });
         std::fs::write(&transcript_path, serde_json::to_vec(&transcript).unwrap()).unwrap();
         if let Some(description) = saved_description {
-            let metadata_dir = directory.path().join("subagents");
-            std::fs::create_dir(&metadata_dir).unwrap();
+            let metadata_dir = directory.path().join("fixture-session").join("subagents");
+            std::fs::create_dir_all(&metadata_dir).unwrap();
             std::fs::write(
                 metadata_dir.join("agent-fixture-agent-id.meta.json"),
                 serde_json::to_vec(&json!({"description": description})).unwrap(),

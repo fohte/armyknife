@@ -26,8 +26,13 @@ fn description_for(transcript_path: &Path, agent_id: &str) -> Option<String> {
     {
         return None;
     }
+    let transcript_name = transcript_path.file_name()?.to_str()?;
+    let session_id = transcript_name
+        .strip_suffix(".jsonl")
+        .or_else(|| transcript_name.strip_suffix(".jsonl.zst"))?;
     let metadata_path = transcript_path
         .parent()?
+        .join(session_id)
         .join("subagents")
         .join(format!("agent-{agent_id}.meta.json"));
     let metadata = match std::fs::read(&metadata_path) {
