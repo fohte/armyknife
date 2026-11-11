@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.569](https://github.com/fohte/armyknife/compare/v0.1.568...v0.1.569) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match the design mock ([#1496](https://github.com/fohte/armyknife/issues/1496)) ([b3282e0](https://github.com/fohte/armyknife/commit/b3282e09ff0fcb5dbb4ecdc0ead8ce00a7f0a1c6))
+
 ## [0.1.568](https://github.com/fohte/armyknife/compare/v0.1.567...v0.1.568) (2026-11-11)
 
 
