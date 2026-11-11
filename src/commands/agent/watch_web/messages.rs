@@ -7,12 +7,13 @@ use anyhow::{Context, Result};
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Path as AxumPath;
+use axum::extract::Query;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
@@ -123,7 +124,12 @@ async fn get_messages(
         RouteLoaders,
     )>,
     AxumPath(session_id): AxumPath<String>,
+    Query(range): Query<MessageRange>,
 ) -> Response {
+    if !range.is_valid() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     match tokio::task::spawn_blocking(move || {
         load_conversation_with_queued_prompts(
             &session_id,
@@ -134,18 +140,21 @@ async fn get_messages(
     })
     .await
     {
-        Ok(Ok(Some(conversation))) => match serde_json::to_vec(&conversation) {
-            Ok(body) => (
-                StatusCode::OK,
-                [(CONTENT_TYPE, "application/json")],
-                Body::from(body),
-            )
-                .into_response(),
-            Err(error) => {
-                tracing::warn!(%error, "failed to serialize agent session messages");
-                StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        Ok(Ok(Some(mut conversation))) => {
+            conversation.apply_range(range);
+            match serde_json::to_vec(&conversation) {
+                Ok(body) => (
+                    StatusCode::OK,
+                    [(CONTENT_TYPE, "application/json")],
+                    Body::from(body),
+                )
+                    .into_response(),
+                Err(error) => {
+                    tracing::warn!(%error, "failed to serialize agent session messages");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
             }
-        },
+        }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(error)) => {
             tracing::warn!(%error, "failed to read agent session messages");
@@ -268,6 +277,8 @@ fn load_conversation_with_queued_prompts(
         });
     }
 
+    conversation.update_metadata();
+
     if !resolved_queued_prompt_ids.is_empty()
         && let Err(error) = (loaders.delete_queued_prompts)(session_id, &resolved_queued_prompt_ids)
     {
@@ -349,6 +360,7 @@ fn parse_session_transcript(
                 ConversationResponse {
                     messages,
                     background_tasks,
+                    ..ConversationResponse::default()
                 },
                 resolved_ids,
             ))
@@ -364,6 +376,7 @@ fn parse_session_transcript(
                             .map(ChatItem::from)
                             .collect(),
                         background_tasks: Vec::new(),
+                        ..ConversationResponse::default()
                     },
                     Vec::new(),
                 ));
@@ -378,6 +391,7 @@ fn parse_session_transcript(
                             .map(ChatItem::from)
                             .collect(),
                         background_tasks: Vec::new(),
+                        ..ConversationResponse::default()
                     },
                     Vec::new(),
                 ));
@@ -388,6 +402,7 @@ fn parse_session_transcript(
                 ConversationResponse {
                     messages,
                     background_tasks: Vec::new(),
+                    ..ConversationResponse::default()
                 },
                 Vec::new(),
             ))
@@ -582,6 +597,72 @@ enum EventKind {
 struct ConversationResponse {
     messages: Vec<ChatItem>,
     background_tasks: Vec<BackgroundTask>,
+    start: usize,
+    total: usize,
+    decisions: Vec<ChatItem>,
+    has_unanswered_proposal: bool,
+    active_question_index: Option<usize>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+struct MessageRange {
+    limit: Option<usize>,
+    before: Option<usize>,
+    from: Option<usize>,
+}
+
+impl MessageRange {
+    fn is_valid(self) -> bool {
+        matches!(
+            (self.limit, self.before, self.from),
+            (None, None, None)
+                | (Some(_), None, None)
+                | (Some(_), Some(_), None)
+                | (None, None, Some(_))
+        )
+    }
+}
+
+impl ConversationResponse {
+    fn update_metadata(&mut self) {
+        self.total = self.messages.len();
+        self.decisions = self
+            .messages
+            .iter()
+            .filter(|message| matches!(message, ChatItem::Decision { .. }))
+            .cloned()
+            .collect();
+        self.has_unanswered_proposal = self.messages.iter().any(|message| {
+            matches!(
+                message,
+                ChatItem::Proposal {
+                    answer: None,
+                    resolved: false,
+                    ..
+                }
+            )
+        });
+        self.active_question_index = self
+            .messages
+            .iter()
+            .rposition(|message| matches!(message, ChatItem::Question { .. }));
+    }
+
+    fn apply_range(&mut self, range: MessageRange) {
+        let (start, end) = if let Some(before) = range.before {
+            let end = before.min(self.total);
+            (end.saturating_sub(range.limit.unwrap_or_default()), end)
+        } else if let Some(from) = range.from {
+            (from.min(self.total), self.total)
+        } else if let Some(limit) = range.limit {
+            (self.total.saturating_sub(limit), self.total)
+        } else {
+            (0, self.total)
+        };
+
+        self.messages = self.messages[start..end].to_vec();
+        self.start = start;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -780,6 +861,122 @@ mod tests {
         (status, content_type, body)
     }
 
+    async fn response_value(response: Response<Body>) -> serde_json::Value {
+        let (_, _, body) = response_snapshot(response).await;
+        serde_json::from_str(&body).unwrap()
+    }
+
+    fn fixture_decision(seq: i64) -> AgentDecision {
+        AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq,
+            title: format!("Fixture decision {seq}"),
+            why: "The fixture keeps the example isolated.".to_string(),
+            considered: Vec::new(),
+            easy_to_change: "Change the fixture value.".to_string(),
+            created_at: "2026-11-11T00:00:00Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        }
+    }
+
+    fn fixture_decision_json(seq: i64) -> serde_json::Value {
+        json!({
+            "type": "decision",
+            "seq": seq,
+            "title": format!("Fixture decision {seq}"),
+            "why": "The fixture keeps the example isolated.",
+            "considered": [],
+            "easyToChange": "Change the fixture value.",
+            "review": null,
+            "createdAt": "2026-11-11T00:00:00Z",
+        })
+    }
+
+    fn ranged_response(start: usize, message_seqs: &[i64]) -> serde_json::Value {
+        let messages = message_seqs
+            .iter()
+            .map(|seq| fixture_decision_json(*seq))
+            .collect::<Vec<_>>();
+        json!({
+            "messages": messages,
+            "backgroundTasks": [],
+            "start": start,
+            "total": 4,
+            "decisions": (1..=4).map(fixture_decision_json).collect::<Vec<_>>(),
+            "hasUnansweredProposal": false,
+            "activeQuestionIndex": null,
+        })
+    }
+
+    #[tokio::test]
+    async fn messages_route_returns_requested_ranges_with_full_conversation_metadata() {
+        let session = Session {
+            engine: Engine::Codex,
+            ..stored_session()
+        };
+        let decisions = (1..=4).map(fixture_decision).collect::<Vec<_>>();
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            move |_| Ok(decisions.clone()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let mut responses = Vec::new();
+        for query in ["", "?limit=2", "?before=2&limit=2", "?from=2"] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/sessions/fixture-session/messages{query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            responses.push(response_value(response).await);
+        }
+
+        assert_eq!(
+            responses,
+            vec![
+                ranged_response(0, &[1, 2, 3, 4]),
+                ranged_response(2, &[3, 4]),
+                ranged_response(0, &[1, 2]),
+                ranged_response(2, &[3, 4]),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_rejects_incompatible_range_parameters() {
+        let session = stored_session();
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages?before=2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (StatusCode::BAD_REQUEST, None, String::new()),
+        );
+    }
+
     #[tokio::test]
     async fn claude_message_route_places_database_decisions_in_the_transcript() {
         let directory = tempfile::tempdir().unwrap();
@@ -831,7 +1028,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[]}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[],"start":0,"total":3,"decisions":[{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -949,6 +1146,20 @@ mod tests {
                         {"type": "assistant", "text": "After the records."},
                     ],
                     "backgroundTasks": [],
+                    "start": 0,
+                    "total": 5,
+                    "decisions": [{
+                        "type": "decision",
+                        "seq": 5,
+                        "title": "Choose the fixture path",
+                        "why": "The fixture remains reversible.",
+                        "considered": ["Choose the other fixture path"],
+                        "easyToChange": "Change one fixture value.",
+                        "review": null,
+                        "createdAt": "2026-06-01T11:59:00Z",
+                    }],
+                    "hasUnansweredProposal": true,
+                    "activeQuestionIndex": null,
                 }),
             ),
         );
@@ -1042,6 +1253,20 @@ mod tests {
                         },
                     ],
                     "backgroundTasks": [],
+                    "start": 0,
+                    "total": 2,
+                    "decisions": [{
+                        "type": "decision",
+                        "seq": 5,
+                        "title": "Choose the fixture path",
+                        "why": "The fixture remains reversible.",
+                        "considered": ["Choose the other fixture path"],
+                        "easyToChange": "Change one fixture value.",
+                        "review": null,
+                        "createdAt": "2026-06-01T11:59:00Z",
+                    }],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
                 }),
             ),
         );
@@ -1094,7 +1319,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[]}"#.to_string(),
+                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[],"start":0,"total":2,"decisions":[{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -1327,7 +1552,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[]}"#
+                r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
                     .to_string(),
             )
         );
@@ -1403,6 +1628,11 @@ mod tests {
                         "content": [{"type": "text", "text": expected_content}],
                     }],
                     "backgroundTasks": [],
+                    "start": 0,
+                    "total": 1,
+                    "decisions": [],
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
                 }),
             ),
         );
@@ -1437,7 +1667,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[]}"#
+                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":0}"#
                     .to_string(),
             )
         );
@@ -1478,7 +1708,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[]}"#.to_string(),
+                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -1519,7 +1749,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[]}"#.to_string(),
+                    r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 Vec::<i64>::new(),
             ),
@@ -1570,7 +1800,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"user","text":"Delivered fixture request."}],"backgroundTasks":[]}"#.to_string(),
+                    r#"{"messages":[{"type":"user","text":"Delivered fixture request."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![7],
             ),
@@ -1604,7 +1834,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[],"backgroundTasks":[]}"#.to_string(),
+                r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -1700,6 +1930,11 @@ mod tests {
                     "elapsedSeconds": 0,
                     "kind": "background_task",
                 }],
+                "start": 0,
+                "total": 2,
+                "decisions": [],
+                "hasUnansweredProposal": false,
+                "activeQuestionIndex": null,
             }),
         );
     }
@@ -1744,7 +1979,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[]}"#.to_string(),
+                r#"{"messages":[{"type":"tool_in_progress","tool":"exec","target":"cargo check"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             )
         );
     }

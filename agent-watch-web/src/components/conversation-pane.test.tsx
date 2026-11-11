@@ -65,8 +65,30 @@ const proposal: ChatItem = {
   resolved: false,
 }
 
-function messagesResponse(messages: unknown, backgroundTasks: unknown = []) {
-  return { messages, backgroundTasks }
+function messagesResponse(
+  messages: ChatItem[],
+  backgroundTasks: BackgroundTask[] = [],
+) {
+  const activeQuestionIndex = messages.findLastIndex(
+    (message) => message.type === 'question',
+  )
+  return {
+    messages,
+    backgroundTasks,
+    start: 0,
+    total: messages.length,
+    decisions: messages.filter(
+      (message): message is Extract<ChatItem, { type: 'decision' }> =>
+        message.type === 'decision',
+    ),
+    hasUnansweredProposal: messages.some(
+      (message) =>
+        message.type === 'proposal' &&
+        message.answer === null &&
+        !message.resolved,
+    ),
+    activeQuestionIndex: activeQuestionIndex < 0 ? null : activeQuestionIndex,
+  }
 }
 
 const permission: ChatItem = {
