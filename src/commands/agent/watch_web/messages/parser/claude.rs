@@ -423,11 +423,12 @@ fn parse_with_background_tasks_and_image_directory(
 }
 
 fn recorded_proposal_seq(text: &str) -> Option<i64> {
-    text.lines().find_map(|line| {
-        line.trim()
-            .strip_prefix("Recorded proposal ")
-            .and_then(|seq| seq.parse().ok())
-    })
+    let seq = text
+        .trim()
+        .strip_prefix("Recorded proposal ")?
+        .parse::<i64>()
+        .ok()?;
+    (seq > 0).then_some(seq)
 }
 
 fn queued_prompt_delivery_is_on_active_branch(
@@ -533,10 +534,28 @@ mod tests {
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{parse, parse_with_image_directory, parse_with_queued_prompts_and_proposals};
+    use super::{
+        parse, parse_with_image_directory, parse_with_queued_prompts_and_proposals,
+        recorded_proposal_seq,
+    };
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, UserContentPart,
     };
+
+    #[rstest]
+    #[case::exact_output("Recorded proposal 12", Some(12))]
+    #[case::surrounding_whitespace(indoc! {"
+         Recorded proposal 12
+        "}, Some(12))]
+    #[case::prefixed_output("Command output: Recorded proposal 12", None)]
+    #[case::additional_output("Recorded proposal 12\nAdditional output", None)]
+    #[case::trailing_text("Recorded proposal 12 copied", None)]
+    fn recognizes_only_a_complete_recorded_proposal_output(
+        #[case] output: &str,
+        #[case] expected: Option<i64>,
+    ) {
+        assert_eq!(recorded_proposal_seq(output), expected);
+    }
 
     #[test]
     fn recorded_proposal_replaces_its_bash_summary_at_the_tool_result_position() {
