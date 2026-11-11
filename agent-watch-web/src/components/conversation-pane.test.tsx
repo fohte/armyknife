@@ -1038,12 +1038,22 @@ it('sends on Enter and Command-Enter and preserves modified newlines', async () 
   })
 })
 
-it('shows Alt-Enter as a desktop newline shortcut', () => {
-  renderView(() => Promise.resolve(true))
+it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
+  const onAction = () => Promise.resolve(true)
+  renderView(onAction)
+  const interruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
+  renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
+  const nonInterruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
 
-  expect(container.querySelector('.composer-footer > span')?.textContent).toBe(
-    '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
-  )
+  const snapshot = () => ({ interruptibleHint, nonInterruptibleHint })
+  expect(snapshot()).toEqual({
+    interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
+    nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+  })
 })
 
 it('keeps Enter for newlines and exposes mobile conversation actions', () => {
