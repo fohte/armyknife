@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use super::super::super::BackgroundTask;
+use super::super::super::claude_content_text;
 use super::user_input::user_text;
 use super::{ToolUse, tool_result_text};
 
@@ -32,18 +33,14 @@ impl BackgroundTaskTracker {
         });
     }
 
-    pub(super) fn finish_notification(&mut self, record: &Value) {
-        if !is_task_notification(record) {
-            return;
-        }
-        let Some(message) = record.get("message") else {
+    pub(super) fn finish_notification(&mut self, text: &str) {
+        let Some(body) = task_notification_body(text) else {
             return;
         };
-        let text = user_text(message);
-        let Some(task_id) = tagged_value(&text, "task-id") else {
+        let Some(task_id) = tagged_value(body, "task-id") else {
             return;
         };
-        let Some(status) = tagged_value(&text, "status") else {
+        let Some(status) = tagged_value(body, "status") else {
             return;
         };
         if matches!(status, "completed" | "failed" | "killed") {
@@ -84,19 +81,60 @@ impl BackgroundTaskTracker {
     }
 }
 
-pub(super) fn is_task_notification(record: &Value) -> bool {
-    let has_task_notification_origin = record
-        .get("origin")
+pub(super) fn task_notification_text(record: &Value) -> Option<String> {
+    let origin = record.get("origin").or_else(|| {
+        record
+            .get("attachment")
+            .and_then(|attachment| attachment.get("origin"))
+    });
+    let origin_kind = origin
         .and_then(|origin| origin.get("kind"))
-        .and_then(Value::as_str)
-        == Some("task-notification");
-    has_task_notification_origin
-        || (record.get("type").and_then(Value::as_str) == Some("user")
-            && record.get("message").is_some_and(|message| {
-                user_text(message)
-                    .trim_start()
-                    .starts_with("<task-notification>")
-            }))
+        .and_then(Value::as_str);
+    if origin_kind == Some("human") {
+        return None;
+    }
+    let text = notification_text(record)?;
+    (origin_kind == Some("task-notification") || task_notification_body(&text).is_some())
+        .then_some(text)
+}
+
+fn notification_text(record: &Value) -> Option<String> {
+    if record.get("type").and_then(Value::as_str) == Some("user")
+        && let Some(message) = record.get("message")
+    {
+        return Some(user_text(message));
+    }
+    let attachment = record.get("attachment")?;
+    (attachment.get("type").and_then(Value::as_str) == Some("queued_command"))
+        .then(|| claude_content_text(attachment.get("prompt")))
+}
+
+pub(super) fn task_notification_envelope(text: &str) -> Option<&str> {
+    let text = text.trim();
+    let envelope = if text.starts_with("<task-notification>") {
+        text
+    } else {
+        let (preamble, remainder) = text.split_once('\n')?;
+        let preamble = preamble.trim();
+        let is_notification_preamble = preamble
+            .strip_prefix('[')
+            .and_then(|preamble| preamble.strip_suffix(']'))
+            .is_some_and(|preamble| preamble.to_ascii_lowercase().contains("notification"));
+        if !is_notification_preamble {
+            return None;
+        }
+        remainder.trim_start()
+    };
+    envelope
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")?;
+    Some(envelope)
+}
+
+fn task_notification_body(text: &str) -> Option<&str> {
+    task_notification_envelope(text)?
+        .strip_prefix("<task-notification>")?
+        .strip_suffix("</task-notification>")
 }
 
 pub(super) fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
@@ -250,7 +288,6 @@ mod tests {
         #[case] include_origin: bool,
         #[case] expected_failed: bool,
     ) {
-        let mut transcript = background_bash_transcript;
         let mut notification = json!({
             "uuid": "fixture-notification-row",
             "parentUuid": "fixture-disconnected-parent-row",
@@ -262,44 +299,96 @@ mod tests {
         if include_origin {
             notification["origin"] = json!({"kind": "task-notification"});
         }
-        transcript.push_str(&serde_json::to_string(&notification).unwrap());
-        transcript.push('\n');
-        transcript.push_str(
-            &serde_json::to_string(&json!({
-                "uuid": "fixture-current-row",
-                "parentUuid": "fixture-bash-result-row",
-                "type": "system",
-            }))
-            .unwrap(),
-        );
-        transcript.push('\n');
-
         let mut expected_messages = background_bash_messages();
         expected_messages.push(ChatItem::Event {
             kind: super::super::super::super::EventKind::System,
             text: format!("Background task fixture-task-id {status}"),
             failed: expected_failed,
         });
-
-        assert_eq!(
-            parse_with_background_tasks_and_peer_out_messages(
-                Cursor::new(transcript),
-                None,
-                None,
-                None,
-                timestamp("2026-01-01T00:01:30Z"),
-                &[],
-            )
-            .unwrap(),
-            (expected_messages, expected_tasks),
+        assert_notification_transcript(
+            background_bash_transcript,
+            notification,
+            expected_messages,
+            expected_tasks,
         );
     }
 
     #[rstest]
+    #[case::completed_without_origin("completed", false)]
+    #[case::failed_without_origin("failed", false)]
+    #[case::killed_without_origin("killed", false)]
+    #[case::completed_with_attachment_origin("completed", true)]
+    fn queued_command_notifications_remove_finished_tasks(
+        background_bash_transcript: String,
+        #[case] status: &str,
+        #[case] include_origin: bool,
+    ) {
+        let mut notification = json!({
+            "uuid": "fixture-queued-notification-row",
+            "parentUuid": "fixture-disconnected-parent-row",
+            "attachment": {
+                "type": "queued_command",
+                "prompt": format!(
+                    "<task-notification><task-id>fixture-task-id</task-id><status>{status}</status></task-notification>"
+                ),
+            },
+        });
+        if include_origin {
+            notification["attachment"]["origin"] = json!({"kind": "task-notification"});
+        }
+        let mut expected_messages = background_bash_messages();
+        expected_messages.push(ChatItem::Event {
+            kind: super::super::super::super::EventKind::System,
+            text: format!("Background task fixture-task-id {status}"),
+            failed: status == "failed",
+        });
+        assert_notification_transcript(
+            background_bash_transcript,
+            notification,
+            expected_messages,
+            Vec::new(),
+        );
+    }
+
+    #[rstest]
+    fn prefixed_task_notifications_remove_finished_tasks(background_bash_transcript: String) {
+        let notification = indoc! {r#"
+            [SYSTEM NOTIFICATION - NOT USER INPUT]
+            <task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>
+        "#};
+        let notification_record = json!({
+            "uuid": "fixture-prefixed-notification-row",
+            "parentUuid": "fixture-disconnected-parent-row",
+            "type": "user",
+            "message": {"content": notification},
+        });
+
+        let mut expected_messages = background_bash_messages();
+        expected_messages.push(ChatItem::Event {
+            kind: super::super::super::super::EventKind::System,
+            text: "Background task fixture-task-id completed".to_string(),
+            failed: false,
+        });
+
+        assert_notification_transcript(
+            background_bash_transcript,
+            notification_record,
+            expected_messages,
+            Vec::new(),
+        );
+    }
+
+    #[rstest]
+    #[case::inner_tags(
+        "I saw <task-id>fixture-task-id</task-id> with <status>completed</status> in the output."
+    )]
+    #[case::quoted_notification(
+        "The documentation quotes <task-notification><task-id>fixture-task-id</task-id><status>completed</status></task-notification>."
+    )]
     fn quoted_task_tags_in_user_text_do_not_finish_a_running_task(
         background_bash_transcript: String,
+        #[case] user_text: &str,
     ) {
-        let user_text = "I saw <task-id>fixture-task-id</task-id> with <status>completed</status> in the output.";
         let mut transcript = background_bash_transcript;
         transcript.push_str(
             &serde_json::to_string(&json!({
@@ -334,6 +423,38 @@ mod tests {
                     elapsed_seconds: 90,
                 }],
             ),
+        );
+    }
+
+    fn assert_notification_transcript(
+        mut transcript: String,
+        notification: Value,
+        expected_messages: Vec<ChatItem>,
+        expected_tasks: Vec<BackgroundTask>,
+    ) {
+        transcript.push_str(&serde_json::to_string(&notification).unwrap());
+        transcript.push('\n');
+        transcript.push_str(
+            &serde_json::to_string(&json!({
+                "uuid": "fixture-current-row",
+                "parentUuid": "fixture-bash-result-row",
+                "type": "system",
+            }))
+            .unwrap(),
+        );
+        transcript.push('\n');
+
+        assert_eq!(
+            parse_with_background_tasks_and_peer_out_messages(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                timestamp("2026-01-01T00:01:30Z"),
+                &[],
+            )
+            .unwrap(),
+            (expected_messages, expected_tasks),
         );
     }
 

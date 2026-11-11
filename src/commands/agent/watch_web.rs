@@ -27,7 +27,6 @@ use tokio::net::TcpListener;
 use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -115,9 +114,15 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         &assets::DIST,
         store::load_session,
         store::watch_web_user_marker,
-        |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
-        |session_id| store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id),
-        store::delete_watch_web_queued_prompts,
+        messages::RouteLoaders::new(
+            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
+            |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
+            |session_id| {
+                store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
+            },
+            store::delete_watch_web_queued_prompts,
+            store::agent_proposals,
+        ),
         restart_signal,
     )
 }
@@ -152,9 +157,13 @@ fn app_with_assets_and_loader_and_restart_signal(
         dist,
         load_session,
         load_user_marker,
-        |_| Ok(Vec::new()),
-        |_| Ok(Vec::new()),
-        |_, _| Ok(()),
+        messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        ),
         restart_signal,
     )
 }
@@ -163,15 +172,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
-    load_queued_prompts: impl Fn(&str) -> anyhow::Result<Vec<WatchWebQueuedPrompt>>
-    + Send
-    + Sync
-    + 'static,
-    load_peer_out_messages: impl Fn(&str) -> anyhow::Result<Vec<WatchWebPeerOutMessage>>
-    + Send
-    + Sync
-    + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> anyhow::Result<()> + Send + Sync + 'static,
+    loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
@@ -180,16 +181,11 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(
-            messages::routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-                load_session,
-                load_user_marker,
-                |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
-                load_queued_prompts,
-                load_peer_out_messages,
-                delete_queued_prompts,
-            ),
-        )
+        .merge(messages::routes_with_proposals_and_peer_out_messages(
+            load_session,
+            load_user_marker,
+            loaders,
+        ))
         .merge(image_attachments::routes())
         .fallback(api_not_found);
 

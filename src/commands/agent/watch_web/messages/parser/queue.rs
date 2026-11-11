@@ -262,9 +262,10 @@ mod tests {
     use indoc::indoc;
     use rstest::rstest;
 
+    use super::super::claude::ParserAdditions;
     use crate::commands::agent::store::WatchWebQueuedPrompt;
     use crate::commands::agent::watch_web::messages::{
-        BackgroundTask, ChatItem, ParentSession, TranscriptInput, UserContentPart,
+        BackgroundTask, ChatItem, ParentSession, UserContentPart,
     };
 
     #[rstest]
@@ -554,16 +555,17 @@ mod tests {
         parent: Option<&ParentSession>,
         marker: Option<&str>,
     ) -> Vec<ChatItem> {
-        super::super::claude::parse_with_decisions_and_queued_prompts_and_peer_out_messages(
+        super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
             parent,
             None,
             marker,
             Utc::now(),
-            TranscriptInput {
+            ParserAdditions {
                 decisions: &[],
                 queued_prompts: &[],
                 peer_out_messages: &[],
+                proposals: &[],
             },
         )
         .unwrap()
@@ -575,16 +577,17 @@ mod tests {
         prompts: &[WatchWebQueuedPrompt],
         marker: Option<&str>,
     ) -> (Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>) {
-        super::super::claude::parse_with_decisions_and_queued_prompts_and_peer_out_messages(
+        super::super::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
             Cursor::new(transcript),
             None,
             None,
             marker,
             Utc::now(),
-            TranscriptInput {
+            ParserAdditions {
                 decisions: &[],
                 queued_prompts: prompts,
                 peer_out_messages: &[],
+                proposals: &[],
             },
         )
         .unwrap()
