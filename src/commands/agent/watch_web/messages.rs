@@ -545,16 +545,28 @@ mod tests {
 
     #[rstest]
     #[case::description(
+        ".jsonl",
+        false,
         Some("Review the fictional feature"),
         Some("Review the fictional feature")
     )]
-    #[case::missing_metadata(None, None)]
+    #[case::compressed_description(
+        ".jsonl.zst",
+        true,
+        Some("Review the fictional feature"),
+        Some("Review the fictional feature")
+    )]
+    #[case::missing_metadata(".jsonl", false, None, None)]
     fn subagent_report_uses_its_description_when_metadata_is_available(
+        #[case] transcript_suffix: &str,
+        #[case] is_compressed: bool,
         #[case] saved_description: Option<&str>,
         #[case] expected_description: Option<&str>,
     ) {
         let directory = tempfile::tempdir().unwrap();
-        let transcript_path = directory.path().join("fixture-session.jsonl");
+        let transcript_path = directory
+            .path()
+            .join(format!("fixture-session{transcript_suffix}"));
         let transcript = json!({
             "type": "user",
             "isMeta": true,
@@ -567,7 +579,13 @@ mod tests {
             },
             "message": {"content": "[Subagent hand-back] boilerplate"},
         });
-        std::fs::write(&transcript_path, serde_json::to_vec(&transcript).unwrap()).unwrap();
+        let transcript = serde_json::to_vec(&transcript).unwrap();
+        let transcript = if is_compressed {
+            zstd::stream::encode_all(transcript.as_slice(), 0).unwrap()
+        } else {
+            transcript
+        };
+        std::fs::write(&transcript_path, transcript).unwrap();
         if let Some(description) = saved_description {
             let metadata_dir = directory.path().join("fixture-session").join("subagents");
             std::fs::create_dir_all(&metadata_dir).unwrap();
