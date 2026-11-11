@@ -32,9 +32,11 @@ function makeRect({
 }
 
 function snapshot() {
+  const summary = container.querySelector('summary')
   const menu = document.body.querySelector<HTMLElement>(
     '.session-task-links-menu',
   )
+  const visibleMenu = menu?.hidden === false ? menu : null
 
   return {
     expanded: container.querySelector('details')?.open,
@@ -48,25 +50,35 @@ function snapshot() {
       text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
-    menuRole: menu?.getAttribute('role') ?? null,
-    menuPosition: menu
+    disclosureOwnsMenu:
+      container
+        .querySelector('.session-task-links')
+        ?.getAttribute('aria-owns') === menu?.id,
+    summaryControlsMenu: summary?.getAttribute('aria-controls') === menu?.id,
+    menuRole: visibleMenu?.getAttribute('role') ?? null,
+    menuLabel: visibleMenu?.getAttribute('aria-label') ?? null,
+    menuHidden: menu?.hidden ?? null,
+    menuPosition: visibleMenu
       ? {
-          left: menu.style.left,
-          top: menu.style.top,
-          width: menu.style.width,
+          left: visibleMenu.style.left,
+          top: visibleMenu.style.top,
+          width: visibleMenu.style.width,
         }
       : null,
-    heading: menu?.querySelector('.session-task-links-heading')?.textContent,
-    linkedTasks: Array.from(menu?.querySelectorAll('li') ?? []).map((item) => ({
-      href: item.querySelector('a')?.getAttribute('href'),
-      id: item.querySelector('.session-task-link-id')?.textContent,
-      text: item.querySelector('a')?.textContent,
-      statuses: Array.from(
-        item.querySelectorAll(
-          '.session-task-links-primary, .session-task-completed',
-        ),
-      ).map((status) => status.textContent),
-    })),
+    heading: visibleMenu?.querySelector('.session-task-links-heading')
+      ?.textContent,
+    linkedTasks: Array.from(visibleMenu?.querySelectorAll('li') ?? []).map(
+      (item) => ({
+        href: item.querySelector('a')?.getAttribute('href'),
+        id: item.querySelector('.session-task-link-id')?.textContent,
+        text: item.querySelector('a')?.textContent,
+        statuses: Array.from(
+          item.querySelectorAll(
+            '.session-task-links-primary, .session-task-completed',
+          ),
+        ).map((status) => status.textContent),
+      }),
+    ),
   }
 }
 
@@ -131,40 +143,72 @@ it('lists all linked tasks and marks completed tasks', async () => {
     await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
   })
 
-  expect(snapshot()).toEqual({
-    expanded: true,
-    primary: {
-      href: 'https://tq.fohte.net/tasks/open-task',
-      id: 'P1 #2048',
-      text: 'P1 #2048 Improve request reliability',
-    },
-    count: '+2 tasks ▾',
-    menuRole: null,
-    menuPosition: {
-      left: '30px',
-      top: '82px',
-      width: '280px',
-    },
-    heading: 'Linked tq tasks · Inbox and Board use the primary one',
-    linkedTasks: [
-      {
+  const snapshots = [snapshot()]
+
+  await act(async () => {
+    summary?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  snapshots.push(snapshot())
+
+  expect(snapshots).toEqual([
+    {
+      expanded: true,
+      primary: {
         href: 'https://tq.fohte.net/tasks/open-task',
         id: 'P1 #2048',
         text: 'P1 #2048 Improve request reliability',
-        statuses: ['Primary', 'Completed'],
       },
-      {
-        href: 'https://tq.fohte.net/tasks/secondary-task',
-        id: 'P4 #2046',
-        text: 'P4 #2046 Add request tracing',
-        statuses: [],
+      count: '+2 tasks ▾',
+      disclosureOwnsMenu: true,
+      summaryControlsMenu: true,
+      menuRole: 'region',
+      menuLabel: 'Linked tq tasks',
+      menuHidden: false,
+      menuPosition: {
+        left: '30px',
+        top: '82px',
+        width: '280px',
       },
-      {
-        href: 'https://tq.fohte.net/tasks/completed-task',
-        id: '#2047',
-        text: '#2047 Document retry behavior',
-        statuses: ['Completed'],
+      heading: 'Linked tq tasks · Inbox and Board use the primary one',
+      linkedTasks: [
+        {
+          href: 'https://tq.fohte.net/tasks/open-task',
+          id: 'P1 #2048',
+          text: 'P1 #2048 Improve request reliability',
+          statuses: ['Primary', 'Completed'],
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/secondary-task',
+          id: 'P4 #2046',
+          text: 'P4 #2046 Add request tracing',
+          statuses: [],
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/completed-task',
+          id: '#2047',
+          text: '#2047 Document retry behavior',
+          statuses: ['Completed'],
+        },
+      ],
+    },
+    {
+      expanded: false,
+      primary: {
+        href: 'https://tq.fohte.net/tasks/open-task',
+        id: 'P1 #2048',
+        text: 'P1 #2048 Improve request reliability',
       },
-    ],
-  })
+      count: '+2 tasks ▾',
+      disclosureOwnsMenu: true,
+      summaryControlsMenu: true,
+      menuRole: null,
+      menuLabel: null,
+      menuHidden: true,
+      menuPosition: null,
+      heading: undefined,
+      linkedTasks: [],
+    },
+  ])
 })

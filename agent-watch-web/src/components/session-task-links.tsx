@@ -1,6 +1,6 @@
 import '#components/session-task-links.css'
 
-import { useLayoutEffect, useRef, useState } from 'react'
+import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
 import type { SessionTask } from '#types'
@@ -51,6 +51,7 @@ export function SessionTaskLinks({
   tasks: SessionTask[]
   taskListOpen?: boolean
 }) {
+  const taskMenuId = useId()
   const summaryRef = useRef<HTMLElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
@@ -109,6 +110,7 @@ export function SessionTaskLinks({
         {tasks.length > 1 ? (
           <details
             className="session-task-links"
+            aria-owns={taskMenuId}
             open={menuOpen}
             onToggle={(event) => {
               const open = event.currentTarget.open
@@ -118,6 +120,7 @@ export function SessionTaskLinks({
           >
             <summary
               ref={summaryRef}
+              aria-controls={taskMenuId}
               aria-label={`${String(tasks.length - 1)} more linked tq tasks`}
             >
               +{tasks.length - 1} tasks ▾
@@ -125,15 +128,23 @@ export function SessionTaskLinks({
           </details>
         ) : null}
       </div>
-      {menuOpen && menuPosition !== null
+      {tasks.length > 1
         ? createPortal(
             <div
+              id={taskMenuId}
               className="session-task-links-menu"
-              style={{
-                top: menuPosition.top,
-                left: menuPosition.left,
-                width: menuPosition.width,
-              }}
+              role="region"
+              aria-label="Linked tq tasks"
+              hidden={!menuOpen || menuPosition === null}
+              style={
+                menuPosition === null
+                  ? undefined
+                  : {
+                      top: menuPosition.top,
+                      left: menuPosition.left,
+                      width: menuPosition.width,
+                    }
+              }
             >
               <div className="session-task-links-heading">
                 Linked tq tasks · Inbox and Board use the primary one
