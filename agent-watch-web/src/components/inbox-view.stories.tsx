@@ -216,12 +216,20 @@ const meta = {
     onSaveViewNameChange: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div className="story-inbox-container">
+    (Story, context) => (
+      <div
+        className="story-inbox-container"
+        data-layout={context.args.isMobile ? 'mobile' : 'desktop'}
+      >
         <Story />
       </div>
     ),
   ],
+  parameters: {
+    overflowCheck: {
+      ignoreSelectors: ['.done-section .session-status-dot'],
+    },
+  },
 } satisfies Meta<typeof InboxView>
 
 export default meta

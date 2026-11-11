@@ -125,115 +125,236 @@
   width: 100%;
   height: 38px;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 0 16px;
   background: var(--aw-bg-surface);
-  border-bottom: 1px solid var(--aw-border);
-  color: var(--aw-text-body);
-  font-size: 12.5px;
+  border-bottom: 1px solid var(--aw-border-row);
+  color: var(--aw-text-primary);
+  font-size: 12px;
   font-weight: 700;
   text-align: left;
 }
 
-.later-section-count {
+.later-section-count,
+.later-next-return {
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
-  font-size: 12.5px;
+  font-size: 11px;
 }
 
 .later-next-return {
   margin-left: auto;
-  color: var(--aw-text-secondary);
   font-family: var(--font-sans);
-  font-size: 12.5px;
 }
 
-.agent-watch-shell[data-layout='desktop'] .inbox-view,
-.story-inbox-container .inbox-view {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view {
   font-size: 13.5px;
   line-height: 1.5;
 }
 
-.inbox-view > .view-header {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  > .view-header {
   padding-right: 18px;
   padding-left: 18px;
   border-bottom-color: var(--aw-border);
 }
 
-.inbox-view .section-heading {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .section-heading {
   gap: 8px;
   padding-right: 18px;
   padding-left: 18px;
 }
 
-.inbox-view .section-count {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .section-count {
   font-size: 12.5px;
 }
 
-.inbox-view .needs-action-section .section-heading {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .needs-action-section
+  .section-heading {
   color: var(--aw-text-primary);
 }
 
-.inbox-view .in-progress-section .section-heading {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .in-progress-section
+  .section-heading {
   margin-top: 6px;
 }
 
-.inbox-view .done-section .section-heading {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .done-section
+  .section-heading {
   margin-top: 4px;
   border-top: 1px solid var(--aw-border);
 }
 
-.inbox-view .session-title-line {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-title-line {
   gap: 8px;
 }
 
-.inbox-view .session-row {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-row {
   gap: 10px;
 }
 
-.inbox-view .session-content {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-content {
   gap: 0;
 }
 
-.inbox-view .in-progress-section .session-status-dot {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .in-progress-section
+  .session-status-dot {
   border-radius: 50%;
 }
 
-.inbox-view .in-progress-section .session-age {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .in-progress-section
+  .session-age {
   color: var(--aw-text-secondary);
 }
 
-.inbox-view .session-preview {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-preview {
   color: var(--aw-text-body);
 }
 
-.inbox-view .session-meta-line {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-meta-line {
   gap: 8px;
   color: var(--aw-text-secondary);
 }
 
-.inbox-view .session-task-reference {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .session-task-reference {
   color: var(--aw-text-muted);
   font-family: var(--font-mono);
 }
 
-.inbox-view .later-collapsed-row {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .later-collapsed-row {
+  gap: 8px;
   padding-right: 18px;
   padding-left: 18px;
+  border-bottom-color: var(--aw-border);
+  color: var(--aw-text-body);
+  font-size: 12.5px;
 }
 
-.inbox-view .show-more-button {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .later-section-count {
+  font-size: 12.5px;
+}
+
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .later-next-return {
+  color: var(--aw-text-secondary);
+  font-size: 12.5px;
+}
+
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .show-more-button {
   padding: 2px 18px 6px 33px;
 }
 
-.inbox-view .inbox-footer {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .inbox-footer {
   gap: 14px;
   padding-right: 18px;
   padding-left: 18px;
   border-top-color: var(--aw-border);
 }
 
-.inbox-view .inbox-footer kbd {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .inbox-footer
+  kbd {
   padding: 0;
   border: 0;
   background: transparent;
@@ -241,20 +362,37 @@
   font-size: 11.5px;
 }
 
-.agent-watch-shell:has(.later-menu) .inbox-view .session-row.is-selected {
+:where(
+    .agent-watch-shell[data-layout='desktop']:has(.later-menu),
+    .story-inbox-container[data-layout='desktop']:has(.later-menu)
+  )
+  .inbox-view
+  .session-row.is-selected {
   outline: 1px solid var(--aw-border-emphasis);
   outline-offset: -1px;
   background: var(--aw-bg-popover);
 }
 
-.inbox-view .done-section .session-status-dot::before {
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .done-section
+  .session-status-dot::before {
   padding-top: 3px;
   color: var(--aw-text-muted);
   font-size: 10px;
 }
 
-.inbox-view .done-section .session-status-dot {
-  width: 9px;
+:where(
+    .agent-watch-shell[data-layout='desktop'],
+    .story-inbox-container[data-layout='desktop']
+  )
+  .inbox-view
+  .done-section
+  .session-status-dot {
+  width: 7px;
 }
 
 .later-menu-overlay {
