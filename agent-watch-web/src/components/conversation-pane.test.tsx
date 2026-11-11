@@ -4159,3 +4159,62 @@ it('keeps question and permission actions active after a refresh error', async (
     requestCount: 4,
   })
 })
+
+it('keeps unchanged message DOM nodes across a conversation refresh', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const messages = [
+    { type: 'assistant', text: 'The conversation is unchanged.' },
+  ]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+  const assistantMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    sameMessageNode:
+      assistantMessage === container.querySelector('.chat-assistant-message'),
+    messageText: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameMessageNode: true,
+    messageText: 'The conversation is unchanged.',
+    requestCount: 4,
+  })
+})

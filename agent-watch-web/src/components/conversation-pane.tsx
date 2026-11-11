@@ -169,6 +169,48 @@ function isChatItem(value: unknown): value is ChatItem {
   }
 }
 
+function areJsonValuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => areJsonValuesEqual(value, right[index]))
+    )
+  }
+  if (!isRecord(left) || !isRecord(right)) return false
+
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) =>
+        Object.hasOwn(right, key) && areJsonValuesEqual(left[key], right[key]),
+    )
+  )
+}
+
+function shareUnchangedMessages(
+  previous: ChatItem[],
+  next: ChatItem[],
+): ChatItem[] {
+  let unchanged = previous.length === next.length
+  const shared = next.map((message, index) => {
+    const previousMessage = previous[index]
+    if (
+      previousMessage !== undefined &&
+      areJsonValuesEqual(previousMessage, message)
+    ) {
+      return previousMessage
+    }
+    unchanged = false
+    return message
+  })
+  return unchanged ? previous : shared
+}
+
 function isBackgroundTask(value: unknown): value is BackgroundTask {
   return (
     isRecord(value) &&
@@ -326,11 +368,20 @@ export function ConversationPane({
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
         if (messagesResult.isOk()) {
-          setMessages(messagesResult.value.messages)
+          setMessages((previous) =>
+            shareUnchangedMessages(previous, messagesResult.value.messages),
+          )
           setBackgroundTasks(messagesResult.value.backgroundTasks)
           setMessagesLoadedAt(Date.now())
         }
-        if (actionsResult.isOk()) setActions(actionsResult.value)
+        if (actionsResult.isOk()) {
+          setActions((previous) =>
+            previous !== null &&
+            areJsonValuesEqual(previous, actionsResult.value)
+              ? previous
+              : actionsResult.value,
+          )
+        }
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =

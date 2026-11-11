@@ -1,6 +1,6 @@
 import '#components/conversation-message.css'
 
-import type { ReactNode } from 'react'
+import { memo, type ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'
 import { MarkdownMessage } from '#components/markdown-message'
@@ -25,10 +25,10 @@ import type {
 type RenderConversationMessageOptions = {
   actions: SessionActions | null
   actionsReady: boolean
-  activeQuestionIndex: number
+  activeQuestion: boolean
   index: number
   isMobile: boolean
-  selectedDecisionSeq: number | null
+  selected: boolean
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
@@ -47,10 +47,10 @@ type RenderConversationMessageOptions = {
 export function renderConversationMessage({
   actions,
   actionsReady,
-  activeQuestionIndex,
+  activeQuestion,
   index,
   isMobile,
-  selectedDecisionSeq,
+  selected,
   decisionPosition,
   onSelectDecision,
   message,
@@ -140,7 +140,7 @@ export function renderConversationMessage({
   }
   if (message.type === 'question') {
     const canAnswer =
-      index === activeQuestionIndex &&
+      activeQuestion &&
       message.answer === null &&
       actionsReady &&
       actions?.answerQuestion === true
@@ -181,7 +181,7 @@ export function renderConversationMessage({
         key={`decision-${String(message.seq)}-${String(index)}`}
         decision={message}
         variant="conversation"
-        selected={message.seq === selectedDecisionSeq}
+        selected={selected}
         {...(decisionPosition === undefined
           ? {}
           : { position: decisionPosition })}
@@ -230,3 +230,66 @@ export function renderConversationMessage({
     />
   )
 }
+
+function areConversationMessagePropsEqual(
+  previous: RenderConversationMessageOptions,
+  next: RenderConversationMessageOptions,
+): boolean {
+  if (
+    previous.message !== next.message ||
+    previous.index !== next.index ||
+    previous.isMobile !== next.isMobile
+  ) {
+    return false
+  }
+
+  switch (previous.message.type) {
+    case 'user':
+    case 'queued_user':
+    case 'user_with_content':
+    case 'peer':
+    case 'subagent_report':
+    case 'assistant':
+      return (
+        previous.onSelectSession === next.onSelectSession &&
+        previous.sessions === next.sessions
+      )
+    case 'question':
+      return (
+        previous.activeQuestion === next.activeQuestion &&
+        previous.actions === next.actions &&
+        previous.actionsReady === next.actionsReady &&
+        previous.onAction === next.onAction &&
+        previous.onOpenInTerminal === next.onOpenInTerminal &&
+        previous.sessionEngine === next.sessionEngine
+      )
+    case 'decision':
+      return (
+        previous.selected === next.selected &&
+        previous.decisionPosition === next.decisionPosition &&
+        previous.onSelectDecision === next.onSelectDecision &&
+        previous.onAction === next.onAction
+      )
+    case 'proposal':
+      return previous.onAction === next.onAction
+    case 'permission':
+      return (
+        previous.actions === next.actions &&
+        previous.actionsReady === next.actionsReady &&
+        previous.pendingAction === next.pendingAction &&
+        previous.onAction === next.onAction &&
+        previous.onOpenInTerminal === next.onOpenInTerminal &&
+        previous.sessionEngine === next.sessionEngine
+      )
+    case 'event':
+    case 'tool_summary':
+    case 'tool_in_progress':
+      return true
+  }
+}
+
+export const ConversationMessageRow = memo(function ConversationMessageRow(
+  props: RenderConversationMessageOptions,
+) {
+  return renderConversationMessage(props)
+}, areConversationMessagePropsEqual)
