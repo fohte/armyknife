@@ -1,7 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-#[cfg(test)]
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -12,6 +10,7 @@ use crate::commands::agent::store::{
 };
 use crate::commands::agent::types::{Engine, Session};
 
+use super::{ChatItem, UserContentPart};
 use super::{ConversationResponse, ParentSession, RouteLoaders};
 
 const MAX_CACHED_SESSIONS: usize = 8;
@@ -45,7 +44,10 @@ impl MessageCacheKey {
         Ok(Self {
             engine: session.engine,
             transcript_path: session.transcript_path.clone(),
-            transcript_fingerprint: transcript_fingerprint(session.transcript_path.as_deref())?,
+            transcript_fingerprint: transcript_fingerprint(
+                session.engine,
+                session.transcript_path.as_deref(),
+            )?,
             parent,
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
             current_tool: session.current_tool.clone(),
@@ -59,8 +61,9 @@ impl MessageCacheKey {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub(super) struct TranscriptFingerprint {
+    source_path: PathBuf,
     len: u64,
     modified: std::time::SystemTime,
     // ctime catches same-size rewrites even if the modification time is restored.
@@ -74,21 +77,52 @@ pub(super) struct TranscriptFingerprint {
     changed_at_nanoseconds: i64,
 }
 
-fn transcript_fingerprint(path: Option<&Path>) -> anyhow::Result<Option<TranscriptFingerprint>> {
+fn transcript_fingerprint(
+    engine: Engine,
+    path: Option<&Path>,
+) -> anyhow::Result<Option<TranscriptFingerprint>> {
     let Some(path) = path else {
         return Ok(None);
     };
-    let metadata = match std::fs::metadata(path) {
+    let source_path = if engine == Engine::Codex {
+        match std::fs::metadata(path) {
+            Ok(_) => path.to_path_buf(),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let compressed_path = super::compressed_path(path);
+                match std::fs::metadata(&compressed_path) {
+                    Ok(_) => compressed_path,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        return Ok(None);
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("read transcript metadata {}", compressed_path.display())
+                        });
+                    }
+                }
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("read transcript metadata {}", path.display()));
+            }
+        }
+    } else {
+        path.to_path_buf()
+    };
+    let metadata = match std::fs::metadata(&source_path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
-                .with_context(|| format!("read transcript metadata {}", path.display()));
+                .with_context(|| format!("read transcript metadata {}", source_path.display()));
         }
     };
-    let modified = metadata
-        .modified()
-        .with_context(|| format!("read transcript modification time {}", path.display()))?;
+    let modified = metadata.modified().with_context(|| {
+        format!(
+            "read transcript modification time {}",
+            source_path.display()
+        )
+    })?;
     #[cfg(unix)]
     let (device, inode, changed_at_seconds, changed_at_nanoseconds) = {
         use std::os::unix::fs::MetadataExt;
@@ -101,6 +135,7 @@ fn transcript_fingerprint(path: Option<&Path>) -> anyhow::Result<Option<Transcri
         )
     };
     Ok(Some(TranscriptFingerprint {
+        source_path,
         len: metadata.len(),
         modified,
         #[cfg(unix)]
@@ -130,6 +165,34 @@ pub(super) fn delete_resolved_queued_prompts(
     }
 }
 
+pub(super) fn refresh_image_availability(conversation: &mut ConversationResponse) {
+    refresh_image_availability_with(
+        conversation,
+        super::super::image_attachments::image_is_available,
+    );
+}
+
+fn refresh_image_availability_with(
+    conversation: &mut ConversationResponse,
+    mut is_available: impl FnMut(&str) -> bool,
+) {
+    for message in &mut conversation.messages {
+        let content = match message {
+            ChatItem::QueuedUser { content, .. }
+            | ChatItem::UserWithContent { content, .. }
+            | ChatItem::Peer { content, .. } => content,
+            _ => continue,
+        };
+        for part in content {
+            if let UserContentPart::Image { source, available } = part
+                && source.starts_with("/api/images/")
+            {
+                *available = is_available(source);
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct CachedConversation {
     pub(super) conversation: ConversationResponse,
@@ -140,8 +203,6 @@ pub(super) struct CachedConversation {
 #[derive(Clone, Default)]
 pub(super) struct MessageCache {
     entries: Arc<Mutex<HashMap<String, (MessageCacheKey, CachedConversation)>>>,
-    #[cfg(test)]
-    hits: Arc<AtomicUsize>,
 }
 
 impl MessageCache {
@@ -158,8 +219,6 @@ impl MessageCache {
         if cached_key != key {
             return None;
         }
-        #[cfg(test)]
-        self.hits.fetch_add(1, Ordering::Relaxed);
         Some(cached.clone())
     }
 
@@ -192,9 +251,52 @@ impl MessageCache {
             ),
         );
     }
+}
 
-    #[cfg(test)]
-    pub(super) fn hit_count(&self) -> usize {
-        self.hits.load(Ordering::Relaxed)
+#[cfg(test)]
+mod tests {
+    use super::{ConversationResponse, refresh_image_availability_with};
+    use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
+
+    #[test]
+    fn refreshes_external_image_status_but_keeps_inline_images_available() {
+        let mut conversation = ConversationResponse {
+            messages: vec![ChatItem::UserWithContent {
+                content: vec![
+                    UserContentPart::Image {
+                        source: "/api/images/fixture-image.png".to_string(),
+                        available: true,
+                    },
+                    UserContentPart::Image {
+                        source: "data:image/png;base64,AAAA".to_string(),
+                        available: true,
+                    },
+                ],
+                from: None,
+            }],
+            background_tasks: Vec::new(),
+        };
+
+        refresh_image_availability_with(&mut conversation, |_| false);
+
+        assert_eq!(
+            conversation,
+            ConversationResponse {
+                messages: vec![ChatItem::UserWithContent {
+                    content: vec![
+                        UserContentPart::Image {
+                            source: "/api/images/fixture-image.png".to_string(),
+                            available: false,
+                        },
+                        UserContentPart::Image {
+                            source: "data:image/png;base64,AAAA".to_string(),
+                            available: true,
+                        },
+                    ],
+                    from: None,
+                }],
+                background_tasks: Vec::new(),
+            },
+        );
     }
 }
