@@ -72,7 +72,8 @@
 .saved-view-delete {
   position: absolute;
   top: 3px;
-  left: 4px;
+  right: 4px;
+  z-index: 1;
   display: flex;
   width: 22px;
   height: 22px;
@@ -81,11 +82,18 @@
   border-radius: var(--aw-radius);
   color: var(--aw-text-secondary);
   opacity: 0;
+  pointer-events: none;
 }
 
 .saved-view-item:hover .saved-view-delete,
 .saved-view-item:focus-within .saved-view-delete {
   opacity: 1;
+  pointer-events: auto;
+}
+
+.saved-view-item:hover .saved-view-count,
+.saved-view-item:focus-within .saved-view-count {
+  opacity: 0;
 }
 
 .saved-view-delete:hover {

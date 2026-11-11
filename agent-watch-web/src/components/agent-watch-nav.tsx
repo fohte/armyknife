@@ -97,7 +97,7 @@ export function AgentWatchNav({
             onViewChange('inbox')
           }}
         >
-          <span>Inbox</span>{' '}
+          <span>Inbox&nbsp;</span>
           <Chip data-view-count="" tone="strong">
             {needsActionCount}
           </Chip>

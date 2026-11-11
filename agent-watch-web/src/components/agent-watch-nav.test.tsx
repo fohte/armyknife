@@ -227,6 +227,50 @@ it('deletes a saved view from the navigation', () => {
   expect(snapshot()).toEqual([['reviews']])
 })
 
+it('keeps the hidden delete button available to keyboard focus', () => {
+  renderNav([], {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+  })
+
+  const deleteButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete Sample reviews view"]',
+  )
+  const count = container.querySelector('.saved-view-count')
+  if (deleteButton === null || count === null) {
+    throw new Error('Saved view controls were not rendered')
+  }
+  const hidden = {
+    opacity: window.getComputedStyle(deleteButton).opacity,
+    pointerEvents: window.getComputedStyle(deleteButton).pointerEvents,
+    tabIndex: deleteButton.tabIndex,
+  }
+
+  act(() => {
+    deleteButton.focus()
+  })
+
+  const focused = {
+    opacity: window.getComputedStyle(deleteButton).opacity,
+    pointerEvents: window.getComputedStyle(deleteButton).pointerEvents,
+    countOpacity: window.getComputedStyle(count).opacity,
+  }
+
+  const snapshot = () => ({ hidden, focused })
+
+  expect(snapshot()).toEqual({
+    hidden: { opacity: '0', pointerEvents: 'none', tabIndex: 0 },
+    focused: { opacity: '1', pointerEvents: 'auto', countOpacity: '0' },
+  })
+})
+
 it('hides the saved views section when no views are saved', () => {
   renderNav([])
 
