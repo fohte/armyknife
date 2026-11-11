@@ -60,10 +60,17 @@ export function UserWithContent({
         queued ? 'chat-user-group chat-user-group-queued' : 'chat-user-group'
       }
     >
-      {message.from != null && message.from !== '' ? (
-        <div className="chat-from">From {message.from}</div>
-      ) : null}
-      {queued ? <div className="chat-queued-label">Queued</div> : null}
+      <div className="chat-from">
+        {queued ? (
+          <>
+            You · <span className="chat-queued-label">Queued</span>
+          </>
+        ) : message.from != null && message.from !== '' ? (
+          `From ${message.from}`
+        ) : (
+          'You'
+        )}
+      </div>
       {content.map((part, partIndex) =>
         part.type === 'text' ? (
           <MarkdownMessage

@@ -13,25 +13,14 @@
 }
 
 .chat-queued-label {
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  text-align: right;
+  color: inherit;
 }
 
 .chat-user-message {
-  padding: 9px 12px;
+  padding: 10px 14px;
   border-radius: var(--aw-radius);
   background: var(--aw-bg-popover);
   white-space: pre-wrap;
-}
-
-.chat-user-message-queued {
-  opacity: 0.55;
-}
-
-.chat-user-group-queued .chat-user-image,
-.chat-user-group-queued .chat-image-unavailable {
-  opacity: 0.55;
 }
 
 .chat-user-image {
@@ -44,7 +33,7 @@
 .chat-user-file {
   max-width: 100%;
   margin: 0;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border-radius: var(--aw-radius);
   background: var(--aw-bg-popover);
   overflow-wrap: anywhere;
@@ -52,7 +41,7 @@
 
 .chat-image-unavailable {
   margin: 0;
-  padding: 9px 12px;
+  padding: 10px 14px;
   border-radius: var(--aw-radius);
   background: var(--aw-bg-popover);
   color: var(--aw-text-muted);

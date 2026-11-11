@@ -5,8 +5,9 @@
 }
 
 .chat-tool-summary summary {
-  min-height: 30px;
-  padding: 5px 9px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 9px;
   border: 1px solid var(--aw-border);
   border-radius: var(--aw-radius);
   cursor: pointer;
