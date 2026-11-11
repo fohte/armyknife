@@ -2109,7 +2109,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
     tasks: [
       '◐FixtureExplorerInspect the fictional module2h 0m',
-      '▶cargo test -p fictional-crate2h 0m',
+      '▶cargo test -p fictional-crateOutput2h 0m',
     ],
     panelToggle: '◐2',
     workingStatus: undefined,
