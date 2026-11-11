@@ -12,11 +12,16 @@ use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, M
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod decisions;
 mod migration;
 mod queued_prompts;
 mod wake;
 mod web_state;
 
+pub(crate) use decisions::{
+    AgentDecision, AgentDecisionCounts, agent_decision_counts, agent_decisions,
+    insert_agent_decision, set_agent_decision_review,
+};
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
@@ -31,7 +36,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 5] = [
+static MIGRATION_ENTRIES: [M<'static>; 6] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -67,6 +72,20 @@ static MIGRATION_ENTRIES: [M<'static>; 5] = [
         );
         CREATE INDEX watch_web_queued_prompt_session_id_id
             ON watch_web_queued_prompt (session_id, id);",
+    ),
+    M::up(
+        "CREATE TABLE agent_decision (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            why TEXT NOT NULL,
+            considered TEXT NOT NULL,
+            easy_to_change TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            review TEXT,
+            reviewed_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );",
     ),
 ];
 

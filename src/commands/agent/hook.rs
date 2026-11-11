@@ -115,12 +115,10 @@ pub fn run(args: &HookArgs) -> Result<()> {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
-    if event == HookEvent::SessionStart
-        && args.engine == Engine::Claude
-        && let Some(marker) = store::watch_web_user_marker(&session_id)?
-    {
+    if event == HookEvent::SessionStart && args.engine == Engine::Claude {
+        let marker = store::watch_web_user_marker(&session_id)?;
         return stop::write_session_start_response(
-            &super::watch_web_user_marker::session_start_context(&marker),
+            &session_start_context(marker.as_deref()),
             &mut io::stdout().lock(),
         );
     }
@@ -129,7 +127,23 @@ pub fn run(args: &HookArgs) -> Result<()> {
 
 fn write_stop_response(engine: Engine, event: HookEvent, block_reason: Option<&str>) -> Result<()> {
     let stdout = io::stdout();
+    if event == HookEvent::SessionStart && engine == Engine::Claude {
+        return stop::write_session_start_response(
+            &session_start_context(None),
+            &mut stdout.lock(),
+        );
+    }
     stop::write_response(engine, event, block_reason, &mut stdout.lock())
+}
+
+fn session_start_context(marker: Option<&str>) -> String {
+    let mut context = super::decision::session_start_instruction().to_string();
+    if let Some(marker) = marker {
+        context.push('\n');
+        context.push('\n');
+        context.push_str(&super::watch_web_user_marker::session_start_context(marker));
+    }
+    context
 }
 
 /// Result of processing a hook event.
@@ -1586,6 +1600,28 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::without_watch_web_marker(None)]
+    #[case::with_watch_web_marker(Some("⟦armyknife-user:fixture-marker-cobalt⟧"))]
+    fn claude_session_start_context_includes_the_decision_instruction(
+        #[case] marker: Option<&str>,
+    ) {
+        let expected = match marker {
+            Some(marker) => {
+                let mut expected = super::super::decision::session_start_instruction().to_string();
+                expected.push('\n');
+                expected.push('\n');
+                expected.push_str(&super::super::watch_web_user_marker::session_start_context(
+                    marker,
+                ));
+                expected
+            }
+            None => super::super::decision::session_start_instruction().to_string(),
+        };
+
+        assert_eq!(session_start_context(marker), expected);
     }
 
     struct TqArchiveContext {

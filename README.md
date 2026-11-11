@@ -634,6 +634,17 @@ When introducing `agent.statuses`, include names already stored in session recor
 $ a agent status set awaiting_build "waiting for a build"
 ```
 
+### `a agent decision add`
+
+Record a provisional decision for the calling tracked session. Supply one or more `--considered` alternatives; the command prints `Recorded decision <seq>` after saving the decision.
+
+```console
+$ a agent decision add "Keep the current format" --why "It matches existing commands" --considered "Use a nested format" --easy-to-change "The command can be renamed later"
+Recorded decision 1
+```
+
+Claude Code receives an instruction on every `SessionStart` to record choices that are cheap to reverse and continue working. It should stop and ask about choices that are hard to reverse.
+
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
 If recording the URL to a tracked session fails, the command warns and still attempts to display the review in a tmux pane or browser and send a notification.
