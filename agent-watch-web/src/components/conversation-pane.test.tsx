@@ -3935,6 +3935,75 @@ it('reloads the selected conversation when the session feed changes', async () =
   })
 })
 
+it('keeps conversation DOM connected while toggling the status panel', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const stableMessages = messagesResponse([
+    { type: 'assistant', text: 'Stable conversation message' },
+  ])
+  const stableActions = {
+    message: true,
+    answerQuestion: false,
+    interrupt: true,
+    openInTerminal: true,
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(stableMessages))
+    .mockResolvedValueOnce(jsonResponse(stableActions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (statusPanelOpen: boolean, refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(false, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+
+  act(() => {
+    renderConversation(true, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const sameMessageAfterOpening =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
+
+  act(() => {
+    renderConversation(false, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const sameMessageAfterClosing =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
+
+  const actual = JSON.stringify([
+    sameMessageAfterOpening,
+    sameMessageAfterClosing,
+    fetcher.mock.calls.length,
+  ])
+  const expected = JSON.stringify([true, true, 2])
+  expect(actual).toBe(expected)
+})
+
 it('keeps the conversation and focused draft while a feed refresh is pending', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {

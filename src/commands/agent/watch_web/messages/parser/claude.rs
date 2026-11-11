@@ -131,7 +131,7 @@ fn parse_with_queued_prompts_and_proposals(
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     queued_prompts: &[WatchWebQueuedPrompt],
-    proposals: &[(i64, ChatItem, bool)],
+    proposals: &[(i64, ChatItem)],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
@@ -179,7 +179,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
         &'a [WatchWebQueuedPrompt],
     pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
         &'a [WatchWebPeerOutMessage],
-    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [(i64, ChatItem, bool)],
+    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [(i64, ChatItem)],
 }
 
 struct ParseContext<'a> {
@@ -187,7 +187,7 @@ struct ParseContext<'a> {
     queued_prompts: &'a [WatchWebQueuedPrompt],
     peer_out_messages: &'a [WatchWebPeerOutMessage],
     decisions: &'a [AgentDecision],
-    proposals: &'a [(i64, ChatItem, bool)],
+    proposals: &'a [(i64, ChatItem)],
 }
 
 fn parse_with_background_tasks_and_image_directory(
@@ -394,8 +394,8 @@ fn parse_with_background_tasks_and_image_directory(
                                         context
                                             .proposals
                                             .iter()
-                                            .find(|(proposal_seq, _, _)| *proposal_seq == seq)
-                                            .map(|(_, item, _)| item)
+                                            .find(|(proposal_seq, _)| *proposal_seq == seq)
+                                            .map(|(_, item)| item)
                                     });
                                 if let Some(proposal) = proposal {
                                     tools.flush_into(&mut items);
@@ -732,7 +732,7 @@ mod tests {
                 None,
                 Utc::now(),
                 &[],
-                &[(1, proposal.clone(), true)],
+                &[(1, proposal.clone())],
             )
             .unwrap();
 

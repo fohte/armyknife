@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.594](https://github.com/fohte/armyknife/compare/v0.1.593...v0.1.594) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep conversation mounted ([#1551](https://github.com/fohte/armyknife/issues/1551)) ([ae63391](https://github.com/fohte/armyknife/commit/ae6339118f976024ddc3e452cf56bd9e89a3f7e9))
+
+## [0.1.593](https://github.com/fohte/armyknife/compare/v0.1.592...v0.1.593) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show answered proposals ([#1549](https://github.com/fohte/armyknife/issues/1549)) ([d0ab5cb](https://github.com/fohte/armyknife/commit/d0ab5cb8876d97307cc3ba86037632c9d5dce03d))
+
 ## [0.1.592](https://github.com/fohte/armyknife/compare/v0.1.591...v0.1.592) (2026-11-11)
 
 

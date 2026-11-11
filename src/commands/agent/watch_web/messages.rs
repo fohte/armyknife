@@ -248,11 +248,10 @@ fn load_conversation_with_queued_prompts(
         });
     }
 
-    for (seq, item, unresolved) in &proposal_items {
-        if (session.engine == Engine::Codex || *unresolved)
-            && !messages
-                .iter()
-                .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
+    for (seq, item) in &proposal_items {
+        if !messages
+            .iter()
+            .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
         {
             messages.push(item.clone());
         }
@@ -659,6 +658,7 @@ mod tests {
 
     #[rstest]
     #[case::claude_unanswered(Engine::Claude, false)]
+    #[case::claude_answered(Engine::Claude, true)]
     #[case::codex_unanswered(Engine::Codex, false)]
     #[case::codex_answered(Engine::Codex, true)]
     fn proposals_without_a_transcript_position_are_appended_to_conversation(
