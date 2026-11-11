@@ -87,6 +87,13 @@ const proposal: ChatItem = {
 function messagesResponse(
   messages: ChatItem[],
   backgroundTasks: BackgroundTask[] = [],
+  metadata: {
+    start: number
+    total: number
+    decisions?: Extract<ChatItem, { type: 'decision' }>[]
+    hasUnansweredProposal?: boolean
+    activeQuestionIndex?: number | null
+  } = { start: 0, total: messages.length },
 ) {
   const activeQuestionIndex = messages.findLastIndex(
     (message) => message.type === 'question',
@@ -94,19 +101,28 @@ function messagesResponse(
   return {
     messages,
     backgroundTasks,
-    start: 0,
-    total: messages.length,
-    decisions: messages.filter(
-      (message): message is Extract<ChatItem, { type: 'decision' }> =>
-        message.type === 'decision',
-    ),
-    hasUnansweredProposal: messages.some(
-      (message) =>
-        message.type === 'proposal' &&
-        message.answer === null &&
-        !message.resolved,
-    ),
-    activeQuestionIndex: activeQuestionIndex < 0 ? null : activeQuestionIndex,
+    start: metadata.start,
+    total: metadata.total,
+    decisions:
+      metadata.decisions ??
+      messages.filter(
+        (message): message is Extract<ChatItem, { type: 'decision' }> =>
+          message.type === 'decision',
+      ),
+    hasUnansweredProposal:
+      metadata.hasUnansweredProposal ??
+      messages.some(
+        (message) =>
+          message.type === 'proposal' &&
+          message.answer === null &&
+          !message.resolved,
+      ),
+    activeQuestionIndex:
+      metadata.activeQuestionIndex === undefined
+        ? activeQuestionIndex < 0
+          ? null
+          : metadata.start + activeQuestionIndex
+        : metadata.activeQuestionIndex,
   }
 }
 
@@ -1536,7 +1552,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     return Promise.resolve(
       method === 'POST'
         ? new Response(null, { status: 204 })
-        : url.endsWith('/messages')
+        : url.split('?')[0]?.endsWith('/messages') === true
           ? jsonResponse(messagesResponse([proposal]))
           : jsonResponse(actions),
     )
@@ -4217,7 +4233,7 @@ it('shows terminal switch progress and success without reloading messages', asyn
         'Tmux switched to this session.',
       ],
       requests: [
-        '/api/sessions/sample-session/messages',
+        '/api/sessions/sample-session/messages?limit=100',
         '/api/sessions/sample-session/actions',
         '/api/sessions/sample-session/focus',
       ],
@@ -4294,7 +4310,7 @@ it('shows the server reason beside every terminal action when switching fails', 
       'Could not switch tmux: The terminal session is unavailable.',
     ],
     requests: [
-      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/messages?limit=100',
       '/api/sessions/sample-session/actions',
       '/api/sessions/sample-session/focus',
     ],
@@ -4313,7 +4329,7 @@ it('ignores a terminal result after the conversation switches sessions', async (
         : input instanceof URL
           ? input.href
           : input.url
-    if (url.endsWith('/messages')) {
+    if (url.split('?')[0]?.endsWith('/messages') === true) {
       return Promise.resolve(
         jsonResponse(messagesResponse([question, permission])),
       )
@@ -4373,10 +4389,10 @@ it('ignores a terminal result after the conversation switches sessions', async (
   expect(snapshot()).toEqual({
     feedback: [],
     requests: [
-      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/messages?limit=100',
       '/api/sessions/sample-session/actions',
       '/api/sessions/sample-session/focus',
-      '/api/sessions/next-session/messages',
+      '/api/sessions/next-session/messages?limit=100',
       '/api/sessions/next-session/actions',
     ],
   })
@@ -4431,7 +4447,7 @@ it('hides successful terminal feedback after three seconds', async () => {
     ],
     feedbackAfterTimeout: [],
     requests: [
-      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/messages?limit=100',
       '/api/sessions/sample-session/actions',
       '/api/sessions/sample-session/focus',
     ],
@@ -4447,7 +4463,7 @@ it('clears terminal feedback timers when the session changes or unmounts', async
         : input instanceof URL
           ? input.href
           : input.url
-    if (url.endsWith('/messages')) {
+    if (url.split('?')[0]?.endsWith('/messages') === true) {
       return Promise.resolve(
         jsonResponse(messagesResponse([question, permission])),
       )
@@ -4682,6 +4698,283 @@ it('keeps unchanged message DOM nodes across a conversation refresh', async () =
     sameMessageNode: true,
     messageText: 'The conversation is unchanged.',
     requestCount: 4,
+  })
+})
+
+it('loads only the latest page initially and refreshes from the loaded start', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const firstInitialMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Loaded message one.',
+  }
+  const initialMessages = [
+    firstInitialMessage,
+    { type: 'assistant', text: 'Loaded message two.' },
+  ] satisfies ChatItem[]
+  const refreshedMessages = [
+    firstInitialMessage,
+    { type: 'assistant', text: 'Loaded message two updated.' },
+    { type: 'assistant', text: 'New message.' },
+  ] satisfies ChatItem[]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(initialMessages, [], { start: 8, total: 10 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(refreshedMessages, [], { start: 8, total: 11 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+  act(() => {
+    renderConversation(1)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => url),
+    retainedMessage:
+      retainedMessage === container.querySelector('.chat-assistant-message'),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?from=8',
+      '/api/sessions/sample-session/actions',
+    ],
+    retainedMessage: true,
+    messages: [
+      'Loaded message one.',
+      'Loaded message two updated.',
+      'New message.',
+    ],
+  })
+})
+
+it('prepends an older page without moving existing messages in the viewport', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const visibleMessages = [
+    { type: 'assistant', text: 'First visible message.' },
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 + container.querySelectorAll('.chat-assistant-message').length * 40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 30
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => url),
+    retainedMessage:
+      retainedMessage ===
+      container.querySelectorAll('.chat-assistant-message')[1],
+    scrollTop: scroll.scrollTop,
+    olderButton: container.querySelector('.conversation-load-older'),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=1&limit=100',
+    ],
+    retainedMessage: true,
+    scrollTop: 70,
+    olderButton: null,
+    messages: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message.',
+    ],
+  })
+})
+
+it('uses full conversation metadata for questions, proposals, and decisions', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision = (
+    seq: number,
+    title: string,
+  ): Extract<ChatItem, { type: 'decision' }> => ({
+    type: 'decision',
+    seq,
+    title,
+    why: 'Keep behavior predictable.',
+    considered: ['Use the simpler path'],
+    easyToChange: 'Change one setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  })
+  const firstQuestion: ChatItem = {
+    ...question,
+    question: 'The active question from the loaded page?',
+  }
+  const laterQuestion: ChatItem = {
+    ...question,
+    question: 'A later, already answered question?',
+    answer: 'Retry once',
+  }
+  const visibleDecision = decision(2, 'Visible decision')
+  const fullDecisions = [
+    decision(1, 'Earlier decision'),
+    visibleDecision,
+    decision(3, 'Later decision'),
+  ]
+  const page = messagesResponse(
+    [firstQuestion, visibleDecision, laterQuestion],
+    [],
+    {
+      start: 10,
+      total: 20,
+      decisions: fullDecisions,
+      hasUnansweredProposal: true,
+      activeQuestionIndex: 10,
+    },
+  )
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(page))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelectorAll('.chat-question-choices button').length === 4,
+  )
+
+  const snapshot = () => ({
+    request: fetcher.mock.calls.map(([url]) => url),
+    questionChoicesDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    conversationDecisionPosition: container.querySelector(
+      '.decision-card--conversation .decision-card-position',
+    )?.textContent,
+    statusPanelDecisionCount: container.querySelectorAll(
+      '.decision-card--panel',
+    ).length,
+    composerPlaceholder: container
+      .querySelector<HTMLTextAreaElement>(
+        'form.conversation-composer:not(.chat-question-composer) textarea',
+      )
+      ?.getAttribute('placeholder'),
+  })
+  expect(snapshot()).toEqual({
+    request: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+    ],
+    questionChoicesDisabled: [false, false, true, true],
+    conversationDecisionPosition: '2 of 3',
+    statusPanelDecisionCount: 3,
+    composerPlaceholder: 'Choose an option above, or message the session',
   })
 })
 

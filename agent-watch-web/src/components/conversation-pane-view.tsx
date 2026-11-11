@@ -33,6 +33,12 @@ type ConversationPaneViewProps = {
   session: Session
   sessions?: readonly Session[]
   messages: readonly ChatItem[]
+  start?: number
+  decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal?: boolean
+  activeQuestionIndex?: number | null
+  loadingOlder?: boolean
+  onLoadOlder?: () => void
   backgroundTasks?: readonly BackgroundTask[]
   actions: SessionActions | null
   actionsReady?: boolean
@@ -89,6 +95,12 @@ export function ConversationPaneView({
   session,
   sessions = [],
   messages,
+  start = 0,
+  decisions,
+  hasUnansweredProposal: responseHasUnansweredProposal,
+  activeQuestionIndex,
+  loadingOlder = false,
+  onLoadOlder = () => undefined,
   backgroundTasks = [],
   actions,
   actionsReady = true,
@@ -131,6 +143,11 @@ export function ConversationPaneView({
     onAction,
   })
   const scrollRef = useRef<HTMLDivElement>(null)
+  const pendingScrollAnchorRef = useRef<{
+    scrollHeight: number
+    scrollTop: number
+    start: number
+  } | null>(null)
   const followLatestRef = useRef(true)
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   // Keep memoized message props stable while the App selection callback changes.
@@ -154,6 +171,12 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    start,
+    ...(decisions === undefined ? {} : { decisions }),
+    ...(responseHasUnansweredProposal === undefined
+      ? {}
+      : { hasUnansweredProposal: responseHasUnansweredProposal }),
+    ...(activeQuestionIndex === undefined ? {} : { activeQuestionIndex }),
     sessionCategory: session.category,
     isCompacting: session.isCompacting === true,
     sessionEngine: session.engine,
@@ -207,12 +230,23 @@ export function ConversationPaneView({
   }
 
   useLayoutEffect(() => {
+    pendingScrollAnchorRef.current = null
+    followLatestRef.current = true
+  }, [session.id])
+
+  useLayoutEffect(() => {
     const scrollContainer = scrollRef.current
-    if (scrollContainer !== null && followLatestRef.current) {
+    if (scrollContainer === null) return
+    const anchor = pendingScrollAnchorRef.current
+    if (anchor !== null && start < anchor.start) {
+      scrollContainer.scrollTop =
+        anchor.scrollTop + scrollContainer.scrollHeight - anchor.scrollHeight
+      pendingScrollAnchorRef.current = null
+    } else if (followLatestRef.current) {
       scrollContainer.scrollTop =
         scrollContainer.scrollHeight - scrollContainer.clientHeight
     }
-  }, [messages])
+  }, [messages, start])
 
   const updateFollowLatest = () => {
     const scrollContainer = scrollRef.current
@@ -388,6 +422,27 @@ export function ConversationPaneView({
         aria-live="polite"
         onScroll={updateFollowLatest}
       >
+        {start > 0 ? (
+          <Button
+            className="conversation-load-older"
+            type="button"
+            variant="plain"
+            disabled={loadingOlder}
+            onClick={() => {
+              const scrollContainer = scrollRef.current
+              if (scrollContainer !== null) {
+                pendingScrollAnchorRef.current = {
+                  scrollHeight: scrollContainer.scrollHeight,
+                  scrollTop: scrollContainer.scrollTop,
+                  start,
+                }
+              }
+              onLoadOlder()
+            }}
+          >
+            {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+          </Button>
+        ) : null}
         <div className="conversation-timeline">
           <span>Conversation</span>
         </div>

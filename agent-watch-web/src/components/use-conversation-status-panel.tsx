@@ -10,6 +10,7 @@ import type { BackgroundTask, ChatItem, Session } from '#types'
 type UseConversationStatusPanelOptions = {
   session: Session
   messages: readonly ChatItem[]
+  allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
   statusPanelOpen: boolean
   onAction: (
@@ -23,6 +24,7 @@ type UseConversationStatusPanelOptions = {
 export function useConversationStatusPanel({
   session,
   messages,
+  allDecisions,
   backgroundTasks,
   statusPanelOpen,
   onAction,
@@ -33,9 +35,11 @@ export function useConversationStatusPanel({
   const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
     null,
   )
-  const decisions = messages.filter(
-    (message): message is Decision => message.type === 'decision',
-  )
+  const decisions =
+    allDecisions ??
+    messages.filter(
+      (message): message is Decision => message.type === 'decision',
+    )
   const decisionCount = session.decisionCount ?? decisions.length
   const selectedDecision =
     decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
