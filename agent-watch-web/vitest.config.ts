@@ -31,6 +31,7 @@ const appTestFiles = [
   'src/components/conversation-pane.test.tsx',
   'src/components/user-with-content.browser.test.tsx',
   'src/components/question-card.test.tsx',
+  'src/components/proposal-card.test.tsx',
   'src/components/message-composer.test.tsx',
   'src/components/crit-pane.test.tsx',
   'src/components/resizable-columns.test.tsx',
