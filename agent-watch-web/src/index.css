@@ -4,7 +4,6 @@
 @import '@fohte/ui/tokens.css';
 @import './design-tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
-@import './components/conversation-pane.css';
 @import './components/mobile-layout.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 
@@ -254,7 +253,7 @@
   left: -1px;
   color: var(--aw-text-muted);
   content: '✓';
-  font-size: 10px;
+  font-size: 8px;
 }
 
 .session-content,

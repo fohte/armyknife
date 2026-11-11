@@ -57,15 +57,18 @@ function cardKind(session: BoardProject['sessions'][number]) {
   return session.kind ?? 'Stopped'
 }
 
-function taskLabel(session: BoardProject['sessions'][number]) {
+function taskDetails(session: BoardProject['sessions'][number]) {
   if (session.task === null) {
-    return '— No task'
+    return { identifier: '—', title: 'No task' }
   }
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
   const linkedTaskCount = formatLinkedTaskCount(session.tasks)
-  return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
+  return {
+    identifier: `${priority} #${String(session.task.number)}`,
+    title: `${session.task.title}${linkedTaskCount}`,
+  }
 }
 
 function ProjectCard({
@@ -75,6 +78,8 @@ function ProjectCard({
   session: BoardProject['sessions'][number]
   onSelectSession: (id: string) => void
 }) {
+  const task = taskDetails(session)
+
   return (
     <Button
       type="button"
@@ -92,7 +97,10 @@ function ProjectCard({
         <time>{formatElapsedTime(session.elapsedSeconds)}</time>
       </div>
       <div className="board-card-title">{session.title}</div>
-      <div className="board-card-task">{taskLabel(session)}</div>
+      <div className="board-card-task">
+        <span className="board-card-task-id">{task.identifier}</span>{' '}
+        <span>{task.title}</span>
+      </div>
     </Button>
   )
 }

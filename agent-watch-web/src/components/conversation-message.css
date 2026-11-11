@@ -1,0 +1,5 @@
+.chat-assistant-message {
+  max-width: 100%;
+  color: var(--aw-text-body);
+  white-space: pre-wrap;
+}

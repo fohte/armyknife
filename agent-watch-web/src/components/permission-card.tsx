@@ -1,3 +1,6 @@
+import '#components/conversation-card.css'
+import '#components/permission-card.css'
+
 import { Button } from '@fohte/ui/button'
 
 import type { ChatItem, SessionActions } from '#types'

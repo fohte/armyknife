@@ -1,3 +1,6 @@
+import '#components/conversation-card.css'
+import '#components/question-card.css'
+
 import { Button } from '@fohte/ui/button'
 import { type KeyboardEvent, type SubmitEvent, useId, useState } from 'react'
 

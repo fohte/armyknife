@@ -1,0 +1,88 @@
+.conversation-working-status {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 9px;
+  padding: 0 max(24px, calc((100% - 760px) / 2));
+  border-top: 1px solid var(--aw-border-row);
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.conversation-working-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 auto;
+  border-radius: var(--aw-radius);
+  background: var(--aw-color-neutral);
+  animation: conversation-working-pulse 1.4s ease-in-out infinite;
+}
+
+.conversation-working-tool {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  color: var(--aw-text-body);
+  font-family: var(--font-mono);
+}
+
+.conversation-working-target {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-background-tasks {
+  position: relative;
+  margin-left: auto;
+  color: var(--aw-text-body);
+}
+
+.conversation-background-tasks summary {
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.conversation-background-tasks ul {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 1;
+  display: grid;
+  min-width: 260px;
+  max-width: min(480px, 80vw);
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  list-style: none;
+}
+
+.conversation-background-tasks li {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 11px;
+}
+
+.conversation-background-tasks li span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-background-tasks li span:last-child {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+}
+
+@keyframes conversation-working-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}

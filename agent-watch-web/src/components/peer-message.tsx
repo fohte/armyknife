@@ -6,21 +6,6 @@ import type { ChatItem, SessionLinkTarget } from '#types'
 
 type PeerMessageItem = Extract<ChatItem, { type: 'peer' }>
 
-function sessionTarget(
-  sessionId: string,
-  sessions: readonly SessionLinkTarget[],
-): SessionLinkTarget {
-  return (
-    sessions.find((session) => session.id === sessionId) ?? {
-      id: sessionId,
-      category: 'done',
-      isPaused: false,
-      task: null,
-      repo: 'unknown',
-    }
-  )
-}
-
 export function PeerMessage({
   message,
   onSelectSession,
@@ -33,10 +18,16 @@ export function PeerMessage({
   const foundTarget = sessions.find(
     (session) => session.id === message.session_id,
   )
-  const target = foundTarget ?? sessionTarget(message.session_id, sessions)
-  const sessionName = target.title ?? message.session_title ?? target.id
+  const sessionName =
+    foundTarget?.title ??
+    (message.session_id === 'unknown'
+      ? 'Unknown session'
+      : message.session_title === undefined
+        ? message.session_id
+        : `${message.session_title} (${message.session_id})`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
   const openSession = () => {
+    if (foundTarget === undefined) return
     onSelectSession(message.session_id)
   }
 
@@ -46,15 +37,21 @@ export function PeerMessage({
     >
       <div className="chat-peer-label">
         <span>{directionLabel}</span>
-        <SessionLink session={target} onSelectSession={onSelectSession}>
-          {sessionName}
-        </SessionLink>
+        {foundTarget === undefined ? (
+          <span>{sessionName}</span>
+        ) : (
+          <SessionLink session={foundTarget} onSelectSession={onSelectSession}>
+            {sessionName}
+          </SessionLink>
+        )}
       </div>
       <div
-        className="chat-peer-content"
-        role="link"
-        tabIndex={0}
-        aria-label={`Open ${sessionName}`}
+        className={`chat-peer-content${foundTarget === undefined ? ' chat-peer-content-unavailable' : ''}`}
+        role={foundTarget === undefined ? undefined : 'link'}
+        tabIndex={foundTarget === undefined ? undefined : 0}
+        aria-label={
+          foundTarget === undefined ? undefined : `Open ${sessionName}`
+        }
         onClick={(event) => {
           if (
             event.target instanceof Element &&
