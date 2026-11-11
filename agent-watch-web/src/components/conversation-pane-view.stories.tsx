@@ -75,11 +75,16 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
       {
         type: 'question',
+        header: 'Retry policy',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          {
+            label: 'Retry **three times** with exponential backoff',
+            description: 'Wait briefly before each retry.',
+          },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: null,
       },
     ],
@@ -111,9 +116,10 @@ export const QuestionShowsSelectedAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry **three times** with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Retry once without delay',
       },
     ],
@@ -128,9 +134,10 @@ export const QuestionShowsFreeformAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry three times with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry three times with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Use a short delay before each retry',
       },
     ],
@@ -292,7 +299,8 @@ export const CodexOnlyOpensInTerminal: Story = {
       {
         type: 'question',
         question: 'Which retry policy should be used?',
-        choices: ['Retry three times', 'Retry once'],
+        choices: [{ label: 'Retry three times' }, { label: 'Retry once' }],
+        multi_select: false,
         answer: null,
       },
       {
@@ -347,6 +355,56 @@ export const TheConversationShowsOperationSummaries: Story = {
       },
     ],
     actions: null,
+  },
+}
+
+export const TheConversationShowsDecisionRows: Story = {
+  name: 'The conversation shows a provisional decision in its transcript',
+  args: {
+    session: { ...session, decisionCount: 1, unreviewedDecisionCount: 1 },
+    messages: [
+      {
+        type: 'assistant',
+        text: 'I will use a fixed retry limit while continuing the work.',
+      },
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Use a fixed retry limit',
+        why: 'The current service has no reliable timing data.',
+        considered: ['Retry using the latest duration'],
+        easyToChange: 'One configuration value in the CI workflow.',
+        review: null,
+        createdAt: '2026-11-11T03:25:59Z',
+      },
+    ],
+  },
+}
+
+export const DoneSessionNeedsDecisionReview: Story = {
+  name: 'A completed session highlights decisions that need review',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      decisionCount: 2,
+      unreviewedDecisionCount: 1,
+    },
+    decisionsPanelOpen: true,
+    selectedDecisionSeq: 1,
+    messages: [
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Use a fixed retry limit',
+        why: 'The current service has no reliable timing data.',
+        considered: ['Retry using the latest duration'],
+        easyToChange: 'One configuration value in the CI workflow.',
+        review: null,
+        createdAt: '2026-11-11T03:25:59Z',
+      },
+    ],
   },
 }
 

@@ -542,7 +542,7 @@ mod tests {
     use super::{parse, parse_with_image_directory};
     use crate::commands::agent::store::AgentDecision;
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, UserContentPart,
+        ChatItem, ParentSession, PeerDirection, QuestionChoice, UserContentPart,
     };
 
     const FAILED_ADD_TRANSCRIPT: &str = indoc! {r#"
@@ -736,6 +736,12 @@ mod tests {
         );
     }
 
+    fn question_choice(label: &str) -> QuestionChoice {
+        QuestionChoice {
+            label: label.to_string(),
+            description: None,
+        }
+    }
     #[test]
     fn parses_a_marked_peer_message_with_a_saved_image() {
         let directory = tempfile::tempdir().unwrap();
@@ -1228,8 +1234,19 @@ mod tests {
                     ],
                 },
                 ChatItem::Question {
+                    header: None,
                     question: "Should notifications be grouped?".to_string(),
-                    choices: vec!["Yes".to_string(), "No".to_string()],
+                    choices: vec![
+                        QuestionChoice {
+                            label: "Yes".to_string(),
+                            description: Some("Group them".to_string()),
+                        },
+                        QuestionChoice {
+                            label: "No".to_string(),
+                            description: Some("Show every event".to_string()),
+                        },
+                    ],
+                    multi_select: false,
                     answer: None,
                 },
                 ChatItem::Peer {
@@ -1259,8 +1276,10 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-one","content":"Your questions have been answered: \"Should the summary be brief?\"=\"Yes\". You can now continue with these answers in mind."}]}}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "Should the summary be brief?".to_string(),
-            choices: vec!["Yes".to_string(), "No".to_string()],
+            choices: vec![question_choice("Yes"), question_choice("No")],
+            multi_select: false,
             answer: Some("Yes".to_string()),
         }]
     )]
@@ -1271,13 +1290,17 @@ mod tests {
         "#},
         vec![
             ChatItem::Question {
+                header: None,
                 question: "Which output format?".to_string(),
-                choices: vec!["Markdown".to_string(), "Plain text".to_string()],
+                choices: vec![question_choice("Markdown"), question_choice("Plain text")],
+                multi_select: false,
                 answer: Some("Markdown".to_string()),
             },
             ChatItem::Question {
+                header: None,
                 question: "Include examples?".to_string(),
-                choices: vec!["Yes".to_string(), "No".to_string()],
+                choices: vec![question_choice("Yes"), question_choice("No")],
+                multi_select: false,
                 answer: Some("No".to_string()),
             },
         ]
@@ -1288,8 +1311,10 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-custom","content":"The user answered: \"How should the cache expire?\"=\"Keep it until deployment\". You can now continue with these answers in mind."}]}}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "How should the cache expire?".to_string(),
-            choices: vec!["After one hour".to_string(), "After one day".to_string()],
+            choices: vec![question_choice("After one hour"), question_choice("After one day")],
+            multi_select: false,
             answer: Some("Keep it until deployment".to_string()),
         }]
     )]
@@ -1299,8 +1324,10 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-structured","content":"Your questions have been answered: \"Which color theme?\"=\"Dark\". You can now continue with these answers in mind."}]},"toolUseResult":{"questions":[{"question":"Which color theme?"}],"answers":{"Which color theme?":"Use a fictional palette"},"annotations":{}}}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "Which color theme?".to_string(),
-            choices: vec!["Light".to_string(), "Dark".to_string()],
+            choices: vec![question_choice("Light"), question_choice("Dark")],
+            multi_select: false,
             answer: Some("Use a fictional palette".to_string()),
         }]
     )]
@@ -1310,8 +1337,10 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-null-result","content":"The user answered: \"Should weekends be shown?\"=\"No\". You can now continue with these answers in mind."}]},"toolUseResult":null}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "Should weekends be shown?".to_string(),
-            choices: vec!["Yes".to_string(), "No".to_string()],
+            choices: vec![question_choice("Yes"), question_choice("No")],
+            multi_select: false,
             answer: Some("No".to_string()),
         }]
     )]
@@ -1320,8 +1349,10 @@ mod tests {
             {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-pending","name":"AskUserQuestion","input":{"questions":[{"question":"Should the report include a chart?","options":[{"label":"Yes"},{"label":"No"}]}]}}]}}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "Should the report include a chart?".to_string(),
-            choices: vec!["Yes".to_string(), "No".to_string()],
+            choices: vec![question_choice("Yes"), question_choice("No")],
+            multi_select: false,
             answer: None,
         }]
     )]
@@ -1331,8 +1362,10 @@ mod tests {
             {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-cancelled","content":"The user cancelled this question."}]}}
         "#},
         vec![ChatItem::Question {
+            header: None,
             question: "Should the report include a chart?".to_string(),
-            choices: vec!["Yes".to_string(), "No".to_string()],
+            choices: vec![question_choice("Yes"), question_choice("No")],
+            multi_select: false,
             answer: None,
         }]
     )]

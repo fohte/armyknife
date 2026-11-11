@@ -435,8 +435,11 @@ enum ChatItem {
         target: Option<String>,
     },
     Question {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        header: Option<String>,
         question: String,
-        choices: Vec<String>,
+        choices: Vec<QuestionChoice>,
+        multi_select: bool,
         answer: Option<String>,
     },
     Permission {
@@ -468,6 +471,14 @@ impl From<AgentDecision> for ChatItem {
             created_at: decision.created_at,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionChoice {
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -533,7 +544,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, load_messages_with, routes_with_decisions_and_queued_prompts,
+        ChatItem, QuestionChoice, load_messages_with, routes_with_decisions_and_queued_prompts,
         routes_with_queued_prompts,
     };
     use crate::commands::agent::store::{AgentDecision, WatchWebQueuedPrompt};
@@ -551,6 +562,13 @@ mod tests {
         .unwrap()
     }
 
+    fn question_choice(label: &str) -> QuestionChoice {
+        QuestionChoice {
+            label: label.to_string(),
+            description: None,
+        }
+    }
+
     fn pending_question_transcript() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
@@ -564,7 +582,12 @@ mod tests {
                     "input": {
                         "questions": [{
                             "question": "Should the summary be brief?",
-                            "options": [{"label": "Yes"}, {"label": "No"}],
+                            "header": "Summary",
+                            "multiSelect": true,
+                            "options": [
+                                {"label": "Yes", "description": "Keep it concise."},
+                                {"label": "No"},
+                            ],
                         }],
                     },
                 }],
@@ -817,8 +840,16 @@ mod tests {
             })
             .unwrap(),
             Some(vec![ChatItem::Question {
+                header: Some("Summary".to_string()),
                 question: "Should the summary be brief?".to_string(),
-                choices: vec!["Yes".to_string(), "No".to_string()],
+                choices: vec![
+                    QuestionChoice {
+                        label: "Yes".to_string(),
+                        description: Some("Keep it concise.".to_string()),
+                    },
+                    question_choice("No"),
+                ],
+                multi_select: true,
                 answer: None,
             }])
         );
@@ -843,8 +874,16 @@ mod tests {
             .unwrap(),
             Some(vec![
                 ChatItem::Question {
+                    header: Some("Summary".to_string()),
                     question: "Should the summary be brief?".to_string(),
-                    choices: vec!["Yes".to_string(), "No".to_string()],
+                    choices: vec![
+                        QuestionChoice {
+                            label: "Yes".to_string(),
+                            description: Some("Keep it concise.".to_string()),
+                        },
+                        question_choice("No"),
+                    ],
+                    multi_select: true,
                     answer: None,
                 },
                 ChatItem::Permission {
@@ -907,6 +946,39 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 r#"{"messages":[{"type":"peer","direction":"from","session_id":"fixture-parent-id","session_title":"Fixture parent","content":[{"type":"text","text":"Synthetic peer request."}]}],"backgroundTasks":[]}"#
+                    .to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn question_message_route_serializes_question_metadata() {
+        let (_directory, transcript_path) = pending_question_transcript();
+        let mut session = stored_session();
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_queued_prompts(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[]}"#
                     .to_string(),
             )
         );

@@ -357,6 +357,12 @@
   white-space: nowrap;
 }
 
+.session-decision-count {
+  flex: 0 0 auto;
+  color: var(--aw-text-body);
+  white-space: nowrap;
+}
+
 .show-more-button {
   display: block;
   width: 100%;

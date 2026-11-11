@@ -3,18 +3,25 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QuestionCard } from '#components/question-card'
 
 const callbacks = {
-  onAnswer: () => undefined,
+  onAnswer: () => Promise.resolve(true),
+  onSkip: () => Promise.resolve(true),
+  onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
 }
 
 const meta = {
   component: QuestionCard,
   args: {
+    header: 'Retry policy',
     question: 'Which **retry policy** should be used?',
     choices: [
-      'Retry **three times** with exponential backoff',
-      'Retry once without delay',
+      {
+        label: 'Retry **three times** with exponential backoff',
+        description: 'Wait briefly before each retry.',
+      },
+      { label: 'Retry once without delay' },
     ],
+    multiSelect: false,
     answer: null,
     canAnswer: true,
     isMobile: false,
@@ -29,6 +36,22 @@ type Story = StoryObj<typeof meta>
 
 export const QuestionWaitsForAnAnswer: Story = {
   name: 'A question offers choices while it waits for an answer',
+  decorators: [
+    (Story) => (
+      <div
+        style={{ width: '740px', padding: '0 24px', boxSizing: 'border-box' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const QuestionShowsItsMultipleSelectType: Story = {
+  name: 'A question is marked as a multiple select question',
+  args: {
+    multiSelect: true,
+  },
 }
 
 export const QuestionShowsSelectedAnswer: Story = {
@@ -51,8 +74,8 @@ export const QuestionOffersALinkedChoice: Story = {
   name: 'A choice shows its link destination as plain text',
   args: {
     choices: [
-      'Follow the [setup guide](https://example.org/guide)',
-      'Use the default settings',
+      { label: 'Follow the [setup guide](https://example.org/guide)' },
+      { label: 'Use the default settings' },
     ],
   },
 }

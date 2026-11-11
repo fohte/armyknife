@@ -2,6 +2,7 @@ import '#components/conversation-message.css'
 
 import type { ReactNode } from 'react'
 
+import { DecisionCard } from '#components/decision-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
 import {
@@ -27,6 +28,9 @@ type RenderConversationMessageOptions = {
   activeQuestionIndex: number
   index: number
   isMobile: boolean
+  selectedDecisionSeq: number | null
+  decisionPosition: string | undefined
+  onSelectDecision: (seq: number) => void
   message: ChatItem
   pendingAction: PendingPermissionAction
   onAction: (
@@ -46,6 +50,9 @@ export function renderConversationMessage({
   activeQuestionIndex,
   index,
   isMobile,
+  selectedDecisionSeq,
+  decisionPosition,
+  onSelectDecision,
   message,
   pendingAction,
   onAction,
@@ -140,8 +147,10 @@ export function renderConversationMessage({
     return (
       <QuestionCard
         key={`question-${String(index)}`}
+        {...(message.header === undefined ? {} : { header: message.header })}
         question={message.question}
         choices={message.choices}
+        multiSelect={message.multi_select === true}
         answer={message.answer}
         canAnswer={canAnswer}
         isMobile={isMobile}
@@ -151,10 +160,38 @@ export function renderConversationMessage({
           !actions.answerQuestion
         }
         canOpenInTerminal={actions?.openInTerminal === true}
-        onAnswer={(choice) => {
-          void onAction('answer', { choice })
+        onAnswer={(choice) => onAction('answer', { choice })}
+        onSkip={() => onAction('answer', { skip: true })}
+        onFreeformAnswer={(answer) => {
+          const questionContext =
+            message.header !== undefined && message.header.length > 0
+              ? `${message.header}: ${message.question}`
+              : message.question
+          return onAction('messages', {
+            content: `My answer to "${questionContext}" is:\n${answer}`,
+          })
         }}
         onOpenInTerminal={onOpenInTerminal}
+      />
+    )
+  }
+  if (message.type === 'decision') {
+    return (
+      <DecisionCard
+        key={`decision-${String(message.seq)}-${String(index)}`}
+        decision={message}
+        variant="conversation"
+        selected={message.seq === selectedDecisionSeq}
+        {...(decisionPosition === undefined
+          ? {}
+          : { position: decisionPosition })}
+        onSelect={() => {
+          onSelectDecision(message.seq)
+        }}
+        onOk={() => onAction(`decisions/${String(message.seq)}/ok`)}
+        onRequestChange={(comment) =>
+          onAction(`decisions/${String(message.seq)}/change`, { comment })
+        }
       />
     )
   }

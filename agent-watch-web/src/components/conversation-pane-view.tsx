@@ -3,9 +3,8 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 
-import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
@@ -19,6 +18,7 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
   ChatItem,
@@ -47,7 +47,11 @@ type ConversationPaneViewProps = {
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
+  decisionsPanelOpen?: boolean
+  selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
+  onToggleDecisionsPanel?: () => void
+  onSelectDecision?: (seq: number) => void
   runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
@@ -106,7 +110,11 @@ export function ConversationPaneView({
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
+  decisionsPanelOpen = false,
+  selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
+  onToggleDecisionsPanel = () => undefined,
+  onSelectDecision = () => undefined,
   runningCount = 0,
   fileDropActive = false,
   onBack,
@@ -148,13 +156,19 @@ export function ConversationPaneView({
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
   )
+  const decisions = conversationMessages.filter(
+    (message) => message.type === 'decision',
+  )
+  const decisionPositions = new Map(
+    decisions.map((decision, index) => [decision.seq, index + 1]),
+  )
+  const decisionLabel = formatSessionDecisionCount(session)
   const hasUnansweredProposal = messages.some(
     (message) =>
       message.type === 'proposal' &&
       message.answer === null &&
       !message.resolved,
   )
-  const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
   const linkedTasks =
@@ -195,37 +209,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  useEffect(() => {
-    const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      if (
-        isMobile ||
-        waitingQuestion?.type !== 'question' ||
-        waitingQuestion.answer !== null ||
-        activeQuestionIndex < 0 ||
-        !actionsReady ||
-        actions?.answerQuestion !== true
-      ) {
-        return
-      }
-      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
-      if (choice === null) return
-      event.preventDefault()
-      void onAction('answer', { choice: choice + 1 })
-    }
-
-    window.addEventListener('keydown', onQuestionKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onQuestionKeyDown)
-    }
-  }, [
-    actions?.answerQuestion,
-    actionsReady,
-    activeQuestionIndex,
-    isMobile,
-    onAction,
-    waitingQuestion,
-  ])
 
   useLayoutEffect(() => {
     const scrollContainer = scrollRef.current
@@ -319,43 +302,61 @@ export function ConversationPaneView({
                     ↑ Parent: {parent.title ?? 'session'}
                   </a>
                 ) : null}
+                <div className="conversation-header-actions">
+                  <Button
+                    className="conversation-status-panel-toggle"
+                    type="button"
+                    variant="plain"
+                    aria-label="Toggle session status panel with Command Period"
+                    aria-expanded={statusPanelOpen}
+                    aria-controls="session-status-panel"
+                    onClick={() => {
+                      onToggleStatusPanel()
+                    }}
+                  >
+                    <span aria-hidden="true">◐</span>
+                    {runningCount > 0 ? <span>{runningCount}</span> : null}
+                  </Button>
+                  {decisionLabel !== null ? (
+                    <Button
+                      className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                      type="button"
+                      variant="plain"
+                      aria-pressed={decisionsPanelOpen}
+                      aria-controls="session-status-panel"
+                      onClick={() => {
+                        onToggleDecisionsPanel()
+                      }}
+                    >
+                      {decisionLabel}
+                    </Button>
+                  ) : null}
+                  {session.pullRequest ? (
+                    <a
+                      className="conversation-pr-link"
+                      href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{session.pullRequest.number} PR
+                    </a>
+                  ) : null}
+                  {actions?.openInTerminal === true ? (
+                    <Button
+                      type="button"
+                      variant="plain"
+                      onClick={openInTerminal}
+                    >
+                      Open in terminal
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                sessionId={session.id}
               />
-            </div>
-            <div className="conversation-header-actions">
-              <Button
-                className="conversation-status-panel-toggle"
-                type="button"
-                variant="plain"
-                aria-label="Toggle session status panel with Command Period"
-                aria-expanded={statusPanelOpen}
-                aria-controls="session-status-panel"
-                onClick={() => {
-                  onToggleStatusPanel()
-                }}
-              >
-                <span aria-hidden="true">◐</span>
-                {runningCount > 0 ? <span>{runningCount}</span> : null}
-              </Button>
-              {session.pullRequest ? (
-                <a
-                  className="conversation-pr-link"
-                  href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  #{session.pullRequest.number} PR
-                </a>
-              ) : null}
-              <CopySessionIdControl sessionId={session.id} />
-              {actions?.openInTerminal === true ? (
-                <Button type="button" variant="plain" onClick={openInTerminal}>
-                  Open in terminal
-                </Button>
-              ) : null}
             </div>
           </>
         )}
@@ -389,6 +390,12 @@ export function ConversationPaneView({
             activeQuestionIndex,
             index,
             isMobile,
+            selectedDecisionSeq,
+            decisionPosition:
+              message.type === 'decision' && decisionPositions.has(message.seq)
+                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
+                : undefined,
+            onSelectDecision,
             message,
             onAction,
             onOpenInTerminal: openInTerminal,

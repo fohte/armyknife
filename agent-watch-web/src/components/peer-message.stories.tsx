@@ -28,7 +28,13 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: 720, padding: 32, background: '#0a0a0a' }}>
+      <div
+        style={{
+          width: 672,
+          padding: 24,
+          background: 'var(--aw-bg-app)',
+        }}
+      >
         <Story />
       </div>
     ),

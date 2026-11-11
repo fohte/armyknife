@@ -7,30 +7,88 @@ import { SessionTaskLinks } from '#components/session-task-links'
 let container: HTMLDivElement
 let root: Root | null = null
 
+function makeRect({
+  left,
+  top,
+  width,
+  height,
+}: {
+  left: number
+  top: number
+  width: number
+  height: number
+}): DOMRect {
+  return {
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
+    toJSON: () => ({}),
+  }
+}
+
 function snapshot() {
+  const summary = container.querySelector('summary')
+  const menu = document.body.querySelector<HTMLElement>(
+    '.session-task-links-menu',
+  )
+  const visibleMenu = menu?.hidden === false ? menu : null
+
   return {
     expanded: container.querySelector('details')?.open,
     primary: {
       href: container
         .querySelector('.session-task-line > a')
         ?.getAttribute('href'),
+      id: container.querySelector(
+        '.session-task-line > a .session-task-link-id',
+      )?.textContent,
       text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
-    linkedTasks: Array.from(
-      container.querySelectorAll('.session-task-links li'),
-    ).map((item) => ({
-      href: item.querySelector('a')?.getAttribute('href'),
-      text: item.querySelector('a')?.textContent,
-      status:
-        item.querySelector('.session-task-completed')?.textContent ?? null,
-    })),
+    disclosureOwnsMenu:
+      container
+        .querySelector('.session-task-links')
+        ?.getAttribute('aria-owns') === menu?.id,
+    summaryControlsMenu: summary?.getAttribute('aria-controls') === menu?.id,
+    menuRole: visibleMenu?.getAttribute('role') ?? null,
+    menuLabel: visibleMenu?.getAttribute('aria-label') ?? null,
+    menuHidden: menu?.hidden ?? null,
+    menuPosition: visibleMenu
+      ? {
+          left: visibleMenu.style.left,
+          top: visibleMenu.style.top,
+          width: visibleMenu.style.width,
+        }
+      : null,
+    heading: visibleMenu?.querySelector('.session-task-links-heading')
+      ?.textContent,
+    linkedTasks: Array.from(visibleMenu?.querySelectorAll('li') ?? []).map(
+      (item) => ({
+        href: item.querySelector('a')?.getAttribute('href'),
+        id: item.querySelector('.session-task-link-id')?.textContent,
+        text: item.querySelector('a')?.textContent,
+        statuses: Array.from(
+          item.querySelectorAll(
+            '.session-task-links-primary, .session-task-completed',
+          ),
+        ).map((status) => status.textContent),
+      }),
+    ),
   }
 }
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
+  container.className = 'conversation-pane'
+  vi.spyOn(container, 'getBoundingClientRect').mockReturnValue(
+    makeRect({ left: 30, top: 0, width: 280, height: 140 }),
+  )
   document.body.append(container)
 })
 
@@ -41,13 +99,13 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('lists all linked tasks and marks completed tasks', () => {
+it('lists all linked tasks and marks completed tasks', async () => {
   const task = {
     id: 'open-task',
     number: 2048,
     title: 'Improve request reliability',
     priority: 1,
-    isClosed: false,
+    isClosed: true,
   }
   root = createRoot(container)
   act(() => {
@@ -56,6 +114,13 @@ it('lists all linked tasks and marks completed tasks', () => {
         task={task}
         tasks={[
           task,
+          {
+            id: 'secondary-task',
+            number: 2046,
+            title: 'Add request tracing',
+            priority: 4,
+            isClosed: false,
+          },
           {
             id: 'completed-task',
             number: 2047,
@@ -67,28 +132,83 @@ it('lists all linked tasks and marks completed tasks', () => {
       />,
     )
   })
-  act(() => {
-    container.querySelector('summary')?.click()
+  const summary = container.querySelector('summary')
+  if (summary !== null) {
+    vi.spyOn(summary, 'getBoundingClientRect').mockReturnValue(
+      makeRect({ left: 250, top: 52, width: 48, height: 22 }),
+    )
+  }
+  await act(async () => {
+    summary?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
   })
 
-  expect(snapshot()).toEqual({
-    expanded: true,
-    primary: {
-      href: 'https://tq.fohte.net/tasks/open-task',
-      text: 'P1 #2048 Improve request reliability',
-    },
-    count: '+1',
-    linkedTasks: [
-      {
-        href: 'https://tq.fohte.net/tasks/open-task',
-        text: 'P1 #2048 Improve request reliability',
-        status: null,
-      },
-      {
-        href: 'https://tq.fohte.net/tasks/completed-task',
-        text: '#2047 Document retry behavior',
-        status: 'Completed',
-      },
-    ],
+  const snapshots = [snapshot()]
+
+  await act(async () => {
+    summary?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
   })
+
+  snapshots.push(snapshot())
+
+  expect(snapshots).toEqual([
+    {
+      expanded: true,
+      primary: {
+        href: 'https://tq.fohte.net/tasks/open-task',
+        id: 'P1 #2048',
+        text: 'P1 #2048 Improve request reliability',
+      },
+      count: '+2 tasks ▾',
+      disclosureOwnsMenu: true,
+      summaryControlsMenu: true,
+      menuRole: 'region',
+      menuLabel: 'Linked tq tasks',
+      menuHidden: false,
+      menuPosition: {
+        left: '30px',
+        top: '82px',
+        width: '280px',
+      },
+      heading: 'Linked tq tasks · Inbox and Board use the primary one',
+      linkedTasks: [
+        {
+          href: 'https://tq.fohte.net/tasks/open-task',
+          id: 'P1 #2048',
+          text: 'P1 #2048 Improve request reliability',
+          statuses: ['Primary', 'Completed'],
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/secondary-task',
+          id: 'P4 #2046',
+          text: 'P4 #2046 Add request tracing',
+          statuses: [],
+        },
+        {
+          href: 'https://tq.fohte.net/tasks/completed-task',
+          id: '#2047',
+          text: '#2047 Document retry behavior',
+          statuses: ['Completed'],
+        },
+      ],
+    },
+    {
+      expanded: false,
+      primary: {
+        href: 'https://tq.fohte.net/tasks/open-task',
+        id: 'P1 #2048',
+        text: 'P1 #2048 Improve request reliability',
+      },
+      count: '+2 tasks ▾',
+      disclosureOwnsMenu: true,
+      summaryControlsMenu: true,
+      menuRole: null,
+      menuLabel: null,
+      menuHidden: true,
+      menuPosition: null,
+      heading: undefined,
+      linkedTasks: [],
+    },
+  ])
 })

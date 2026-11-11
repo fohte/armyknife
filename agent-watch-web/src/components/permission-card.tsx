@@ -58,6 +58,7 @@ export function PermissionCard({
           <Button
             type="button"
             variant="plain"
+            className="aw-button--primary"
             disabled={
               !actionsReady || !canApprove || matchingPendingAction !== null
             }
@@ -77,6 +78,7 @@ export function PermissionCard({
           <Button
             type="button"
             variant="plain"
+            className="aw-button--outline"
             disabled={
               !actionsReady || !canReject || matchingPendingAction !== null
             }
