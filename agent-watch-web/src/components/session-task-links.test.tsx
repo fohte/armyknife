@@ -14,6 +14,9 @@ function snapshot() {
       href: container
         .querySelector('.session-task-line > a')
         ?.getAttribute('href'),
+      id: container.querySelector(
+        '.session-task-line > a .session-task-link-id',
+      )?.textContent,
       text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
@@ -23,6 +26,7 @@ function snapshot() {
       container.querySelectorAll('.session-task-links li'),
     ).map((item) => ({
       href: item.querySelector('a')?.getAttribute('href'),
+      id: item.querySelector('.session-task-link-id')?.textContent,
       text: item.querySelector('a')?.textContent,
       status:
         item.querySelector(
@@ -86,6 +90,7 @@ it('lists all linked tasks and marks completed tasks', () => {
     expanded: true,
     primary: {
       href: 'https://tq.fohte.net/tasks/open-task',
+      id: 'P1 #2048',
       text: 'P1 #2048 Improve request reliability',
     },
     count: '+2 tasks ▾',
@@ -93,16 +98,19 @@ it('lists all linked tasks and marks completed tasks', () => {
     linkedTasks: [
       {
         href: 'https://tq.fohte.net/tasks/open-task',
+        id: 'P1 #2048',
         text: 'P1 #2048 Improve request reliability',
         status: 'Primary',
       },
       {
         href: 'https://tq.fohte.net/tasks/secondary-task',
+        id: 'P4 #2046',
         text: 'P4 #2046 Add request tracing',
         status: null,
       },
       {
         href: 'https://tq.fohte.net/tasks/completed-task',
+        id: '#2047',
         text: '#2047 Document retry behavior',
         status: 'Completed',
       },

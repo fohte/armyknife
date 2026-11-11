@@ -9,6 +9,23 @@ const openTask = {
   priority: 1,
   isClosed: false,
 }
+const linkedTasks = [
+  openTask,
+  {
+    id: 'example-secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+    isClosed: false,
+  },
+  {
+    id: 'example-completed-task',
+    number: 2047,
+    title: 'Document retry behavior',
+    priority: null,
+    isClosed: true,
+  },
+]
 
 const meta = {
   component: SessionTaskLinks,
@@ -29,25 +46,14 @@ export const SessionHasOneLinkedTask: Story = {
   name: 'A session shows its only linked task',
 }
 
+export const SessionHasMultipleLinkedTasksAndMenuIsClosed: Story = {
+  args: { tasks: linkedTasks, taskListOpen: false },
+  name: 'The task menu stays closed while several tasks are linked',
+}
+
 export const SessionHasMultipleLinkedTasks: Story = {
   args: {
-    tasks: [
-      openTask,
-      {
-        id: 'example-secondary-task',
-        number: 2046,
-        title: 'Add request tracing',
-        priority: 4,
-        isClosed: false,
-      },
-      {
-        id: 'example-completed-task',
-        number: 2047,
-        title: 'Document retry behavior',
-        priority: null,
-        isClosed: true,
-      },
-    ],
+    tasks: linkedTasks,
     taskListOpen: true,
   },
   name: 'A session lists linked tasks and marks completed work',

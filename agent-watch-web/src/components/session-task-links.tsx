@@ -21,8 +21,11 @@ export function SessionTaskLinks({
         target="_blank"
         rel="noreferrer"
       >
-        {task.priority !== null ? <span>P{task.priority}</span> : null} #
-        {task.number} {task.title}
+        <span className="session-task-link-id">
+          {task.priority !== null ? `P${String(task.priority)} ` : null}#
+          {task.number}
+        </span>{' '}
+        {task.title}
       </a>
       {tasks.length > 1 ? (
         <details
@@ -64,10 +67,13 @@ export function SessionTaskLinks({
                       target="_blank"
                       rel="noreferrer"
                     >
-                      {linkedTask.priority !== null ? (
-                        <span>P{linkedTask.priority} </span>
-                      ) : null}
-                      #{linkedTask.number} {linkedTask.title}
+                      <span className="session-task-link-id">
+                        {linkedTask.priority !== null
+                          ? `P${String(linkedTask.priority)} `
+                          : null}
+                        #{linkedTask.number}
+                      </span>{' '}
+                      {linkedTask.title}
                     </a>
                     {isPrimary ? (
                       <span className="session-task-links-primary">
