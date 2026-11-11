@@ -4,8 +4,6 @@
 @import '@fohte/ui/tokens.css';
 @import './design-tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
-@import './components/conversation-pane.css';
-@import './components/proposal-card.css';
 @import './components/mobile-layout.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 

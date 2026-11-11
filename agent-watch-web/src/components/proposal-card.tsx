@@ -1,3 +1,5 @@
+import '#components/proposal-card.css'
+
 import { Button } from '@fohte/ui/button'
 import { useCallback, useEffect, useRef, useState } from 'react'
 

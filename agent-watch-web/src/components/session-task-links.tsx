@@ -1,3 +1,5 @@
+import '#components/session-task-links.css'
+
 import type { SessionTask } from '#types'
 
 export function SessionTaskLinks({
