@@ -65,11 +65,16 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
         let cwd = std::env::current_dir().context("Failed to get current directory")?;
         Ok(linked_worktree_root(&cwd))
     };
-    match resolve_default_target(
+    let target = resolve_default_target(
         resume::resolve_session_id_from_pane(),
         super::store::load_session,
         current_worktree_root,
-    )? {
+    )?;
+    close_default_target(target, args).await
+}
+
+async fn close_default_target(target: DefaultTarget, args: &CloseArgs) -> Result<()> {
+    match target {
         DefaultTarget::Session(session) => {
             session_close::close_session_value(&session, args, None).await
         }
@@ -1449,6 +1454,25 @@ mod tests {
         };
 
         let result = close_target("feature/worktree", &args, None).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "--keep-worktree requires a session target"
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_worktree_rejects_the_default_worktree_fallback() {
+        let args = CloseArgs {
+            keep_worktree: true,
+            ..CloseArgs::default()
+        };
+
+        let result = close_default_target(
+            DefaultTarget::Worktree(PathBuf::from("/tmp/worktrees/current")),
+            &args,
+        )
+        .await;
 
         assert_eq!(
             result.unwrap_err().to_string(),
