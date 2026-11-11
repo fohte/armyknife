@@ -15,6 +15,7 @@ use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
+use super::messages::RouteLoaders;
 
 mod decisions;
 mod messages;
@@ -23,12 +24,13 @@ mod proposals;
 
 use proposal_answer_locks::ProposalAnswerLocks;
 
-pub(super) fn router() -> Router {
+pub(super) fn router(message_loaders: RouteLoaders) -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
         proposal_answer_locks: ProposalAnswerLocks::default(),
+        message_loaders,
     })
 }
 
@@ -71,6 +73,7 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
+    message_loaders: RouteLoaders,
     // Delivery precedes persistence, so repeated answers for one proposal must serialize.
     proposal_answer_locks: ProposalAnswerLocks,
 }
@@ -643,12 +646,20 @@ mod tests {
         }
 
         fn router_with_proposal_answer_locks(&self) -> (Router, ProposalAnswerLocks) {
+            self.router_with_loaders_and_proposal_answer_locks(empty_message_loaders())
+        }
+
+        fn router_with_loaders_and_proposal_answer_locks(
+            &self,
+            message_loaders: super::super::messages::RouteLoaders,
+        ) -> (Router, ProposalAnswerLocks) {
             let proposal_answer_locks = ProposalAnswerLocks::default();
             let router = router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
                 proposal_answer_locks: proposal_answer_locks.clone(),
+                message_loaders,
             });
             (router, proposal_answer_locks)
         }
@@ -702,6 +713,16 @@ mod tests {
             temp_dir: TempDir::new().unwrap(),
             runtime: Arc::new(FakeRuntime::default()),
         }
+    }
+
+    fn empty_message_loaders() -> super::super::messages::RouteLoaders {
+        super::super::messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        )
     }
 
     fn session(session_id: &str) -> Session {

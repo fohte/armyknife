@@ -14,6 +14,7 @@ use super::{ChatItem, UserContentPart};
 use super::{ConversationResponse, ParentSession, RouteLoaders};
 
 const MAX_CACHED_SESSIONS: usize = 8;
+const MAX_CACHED_BACKGROUND_TASK_SESSIONS: usize = 256;
 
 #[derive(Clone, PartialEq, Eq)]
 pub(super) struct MessageCacheKey {
@@ -147,6 +148,51 @@ fn transcript_fingerprint(
         #[cfg(unix)]
         changed_at_nanoseconds,
     }))
+}
+
+#[derive(Clone, Default)]
+pub(super) struct RunningBackgroundTaskCache {
+    entries: Arc<Mutex<RunningBackgroundTaskEntries>>,
+}
+
+type RunningBackgroundTaskEntries = HashMap<String, (Option<TranscriptFingerprint>, bool)>;
+
+impl RunningBackgroundTaskCache {
+    pub(super) fn fingerprint(session: &Session) -> anyhow::Result<Option<TranscriptFingerprint>> {
+        transcript_fingerprint(session.engine, session.transcript_path.as_deref())
+    }
+
+    pub(super) fn get(
+        &self,
+        session_id: &str,
+        fingerprint: &Option<TranscriptFingerprint>,
+    ) -> Option<bool> {
+        let entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let (cached_fingerprint, has_running_task) = entries.get(session_id)?;
+        (cached_fingerprint == fingerprint).then_some(*has_running_task)
+    }
+
+    pub(super) fn insert(
+        &self,
+        session_id: &str,
+        fingerprint: Option<TranscriptFingerprint>,
+        has_running_task: bool,
+    ) {
+        let mut entries = self
+            .entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !entries.contains_key(session_id)
+            && entries.len() >= MAX_CACHED_BACKGROUND_TASK_SESSIONS
+            && let Some(evicted_session_id) = entries.keys().next().cloned()
+        {
+            entries.remove(&evicted_session_id);
+        }
+        entries.insert(session_id.to_string(), (fingerprint, has_running_task));
+    }
 }
 
 pub(super) fn delete_resolved_queued_prompts(

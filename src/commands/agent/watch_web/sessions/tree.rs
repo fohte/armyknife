@@ -140,6 +140,13 @@ pub(super) async fn session_tree<S: SessionSource>(
         .filter(|session| !snapshot.repo_by_id.contains_key(&session.session_id))
         .cloned()
         .collect::<Vec<_>>();
+    let stopped_claude_sessions = tree_sessions
+        .iter()
+        .filter(|session| {
+            session.engine == Engine::Claude && session.status == SessionStatus::Stopped
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let missing_repo_ids = sessions_to_resolve
         .iter()
         .map(|session| session.session_id.clone())
@@ -151,10 +158,18 @@ pub(super) async fn session_tree<S: SessionSource>(
             resolve_repos_for_sessions(&sessions_to_resolve, &all_sessions_for_repos, resolve_repo),
         )
     });
-    let (task_metadata, pull_requests) = tokio::join!(
+    let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
         source.fetch_task_metadata(&tree_sessions),
         source.fetch_pull_requests(&tree_sessions),
+        source.running_background_task_session_ids(stopped_claude_sessions),
     );
+    let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
+        tracing::warn!(
+            event = "agent.watch_web.background_task_lookup_failed",
+            %error,
+        );
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let (interrupted_session_ids, missing_repo_by_id) = session_metadata
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -198,10 +213,18 @@ pub(super) async fn session_tree<S: SessionSource>(
                 || snapshot
                     .unanswered_proposal_titles
                     .contains_key(&session.session_id);
+            let has_running_background_task =
+                running_background_task_sessions.contains(&session.session_id);
+            let agent_status_state = session
+                .agent_status
+                .as_ref()
+                .map(|status| snapshot.agent_config.status_state(&status.kind));
             let category = category_for_with_later(
                 session,
                 turn,
                 needs_action,
+                has_running_background_task,
+                agent_status_state,
                 state_by_id.get(session.session_id.as_str()).copied(),
                 now,
             );
@@ -216,6 +239,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     snapshot
                         .unanswered_proposal_titles
                         .contains_key(&session.session_id),
+                    has_running_background_task,
                 ),
                 title: snapshot
                     .title_by_id

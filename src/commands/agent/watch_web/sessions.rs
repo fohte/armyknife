@@ -19,32 +19,20 @@ use crate::commands::agent::store;
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
-use crate::infra::git::{github_owner_and_repo, open_repo_at};
 use crate::infra::github::{PrInfo, PrState};
 use crate::shared::config::{self, AgentConfig};
 
+mod category;
+use self::category::{
+    SessionCategory, SessionKind, category_for_with_interruption, category_for_with_later, kind_for,
+};
+mod sorting;
+use self::sorting::sort_session_views;
+mod project;
+use self::project::{
+    resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
+};
 mod tree;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum SessionCategory {
-    NeedsAction,
-    Later,
-    InProgress,
-    Done,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "PascalCase")]
-enum SessionKind {
-    Question,
-    Approve,
-    Review,
-    Error,
-    Plan,
-    Stopped,
-    Proposal,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -138,12 +126,20 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
 
+    fn running_background_task_session_ids(
+        &self,
+        _sessions: Vec<Session>,
+    ) -> impl Future<Output = anyhow::Result<HashSet<String>>> + Send {
+        async { Ok(HashSet::new()) }
+    }
+
     fn now(&self) -> DateTime<Utc>;
 }
 
 #[derive(Clone)]
 struct LiveSessionSource {
     enrichment: SessionEnrichmentCache,
+    message_loaders: super::messages::RouteLoaders,
 }
 
 impl SessionSource for LiveSessionSource {
@@ -159,15 +155,46 @@ impl SessionSource for LiveSessionSource {
         self.enrichment.pull_requests(sessions).await
     }
 
+    async fn running_background_task_session_ids(
+        &self,
+        sessions: Vec<Session>,
+    ) -> anyhow::Result<HashSet<String>> {
+        let loaders = self.message_loaders.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            loaders.running_background_task_session_ids(&sessions)
+        })
+        .await?)
+    }
+
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
 }
 
-pub(super) fn router(updates: EnrichmentUpdates) -> Router {
+pub(super) fn router(
+    updates: EnrichmentUpdates,
+    message_loaders: super::messages::RouteLoaders,
+) -> Router {
     router_with_source(LiveSessionSource {
         enrichment: SessionEnrichmentCache::new(updates),
+        message_loaders,
     })
+}
+
+pub(super) fn decision_category_is_done(
+    session: &Session,
+    agent_config: &AgentConfig,
+    has_running_background_task: bool,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> bool {
+    category::decision_category_is_done(
+        session,
+        agent_config,
+        has_running_background_task,
+        state,
+        now,
+    )
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {
@@ -198,11 +225,27 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
+    let stopped_claude_sessions = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.engine == Engine::Claude && session.status == SessionStatus::Stopped
+        })
+        .cloned()
+        .collect::<Vec<_>>();
 
-    let (task_metadata, pull_requests) = tokio::join!(
+    let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
         source.fetch_task_metadata(&snapshot.sessions),
         source.fetch_pull_requests(&snapshot.sessions),
+        source.running_background_task_session_ids(stopped_claude_sessions),
     );
+    let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
+        tracing::warn!(
+            event = "agent.watch_web.background_task_lookup_failed",
+            %error,
+        );
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -277,11 +320,30 @@ async fn list_sessions<S: SessionSource>(
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
+            let has_running_background_task =
+                running_background_task_sessions.contains(&session.session_id);
+            let agent_status_state = session
+                .agent_status
+                .as_ref()
+                .map(|status| snapshot.agent_config.status_state(&status.kind));
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some();
-            let category_when_not_later =
-                category_for_with_interruption(session, turn, needs_action);
-            let category = category_for_with_later(session, turn, needs_action, state, now);
+            let category_when_not_later = category_for_with_interruption(
+                session,
+                turn,
+                needs_action,
+                has_running_background_task,
+                agent_status_state,
+            );
+            let category = category_for_with_later(
+                session,
+                turn,
+                needs_action,
+                has_running_background_task,
+                agent_status_state,
+                state,
+                now,
+            );
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -289,7 +351,12 @@ async fn list_sessions<S: SessionSource>(
                 category,
                 is_paused: session.status == SessionStatus::Paused,
                 category_when_not_later,
-                kind: kind_for(session, turn, proposal_title.is_some()),
+                kind: kind_for(
+                    session,
+                    turn,
+                    proposal_title.is_some(),
+                    has_running_background_task,
+                ),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
@@ -396,55 +463,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     })
 }
 
-fn resolve_repos_for_sessions(
-    sessions: &[Session],
-    all_sessions: &[Session],
-    mut resolve_repo: impl FnMut(&std::path::Path) -> String,
-) -> HashMap<String, String> {
-    let relevant_ids = sessions
-        .iter()
-        .flat_map(|session| {
-            std::iter::once(session.session_id.clone())
-                .chain(session.ancestor_session_ids.iter().cloned())
-        })
-        .collect::<HashSet<_>>();
-    let mut repo_by_cwd = HashMap::<std::path::PathBuf, String>::new();
-
-    all_sessions
-        .iter()
-        .filter(|session| relevant_ids.contains(&session.session_id))
-        .map(|session| {
-            let repo = repo_by_cwd
-                .entry(session.cwd.clone())
-                .or_insert_with(|| resolve_repo(&session.cwd))
-                .clone();
-            (session.session_id.clone(), repo)
-        })
-        .collect()
-}
-
-fn resolve_repo(cwd: &std::path::Path) -> String {
-    if let Ok(repo) = open_repo_at(cwd)
-        && let Ok((owner, repo)) = github_owner_and_repo(&repo)
-    {
-        return format!("{owner}/{repo}");
-    }
-
-    cwd.file_name()
-        .and_then(|name| name.to_str())
-        .map(String::from)
-        .unwrap_or_else(|| cwd.display().to_string())
-}
-
-fn resolve_project(parent_project: Option<&str>, task_project: Option<&str>, repo: &str) -> String {
-    parent_project
-        .filter(|project| !project.trim().is_empty())
-        .or_else(|| task_project.filter(|project| !project.trim().is_empty()))
-        .or_else(|| (!repo.trim().is_empty()).then_some(repo))
-        .unwrap_or("Unsorted")
-        .to_string()
-}
-
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
     let mut related_ids = HashSet::new();
     for session in sessions {
@@ -454,304 +472,6 @@ fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
         related_ids.extend(session.ancestor_session_ids.iter().cloned());
     }
     related_ids
-}
-
-fn resolve_parent_project<'a>(
-    ancestor_session_ids: &[String],
-    task_metadata: &'a SessionTaskMetadata,
-    repo_by_id: &'a HashMap<String, String>,
-) -> Option<&'a str> {
-    ancestor_session_ids.iter().find_map(|ancestor_id| {
-        task_metadata
-            .links
-            .get(ancestor_id)
-            .and_then(|tasks| tasks.first())
-            .and_then(|task| task_metadata.task_projects.get(&task.task_id))
-            .map(String::as_str)
-            .filter(|project| !project.trim().is_empty())
-            .or_else(|| {
-                repo_by_id
-                    .get(ancestor_id)
-                    .map(String::as_str)
-                    .filter(|repo| !repo.trim().is_empty())
-            })
-    })
-}
-
-#[cfg(test)]
-mod project_tests {
-    use super::{SessionTaskMetadata, resolve_parent_project, resolve_project};
-    use crate::commands::agent::tq_session_tasks::SessionTask;
-    use rstest::rstest;
-    use std::collections::HashMap;
-
-    fn task_metadata(links: &[(&str, &str)], projects: &[(&str, &str)]) -> SessionTaskMetadata {
-        SessionTaskMetadata {
-            links: links
-                .iter()
-                .map(|(session_id, task_id)| {
-                    (
-                        (*session_id).to_string(),
-                        vec![SessionTask {
-                            task_id: (*task_id).to_string(),
-                            task_number: 1,
-                            task_title: "Sample task".to_string(),
-                            parent_task_id: None,
-                            is_closed: false,
-                        }],
-                    )
-                })
-                .collect(),
-            task_projects: projects
-                .iter()
-                .map(|(task_id, project)| ((*task_id).to_string(), (*project).to_string()))
-                .collect(),
-            ..SessionTaskMetadata::default()
-        }
-    }
-
-    #[rstest]
-    #[case::parent_takes_precedence(
-        Some("parent-project"),
-        Some("task-project"),
-        "example-org/repo",
-        "parent-project"
-    )]
-    #[case::task_project_precedes_repo(
-        None,
-        Some("task-project"),
-        "example-org/repo",
-        "task-project"
-    )]
-    #[case::repo_is_the_fallback(None, None, "example-org/repo", "example-org/repo")]
-    #[case::unsorted_is_the_final_fallback(None, None, "", "Unsorted")]
-    #[case::empty_candidates_are_ignored(
-        Some(" "),
-        Some(""),
-        "example-org/repo",
-        "example-org/repo"
-    )]
-    fn resolves_projects_by_source_precedence(
-        #[case] parent_project: Option<&str>,
-        #[case] task_project: Option<&str>,
-        #[case] repo: &str,
-        #[case] expected: &str,
-    ) {
-        assert_eq!(
-            resolve_project(parent_project, task_project, repo),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::single_parent_uses_its_task_project(
-        vec!["parent"],
-        vec![("parent", "parent-task")],
-        vec![("parent-task", "parent-project")],
-        vec![],
-        Some("parent-project")
-    )]
-    #[case::single_parent_falls_back_to_its_repo(
-        vec!["parent"],
-        vec![],
-        vec![],
-        vec![("parent", "sample/parent-repo")],
-        Some("sample/parent-repo")
-    )]
-    #[case::three_levels_use_the_root_project_first(
-        vec!["root", "middle", "parent"],
-        vec![("root", "root-task")],
-        vec![("root-task", "root-project")],
-        vec![
-            ("root", "sample/root-repo"),
-            ("middle", "sample/middle-repo"),
-            ("parent", "sample/parent-repo"),
-        ],
-        Some("root-project")
-    )]
-    #[case::unknown_root_uses_the_next_available_ancestor(
-        vec!["unknown-root", "middle", "parent"],
-        vec![("middle", "middle-task")],
-        vec![("middle-task", "middle-project")],
-        vec![("parent", "sample/parent-repo")],
-        Some("middle-project")
-    )]
-    #[case::unknown_ancestors_fall_back_to_the_current_session(
-        vec!["unknown-root", "unknown-parent"],
-        vec![],
-        vec![],
-        vec![],
-        None
-    )]
-    fn resolves_parent_project_from_root_to_parent(
-        #[case] ancestor_ids: Vec<&str>,
-        #[case] links: Vec<(&str, &str)>,
-        #[case] projects: Vec<(&str, &str)>,
-        #[case] repos: Vec<(&str, &str)>,
-        #[case] expected: Option<&str>,
-    ) {
-        let ancestor_ids = ancestor_ids
-            .into_iter()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-        let metadata = task_metadata(&links, &projects);
-        let repo_by_id = repos
-            .into_iter()
-            .map(|(session_id, repo)| (session_id.to_string(), repo.to_string()))
-            .collect::<HashMap<_, _>>();
-
-        assert_eq!(
-            resolve_parent_project(&ancestor_ids, &metadata, &repo_by_id),
-            expected,
-        );
-    }
-}
-
-fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategory {
-    if turn.is_some()
-        || session.status == SessionStatus::Stopped
-        || session
-            .current_tool
-            .as_deref()
-            .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
-    {
-        SessionCategory::NeedsAction
-    } else if session.status == SessionStatus::Running {
-        SessionCategory::InProgress
-    } else {
-        SessionCategory::Done
-    }
-}
-
-pub(super) fn decision_category_is_done(
-    session: &Session,
-    agent_config: &AgentConfig,
-    state: Option<&store::WatchWebSessionState>,
-    now: DateTime<Utc>,
-) -> bool {
-    let turn = user_turns(std::iter::once(session), agent_config)
-        .into_iter()
-        .next()
-        .map(|turn| turn.kind);
-    category_for_with_later(session, turn, false, state, now) == SessionCategory::Done
-}
-
-fn category_for_with_later(
-    session: &Session,
-    turn: Option<UserTurnKind>,
-    interrupted: bool,
-    state: Option<&store::WatchWebSessionState>,
-    now: DateTime<Utc>,
-) -> SessionCategory {
-    let still_unchanged = state.is_some_and(|state| {
-        state
-            .activity_snapshot
-            .is_none_or(|snapshot| session.updated_at <= snapshot)
-    });
-    let later_is_active = still_unchanged
-        && state.is_some_and(|state| {
-            state.until_activity || state.later_until.is_some_and(|deadline| now < deadline)
-        });
-    if later_is_active {
-        SessionCategory::Later
-    } else {
-        category_for_with_interruption(session, turn, interrupted)
-    }
-}
-
-fn category_for_with_interruption(
-    session: &Session,
-    turn: Option<UserTurnKind>,
-    interrupted: bool,
-) -> SessionCategory {
-    if interrupted {
-        SessionCategory::NeedsAction
-    } else {
-        category_for(session, turn)
-    }
-}
-
-fn kind_for(
-    session: &Session,
-    turn: Option<UserTurnKind>,
-    has_unanswered_proposal: bool,
-) -> Option<SessionKind> {
-    if session
-        .current_tool
-        .as_deref()
-        .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
-    {
-        return Some(SessionKind::Plan);
-    }
-
-    if turn == Some(UserTurnKind::Ask) {
-        return Some(SessionKind::Question);
-    }
-    if turn == Some(UserTurnKind::Allow) {
-        return Some(SessionKind::Approve);
-    }
-    if has_unanswered_proposal {
-        return Some(SessionKind::Proposal);
-    }
-
-    let Some(turn) = turn else {
-        return (session.status == SessionStatus::Stopped).then_some(SessionKind::Stopped);
-    };
-
-    match turn {
-        UserTurnKind::Ask => Some(SessionKind::Question),
-        UserTurnKind::Allow => Some(SessionKind::Approve),
-        UserTurnKind::Crit | UserTurnKind::Body => Some(SessionKind::Review),
-        UserTurnKind::Failed => Some(SessionKind::Error),
-        UserTurnKind::AgentStatus => {
-            let status = session.agent_status.as_ref()?;
-            let content = format!("{} {}", status.kind, status.note).to_ascii_lowercase();
-            let has_word = |cues: &[&str]| {
-                content
-                    .split(|character: char| !character.is_ascii_alphanumeric())
-                    .any(|word| cues.contains(&word))
-            };
-            if content.contains('?') || has_word(&["question", "ask", "asked", "answer", "reply"]) {
-                Some(SessionKind::Question)
-            } else if has_word(&[
-                "review",
-                "reviews",
-                "reviewing",
-                "crit",
-                "body",
-                "approve",
-                "approval",
-                "proposal",
-            ]) {
-                Some(SessionKind::Review)
-            } else {
-                Some(SessionKind::Stopped)
-            }
-        }
-        UserTurnKind::Merge => Some(SessionKind::Review),
-    }
-}
-
-fn compare_tasks(left: &Option<TqTaskView>, right: &Option<TqTaskView>) -> std::cmp::Ordering {
-    match (left, right) {
-        (Some(left), Some(right)) => left
-            .priority_order
-            .unwrap_or(usize::MAX)
-            .cmp(&right.priority_order.unwrap_or(usize::MAX)),
-        (Some(_), None) => std::cmp::Ordering::Less,
-        (None, Some(_)) => std::cmp::Ordering::Greater,
-        (None, None) => std::cmp::Ordering::Equal,
-    }
-}
-
-fn sort_session_views(sessions: &mut [SessionView]) {
-    sessions.sort_by(|left, right| {
-        left.category
-            .cmp(&right.category)
-            .then_with(|| compare_tasks(&left.task, &right.task))
-            .then_with(|| right.updated_at.cmp(&left.updated_at))
-            .then_with(|| left.id.cmp(&right.id))
-    });
 }
 
 #[cfg(test)]
@@ -807,52 +527,6 @@ mod tests {
         }
     }
 
-    fn row(
-        id: &str,
-        category: SessionCategory,
-        task: Option<(Option<i32>, Option<usize>, u32)>,
-        updated_at: i64,
-    ) -> SessionView {
-        let task = task.map(|(priority, priority_order, number)| TqTaskView {
-            id: format!("task-{number}"),
-            number,
-            title: id.to_string(),
-            priority,
-            is_closed: false,
-            priority_order,
-        });
-        SessionView {
-            id: id.to_string(),
-            engine: Engine::Claude,
-            work_type: None,
-            category,
-            is_paused: false,
-            category_when_not_later: category,
-            kind: None,
-            title: id.to_string(),
-            preview: None,
-            updated_at: Utc.timestamp_opt(updated_at, 0).unwrap(),
-            elapsed_seconds: 0,
-            unread: false,
-            task: task.clone(),
-            tasks: task.into_iter().collect(),
-            repo: String::new(),
-            branch: None,
-            can_open_in_terminal: false,
-            project: "Unsorted".to_string(),
-            parent: None,
-            has_session_tree: false,
-            ancestor_session_ids: Vec::new(),
-            pull_request: None,
-            crit_url: None,
-            later_until: None,
-            is_today: false,
-            is_compacting: false,
-            decision_count: 0,
-            unreviewed_decision_count: 0,
-        }
-    }
-
     #[derive(Clone)]
     struct TestSessionSource {
         revision: i64,
@@ -869,6 +543,8 @@ mod tests {
         pull_requests: HashMap<String, Option<PrInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
+        agent_statuses: HashMap<String, AgentStatusConfig>,
+        message_loaders: super::super::messages::RouteLoaders,
         now: DateTime<Utc>,
     }
 
@@ -898,6 +574,7 @@ mod tests {
                             )
                         })
                         .collect(),
+                    statuses: self.agent_statuses.clone(),
                     ..AgentConfig::default()
                 },
             })
@@ -917,6 +594,18 @@ mod tests {
             _sessions: &[Session],
         ) -> HashMap<String, Option<PrInfo>> {
             self.pull_requests.clone()
+        }
+
+        async fn running_background_task_session_ids(
+            &self,
+            sessions: Vec<Session>,
+        ) -> anyhow::Result<HashSet<String>> {
+            let loaders = self.message_loaders.clone();
+            tokio::task::spawn_blocking(move || {
+                loaders.running_background_task_session_ids(&sessions)
+            })
+            .await
+            .map_err(Into::into)
         }
 
         fn now(&self) -> DateTime<Utc> {
@@ -1023,6 +712,14 @@ mod tests {
                 },
             )]),
             work_type_nav_labels: HashMap::new(),
+            agent_statuses: HashMap::new(),
+            message_loaders: super::super::messages::RouteLoaders::new(
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_, _| Ok(()),
+                |_| Ok(Vec::new()),
+            ),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
     }
@@ -1116,6 +813,49 @@ mod tests {
                     },
                 ],
             }),
+        );
+    }
+
+    #[tokio::test]
+    async fn session_tree_route_marks_stopped_sessions_with_pending_background_tasks_in_progress() {
+        let mut source = source();
+        source.all_sessions.truncate(1);
+        source.all_sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            session_tree_response(source, "child-session").await,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "revision": 7,
+                    "sessions": [{
+                        "id": "child-session",
+                        "parentId": null,
+                        "category": "in_progress",
+                        "isActive": true,
+                        "kind": null,
+                        "title": "child title",
+                        "preview": "last message",
+                        "elapsedSeconds": 100,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/example-repo",
+                        "decisionCount": 4,
+                        "pullRequest": { "number": 42, "state": "Open" },
+                    }],
+                }),
+            ),
         );
     }
 
@@ -1570,6 +1310,79 @@ mod tests {
     }
 
     #[rstest]
+    #[case::without_agent_status(None, true, false)]
+    #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
+    #[case::pending_task_without_transcript(None, false, false)]
+    #[case::pending_task_with_parse_error(None, false, true)]
+    #[tokio::test]
+    async fn stopped_claude_with_running_background_task_is_in_progress(
+        mut source: TestSessionSource,
+        #[case] status_state: Option<AgentStatusState>,
+        #[case] has_transcript: bool,
+        #[case] transcript_parse_fails: bool,
+    ) {
+        let transcript_file = has_transcript.then(|| tempfile::NamedTempFile::new().unwrap());
+        let transcript_directory = transcript_parse_fails.then(|| tempfile::tempdir().unwrap());
+        if let Some(transcript_file) = &transcript_file {
+            std::fs::write(
+                transcript_file.path(),
+                indoc::indoc! {r#"
+                    {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
+                    {"uuid":"fixture-bash-call-row","parentUuid":"fixture-prompt-row","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-bash-tool-use-id","name":"Bash","input":{"command":"watch fixture build","description":"Watch the synthetic build","run_in_background":true}}]}}
+                    {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
+                "#},
+            )
+            .unwrap();
+            source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
+        } else {
+            source.sessions[0]
+                .pending_bg_task_ids
+                .insert("fixture-task-id".to_string());
+            source.sessions[0].transcript_path = transcript_directory
+                .as_ref()
+                .map(|directory| directory.path().to_path_buf());
+        }
+        source.web_states[0].later_until = None;
+        if let Some(state) = status_state {
+            let status_kind = "work_finished";
+            source.sessions[0].agent_status = Some(AgentStatus {
+                kind: status_kind.to_string(),
+                note: "The synthetic task is complete.".to_string(),
+            });
+            source
+                .agent_statuses
+                .insert(status_kind.to_string(), AgentStatusConfig { state });
+        }
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "in_progress",
+                    None,
+                    true,
+                    ExpectedSessionDetails {
+                        kind: None,
+                        category_when_not_later: "in_progress",
+                        is_paused: false,
+                        unread: true,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        engine: "claude",
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                        can_open_in_terminal: true,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
     #[tokio::test]
     async fn sessions_route_returns_all_tasks_with_the_newest_open_task_as_primary(
         mut source: TestSessionSource,
@@ -1847,213 +1660,6 @@ mod tests {
                     ),
                 ),
             ),
-        );
-    }
-
-    #[rstest]
-    #[case::waiting_tool(UserTurnKind::Ask, Some(SessionKind::Question))]
-    #[case::permission(UserTurnKind::Allow, Some(SessionKind::Approve))]
-    #[case::crit_review(UserTurnKind::Crit, Some(SessionKind::Review))]
-    #[case::draft_review(UserTurnKind::Body, Some(SessionKind::Review))]
-    #[case::failure(UserTurnKind::Failed, Some(SessionKind::Error))]
-    #[case::merge(UserTurnKind::Merge, Some(SessionKind::Review))]
-    fn maps_user_turn_kinds_to_web_kinds(
-        #[case] turn: UserTurnKind,
-        #[case] expected: Option<SessionKind>,
-    ) {
-        assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), Some(turn), false),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::agent_question("ask_user", "", SessionKind::Question)]
-    #[case::note_question("needs_attention", "Which option?", SessionKind::Question)]
-    #[case::agent_review("needs_review", "", SessionKind::Review)]
-    #[case::task_in_review_note("needs_review", "Review the task plan", SessionKind::Review)]
-    #[case::agent_stopped("waiting_for_external", "", SessionKind::Stopped)]
-    fn maps_agent_status_to_web_kind(
-        #[case] status_kind: &str,
-        #[case] note: &str,
-        #[case] expected: SessionKind,
-    ) {
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: note.to_string(),
-        });
-
-        assert_eq!(
-            kind_for(&session, Some(UserTurnKind::AgentStatus), false),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn maps_exit_plan_mode_to_plan_kind() {
-        let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
-
-        assert_eq!(
-            kind_for(&session, Some(UserTurnKind::Ask), true),
-            Some(SessionKind::Plan)
-        );
-    }
-
-    #[rstest]
-    #[case::question(Some(UserTurnKind::Ask), SessionKind::Question)]
-    #[case::approval(Some(UserTurnKind::Allow), SessionKind::Approve)]
-    fn pending_question_and_approval_kinds_precede_proposals(
-        #[case] turn: Option<UserTurnKind>,
-        #[case] expected: SessionKind,
-    ) {
-        assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), turn, true),
-            Some(expected),
-        );
-    }
-
-    #[test]
-    fn exit_plan_mode_needs_action() {
-        let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
-
-        assert_eq!(category_for(&session, None), SessionCategory::NeedsAction);
-    }
-
-    #[test]
-    fn stopped_without_a_user_turn_has_stopped_kind() {
-        assert_eq!(
-            kind_for(&session(SessionStatus::Stopped), None, false),
-            Some(SessionKind::Stopped)
-        );
-    }
-
-    #[rstest]
-    #[case::stopped(SessionStatus::Stopped, None, SessionCategory::NeedsAction)]
-    #[case::user_turn(
-        SessionStatus::WaitingInput,
-        Some(UserTurnKind::Ask),
-        SessionCategory::NeedsAction
-    )]
-    #[case::running(SessionStatus::Running, None, SessionCategory::InProgress)]
-    #[case::paused(SessionStatus::Paused, None, SessionCategory::Done)]
-    #[case::ended(SessionStatus::Ended, None, SessionCategory::Done)]
-    fn maps_sessions_to_inbox_categories(
-        #[case] status: SessionStatus,
-        #[case] turn: Option<UserTurnKind>,
-        #[case] expected: SessionCategory,
-    ) {
-        assert_eq!(category_for(&session(status), turn), expected);
-    }
-
-    #[rstest]
-    #[case::configured_waiting("waiting_for_external", AgentStatusState::Waiting)]
-    #[case::configured_done("work_finished", AgentStatusState::Done)]
-    fn stopped_agent_statuses_remain_in_needs_action(
-        #[case] status_kind: &str,
-        #[case] state: AgentStatusState,
-    ) {
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: "waiting for a task result".to_string(),
-        });
-        let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
-        let turn = user_turns([&session], &agent_config)
-            .first()
-            .map(|turn| turn.kind);
-
-        assert_eq!(
-            (
-                turn,
-                category_for(&session, turn),
-                kind_for(&session, turn, false),
-            ),
-            (
-                None,
-                SessionCategory::NeedsAction,
-                Some(SessionKind::Stopped)
-            ),
-        );
-    }
-
-    #[rstest]
-    #[case::lower_priority_first(Some((Some(1), Some(0), 1)), Some((Some(0), Some(1), 2)), std::cmp::Ordering::Less)]
-    #[case::unset_priority_after_deferred(Some((None, None, 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Greater)]
-    #[case::deferred_after_regular(Some((Some(-1), Some(4), 1)), Some((Some(0), Some(2), 2)), std::cmp::Ordering::Greater)]
-    #[case::missing_order_after_known(Some((Some(1), None, 1)), Some((Some(-1), Some(4), 2)), std::cmp::Ordering::Greater)]
-    #[case::same_priority_ties(Some((Some(1), Some(2), 1)), Some((Some(1), Some(2), 2)), std::cmp::Ordering::Equal)]
-    #[case::taskless_last(Some((Some(1), Some(2), 1)), None, std::cmp::Ordering::Less)]
-    fn compares_task_priority(
-        #[case] left: Option<(Option<i32>, Option<usize>, u32)>,
-        #[case] right: Option<(Option<i32>, Option<usize>, u32)>,
-        #[case] expected: std::cmp::Ordering,
-    ) {
-        let to_task = |task: Option<(Option<i32>, Option<usize>, u32)>| {
-            task.map(|(priority, priority_order, number)| TqTaskView {
-                id: "task".to_string(),
-                number,
-                title: "task".to_string(),
-                priority,
-                is_closed: false,
-                priority_order,
-            })
-        };
-        assert_eq!(compare_tasks(&to_task(left), &to_task(right)), expected);
-    }
-
-    #[rstest]
-    #[case::category_then_priority(
-        vec![
-            row("done", SessionCategory::Done, Some((Some(0), Some(0), 1)), 1),
-            row("working", SessionCategory::InProgress, Some((Some(0), Some(0), 2)), 1),
-            row("needs_low", SessionCategory::NeedsAction, Some((Some(2), Some(1), 3)), 1),
-            row("needs_high", SessionCategory::NeedsAction, Some((Some(1), Some(0), 4)), 1),
-            row("needs_without_task", SessionCategory::NeedsAction, None, 0),
-        ],
-        vec!["needs_high", "needs_low", "needs_without_task", "working", "done"]
-    )]
-    #[case::unset_priority_last(
-        vec![
-            row("deferred", SessionCategory::NeedsAction, Some((Some(-1), Some(4), 2)), 1),
-            row("inbox", SessionCategory::NeedsAction, Some((None, None, 1)), 1),
-        ],
-        vec!["deferred", "inbox"]
-    )]
-    #[case::newest_same_priority_first(
-        vec![
-            row("newer", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
-            row("older", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 10),
-        ],
-        vec!["newer", "older"]
-    )]
-    #[case::newest_without_task_first(
-        vec![
-            row("newer", SessionCategory::NeedsAction, None, 20),
-            row("older", SessionCategory::NeedsAction, None, 10),
-        ],
-        vec!["newer", "older"]
-    )]
-    #[case::id_breaks_equal_timestamps(
-        vec![
-            row("session_b", SessionCategory::NeedsAction, Some((Some(1), Some(0), 1)), 20),
-            row("session_a", SessionCategory::NeedsAction, Some((Some(1), Some(0), 2)), 20),
-        ],
-        vec!["session_a", "session_b"]
-    )]
-    fn orders_session_rows(#[case] mut rows: Vec<SessionView>, #[case] expected_ids: Vec<&str>) {
-        sort_session_views(&mut rows);
-
-        assert_eq!(
-            rows.into_iter()
-                .map(|session| session.id)
-                .collect::<Vec<_>>(),
-            expected_ids
         );
     }
 }

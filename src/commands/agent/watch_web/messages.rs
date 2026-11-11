@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -24,6 +25,7 @@ use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod background_task_outputs;
+mod background_tasks;
 mod parser;
 mod proposals;
 mod range;
@@ -33,7 +35,7 @@ use self::proposals::proposal_chat_item;
 use self::range::MessageRange;
 
 mod cache;
-use self::cache::{MessageCache, MessageCacheKey};
+use self::cache::{MessageCache, MessageCacheKey, RunningBackgroundTaskCache};
 mod session_titles;
 use self::session_titles::{parent_session, resolve_peer_session_titles};
 
@@ -67,6 +69,7 @@ pub(super) struct RouteLoaders {
     delete_queued_prompts: QueuedPromptDeleter,
     proposals: ProposalLoader,
     message_cache: MessageCache,
+    running_background_task_cache: RunningBackgroundTaskCache,
 }
 
 impl RouteLoaders {
@@ -87,7 +90,18 @@ impl RouteLoaders {
             delete_queued_prompts: Arc::new(delete_queued_prompts),
             proposals: Arc::new(load_proposals),
             message_cache: MessageCache::default(),
+            running_background_task_cache: RunningBackgroundTaskCache::default(),
         }
+    }
+
+    pub(super) fn running_background_task_session_ids(
+        &self,
+        sessions: &[Session],
+    ) -> HashSet<String> {
+        background_tasks::running_background_task_session_ids(
+            sessions,
+            &self.running_background_task_cache,
+        )
     }
 }
 
@@ -327,7 +341,7 @@ fn load_conversation_with_queued_prompts(
     Ok(Some(conversation))
 }
 
-struct TranscriptInput<'a> {
+pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
     path: Option<&'a Path>,
     engine: Engine,
     parent: Option<&'a ParentSession>,
@@ -336,7 +350,7 @@ struct TranscriptInput<'a> {
     additions: parser::claude::ParserAdditions<'a>,
 }
 
-fn parse_session_transcript(
+pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
     TranscriptInput {
         path,
         engine,
