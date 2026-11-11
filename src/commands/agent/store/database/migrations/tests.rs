@@ -1,3 +1,4 @@
+use indoc::indoc;
 use rstest::rstest;
 use rusqlite::Connection;
 use rusqlite_migration::{Error as MigrationError, MigrationDefinitionError, Migrations};
@@ -51,10 +52,14 @@ fn adds_peer_out_message_to_version_seven_database() {
         .expect("version seven database should migrate to the peer message schema");
     let actual = connection
         .query_row(
-            "SELECT
+            indoc! {
+                "
+                SELECT
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watch_web_peer_out_message'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_peer_out_message_sender_target_time'),
-                (SELECT title || ':' || why FROM agent_decision LIMIT 1)",
+                (SELECT title || ':' || why FROM agent_decision LIMIT 1)
+                "
+            },
             [],
             |row| {
                 Ok((
