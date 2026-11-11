@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -65,6 +65,16 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+const iPhoneViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    data-layout="mobile"
+    style={{ width: '390px', height: '844px', display: 'flex' }}
+  >
+    <Story />
+  </div>
+)
+
 export const QuestionWaitsForAnAnswer: Story = {
   name: 'A question offers numbered choices',
   args: {
@@ -75,11 +85,16 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
       {
         type: 'question',
+        header: 'Retry policy',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          {
+            label: 'Retry **three times** with exponential backoff',
+            description: 'Wait briefly before each retry.',
+          },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: null,
       },
     ],
@@ -111,9 +126,10 @@ export const QuestionShowsSelectedAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry **three times** with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Retry once without delay',
       },
     ],
@@ -128,9 +144,10 @@ export const QuestionShowsFreeformAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry three times with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry three times with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Use a short delay before each retry',
       },
     ],
@@ -162,17 +179,78 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
       unread: false,
     },
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
+  name: 'The iPhone conversation header shows the active TODAY toggle',
+  args: {
+    isMobile: true,
+    isToday: true,
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneConversationShowsAQuestion: Story = {
+  name: 'The iPhone conversation shows messages and a question card',
+  args: {
+    isMobile: true,
+    actions: { ...actions, interrupt: false },
+    messages: [
+      {
+        type: 'user',
+        from: 'Example project lead',
+        text: 'Please add retry handling to the request client.',
+      },
+      {
+        type: 'assistant',
+        text: 'I added bounded retries. Which policy should I use?',
+      },
+      {
+        type: 'tool_summary',
+        summary: 'Edit client.ts · Read ×3 · Shell ×1',
+      },
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Retry with exponential delay',
+        why: 'A short delay avoids repeating temporary failures immediately.',
+        considered: ['Retry without a delay'],
+        easyToChange: 'Update the retry delay constant.',
+        review: null,
+        createdAt: '2026-11-01T03:25:59Z',
+      },
+      {
+        type: 'question',
+        header: 'Question',
+        question: 'Should retries use the default limit?',
+        choices: [
+          { label: 'Yes, use the default limit' },
+          { label: 'No, choose a different limit' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+  decorators: [iPhoneViewportDecorator],
+}
+
+export const IPhoneConversationShowsItsWorkingStatus: Story = {
+  name: 'The iPhone conversation keeps the working status within its insets',
+  args: {
+    isMobile: true,
+    session: { ...session, category: 'in_progress', kind: null },
+    messages: [
+      { type: 'assistant', text: 'The request client is being updated.' },
+      {
+        type: 'tool_in_progress',
+        tool: 'Shell',
+        target: 'cargo test --package example-client',
+      },
+    ],
+  },
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const PermissionWaitsForApproval: Story = {
@@ -271,17 +349,7 @@ export const ReviewGuidanceFitsAnIPhone: Story = {
       },
     ],
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const CodexOnlyOpensInTerminal: Story = {
@@ -292,7 +360,8 @@ export const CodexOnlyOpensInTerminal: Story = {
       {
         type: 'question',
         question: 'Which retry policy should be used?',
-        choices: ['Retry three times', 'Retry once'],
+        choices: [{ label: 'Retry three times' }, { label: 'Retry once' }],
+        multi_select: false,
         answer: null,
       },
       {
@@ -400,6 +469,14 @@ export const DoneSessionNeedsDecisionReview: Story = {
   },
 }
 
+export const DoneSessionCanBeArchived: Story = {
+  name: 'A Done session exposes its Archive action',
+  args: {
+    session: { ...session, category: 'done', kind: null },
+    onArchive: () => undefined,
+  },
+}
+
 export const PeerMessagesAndEventsHaveTheirOwnDirection: Story = {
   name: 'The conversation separates peer messages from one-line events',
   args: {
@@ -467,11 +544,42 @@ export const AnActionFailureIsVisible: Story = {
 export const BackgroundTaskContinuesWhileTheSessionWaits: Story = {
   name: 'A background task remains visible while the session waits',
   args: {
+    isMobile: true,
     backgroundTasks: [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
+      },
+    ],
+  },
+}
+
+export const OlderMessagesCanBeLoaded: Story = {
+  name: 'The conversation offers older messages above the loaded page',
+  args: {
+    start: 40,
+    messages: [
+      { type: 'user', text: 'Check the example request flow.' },
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}
+
+export const OlderMessagesAreLoading: Story = {
+  name: 'The conversation shows progress while older messages load',
+  args: {
+    start: 40,
+    loadingOlder: true,
+    messages: [
+      { type: 'user', text: 'Check the example request flow.' },
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is available on demand.',
       },
     ],
   },

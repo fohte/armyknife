@@ -100,6 +100,8 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         selectedId={null}
         loaded
         error={null}
+        connectionError={null}
+        lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
         showAllInProgress
         onShowMore={() => undefined}
         onSelect={() => undefined}
@@ -114,6 +116,7 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         onToggleInProgress={() => undefined}
         doneExpanded
         onToggleDone={() => undefined}
+        onArchiveDone={() => undefined}
         {...props}
       />,
     )
@@ -123,7 +126,11 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
 function sectionSnapshot() {
   return {
     headings: Array.from(container.querySelectorAll('.section-heading')).map(
-      (heading) => heading.textContent,
+      (heading) =>
+        Array.from(heading.children)
+          .filter((child) => !child.matches('button'))
+          .map((child) => child.textContent)
+          .join(''),
     ),
     laterCount: container.querySelector('.later-section-count')?.textContent,
     visibleSessionIds: Array.from(
@@ -131,6 +138,26 @@ function sectionSnapshot() {
     ).map((title) => title.textContent),
     resultCount: container.querySelector('.inbox-filter-result-count')
       ?.textContent,
+  }
+}
+
+function connectionSnapshot() {
+  return {
+    label: container.querySelector('.mobile-inbox-connection')?.textContent,
+    dotClassName: container.querySelector('.mobile-inbox-connection-dot')
+      ?.className,
+  }
+}
+
+function doneRowSnapshot() {
+  return {
+    text: container.querySelector('.mobile-done-toggle')?.textContent,
+    expanded: container
+      .querySelector('.mobile-done-toggle')
+      ?.getAttribute('aria-expanded'),
+    chevronHidden: container
+      .querySelector('.mobile-done-row .mobile-collapse-chevron')
+      ?.getAttribute('aria-hidden'),
   }
 }
 
@@ -232,6 +259,146 @@ it('filters each inbox section and updates the visible counts', () => {
     ],
     resultCount: '1 of 2',
   })
+})
+
+it('omits quick actions from iPhone inbox rows', () => {
+  renderInbox({ isMobile: true })
+
+  expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
+})
+
+it('shows the connection time while the iPhone inbox is connected', () => {
+  renderInbox({ isMobile: true })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Connected · 22:00',
+    dotClassName: 'mobile-inbox-connection-dot',
+  })
+})
+
+it('shows the last update time and error dot while the iPhone inbox is disconnected', () => {
+  renderInbox({
+    isMobile: true,
+    error: 'The session feed disconnected.',
+    connectionError: 'The session feed disconnected.',
+  })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Disconnected · Last updated 22:00',
+    dotClassName: 'mobile-inbox-connection-dot is-disconnected',
+  })
+})
+
+it('keeps a connected status when saved view storage fails', () => {
+  renderInbox({
+    isMobile: true,
+    error: 'Unable to load saved inbox views.',
+  })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Connected · 22:00',
+    dotClassName: 'mobile-inbox-connection-dot',
+  })
+})
+
+it('shows the combined review count in the collapsed iPhone Done row', () => {
+  const secondDoneSession: Session = {
+    id: 'sample-done-secondary',
+    category: 'done',
+    isPaused: false,
+    kind: null,
+    title: 'Document another result',
+    preview: null,
+    elapsedSeconds: 60,
+    unread: false,
+    task: null,
+    tasks: [],
+    repo: 'sample-org/service',
+    project: 'web-app',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+    unreviewedDecisionCount: 1,
+  }
+  renderInbox({
+    isMobile: true,
+    doneExpanded: false,
+    sessions: [
+      ...sessions.map((session) =>
+        session.id === 'sample-done'
+          ? { ...session, unreviewedDecisionCount: 1 }
+          : session,
+      ),
+      secondDoneSession,
+    ],
+  })
+
+  expect(doneRowSnapshot()).toEqual({
+    text: 'Done2◇ 2 to review›',
+    expanded: 'false',
+    chevronHidden: 'true',
+  })
+})
+
+it('shows the downward chevron for expanded iPhone Done rows with pending reviews', () => {
+  renderInbox({
+    isMobile: true,
+    doneExpanded: true,
+    sessions: sessions.map((session) =>
+      session.id === 'sample-done'
+        ? { ...session, unreviewedDecisionCount: 1 }
+        : session,
+    ),
+  })
+
+  expect(doneRowSnapshot()).toEqual({
+    text: 'Done1◇ 1 to review⌄',
+    expanded: 'true',
+    chevronHidden: 'true',
+  })
+})
+
+it('archives the Done sessions from the section action', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ onArchiveDone })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      ?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
+})
+
+it('archives the Done sessions from the mobile collapse row', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ isMobile: true, onArchiveDone })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.mobile-archive-all')?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
+})
+
+it('archives all Done sessions even when filters hide them', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ filterQuery: 'project:missing', onArchiveDone })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      ?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
 })
 
 it('opens the filter dialog from its button', () => {

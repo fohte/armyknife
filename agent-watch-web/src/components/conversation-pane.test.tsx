@@ -1,10 +1,24 @@
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
+import { renderConversationMessage } from '#components/conversation-message'
+import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { SessionStatusPanel } from '#components/session-status-panel'
+import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
+
+vi.mock('#components/conversation-message', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('#components/conversation-message')>()
+  return {
+    ...original,
+    renderConversationMessage: vi.fn(original.renderConversationMessage),
+  }
+})
 
 const session: Session = {
   id: 'sample-session',
@@ -31,10 +45,18 @@ const actions: SessionActions = {
   openInTerminal: true,
 }
 
+const codexTerminalActions: SessionActions = {
+  message: true,
+  answerQuestion: false,
+  permission: { approve: false, reject: false },
+  interrupt: true,
+  openInTerminal: true,
+}
+
 const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
-  choices: ['Retry a few times', 'Retry once'],
+  choices: [{ label: 'Retry a few times' }, { label: 'Retry once' }],
   answer: null,
 }
 
@@ -63,8 +85,58 @@ const proposal: ChatItem = {
   resolved: false,
 }
 
-function messagesResponse(messages: unknown, backgroundTasks: unknown = []) {
-  return { messages, backgroundTasks }
+function messagesResponse(
+  messages: ChatItem[],
+  backgroundTasks: BackgroundTask[] = [],
+  metadata: {
+    start: number
+    total: number
+    decisions?: Extract<ChatItem, { type: 'decision' }>[]
+    hasUnansweredProposal?: boolean
+    activeQuestionIndex?: number | null
+  } = { start: 0, total: messages.length },
+) {
+  const activeQuestionIndex = messages.findLastIndex(
+    (message) => message.type === 'question',
+  )
+  return {
+    messages,
+    backgroundTasks,
+    start: metadata.start,
+    total: metadata.total,
+    decisions:
+      metadata.decisions ??
+      messages.filter(
+        (message): message is Extract<ChatItem, { type: 'decision' }> =>
+          message.type === 'decision',
+      ),
+    hasUnansweredProposal:
+      metadata.hasUnansweredProposal ??
+      messages.some(
+        (message) =>
+          message.type === 'proposal' &&
+          message.answer === null &&
+          !message.resolved,
+      ),
+    activeQuestionIndex:
+      metadata.activeQuestionIndex === undefined
+        ? activeQuestionIndex < 0
+          ? null
+          : metadata.start + activeQuestionIndex
+        : metadata.activeQuestionIndex,
+  }
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+function requestUrl(input: RequestInfo | URL) {
+  if (typeof input === 'string') return input
+  return input instanceof URL ? input.href : input.url
 }
 
 const permission: ChatItem = {
@@ -108,6 +180,13 @@ async function waitForState(condition: () => boolean) {
   return condition()
 }
 
+function terminalFeedback() {
+  return Array.from(
+    container.querySelectorAll('.conversation-terminal-action-status'),
+    (element) => element.textContent,
+  ).filter((text) => text !== '')
+}
+
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   act(() => {
     const valueSetter = Reflect.getOwnPropertyDescriptor(
@@ -125,7 +204,7 @@ function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
   onSelectSession: (id: string) => void = () => undefined,
-  viewMessages: readonly ChatItem[] = [question],
+  viewMessages: readonly ChatItem[] = [],
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
@@ -140,6 +219,10 @@ function renderView(
   } | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
+  today: {
+    isToday: boolean
+    onToggleToday: (isToday: boolean) => void
+  } = { isToday: false, onToggleToday: () => undefined },
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -156,6 +239,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        isToday={today.isToday}
+        onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
         decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
@@ -166,6 +251,132 @@ function renderView(
     )
   })
 }
+
+function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  return {
+    label: toggle?.getAttribute('aria-label'),
+    pressed: toggle?.getAttribute('aria-pressed'),
+    calls: onToggleToday.mock.calls,
+  }
+}
+
+it('toggles TODAY from the iPhone conversation header', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: false, onToggleToday },
+  )
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  act(() => {
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Add to TODAY',
+    pressed: 'false',
+    calls: [[true]],
+  })
+})
+
+it('sets the primary linked task from desktop and mobile headers', async () => {
+  const primaryTask = {
+    id: 'sample-primary-task',
+    number: 2048,
+    title: 'Improve request reliability',
+    priority: 1,
+  }
+  const secondaryTask = {
+    id: 'sample-secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+  }
+  const sessionWithLinkedTasks = {
+    ...session,
+    task: primaryTask,
+    tasks: [primaryTask, secondaryTask],
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+
+  for (const isMobile of [false, true]) {
+    renderView(
+      onAction,
+      sessionWithLinkedTasks,
+      undefined,
+      [],
+      actions,
+      isMobile,
+      [],
+      [sessionWithLinkedTasks],
+    )
+    await act(async () => {
+      container.querySelector('summary')?.click()
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      document.body
+        .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
+        ?.click()
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+
+  expect(onAction.mock.calls).toEqual([
+    ['primary-task', { taskId: 'sample-secondary-task' }],
+    ['primary-task', { taskId: 'sample-secondary-task' }],
+  ])
+})
+
+it('places the session ID copy control beside the iPhone title', () => {
+  renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
+
+  const titleRow = container.querySelector(
+    '.mobile-conversation-heading .session-heading-title-row',
+  )
+  const copyButton = titleRow?.querySelector<HTMLButtonElement>(
+    '.conversation-copy-session-id',
+  )
+
+  const snapshot = () => ({
+    title: titleRow?.querySelector('h1')?.textContent,
+    copyButton: {
+      ariaLabel: copyButton?.getAttribute('aria-label'),
+      title: copyButton?.getAttribute('title'),
+      compact: copyButton?.getAttribute('data-compact') ?? null,
+    },
+    compactCopyControl: container.querySelector(
+      '.conversation-copy-session-id[data-compact="true"]',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Choose a retry policy',
+    copyButton: {
+      ariaLabel: 'Copy session ID',
+      title: 'Copy session ID',
+      compact: null,
+    },
+    compactCopyControl: null,
+  })
+})
 
 function dispatchKey(
   target: EventTarget,
@@ -210,6 +421,7 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   if (originalExecCommand === undefined) {
@@ -257,7 +469,8 @@ it('shows pending and sent permission action feedback', () => {
       disabled: Array.from(
         card.querySelectorAll<HTMLButtonElement>('button'),
       ).map((button) => button.disabled),
-      status: card.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        card.querySelector('.permission-action-status')?.textContent ?? null,
     })),
   }
 
@@ -273,7 +486,8 @@ it('shows pending and sent permission action feedback', () => {
         disabled: Array.from(
           card.querySelectorAll<HTMLButtonElement>('button'),
         ).map((button) => button.disabled),
-        status: card.querySelector('[role="status"]')?.textContent ?? null,
+        status:
+          card.querySelector('.permission-action-status')?.textContent ?? null,
       })),
     },
   })
@@ -324,7 +538,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
 
   const desktopButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      '.conversation-header-actions .conversation-copy-session-id',
+      '.conversation-header-copy .session-heading-title-row .conversation-copy-session-id',
     ),
   )
   await act(async () => {
@@ -333,7 +547,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
   })
   const desktopButtonText = desktopButton.textContent
 
-  renderView(onAction, session, undefined, [question], actions, true)
+  renderView(onAction, session, undefined, [], actions, true)
   const mobileButton = requireElement(
     container.querySelector<HTMLButtonElement>(
       ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
@@ -379,7 +593,7 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -434,7 +648,7 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -476,7 +690,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -494,7 +708,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
   const snapshot = () => ({
     buttonText: copyButton.textContent,
     accessibleName: copyButton.getAttribute('aria-label'),
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     buttonText: 'Copy failed',
@@ -519,7 +733,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -538,7 +752,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     copyCalls: copyCommand.mock.calls,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
     buttonText: copyButton.textContent,
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     copyCalls: [['copy']],
@@ -548,32 +762,163 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('answers a question from a number key or a choice click', () => {
+it('prevents a choice click from duplicating a number-key answer', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, session, undefined, [question])
 
-  const keyEvent = dispatchKeyInAct(
-    requireElement(container.querySelector('.conversation-pane')),
-    '2',
-  )
-  act(() => {
+  const keyEvent = new KeyboardEvent('keydown', {
+    key: '2',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    requireElement(container.querySelector('.conversation-pane')).dispatchEvent(
+      keyEvent,
+    )
     container
       .querySelector<HTMLButtonElement>('.chat-question-choices button')
       ?.click()
+    await Promise.resolve()
+    await Promise.resolve()
   })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    keyEvent.defaultPrevented,
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    keyDefaultPrevented: keyEvent.defaultPrevented,
+    choiceDisabled: container.querySelector<HTMLButtonElement>(
+      '.chat-question-choices button',
+    )?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [['answer', { choice: 2 }]],
+    keyDefaultPrevented: true,
+    choiceDisabled: true,
+  })
+})
+
+it('closes a question before sending a contextual freeform answer', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    {
+      ...question,
+      header: 'Output format',
+      question: 'Which format should be used?',
+    },
   ])
-  const expected = JSON.stringify([
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    ['answer', { skip: true }],
     [
-      ['answer', { choice: 2 }],
-      ['answer', { choice: 1 }],
+      'messages',
+      {
+        content:
+          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+      },
     ],
-    true,
   ])
-  expect(actual).toBe(expected)
+})
+
+it('does not send a freeform answer when skipping the question fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  onAction.mockResolvedValueOnce(false)
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+})
+
+it('does not answer a choice shortcut while a freeform answer is sending', async () => {
+  let resolveMessage: (sent: boolean) => void = () => undefined
+  const messageResult = new Promise<boolean>((resolve) => {
+    resolveMessage = resolve
+  })
+  const onAction = vi.fn((action: string) =>
+    action === 'messages' ? messageResult : Promise.resolve(true),
+  )
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const event = new KeyboardEvent('keydown', {
+    key: '1',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(event)
+  })
+  const duringSend = {
+    textareaDisabled: textarea.disabled,
+    eventTargetIsBody: event.target === document.body,
+    eventDefaultPrevented: event.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  }
+
+  await act(async () => {
+    resolveMessage(true)
+    await messageResult
+    await Promise.resolve()
+  })
+
+  const expectedCalls = [
+    ['answer', { skip: true }],
+    [
+      'messages',
+      {
+        content:
+          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+      },
+    ],
+  ]
+  const snapshot = () => ({ duringSend, actionCalls: onAction.mock.calls })
+  expect(snapshot()).toEqual({
+    duringSend: {
+      textareaDisabled: true,
+      eventTargetIsBody: true,
+      eventDefaultPrevented: false,
+      actionCalls: expectedCalls,
+    },
+    actionCalls: expectedCalls,
+  })
 })
 
 it('keeps the message composer available while a proposal waits for a choice', () => {
@@ -634,7 +979,7 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
     {
       ...question,
       question: 'Which **retry** policy should be used?',
-      choices: ['Retry *a few* times', 'Retry once'],
+      choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
       answer: 'Retry once',
     },
   ])
@@ -717,7 +1062,7 @@ it('shows a freeform answer below the choices', () => {
   })
 })
 
-it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
+it('sends on Enter and Command-Enter and preserves modified newlines', async () => {
   const completedSends: Array<(succeeded: boolean) => void> = []
   const onAction = vi.fn(
     () =>
@@ -738,6 +1083,8 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
     completedSends[0]?.(true)
     await Promise.resolve()
   })
+  setTextareaValue(textarea, 'Keep this as a draft')
+  const altEvent = dispatchKeyInAct(textarea, 'Enter', { altKey: true })
   setTextareaValue(textarea, 'Keep the error visible')
   act(() => {
     dispatchKey(textarea, 'Enter', { metaKey: true })
@@ -749,18 +1096,60 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
   setTextareaValue(textarea, 'Add one more detail')
   const shiftEvent = dispatchKeyInAct(textarea, 'Enter', { shiftKey: true })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    shiftEvent.defaultPrevented,
-  ])
-  const expected = JSON.stringify([
-    [
+  const snapshot = () => ({
+    actions: onAction.mock.calls,
+    defaultPrevented: [altEvent.defaultPrevented, shiftEvent.defaultPrevented],
+  })
+  expect(snapshot()).toEqual({
+    actions: [
       ['messages', { content: 'Use bounded retries' }],
       ['messages', { content: 'Keep the error visible' }],
     ],
-    false,
-  ])
-  expect(actual).toBe(expected)
+    defaultPrevented: [true, false],
+  })
+})
+
+it('inserts Alt-Enter at the cursor without sending the message', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep this as a draft')
+  textarea.focus()
+  textarea.setSelectionRange(9, 9)
+
+  await act(async () => {
+    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: `Keep this
+ as a draft`,
+    actionCalls: [],
+  })
+})
+
+it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
+  const onAction = () => Promise.resolve(true)
+  renderView(onAction)
+  const interruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
+  renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
+  const nonInterruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
+
+  const snapshot = () => ({ interruptibleHint, nonInterruptibleHint })
+  expect(snapshot()).toEqual({
+    interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
+    nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+  })
 })
 
 it('keeps Enter for newlines and exposes mobile conversation actions', () => {
@@ -799,7 +1188,7 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: undefined,
-    choiceLabels: [],
+    choiceLabels: ['1', '2'],
     interruptLabel: 'Interrupt',
   })
 })
@@ -1217,9 +1606,13 @@ it('renders file attachments returned by the messages endpoint', async () => {
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.chat-user-file')?.textContent ===
+        'sample-layout.html',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     message: container.querySelector('.chat-user-message')?.textContent,
@@ -1258,7 +1651,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     return Promise.resolve(
       method === 'POST'
         ? new Response(null, { status: 204 })
-        : url.endsWith('/messages')
+        : url.split('?')[0]?.endsWith('/messages') === true
           ? jsonResponse(messagesResponse([proposal]))
           : jsonResponse(actions),
     )
@@ -1382,24 +1775,26 @@ it('shows elapsed time while the session is working without an active tool', () 
   })
 })
 
-it('expands the background task count into descriptions and elapsed times', () => {
+it('shows background task descriptions and elapsed times on mobile', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'in_progress', elapsedSeconds: 92 },
     undefined,
     [],
     actions,
-    false,
+    true,
     [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
       },
       {
         id: 'fixture-task-two',
         description: 'Review the generated report',
         elapsedSeconds: 43,
+        kind: 'background_task',
       },
     ],
   )
@@ -1533,12 +1928,13 @@ it('keeps background tasks visible while the session waits for input', () => {
     undefined,
     [],
     actions,
-    false,
+    true,
     [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
       },
     ],
   )
@@ -1603,6 +1999,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
               id: 'fixture-task-one',
               description: 'Watch the build pipeline',
               elapsedSeconds: 128,
+              kind: 'background_task',
             },
           ],
         ),
@@ -1628,9 +2025,13 @@ it('accepts classified messages and the active tool from messages endpoint', asy
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.chat-peer-file')?.textContent ===
+        'fixture-peer-layout.html',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     workingStatus: container.querySelector('.conversation-working-status')
@@ -1652,16 +2053,390 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     backgroundTasks: container.querySelector(
       '.conversation-background-tasks summary',
     )?.textContent,
+    headerRunningCount: container.querySelector(
+      '.conversation-status-panel-count',
+    )?.textContent,
   })
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 30s',
     activeTool: 'execcargo test',
     peerMessage:
-      'FROMFixture peer session (fixture-peer-session)A fictional peer update.fixture-peer-layout.html',
+      'FROMFixture peer session (ended)A fictional peer update.fixture-peer-layout.html',
     peerImage: '/api/images/fixture-peer-image.png',
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
     backgroundTasks: 'Background tasks (1)',
+    headerRunningCount: undefined,
+  })
+})
+
+it('shows running tasks in the desktop status panel and counts them in the header', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(
+          [],
+          [
+            {
+              id: 'fixture-agent-task',
+              description: 'Inspect the fictional module',
+              elapsedSeconds: 7_200,
+              kind: 'subagent',
+              agentType: 'FixtureExplorer',
+            },
+            {
+              id: 'fixture-shell-task',
+              description: 'cargo test -p fictional-crate',
+              elapsedSeconds: 7_200,
+              kind: 'background_task',
+            },
+          ],
+        ),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          category: 'needs_action',
+          elapsedSeconds: 30,
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    descriptionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.running-task-subagent-description, .running-task-description',
+      ),
+      (description) => description.getAttribute('title'),
+    ),
+    sections: Array.from(
+      container.querySelectorAll('.running-tasks-group h2'),
+      (heading) => heading.textContent,
+    ),
+    tasks: Array.from(
+      container.querySelectorAll('.running-task'),
+      (task) => task.textContent,
+    ),
+    panelToggle: container.querySelector('.conversation-status-panel-toggle')
+      ?.textContent,
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    legacyTaskList:
+      container.querySelector('.conversation-background-tasks') !== null,
+  })
+  expect(snapshot()).toEqual({
+    tabs: [{ label: 'Running2', selected: 'true' }],
+    selectedTab: 'Running2',
+    descriptionTitles: [
+      'Inspect the fictional module',
+      'cargo test -p fictional-crate',
+    ],
+    sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
+    tasks: [
+      '◐FixtureExplorerInspect the fictional module2h 0m',
+      '▶cargo test -p fictional-crateOutput2h 0m',
+    ],
+    panelToggle: '◐2',
+    workingStatus: undefined,
+    legacyTaskList: false,
+  })
+})
+
+it('keeps the Decisions tab active when running tasks appear', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-started-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([decision], [runningTask])),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          category: 'needs_action',
+          decisionCount: 1,
+          unreviewedDecisionCount: 1,
+        }}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    decisionHeading: container.querySelector('.decisions-panel-header h2')
+      ?.textContent,
+  })
+  const beforeTaskStarts = snapshot()
+  act(() => {
+    renderConversation(1)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const states = () => ({ beforeTaskStarts, afterTaskStarts: snapshot() })
+  expect(states()).toEqual({
+    beforeTaskStarts: {
+      tabs: [{ label: '◇ Decisions', selected: 'true' }],
+      selectedTab: '◇ Decisions',
+      decisionHeading: 'Decisions in this session',
+    },
+    afterTaskStarts: {
+      tabs: [
+        { label: 'Running1', selected: 'false' },
+        { label: '◇ Decisions', selected: 'true' },
+      ],
+      selectedTab: '◇ Decisions',
+      decisionHeading: 'Decisions in this session',
+    },
+  })
+})
+
+it('selects Running by default and opens Decisions from the header', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-running-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  const reviewSession: Session = {
+    ...session,
+    category: 'needs_action',
+    decisionCount: 1,
+    unreviewedDecisionCount: 1,
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: reviewSession,
+      messages: [decision],
+      backgroundTasks: [runningTask],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+      onToggleStatusPanel: () => undefined,
+    })
+    return (
+      <>
+        <ConversationPaneView
+          session={reviewSession}
+          messages={[decision]}
+          backgroundTasks={[runningTask]}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+          statusPanelOpen
+          decisionsPanelOpen={statusPanel.decisionsPanelOpen}
+          selectedDecisionSeq={statusPanel.selectedDecisionSeq}
+          onToggleDecisionsPanel={statusPanel.onToggleDecisionsPanel}
+          onSelectDecision={statusPanel.onSelectDecision}
+        />
+        <SessionStatusPanel
+          tabs={statusPanel.tabs}
+          activeTabId={statusPanel.activeTabId}
+          onTabChange={statusPanel.onTabChange}
+          onClose={() => undefined}
+        />
+      </>
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    sections: Array.from(
+      container.querySelectorAll('.running-tasks-group h2'),
+      (heading) => heading.textContent,
+    ),
+    decisionHeading: container.querySelector('.decisions-panel-header h2')
+      ?.textContent,
+    decisionButtonPressed: container
+      .querySelector('.conversation-decisions-toggle')
+      ?.getAttribute('aria-pressed'),
+  })
+  const runningState = snapshot()
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-decisions-toggle',
+      ),
+    ).click()
+  })
+  const states = () => ({ runningState, decisionsState: snapshot() })
+  expect(states()).toEqual({
+    runningState: {
+      tabs: [
+        { label: 'Running1', selected: 'true' },
+        { label: '◇ Decisions', selected: 'false' },
+      ],
+      selectedTab: 'Running1',
+      sections: ['SUBAGENTS'],
+      decisionHeading: undefined,
+      decisionButtonPressed: 'false',
+    },
+    decisionsState: {
+      tabs: [
+        { label: 'Running1', selected: 'false' },
+        { label: '◇ Decisions', selected: 'true' },
+      ],
+      selectedTab: '◇ Decisions',
+      sections: [],
+      decisionHeading: 'Decisions in this session',
+      decisionButtonPressed: 'true',
+    },
+  })
+})
+
+it('prefers crit when other status tabs are available', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-running-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Review',
+        critUrl: 'http://127.0.0.1:5000/review/sample',
+        decisionCount: 1,
+        unreviewedDecisionCount: 1,
+      },
+      messages: [decision],
+      backgroundTasks: [runningTask],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+      onToggleStatusPanel: () => undefined,
+    })
+    return (
+      <SessionStatusPanel
+        tabs={statusPanel.tabs}
+        activeTabId={statusPanel.activeTabId}
+        onTabChange={statusPanel.onTabChange}
+        onClose={() => undefined}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    critPane: container.querySelector('.crit-pane') !== null,
+  })
+  expect(snapshot()).toEqual({
+    tabs: [
+      { label: 'Running1', selected: 'false' },
+      { label: '◇ Decisions', selected: 'false' },
+      { label: 'crit', selected: 'true' },
+    ],
+    selectedTab: 'crit',
+    critPane: true,
   })
 })
 
@@ -2171,12 +2946,17 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  })
+  expect(await waitForState(() => onAction.mock.calls.length === 1)).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
@@ -2225,15 +3005,26 @@ it('attaches dropped files through the composer and sends their data', async () 
   act(() => {
     pane.dispatchEvent(drop)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   act(() => {
     dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  })
+  expect(
+    await waitForState(
+      () =>
+        onAction.mock.calls.length === 1 &&
+        container.querySelector('.composer-attachment') === null,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     targetVisibleDuringDrag,
@@ -2362,7 +3153,7 @@ it('clears pasted attachments after a successful send', async () => {
   })
 })
 
-it('names the attachment that crosses the message size limit before sending', () => {
+it('names the attachment that crosses the message size limit before sending', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
   renderView(onAction)
   const firstFile = new File(['first'], 'first.bin', {
@@ -2387,9 +3178,21 @@ it('names the attachment that crosses the message size limit before sending', ()
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () => container.querySelectorAll('.composer-attachment').length === 2,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+        'limit-crossing.bin would exceed the 50 MiB attachment limit',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -2406,7 +3209,7 @@ it('names the attachment that crosses the message size limit before sending', ()
   })
 })
 
-it('names and blocks the attachment that crosses the attachment count limit', () => {
+it('names and blocks the attachment that crosses the attachment count limit', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
   renderView(onAction)
   const files = Array.from(
@@ -2423,9 +3226,23 @@ it('names and blocks the attachment that crosses the attachment count limit', ()
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelectorAll('.composer-attachment').length ===
+        files.length,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+        'file-17.txt exceeds the limit of 16 attachments per message',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -2491,9 +3308,13 @@ it('shows a server attachment validation error and retains the rejected attachme
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+        false,
+    ),
+  ).toBe(true)
 
   const file = new File(['not an image'], 'document.pdf', {
     type: 'application/pdf',
@@ -2508,13 +3329,26 @@ it('shows a server attachment validation error and retains the rejected attachme
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+          'file attachment data is invalid' &&
+        fetcher.mock.calls.length === 3 &&
+        container.querySelector('.composer-attachment span')?.textContent ===
+          file.name,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -2645,7 +3479,8 @@ it('keeps the composer usable when browser storage is unavailable', () => {
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
-    storageNotice: container.querySelector('[role="status"]')?.textContent,
+    storageNotice: container.querySelector('.conversation-error[role="status"]')
+      ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
@@ -2668,7 +3503,8 @@ it('reports when a draft cannot be saved after loading storage succeeds', () => 
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
-    storageNotice: container.querySelector('[role="status"]')?.textContent,
+    storageNotice: container.querySelector('.conversation-error[role="status"]')
+      ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
@@ -2744,7 +3580,9 @@ it('blocks duplicate sends and shows their pending status', async () => {
     buttonDisabled: sendButton.disabled,
     defaultPrevented: events.map((event) => event.defaultPrevented),
     draft: textarea.value,
-    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    status:
+      container.querySelector('.composer-footer [role="status"]')
+        ?.textContent ?? null,
   })
   const pendingSnapshot = duringSend()
 
@@ -2758,7 +3596,9 @@ it('blocks duplicate sends and shows their pending status', async () => {
     afterSend: {
       buttonDisabled: sendButton.disabled,
       draft: textarea.value,
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.composer-footer [role="status"]')
+          ?.textContent ?? null,
     },
   })
   const expected = {
@@ -3022,7 +3862,9 @@ it.each([
           '.permission-actions button',
         ),
       ).map((button) => button.disabled),
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.permission-action-status')?.textContent ??
+        null,
     }
     const actionRequest = fetcher.mock.calls[2]?.[0]
     const actionRequestUrl =
@@ -3049,7 +3891,9 @@ it.each([
       permissionButtons: container.querySelectorAll(
         '.permission-actions button',
       ).length,
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.permission-action-status')?.textContent ??
+        null,
     }
 
     act(() => {
@@ -3072,7 +3916,9 @@ it.each([
       afterCapabilityDisappears,
       afterCardDisappears: {
         permissionCard: container.querySelector('.chat-permission-card'),
-        status: container.querySelector('[role="status"]')?.textContent ?? null,
+        status:
+          container.querySelector('.permission-action-status')?.textContent ??
+          null,
       },
     })
     expect(snapshot()).toEqual({
@@ -3159,6 +4005,7 @@ it('reloads the selected conversation when the session feed changes', async () =
               id: 'fixture-task-one',
               description: 'Watch the build pipeline',
               elapsedSeconds: 18,
+              kind: 'background_task',
             },
           ],
         ),
@@ -3234,6 +4081,75 @@ it('reloads the selected conversation when the session feed changes', async () =
     backgroundTasks: undefined,
     requestCount: 4,
   })
+})
+
+it('keeps conversation DOM connected while toggling the status panel', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const stableMessages = messagesResponse([
+    { type: 'assistant', text: 'Stable conversation message' },
+  ])
+  const stableActions = {
+    message: true,
+    answerQuestion: false,
+    interrupt: true,
+    openInTerminal: true,
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(stableMessages))
+    .mockResolvedValueOnce(jsonResponse(stableActions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (statusPanelOpen: boolean, refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(false, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+
+  act(() => {
+    renderConversation(true, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const sameMessageAfterOpening =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
+
+  act(() => {
+    renderConversation(false, 0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const sameMessageAfterClosing =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
+
+  const actual = JSON.stringify([
+    sameMessageAfterOpening,
+    sameMessageAfterClosing,
+    fetcher.mock.calls.length,
+  ])
+  const expected = JSON.stringify([true, true, 2])
+  expect(actual).toBe(expected)
 })
 
 it('keeps the conversation and focused draft while a feed refresh is pending', async () => {
@@ -3335,6 +4251,398 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
   })
 })
 
+it('shows terminal switch progress and success without reloading messages', async () => {
+  let resolveFocus: ((response: Response) => void) | undefined
+  const focusResponse = new Promise<Response>((resolve) => {
+    resolveFocus = resolve
+  })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockReturnValueOnce(focusResponse)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const initialLiveRegions = Array.from(
+    container.querySelectorAll('.conversation-terminal-action-status'),
+  )
+
+  const terminalButtons = () =>
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.conversation-open-in-terminal button',
+      ),
+    )
+  act(() => {
+    terminalButtons()[0]?.click()
+  })
+  const pendingSnapshot = () => ({
+    feedback: terminalFeedback(),
+    disabled: terminalButtons().map((button) => button.disabled),
+  })
+  const pending = pendingSnapshot()
+
+  await act(async () => {
+    resolveFocus?.(new Response(null, { status: 204 }))
+    await focusResponse
+  })
+  const successSnapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+    liveRegions: initialLiveRegions.map((element, index) => ({
+      sameElement:
+        element ===
+        container.querySelectorAll('.conversation-terminal-action-status')[
+          index
+        ],
+      role: element.getAttribute('role'),
+      ariaLive: element.getAttribute('aria-live'),
+      ariaAtomic: element.getAttribute('aria-atomic'),
+      ariaHidden: element.getAttribute('aria-hidden'),
+    })),
+    announcementCount: container.querySelectorAll(
+      '.conversation-terminal-action-status[role="status"][aria-live="polite"]',
+    ).length,
+  })
+  const success = successSnapshot()
+  const snapshot = () => ({ pending, success })
+  const expected = {
+    pending: {
+      feedback: ['Switching tmux…', 'Switching tmux…', 'Switching tmux…'],
+      disabled: [true, true, true],
+    },
+    success: {
+      feedback: [
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+      ],
+      requests: [
+        '/api/sessions/sample-session/messages?limit=100',
+        '/api/sessions/sample-session/actions',
+        '/api/sessions/sample-session/focus',
+      ],
+      liveRegions: [
+        {
+          sameElement: true,
+          role: 'status',
+          ariaLive: 'polite',
+          ariaAtomic: 'true',
+          ariaHidden: null,
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+      ],
+      announcementCount: 1,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('shows the server reason beside every terminal action when switching fails', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockResolvedValueOnce(
+      jsonResponse({ error: 'The terminal session is unavailable.' }, 503),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    feedback: [
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+    ],
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
+  })
+})
+
+it('ignores a terminal result after the conversation switches sessions', async () => {
+  let resolveFocus: ((response: Response) => void) | undefined
+  const focusResponse = new Promise<Response>((resolve) => {
+    resolveFocus = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+    if (url.split('?')[0]?.endsWith('/messages') === true) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([question, permission])),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(codexTerminalActions))
+    }
+    return focusResponse
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          id: 'next-session',
+          title: 'A later session',
+          engine: 'Codex',
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await act(async () => {
+    resolveFocus?.(new Response(null, { status: 204 }))
+    await focusResponse
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    feedback: [],
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+      '/api/sessions/next-session/messages?limit=100',
+      '/api/sessions/next-session/actions',
+    ],
+  })
+})
+
+it('hides successful terminal feedback after three seconds', async () => {
+  vi.useFakeTimers()
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const visibleFeedback = terminalFeedback()
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000)
+  })
+
+  const snapshot = () => ({
+    visibleFeedback,
+    feedbackAfterTimeout: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    visibleFeedback: [
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+    ],
+    feedbackAfterTimeout: [],
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
+  })
+})
+
+it('clears terminal feedback timers when the session changes or unmounts', async () => {
+  vi.useFakeTimers()
+  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+    if (url.split('?')[0]?.endsWith('/messages') === true) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([question, permission])),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(codexTerminalActions))
+    }
+    return Promise.resolve(new Response(null, { status: 204 }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const baselineTimers = vi.getTimerCount()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersAfterFirstSuccess = vi.getTimerCount() - baselineTimers
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          id: 'next-session',
+          title: 'A later session',
+          engine: 'Codex',
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersAfterSessionSwitch = vi.getTimerCount() - baselineTimers
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersBeforeUnmount = vi.getTimerCount() - baselineTimers
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+
+  const snapshot = () => ({
+    timersAfterFirstSuccess,
+    timersAfterSessionSwitch,
+    timersBeforeUnmount,
+    timersAfterUnmount: vi.getTimerCount() - baselineTimers,
+  })
+  expect(snapshot()).toEqual({
+    timersAfterFirstSuccess: 1,
+    timersAfterSessionSwitch: 0,
+    timersBeforeUnmount: 1,
+    timersAfterUnmount: 0,
+  })
+})
+
 it('keeps question and permission actions active after a refresh error', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -3425,6 +4733,1047 @@ it('keeps question and permission actions active after a refresh error', async (
     questionChoiceDisabled: [false, false],
     permissionButtonsDisabled: [false, false],
     error: 'Messages unavailable',
+    requestCount: 4,
+  })
+})
+
+it('keeps unchanged message DOM nodes across a conversation refresh', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const messages: ChatItem[] = [
+    { type: 'assistant', text: 'The conversation is unchanged.' },
+  ]
+  const sessions: Session[] = []
+  const onSelectSession = () => undefined
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        sessions={sessions}
+        refreshKey={0}
+        onSelectSession={onSelectSession}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+  const assistantMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        sessions={sessions}
+        refreshKey={1}
+        onSelectSession={onSelectSession}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    sameMessageNode:
+      assistantMessage === container.querySelector('.chat-assistant-message'),
+    messageText: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameMessageNode: true,
+    messageText: 'The conversation is unchanged.',
+    requestCount: 4,
+  })
+})
+
+it('loads only the latest page initially and refreshes from the loaded start', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const firstInitialMessage: ChatItem = {
+    type: 'assistant',
+    text: 'Loaded message one.',
+  }
+  const initialMessages = [
+    firstInitialMessage,
+    { type: 'assistant', text: 'Loaded message two.' },
+  ] satisfies ChatItem[]
+  const refreshedMessages = [
+    firstInitialMessage,
+    { type: 'assistant', text: 'Loaded message two updated.' },
+    { type: 'assistant', text: 'New message.' },
+  ] satisfies ChatItem[]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(initialMessages, [], { start: 8, total: 10 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(refreshedMessages, [], { start: 8, total: 11 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+  act(() => {
+    renderConversation(1)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => url),
+    retainedMessage:
+      retainedMessage === container.querySelector('.chat-assistant-message'),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?from=8',
+      '/api/sessions/sample-session/actions',
+    ],
+    retainedMessage: true,
+    messages: [
+      'Loaded message one.',
+      'Loaded message two updated.',
+      'New message.',
+    ],
+  })
+})
+
+it('prepends an older page without moving existing messages in the viewport', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const firstVisibleMessage: ChatItem = {
+    type: 'assistant',
+    text: 'First visible message.',
+  }
+  const visibleMessages = [
+    firstVisibleMessage,
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 + container.querySelectorAll('.chat-assistant-message').length * 40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 30
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => url),
+    retainedMessage:
+      retainedMessage ===
+      container.querySelectorAll('.chat-assistant-message')[1],
+    scrollTop: scroll.scrollTop,
+    olderButton: container.querySelector('.conversation-load-older'),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=1&limit=100',
+    ],
+    retainedMessage: true,
+    scrollTop: 70,
+    olderButton: null,
+    messages: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message.',
+    ],
+  })
+})
+
+it('loads an older page near the top and ignores repeated scrolls while it loads', async () => {
+  const visibleMessages = [
+    { type: 'assistant', text: 'First visible message.' },
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  let resolveOlderPage: ((response: Response) => void) | undefined
+  const olderPage = new Promise<Response>((resolve) => {
+    resolveOlderPage = resolve
+  })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockReturnValueOnce(olderPage)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 + container.querySelectorAll('.chat-assistant-message').length * 40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 30
+    scroll.dispatchEvent(new Event('scroll'))
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  act(() => {
+    scroll.scrollTop = 80
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  await waitForState(() => fetcher.mock.calls.length === 3)
+  const loadingState = {
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    loadingLabel: container.querySelector('.conversation-load-older')
+      ?.textContent,
+  }
+  await act(async () => {
+    resolveOlderPage?.(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const anchoredScrollTop = scroll.scrollTop
+  act(() => {
+    scroll.scrollTop = 0
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+
+  const snapshot = () => ({
+    loadingState,
+    scrollTop: anchoredScrollTop,
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    loadingState: {
+      requests: [
+        '/api/sessions/sample-session/messages?limit=100',
+        '/api/sessions/sample-session/actions',
+        '/api/sessions/sample-session/messages?before=1&limit=100',
+      ],
+      loadingLabel: 'Loading older messages…',
+    },
+    scrollTop: 120,
+    messages: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message.',
+    ],
+    olderButton: null,
+  })
+})
+
+it('prunes to the latest 200 messages at the bottom and can load the discarded range again', async () => {
+  const assistantMessage = (index: number): ChatItem => ({
+    type: 'assistant',
+    text: `Message ${String(index)}.`,
+  })
+  const decision = (seq: number): Extract<ChatItem, { type: 'decision' }> => ({
+    type: 'decision',
+    seq,
+    title: `Decision ${String(seq)}`,
+    why: 'Keep the behavior predictable.',
+    considered: ['Use the existing flow'],
+    easyToChange: 'Change one setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  })
+  const firstPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 200),
+  )
+  const secondPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 100),
+  )
+  const thirdPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index),
+  )
+  const allDecisions = [decision(1), decision(2), decision(3)]
+  const refreshedMessages = Array.from({ length: 301 }, (_, index) =>
+    assistantMessage(index),
+  )
+  refreshedMessages[150] = proposal
+  refreshedMessages[300] = question
+  refreshedMessages[250] = decision(2)
+  const refetchedOlderMessages = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 1),
+  )
+  const conversationMessageCount = () =>
+    container.querySelectorAll(
+      '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+    ).length
+  let refreshKey = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('before=200')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(secondPage, [], { start: 100, total: 300 }),
+        ),
+      )
+    }
+    if (url.includes('before=100')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse(thirdPage, [], { start: 0, total: 300 })),
+      )
+    }
+    if (url.includes('before=101')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(refetchedOlderMessages, [], {
+            start: 1,
+            total: 301,
+          }),
+        ),
+      )
+    }
+    if (url.includes('from=0')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(refreshedMessages, [], {
+            start: 0,
+            total: 301,
+            decisions: allDecisions,
+            hasUnansweredProposal: true,
+            activeQuestionIndex: 300,
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(
+      jsonResponse(messagesResponse(firstPage, [], { start: 200, total: 300 })),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  }
+  act(renderConversation)
+  await waitForState(() => conversationMessageCount() === 100)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 +
+        container.querySelectorAll(
+          '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+        ).length *
+          10,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(() => conversationMessageCount() === 200)
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(() => conversationMessageCount() === 300)
+  const retainedMessage = requireElement(
+    Array.from(container.querySelectorAll('.chat-assistant-message')).find(
+      (element) => element.textContent === 'Message 101.',
+    ) ?? null,
+  )
+  refreshKey += 1
+  act(renderConversation)
+  await waitForState(() => conversationMessageCount() === 200)
+  const retainedMessageReused =
+    retainedMessage === container.querySelector('.chat-assistant-message')
+  const prunedState = {
+    startOfMessages: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    endOfMessages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+    ).at(-1)?.textContent,
+    decisionPosition: container.querySelector(
+      '.decision-card--conversation .decision-card-position',
+    )?.textContent,
+    questionChoicesDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    statusPanelDecisions: container.querySelectorAll('.decision-card--panel')
+      .length,
+    composerPlaceholder: container
+      .querySelector<HTMLTextAreaElement>(
+        'form.conversation-composer:not(.chat-question-composer) textarea',
+      )
+      ?.getAttribute('placeholder'),
+  }
+  act(() => {
+    scroll.scrollTop = 0
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  await waitForState(() => conversationMessageCount() === 300)
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    loadedMessageCount: conversationMessageCount(),
+    prunedState,
+    reloadedFirstMessage: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    retainedMessageReused,
+    olderButton: container.querySelector('.conversation-load-older') !== null,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=200&limit=100',
+      '/api/sessions/sample-session/messages?before=100&limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=101&limit=100',
+    ],
+    loadedMessageCount: 300,
+    prunedState: {
+      startOfMessages: 'Message 101.',
+      endOfMessages: 'Message 299.',
+      decisionPosition: '2 of 3',
+      questionChoicesDisabled: [false, false],
+      statusPanelDecisions: 3,
+      composerPlaceholder: 'Choose an option above, or message the session',
+    },
+    reloadedFirstMessage: 'Message 1.',
+    retainedMessageReused: true,
+    olderButton: true,
+  })
+})
+
+it('re-enables older-page loading after a request fails so it can be retried', async () => {
+  const jsonResponse = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const visibleMessages = [
+    { type: 'assistant', text: 'First visible message.' },
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse({ error: 'Older messages unavailable' }, 503),
+    )
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  const olderButton = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-load-older'),
+  )
+  act(() => {
+    olderButton.click()
+  })
+  await waitForState(
+    () =>
+      container.querySelector('[role="alert"]')?.textContent ===
+      'Older messages unavailable',
+  )
+  const stateAfterFailure = {
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    error: container.querySelector('[role="alert"]')?.textContent,
+    buttonDisabled: olderButton.disabled,
+  }
+  act(() => {
+    olderButton.click()
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => url),
+    stateAfterFailure,
+    finalState: {
+      messages: Array.from(
+        container.querySelectorAll('.chat-assistant-message'),
+        (element) => element.textContent,
+      ),
+      error: container.querySelector('[role="alert"]')?.textContent ?? null,
+      olderButton: container.querySelector('.conversation-load-older'),
+    },
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=1&limit=100',
+      '/api/sessions/sample-session/messages?before=1&limit=100',
+    ],
+    stateAfterFailure: {
+      messages: ['First visible message.', 'Latest visible message.'],
+      error: 'Older messages unavailable',
+      buttonDisabled: false,
+    },
+    finalState: {
+      messages: [
+        'Older message.',
+        'First visible message.',
+        'Latest visible message.',
+      ],
+      error: null,
+      olderButton: null,
+    },
+  })
+})
+
+it('keeps an older page loaded when a conversation refresh overlaps its request', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const firstVisibleMessage: ChatItem = {
+    type: 'assistant',
+    text: 'First visible message.',
+  }
+  const visibleMessages = [
+    firstVisibleMessage,
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  let resolveOlderPage: ((response: Response) => void) | undefined
+  let resolveRefresh: ((response: Response) => void) | undefined
+  const olderPage = new Promise<Response>((resolve) => {
+    resolveOlderPage = resolve
+  })
+  const refreshPage = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('before=')) return olderPage
+    if (url.includes('from=')) return refreshPage
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  act(() => {
+    renderConversation(1)
+  })
+  await waitForState(() =>
+    fetcher.mock.calls.some(([url]) => requestUrl(url).includes('from=')),
+  )
+  await act(async () => {
+    resolveOlderPage?.(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 3,
+  )
+  await act(async () => {
+    resolveRefresh?.(
+      jsonResponse(
+        messagesResponse(
+          [
+            firstVisibleMessage,
+            { type: 'assistant', text: 'Latest visible message updated.' },
+            { type: 'assistant', text: 'New message.' },
+          ],
+          [],
+          { start: 1, total: 4 },
+        ),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=1&limit=100',
+      '/api/sessions/sample-session/messages?from=1',
+      '/api/sessions/sample-session/actions',
+    ],
+    messages: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message updated.',
+      'New message.',
+    ],
+    olderButton: null,
+  })
+})
+
+it('uses full conversation metadata for questions, proposals, and decisions', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision = (
+    seq: number,
+    title: string,
+  ): Extract<ChatItem, { type: 'decision' }> => ({
+    type: 'decision',
+    seq,
+    title,
+    why: 'Keep behavior predictable.',
+    considered: ['Use the simpler path'],
+    easyToChange: 'Change one setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  })
+  const firstQuestion: ChatItem = {
+    ...question,
+    question: 'The active question from the loaded page?',
+  }
+  const laterQuestion: ChatItem = {
+    ...question,
+    question: 'A later, already answered question?',
+    answer: 'Retry once',
+  }
+  const visibleDecision = decision(2, 'Visible decision')
+  const fullDecisions = [
+    decision(1, 'Earlier decision'),
+    visibleDecision,
+    decision(3, 'Later decision'),
+  ]
+  const page = messagesResponse(
+    [firstQuestion, visibleDecision, laterQuestion],
+    [],
+    {
+      start: 10,
+      total: 20,
+      decisions: fullDecisions,
+      hasUnansweredProposal: true,
+      activeQuestionIndex: 10,
+    },
+  )
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(page))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await waitForState(
+    () =>
+      container.querySelectorAll('.chat-question-choices button').length === 4,
+  )
+
+  const snapshot = () => ({
+    request: fetcher.mock.calls.map(([url]) => url),
+    questionChoicesDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    conversationDecisionPosition: container.querySelector(
+      '.decision-card--conversation .decision-card-position',
+    )?.textContent,
+    statusPanelDecisionCount: container.querySelectorAll(
+      '.decision-card--panel',
+    ).length,
+    composerPlaceholder: container
+      .querySelector<HTMLTextAreaElement>(
+        'form.conversation-composer:not(.chat-question-composer) textarea',
+      )
+      ?.getAttribute('placeholder'),
+  })
+  expect(snapshot()).toEqual({
+    request: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+    ],
+    questionChoicesDisabled: [false, false, true, true],
+    conversationDecisionPosition: '2 of 3',
+    statusPanelDecisionCount: 3,
+    composerPlaceholder: 'Choose an option above, or message the session',
+  })
+})
+
+it('skips committing an unchanged memoized conversation row', () => {
+  const message: ChatItem = {
+    type: 'assistant',
+    text: 'The conversation is unchanged.',
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    activeQuestion: false,
+    index: 0,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'Claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+
+  expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps message rows memoized when linked session details stay unchanged', () => {
+  const message: ChatItem = {
+    type: 'assistant',
+    text: 'The conversation is unchanged.',
+  }
+  const messages = [message]
+  const initialSession = {
+    ...session,
+    elapsedSeconds: 1,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 1,
+      isClosed: false,
+    },
+  }
+  const refreshedSession = {
+    ...initialSession,
+    elapsedSeconds: 2,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 2,
+      isClosed: true,
+    },
+  }
+  const initialSessions = [initialSession]
+  const refreshedSessions = [refreshedSession]
+  const onAction = () => Promise.resolve(true)
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={initialSession}
+        sessions={initialSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={refreshedSession}
+        sessions={refreshedSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+
+  expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps an unsent proposal comment when its position changes after refresh', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const queuedMessage: ChatItem = {
+    type: 'queued_user',
+    content: [{ type: 'text', text: 'A fictional queued request.' }],
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([proposal])))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([queuedMessage, proposal])),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(comment, 'Keep this draft')
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    sameCommentNode:
+      comment === container.querySelector('.chat-proposal-comment'),
+    commentValue: container.querySelector<HTMLTextAreaElement>(
+      '.chat-proposal-comment',
+    )?.value,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameCommentNode: true,
+    commentValue: 'Keep this draft',
     requestCount: 4,
   })
 })

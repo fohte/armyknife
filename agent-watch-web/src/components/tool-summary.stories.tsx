@@ -5,12 +5,20 @@ import { ToolSummary } from '#components/tool-summary'
 const meta = {
   component: ToolSummary,
   args: {
-    summary: '4 actions · 2 files edited',
+    summary: 'Edit sample.rs  Read ×1  exec ×1  Agent ×1',
     operations: [
-      { tool: 'Read', target: 'src/sample.rs' },
-      { tool: 'exec', target: "printf '%s\\n' 'hello' | grep hello" },
-      { tool: 'Agent', target: 'Explore · Find fixture loaders' },
-      { tool: 'Edit', target: 'src/sample.rs' },
+      { tool: 'Read', target: 'src/sample.rs', failed: false },
+      {
+        tool: 'exec',
+        target: "printf '%s\\n' 'hello' | grep hello",
+        failed: false,
+      },
+      {
+        tool: 'Agent',
+        target: 'Explore · Find fixture loaders',
+        failed: false,
+      },
+      { tool: 'Edit', target: 'src/sample.rs', failed: false },
     ],
     open: false,
   },
@@ -29,13 +37,13 @@ export const ExpandedSummaryShowsToolTargets: Story = {
 }
 
 export const FailedSummaryHighlightsFailures: Story = {
-  name: 'the failed count is highlighted in red',
+  name: 'the failed operation is highlighted in red',
   args: {
-    summary: '3 actions · 2 failed',
+    summary: '3 actions · 1 failed',
     operations: [
-      { tool: 'Read', target: 'src/sample.rs' },
-      { tool: 'Edit', target: 'src/sample.rs' },
-      { tool: 'exec', target: 'cargo test' },
+      { tool: 'Read', target: 'src/sample.rs', failed: false },
+      { tool: 'Edit', target: 'src/sample.rs', failed: false },
+      { tool: 'exec', target: 'fictional failure command', failed: true },
     ],
   },
 }
@@ -45,8 +53,8 @@ export const ExpandedOperationsOmitEmptyTargets: Story = {
   args: {
     summary: '2 actions',
     operations: [
-      { tool: 'Read', target: null },
-      { tool: 'Edit', target: '' },
+      { tool: 'Read', target: null, failed: false },
+      { tool: 'Edit', target: '', failed: false },
     ],
     open: true,
   },

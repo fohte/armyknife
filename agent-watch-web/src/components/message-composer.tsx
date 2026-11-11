@@ -98,7 +98,7 @@ export function MessageComposer({
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
         disabled={disabled}
-        rows={2}
+        rows={isMobile ? 1 : 2}
       />
       {attachments.length > 0 ? (
         <ul className="composer-attachments" aria-label="Attachments">
@@ -131,8 +131,8 @@ export function MessageComposer({
             {isSending
               ? 'Sending…'
               : canInterrupt
-                ? '↵ Send · ⇧↵ New line · Esc Interrupt'
-                : '↵ Send · ⇧↵ New line'}
+                ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
+                : '↵ Send · ⇧↵ / ⌥↵ New line'}
           </span>
         ) : null}
         {isMobile && canInterrupt ? (

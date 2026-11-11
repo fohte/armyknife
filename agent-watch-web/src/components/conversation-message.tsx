@@ -17,22 +17,24 @@ import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
   SessionLinkTarget,
 } from '#types'
 
-type RenderConversationMessageOptions = {
+export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
-  activeQuestionIndex: number
+  activeQuestion: boolean
   index: number
   isMobile: boolean
-  selectedDecisionSeq: number | null
+  selected: boolean
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
   pendingAction: PendingPermissionAction
+  openInTerminalStatus: OpenInTerminalStatus
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -40,27 +42,28 @@ type RenderConversationMessageOptions = {
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
-  session: Session
+  sessionEngine: Session['engine']
   sessions: readonly SessionLinkTarget[]
 }
 
 export function renderConversationMessage({
   actions,
   actionsReady,
-  activeQuestionIndex,
+  activeQuestion,
   index,
   isMobile,
-  selectedDecisionSeq,
+  selected,
   decisionPosition,
   onSelectDecision,
   message,
   pendingAction,
+  openInTerminalStatus,
   onAction,
   onOpenInTerminal,
   onSelectSession,
-  session,
+  sessionEngine,
   sessions,
-}: RenderConversationMessageOptions): ReactNode {
+}: ConversationMessageRowProps): ReactNode {
   if (
     message.type === 'user' ||
     message.type === 'queued_user' ||
@@ -140,26 +143,37 @@ export function renderConversationMessage({
   }
   if (message.type === 'question') {
     const canAnswer =
-      index === activeQuestionIndex &&
+      activeQuestion &&
       message.answer === null &&
       actionsReady &&
       actions?.answerQuestion === true
     return (
       <QuestionCard
         key={`question-${String(index)}`}
+        {...(message.header === undefined ? {} : { header: message.header })}
         question={message.question}
         choices={message.choices}
+        multiSelect={message.multi_select === true}
         answer={message.answer}
         canAnswer={canAnswer}
         isMobile={isMobile}
         showTerminalFallback={
-          session.engine === 'Codex' &&
+          sessionEngine === 'Codex' &&
           actions !== null &&
           !actions.answerQuestion
         }
         canOpenInTerminal={actions?.openInTerminal === true}
-        onAnswer={(choice) => {
-          void onAction('answer', { choice })
+        openInTerminalStatus={openInTerminalStatus}
+        onAnswer={(choice) => onAction('answer', { choice })}
+        onSkip={() => onAction('answer', { skip: true })}
+        onFreeformAnswer={(answer) => {
+          const questionContext =
+            message.header !== undefined && message.header.length > 0
+              ? `${message.header}: ${message.question}`
+              : message.question
+          return onAction('messages', {
+            content: `My answer to "${questionContext}" is:\n${answer}`,
+          })
         }}
         onOpenInTerminal={onOpenInTerminal}
       />
@@ -171,7 +185,7 @@ export function renderConversationMessage({
         key={`decision-${String(message.seq)}-${String(index)}`}
         decision={message}
         variant="conversation"
-        selected={message.seq === selectedDecisionSeq}
+        selected={selected}
         {...(decisionPosition === undefined
           ? {}
           : { position: decisionPosition })}
@@ -212,7 +226,8 @@ export function renderConversationMessage({
       actions={actions}
       actionsReady={actionsReady}
       pendingAction={pendingAction}
-      isCodex={session.engine === 'Codex'}
+      openInTerminalStatus={openInTerminalStatus}
+      isCodex={sessionEngine === 'Codex'}
       onAction={(action, permissionIdentity) => {
         void onAction(action, undefined, permissionIdentity)
       }}

@@ -1,0 +1,16 @@
+.conversation-copy-session-id:not([data-compact='true']) {
+  display: inline-flex;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.conversation-copy-session-id:not([data-compact='true']) svg {
+  width: 13px;
+  height: 13px;
+}

@@ -26,6 +26,8 @@ const inboxProps = {
   selectedId: session.id,
   loaded: true,
   error: null,
+  connectionError: null,
+  lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
   showAllInProgress: false,
   onShowMore: () => undefined,
   onSelect: () => undefined,
@@ -39,6 +41,7 @@ const inboxProps = {
   onToggleInProgress: () => undefined,
   doneExpanded: false,
   onToggleDone: () => undefined,
+  onArchiveDone: () => undefined,
 }
 
 const meta = {
@@ -51,6 +54,7 @@ const meta = {
     showMobileConversation: false,
     onBack: () => undefined,
     onLater: () => undefined,
+    onArchiveSession: () => undefined,
     onSelectSession: () => undefined,
   },
   decorators: [
@@ -79,6 +83,11 @@ const meta = {
               },
             ],
             backgroundTasks: [],
+            start: 0,
+            total: 1,
+            decisions: [],
+            hasUnansweredProposal: false,
+            activeQuestionIndex: null,
           }),
         ),
         http.get('/api/sessions/:sessionId/actions', () =>
@@ -117,6 +126,13 @@ export const NarrowDesktopOverlaysTheStatusPanel: Story = {
       </div>
     ),
   ],
+}
+
+export const DoneSessionCanBeArchived: Story = {
+  name: 'A Done session exposes Archive in its conversation header',
+  args: {
+    selectedSession: { ...session, category: 'done', kind: null },
+  },
 }
 
 export const IPhoneShowsTheInboxBeforeSelection: Story = {

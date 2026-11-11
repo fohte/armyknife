@@ -27,7 +27,6 @@ use tokio::net::TcpListener;
 use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::store::WatchWebQueuedPrompt;
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -115,8 +114,15 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         &assets::DIST,
         store::load_session,
         store::watch_web_user_marker,
-        |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
-        store::delete_watch_web_queued_prompts,
+        messages::RouteLoaders::new(
+            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
+            |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
+            |session_id| {
+                store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
+            },
+            store::delete_watch_web_queued_prompts,
+            store::agent_proposals,
+        ),
         restart_signal,
     )
 }
@@ -151,8 +157,13 @@ fn app_with_assets_and_loader_and_restart_signal(
         dist,
         load_session,
         load_user_marker,
-        |_| Ok(Vec::new()),
-        |_, _| Ok(()),
+        messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(Vec::new()),
+        ),
         restart_signal,
     )
 }
@@ -161,11 +172,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     dist: &'static Dir<'static>,
     load_session: impl Fn(&str) -> anyhow::Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> anyhow::Result<Option<String>> + Send + Sync + 'static,
-    load_queued_prompts: impl Fn(&str) -> anyhow::Result<Vec<WatchWebQueuedPrompt>>
-    + Send
-    + Sync
-    + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> anyhow::Result<()> + Send + Sync + 'static,
+    loaders: messages::RouteLoaders,
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
@@ -174,11 +181,10 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(messages::routes_with_queued_prompts(
+        .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,
             load_user_marker,
-            load_queued_prompts,
-            delete_queued_prompts,
+            loaders,
         ))
         .merge(image_attachments::routes())
         .fallback(api_not_found);
@@ -326,7 +332,7 @@ mod tests {
         "/api/sessions/fixture-session/messages",
         StatusCode::OK,
         Some("application/json"),
-        r#"{"messages":[],"backgroundTasks":[]}"#
+        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
     )]
     #[case::unknown_session(
         "/api/sessions/unregistered-session/messages",
@@ -380,13 +386,20 @@ mod tests {
                     .header(HOST, "localhost")
                     .header(ORIGIN, "http://localhost")
                     .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from("{}"))
+                    .body(Body::from(r#"{"skip":"invalid"}"#))
                     .unwrap(),
             )
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Some("text/plain; charset=utf-8".to_owned()),
+                "Failed to deserialize the JSON body into the target type: skip: invalid type: string \"invalid\", expected a boolean at line 1 column 17".to_owned(),
+            )
+        );
     }
     fn request(method: &str, uri: &str, host: &str, origin: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()

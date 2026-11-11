@@ -96,7 +96,11 @@ pub(super) async fn send_message(
     Ok(Json(Success::new()))
 }
 
-fn watch_web_message_content(session: &Session, marker: Option<&str>, content: &str) -> String {
+pub(super) fn watch_web_message_content(
+    session: &Session,
+    marker: Option<&str>,
+    content: &str,
+) -> String {
     match (session.engine, marker) {
         (Engine::Claude, Some(marker)) => {
             super::super::super::watch_web_user_marker::prefix_message(marker, content)

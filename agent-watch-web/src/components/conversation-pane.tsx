@@ -1,259 +1,43 @@
-import { err, ok, Result, ResultAsync } from 'neverthrow'
+import { err, ok } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import {
+  reuseEqualValue,
+  shareUnchangedMessages,
+} from '#components/conversation-message-sharing'
+import {
+  isConversationResponse,
+  isSessionActions,
+} from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import { CritPane } from '#components/crit-pane'
-import type { Decision } from '#components/decision-card'
-import { DecisionsPanel } from '#components/decisions-panel'
+import { requestAction, requestJson } from '#components/conversation-requests'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
-import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
-  BackgroundTask,
-  ChatItem,
   ConversationResponse,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
 } from '#types'
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
+const EMPTY_SESSIONS: readonly Session[] = []
+const EMPTY_CONVERSATION: ConversationResponse = {
+  messages: [],
+  backgroundTasks: [],
+  start: 0,
+  total: 0,
+  decisions: [],
+  hasUnansweredProposal: false,
+  activeQuestionIndex: null,
 }
-
-function isUserContentPart(value: unknown): boolean {
-  if (!isRecord(value) || typeof value['type'] !== 'string') return false
-  if (value['type'] === 'text') return typeof value['text'] === 'string'
-  if (value['type'] === 'file') return typeof value['name'] === 'string'
-  if (value['type'] !== 'image') return false
-  return (
-    typeof value['source'] === 'string' &&
-    (value['source'].startsWith('/api/images/') ||
-      /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(
-        value['source'],
-      )) &&
-    typeof value['available'] === 'boolean'
-  )
-}
-
-function isProposalOption(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value['label'] === 'string' &&
-    (value['description'] === null ||
-      typeof value['description'] === 'string') &&
-    Array.isArray(value['pros']) &&
-    value['pros'].every((pro) => typeof pro === 'string') &&
-    Array.isArray(value['cons']) &&
-    value['cons'].every((con) => typeof con === 'string') &&
-    typeof value['recommended'] === 'boolean'
-  )
-}
-
-function isProposalAnswer(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value['choice'] === null ||
-      (typeof value['choice'] === 'number' &&
-        Number.isInteger(value['choice']) &&
-        value['choice'] >= 0)) &&
-    (value['comment'] === null || typeof value['comment'] === 'string')
-  )
-}
-
-function isChatItem(value: unknown): value is ChatItem {
-  if (!isRecord(value) || typeof value['type'] !== 'string') return false
-  switch (value['type']) {
-    case 'user':
-    case 'assistant':
-      return typeof value['text'] === 'string'
-    case 'queued_user':
-    case 'user_with_content':
-      return (
-        Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart) &&
-        (value['from'] === undefined || typeof value['from'] === 'string')
-      )
-    case 'peer':
-      return (
-        (value['direction'] === 'from' || value['direction'] === 'to') &&
-        typeof value['session_id'] === 'string' &&
-        (value['session_title'] === undefined ||
-          typeof value['session_title'] === 'string') &&
-        Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart)
-      )
-    case 'subagent_report':
-      return (
-        typeof value['agent_id'] === 'string' &&
-        typeof value['agent_name'] === 'string' &&
-        (value['description'] === undefined ||
-          typeof value['description'] === 'string') &&
-        typeof value['text'] === 'string'
-      )
-    case 'event':
-      return (
-        (value['kind'] === 'armyknife' ||
-          value['kind'] === 'system' ||
-          value['kind'] === 'hook') &&
-        typeof value['text'] === 'string' &&
-        typeof value['failed'] === 'boolean'
-      )
-    case 'tool_summary':
-      return (
-        typeof value['summary'] === 'string' &&
-        (value['operations'] === undefined ||
-          (Array.isArray(value['operations']) &&
-            value['operations'].every(
-              (operation) =>
-                isRecord(operation) &&
-                typeof operation['tool'] === 'string' &&
-                (operation['target'] === undefined ||
-                  typeof operation['target'] === 'string'),
-            )))
-      )
-    case 'tool_in_progress':
-      return (
-        typeof value['tool'] === 'string' &&
-        (value['target'] === undefined || typeof value['target'] === 'string')
-      )
-    case 'question':
-      return (
-        typeof value['question'] === 'string' &&
-        Array.isArray(value['choices']) &&
-        value['choices'].every((choice) => typeof choice === 'string') &&
-        (value['answer'] === null || typeof value['answer'] === 'string')
-      )
-    case 'proposal':
-      return (
-        typeof value['seq'] === 'number' &&
-        Number.isInteger(value['seq']) &&
-        value['seq'] > 0 &&
-        typeof value['title'] === 'string' &&
-        (value['summary'] === null || typeof value['summary'] === 'string') &&
-        Array.isArray(value['options']) &&
-        value['options'].every(isProposalOption) &&
-        (value['answer'] === null || isProposalAnswer(value['answer'])) &&
-        typeof value['resolved'] === 'boolean'
-      )
-    case 'permission':
-      return (
-        typeof value['tool'] === 'string' &&
-        typeof value['description'] === 'string'
-      )
-    case 'decision':
-      return (
-        typeof value['seq'] === 'number' &&
-        typeof value['title'] === 'string' &&
-        typeof value['why'] === 'string' &&
-        Array.isArray(value['considered']) &&
-        value['considered'].every((item) => typeof item === 'string') &&
-        typeof value['easyToChange'] === 'string' &&
-        (value['review'] === null ||
-          value['review'] === 'ok' ||
-          value['review'] === 'change') &&
-        typeof value['createdAt'] === 'string'
-      )
-    default:
-      return false
-  }
-}
-
-function isBackgroundTask(value: unknown): value is BackgroundTask {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['description'] === 'string' &&
-    typeof value['elapsedSeconds'] === 'number'
-  )
-}
-
-function isConversationResponse(value: unknown): value is ConversationResponse {
-  return (
-    isRecord(value) &&
-    Array.isArray(value['messages']) &&
-    value['messages'].every(isChatItem) &&
-    Array.isArray(value['backgroundTasks']) &&
-    value['backgroundTasks'].every(isBackgroundTask)
-  )
-}
-
-function isSessionActions(value: unknown): value is SessionActions {
-  return (
-    isRecord(value) &&
-    typeof value['message'] === 'boolean' &&
-    typeof value['answerQuestion'] === 'boolean' &&
-    typeof value['interrupt'] === 'boolean' &&
-    typeof value['openInTerminal'] === 'boolean' &&
-    (value['permission'] === undefined ||
-      (isRecord(value['permission']) &&
-        typeof value['permission']['approve'] === 'boolean' &&
-        typeof value['permission']['reject'] === 'boolean'))
-  )
-}
-
-function toError(error: unknown) {
-  return error instanceof Error
-    ? error
-    : new Error('Request failed', { cause: error })
-}
-
-function errorFromResponse(response: Response) {
-  const fallback =
-    response.statusText || `Request failed (${String(response.status)})`
-  return ResultAsync.fromPromise(response.text(), toError).map((body) => {
-    const parsed =
-      body === ''
-        ? null
-        : Result.fromThrowable(() => JSON.parse(body) as unknown, toError)()
-    const message =
-      parsed !== null &&
-      parsed.isOk() &&
-      isRecord(parsed.value) &&
-      typeof parsed.value['error'] === 'string'
-        ? parsed.value['error']
-        : fallback
-    return new Error(message)
-  })
-}
-
-function requestJson<T>(url: string, validate: (value: unknown) => value is T) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      validate(body)
-        ? ok(body)
-        : err(new Error('The server returned an invalid response')),
-    )
-  })
-}
-
-function requestAction(
-  sessionId: string,
-  path: string,
-  payload?: Record<string, unknown>,
-) {
-  return ResultAsync.fromPromise(
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
-      method: 'POST',
-      ...(payload === undefined
-        ? {}
-        : {
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          }),
-    }),
-    toError,
-  ).andThen((response) => {
-    if (response.ok) return ok(undefined)
-    return errorFromResponse(response).andThen((error) => err(error))
-  })
-}
+const INITIAL_MESSAGE_LIMIT = 100
+const MAX_LOADED_MESSAGES = 300
+const RETAINED_MESSAGE_COUNT = 200
 
 type ConversationPaneProps = {
   session: Session
@@ -264,30 +48,34 @@ type ConversationPaneProps = {
   statusPanelOpen?: boolean
   onToggleStatusPanel?: () => void
   onCloseStatusPanel?: () => void
-  runningCount?: number
   onBack?: () => void
   onLater?: () => void
+  onArchive?: () => void
+  isToday?: boolean
+  onToggleToday?: (isToday: boolean) => void
 }
 
 export function ConversationPane({
   session,
-  sessions = [],
+  sessions = EMPTY_SESSIONS,
   refreshKey,
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
   onToggleStatusPanel = () => undefined,
   onCloseStatusPanel = () => undefined,
-  runningCount = 0,
   onBack = () => undefined,
   onLater = () => undefined,
+  onArchive,
+  isToday = false,
+  onToggleToday = () => undefined,
 }: ConversationPaneProps) {
-  const [messages, setMessages] = useState<ChatItem[]>([])
-  const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
-  const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
-    null,
-  )
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
+  const [conversation, setConversation] =
+    useState<ConversationResponse>(EMPTY_CONVERSATION)
+  const conversationRef = useRef(conversation)
+  const conversationSessionId = useRef<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
@@ -295,14 +83,46 @@ export function ConversationPane({
   const [error, setError] = useState<string | null>(null)
   const [pendingPermissionAction, setPendingPermissionAction] =
     useState<PendingPermissionAction>(null)
+  const [openInTerminalStatus, setOpenInTerminalStatus] =
+    useState<OpenInTerminalStatus>(null)
+  const currentSessionId = useRef(session.id)
+  currentSessionId.current = session.id
+  const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const olderRequestGeneration = useRef(0)
+  const updateConversation = useCallback((next: ConversationResponse) => {
+    conversationRef.current = next
+    setConversation(next)
+  }, [])
+  const pruneOldMessages = useCallback(() => {
+    const current = conversationRef.current
+    if (current.messages.length <= MAX_LOADED_MESSAGES) return
+    const dropCount = current.messages.length - RETAINED_MESSAGE_COUNT
+    updateConversation({
+      ...current,
+      start: current.start + dropCount,
+      messages: current.messages.slice(dropCount),
+    })
+  }, [updateConversation])
+  const clearOpenInTerminalTimer = useCallback(() => {
+    if (openInTerminalTimer.current !== null) {
+      window.clearTimeout(openInTerminalTimer.current)
+      openInTerminalTimer.current = null
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
+    const loadedConversation =
+      conversationSessionId.current === session.id
+        ? conversationRef.current
+        : null
     const messagesRequest = requestJson(
-      `${sessionPath}/messages`,
+      loadedConversation === null
+        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}`,
       isConversationResponse,
     ).match(
       (value) => ok(value),
@@ -318,17 +138,50 @@ export function ConversationPane({
     void Promise.all([messagesRequest, actionsRequest]).then(
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
+        let refreshedConversation: ConversationResponse | null = null
         if (messagesResult.isOk()) {
-          setMessages(messagesResult.value.messages)
-          setBackgroundTasks(messagesResult.value.backgroundTasks)
+          const alreadyLoaded = conversationSessionId.current === session.id
+          const previous = alreadyLoaded
+            ? conversationRef.current
+            : EMPTY_CONVERSATION
+          const preserveLoadedPrefix =
+            alreadyLoaded && previous.start < messagesResult.value.start
+          const start = preserveLoadedPrefix
+            ? previous.start
+            : messagesResult.value.start
+          const messages = preserveLoadedPrefix
+            ? [
+                ...previous.messages.slice(
+                  0,
+                  messagesResult.value.start - previous.start,
+                ),
+                ...messagesResult.value.messages,
+              ]
+            : messagesResult.value.messages
+          refreshedConversation = {
+            ...messagesResult.value,
+            start,
+            messages: shareUnchangedMessages(
+              previous.messages,
+              messages,
+              previous.start,
+              start,
+            ),
+          }
+          updateConversation(refreshedConversation)
+          conversationSessionId.current = session.id
           setMessagesLoadedAt(Date.now())
         }
-        if (actionsResult.isOk()) setActions(actionsResult.value)
+        if (actionsResult.isOk()) {
+          setActions((previous) =>
+            reuseEqualValue(previous, actionsResult.value),
+          )
+        }
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =
-            messagesResult.isOk() &&
-            !messagesResult.value.messages.some(
+            refreshedConversation !== null &&
+            !refreshedConversation.messages.some(
               (message) =>
                 message.type === 'permission' &&
                 message.tool === pending.tool &&
@@ -353,7 +206,7 @@ export function ConversationPane({
         setLoading(false)
       },
     )
-  }, [session.id])
+  }, [session.id, updateConversation])
 
   useEffect(() => {
     refresh()
@@ -364,165 +217,217 @@ export function ConversationPane({
 
   useEffect(() => {
     setPendingPermissionAction(null)
-  }, [session.id])
-
-  const onAction = (
-    action: string,
-    payload?: Record<string, unknown>,
-    permissionIdentity?: PermissionRequestIdentity,
-  ) => {
-    const permissionAction =
-      action === 'permission/approve'
-        ? 'approve'
-        : action === 'permission/reject'
-          ? 'reject'
-          : null
-    if (permissionAction !== null && permissionIdentity !== undefined) {
-      setPendingPermissionAction({
-        action: permissionAction,
-        status: 'sending',
-        ...permissionIdentity,
-      })
+    setOpenInTerminalStatus(null)
+    if (conversationSessionId.current !== session.id) {
+      updateConversation(EMPTY_CONVERSATION)
+      setMessagesLoadedAt(null)
+      setLoadingOlder(false)
+      loadingOlderRef.current = false
     }
-    return requestAction(session.id, action, payload).match(
-      () => {
-        if (permissionAction !== null && permissionIdentity !== undefined) {
-          setPendingPermissionAction({
-            action: permissionAction,
-            status: 'sent',
-            ...permissionIdentity,
-          })
-        }
+    clearOpenInTerminalTimer()
+    return () => {
+      olderRequestGeneration.current += 1
+      clearOpenInTerminalTimer()
+    }
+  }, [clearOpenInTerminalTimer, session.id, updateConversation])
+
+  const loadOlder = useCallback(() => {
+    const current = conversationRef.current
+    if (
+      conversationSessionId.current !== session.id ||
+      current.start <= 0 ||
+      loadingOlderRef.current
+    ) {
+      return
+    }
+    loadingOlderRef.current = true
+    const generation = olderRequestGeneration.current + 1
+    olderRequestGeneration.current = generation
+    setLoadingOlder(true)
+    void requestJson(
+      `/api/sessions/${encodeURIComponent(session.id)}/messages?before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`,
+      isConversationResponse,
+    ).match(
+      (response) => {
+        if (olderRequestGeneration.current !== generation) return
+        if (conversationSessionId.current !== session.id) return
+        const latest = conversationRef.current
+        const messages = [...response.messages, ...latest.messages]
+        updateConversation({
+          ...response,
+          messages: shareUnchangedMessages(
+            latest.messages,
+            messages,
+            latest.start,
+            response.start,
+          ),
+        })
+        setMessagesLoadedAt(Date.now())
         setError(null)
-        refresh()
-        return true
+        loadingOlderRef.current = false
+        setLoadingOlder(false)
       },
       (requestError) => {
-        if (permissionAction !== null && permissionIdentity !== undefined) {
-          setPendingPermissionAction(null)
-        }
+        if (olderRequestGeneration.current !== generation) return
         setError(requestError.message)
-        return false
+        loadingOlderRef.current = false
+        setLoadingOlder(false)
       },
     )
-  }
+  }, [loadingOlder, session.id, updateConversation])
 
+  const onOpenInTerminal = useCallback(() => {
+    const requestedSessionId = session.id
+    clearOpenInTerminalTimer()
+    setOpenInTerminalStatus({ state: 'sending' })
+    void requestAction(requestedSessionId, 'focus').match(
+      () => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({ state: 'success' })
+        openInTerminalTimer.current = window.setTimeout(() => {
+          if (currentSessionId.current === requestedSessionId) {
+            setOpenInTerminalStatus(null)
+          }
+          openInTerminalTimer.current = null
+        }, 3_000)
+      },
+      (requestError) => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({
+          state: 'error',
+          message: requestError.message,
+        })
+      },
+    )
+  }, [clearOpenInTerminalTimer, session.id])
+
+  const onAction = useCallback(
+    (
+      action: string,
+      payload?: Record<string, unknown>,
+      permissionIdentity?: PermissionRequestIdentity,
+    ) => {
+      const permissionAction =
+        action === 'permission/approve'
+          ? 'approve'
+          : action === 'permission/reject'
+            ? 'reject'
+            : null
+      if (permissionAction !== null && permissionIdentity !== undefined) {
+        setPendingPermissionAction({
+          action: permissionAction,
+          status: 'sending',
+          ...permissionIdentity,
+        })
+      }
+      return requestAction(session.id, action, payload).match(
+        () => {
+          if (permissionAction !== null && permissionIdentity !== undefined) {
+            setPendingPermissionAction({
+              action: permissionAction,
+              status: 'sent',
+              ...permissionIdentity,
+            })
+          }
+          setError(null)
+          refresh()
+          return true
+        },
+        (requestError) => {
+          if (permissionAction !== null && permissionIdentity !== undefined) {
+            setPendingPermissionAction(null)
+          }
+          setError(requestError.message)
+          return false
+        },
+      )
+    },
+    [refresh, session.id],
+  )
+
+  const { messages, backgroundTasks } = conversation
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
       ? 0
       : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
-  const decisions = messages.filter(
-    (message): message is Decision => message.type === 'decision',
-  )
-  const decisionCount = session.decisionCount ?? decisions.length
-  const selectedDecision =
-    decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
-    decisions.find((decision) => decision.review === null) ??
-    decisions[0]
-  const critUrl =
-    session.kind === 'Review' &&
-    session.category === 'needs_action' &&
-    session.critUrl != null &&
-    session.critUrl !== ''
-      ? session.critUrl
-      : null
-  const panelTabs: readonly SessionStatusPanelTab[] = [
-    ...(decisionCount > 0
-      ? [
-          {
-            id: 'decisions',
-            label: '◇ Decisions',
-            count: decisionCount,
-            content: (
-              <DecisionsPanel
-                decisions={decisions}
-                session={session}
-                selectedSeq={selectedDecision?.seq ?? null}
-                onSelect={setSelectedDecisionSeq}
-                onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
-                onChange={(seq, comment) =>
-                  onAction(`decisions/${String(seq)}/change`, { comment })
-                }
-              />
-            ),
-          },
-        ]
-      : []),
-    ...(critUrl === null
-      ? []
-      : [
-          {
-            id: 'crit',
-            label: 'crit',
-            count: 1,
-            content: <CritPane url={critUrl} onClose={onCloseStatusPanel} />,
-          },
-        ]),
-  ]
-  const defaultPanelTabId =
-    panelTabs.find((tab) => tab.id === 'crit')?.id ?? panelTabs[0]?.id ?? null
-  const effectivePanelTabId = panelTabs.some(
-    (tab) => tab.id === activePanelTabId,
-  )
-    ? activePanelTabId
-    : defaultPanelTabId
-  const decisionsPanelOpen =
-    statusPanelOpen && effectivePanelTabId === 'decisions'
-  const toggleDecisionsPanel = () => {
-    if (decisionsPanelOpen) {
-      onToggleStatusPanel()
-      return
-    }
-    setActivePanelTabId('decisions')
-    if (!statusPanelOpen) onToggleStatusPanel()
-  }
+  const displayBackgroundTasks = backgroundTasks.map((task) => ({
+    ...task,
+    elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
+  }))
+  const {
+    activeTabId,
+    decisionsPanelOpen,
+    onSelectDecision,
+    onTabChange,
+    onToggleDecisionsPanel,
+    selectedDecisionSeq,
+    tabs: panelTabs,
+  } = useConversationStatusPanel({
+    session,
+    messages,
+    allDecisions: conversation.decisions,
+    backgroundTasks: displayBackgroundTasks,
+    statusPanelOpen,
+    onAction,
+    onCloseStatusPanel,
+    onToggleStatusPanel,
+  })
 
   const conversationView = (
     <ConversationPaneView
       session={session}
       sessions={sessions}
       messages={messages}
-      backgroundTasks={backgroundTasks.map((task) => ({
-        ...task,
-        elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
-      }))}
+      start={conversation.start}
+      decisions={conversation.decisions}
+      hasUnansweredProposal={conversation.hasUnansweredProposal}
+      activeQuestionIndex={conversation.activeQuestionIndex}
+      loadingOlder={loadingOlder}
+      onLoadOlder={loadOlder}
+      onPruneOldMessages={pruneOldMessages}
+      backgroundTasks={displayBackgroundTasks}
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}
+      openInTerminalStatus={openInTerminalStatus}
       loading={loading}
       error={error}
       onClearError={() => {
         setError(null)
       }}
       onAction={onAction}
+      onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       decisionsPanelOpen={decisionsPanelOpen}
-      selectedDecisionSeq={selectedDecision?.seq ?? null}
+      selectedDecisionSeq={selectedDecisionSeq}
       onToggleStatusPanel={onToggleStatusPanel}
-      onToggleDecisionsPanel={toggleDecisionsPanel}
-      onSelectDecision={setSelectedDecisionSeq}
-      runningCount={runningCount}
+      onToggleDecisionsPanel={onToggleDecisionsPanel}
+      onSelectDecision={onSelectDecision}
       onBack={onBack}
       onLater={onLater}
+      {...(onArchive === undefined ? {} : { onArchive })}
+      isToday={isToday}
+      onToggleToday={onToggleToday}
     />
   )
 
   if (isMobile) return conversationView
-  if (!statusPanelOpen) return conversationView
 
   return (
     <div className="conversation-status-panel-container">
       <ResizableColumns
         first={conversationView}
         second={
-          <SessionStatusPanel
-            tabs={panelTabs}
-            activeTabId={effectivePanelTabId}
-            onTabChange={setActivePanelTabId}
-            onClose={onCloseStatusPanel}
-          />
+          statusPanelOpen ? (
+            <SessionStatusPanel
+              tabs={panelTabs}
+              activeTabId={activeTabId}
+              onTabChange={onTabChange}
+              onClose={onCloseStatusPanel}
+            />
+          ) : null
         }
         overlaySecondPane
         storageKey="agent-watch:conversation-width"

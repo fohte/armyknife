@@ -1122,21 +1122,26 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `GET /api/sessions/{id}/actions`
+- `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
-- `POST /api/sessions/{id}/answer` with `{"choice":1}`
+- `POST /api/sessions/{id}/answer` with `{"choice":1}` or `{"skip":true}`
+- `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve`
 - `POST /api/sessions/{id}/permission/reject`
 - `POST /api/sessions/{id}/interrupt`
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`
+- `POST /api/sessions/{id}/primary-task` with `{"taskId":"..."}` to choose the primary linked tq task
 - `POST /api/sessions/{id}/archive`
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
+- `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
+- `POST /api/sessions/{id}/decisions/{seq}/change` with `{"comment":"Revise the fixture choice."}` to request a change
 
 Messages may include up to 16 file attachments with a combined size of 50 MiB. Each attachment has a sanitized file name, MIME type, byte size, and base64-encoded data. PNG, JPEG, GIF, and WebP attachments with matching file signatures keep their conversation previews; other files appear by name:
 
@@ -1172,6 +1177,15 @@ curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
   -d '{"choice":1}'
+```
+
+Skip a question by sending Escape:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"skip":true}'
 ```
 
 ```sh

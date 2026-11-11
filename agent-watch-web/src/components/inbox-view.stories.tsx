@@ -174,6 +174,8 @@ const sessions: Session[] = [
     ancestorSessionIds: [],
     parent: null,
     pullRequest: { number: 2049, state: 'Merged' },
+    decisionCount: 2,
+    unreviewedDecisionCount: 2,
   },
   ...Array.from({ length: 3 }, (_, index) =>
     sampleSession(
@@ -195,6 +197,8 @@ const meta = {
     selectedId: 'sample-question',
     loaded: true,
     error: null,
+    connectionError: null,
+    lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
     showAllInProgress: false,
     onShowMore: () => undefined,
     onSelect: () => undefined,
@@ -211,6 +215,7 @@ const meta = {
     onToggleInProgress: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
+    onArchiveDone: () => undefined,
     onSaveView: () => undefined,
     onSaveViewOpenChange: () => undefined,
     onSaveViewNameChange: () => undefined,
@@ -296,10 +301,36 @@ export const InboxFitsAnIPhone: Story = {
   name: 'The inbox uses its narrow layout on an iPhone',
   args: {
     isMobile: true,
+    selectedId: null,
     laterExpanded: false,
     todaySessions: sessions.filter(
       (session) => session.id === 'sample-question',
     ),
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneInboxShowsItsLastUpdateWhenDisconnected: Story = {
+  name: 'The iPhone inbox shows its last update when disconnected',
+  args: {
+    isMobile: true,
+    error: 'The session feed disconnected.',
+    connectionError: 'The session feed disconnected.',
+    selectedId: null,
   },
   decorators: [
     (Story) => (

@@ -14,6 +14,7 @@ pub(crate) struct WatchWebSessionState {
     pub(crate) until_activity: bool,
     pub(crate) is_today: bool,
     pub(crate) is_compacting: bool,
+    pub(crate) primary_task_id: Option<String>,
 }
 
 pub(in crate::commands::agent::store) fn watch_web_session_states(
@@ -24,7 +25,8 @@ pub(in crate::commands::agent::store) fn watch_web_session_states(
     }
     let connection = open_connection(sessions_dir)?;
     let mut statement = connection.prepare(
-        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today, is_compacting
+        "SELECT session_id, later_until, activity_snapshot, until_activity, is_today, is_compacting,
+                primary_task_id
          FROM watch_web_session_state",
     )?;
     let rows = statement.query_map([], |row| {
@@ -37,11 +39,19 @@ pub(in crate::commands::agent::store) fn watch_web_session_states(
             row.get::<_, bool>(3)?,
             row.get::<_, bool>(4)?,
             row.get::<_, Option<bool>>(5)?.unwrap_or(false),
+            row.get::<_, Option<String>>(6)?,
         ))
     })?;
     rows.map(|row| {
-        let (session_id, later_until, activity_snapshot, until_activity, is_today, is_compacting) =
-            row?;
+        let (
+            session_id,
+            later_until,
+            activity_snapshot,
+            until_activity,
+            is_today,
+            is_compacting,
+            primary_task_id,
+        ) = row?;
         Ok(WatchWebSessionState {
             session_id,
             later_until: parse_timestamp(later_until)?,
@@ -49,6 +59,7 @@ pub(in crate::commands::agent::store) fn watch_web_session_states(
             until_activity,
             is_today,
             is_compacting,
+            primary_task_id,
         })
     })
     .collect()
@@ -100,6 +111,22 @@ pub(crate) fn set_watch_web_compacting(
     );
     transaction.commit()?;
     Ok(true)
+}
+
+pub(in crate::commands::agent::store) fn set_watch_web_primary_task(
+    sessions_dir: &Path,
+    session_id: &str,
+    task_id: &str,
+) -> Result<bool> {
+    update_session_state(sessions_dir, session_id, |transaction| {
+        transaction.execute(
+            "INSERT INTO watch_web_session_state (session_id, primary_task_id)
+             VALUES (?1, ?2)
+             ON CONFLICT(session_id) DO UPDATE SET primary_task_id = excluded.primary_task_id",
+            params![session_id, task_id],
+        )?;
+        Ok(())
+    })
 }
 
 pub(in crate::commands::agent::store) fn set_watch_web_later(
@@ -316,6 +343,7 @@ mod tests {
                     until_activity: true,
                     is_today: false,
                     is_compacting: false,
+                    primary_task_id: None,
                 }],
             ),
         );

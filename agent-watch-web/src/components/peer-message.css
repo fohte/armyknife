@@ -74,7 +74,6 @@
 
 .chat-peer-text {
   color: var(--aw-text-body);
-  white-space: pre-wrap;
 }
 
 .chat-peer-image {

@@ -12,6 +12,7 @@ use serde::Serialize;
 use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
+use crate::commands::agent::proposal::ProposalBody;
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
@@ -40,6 +41,7 @@ enum SessionKind {
     Error,
     Plan,
     Stopped,
+    Proposal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -96,6 +98,8 @@ struct SessionView {
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
+    decision_count: i64,
+    unreviewed_decision_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -112,6 +116,8 @@ struct SessionSnapshot {
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
+    decision_counts: HashMap<String, store::AgentDecisionCounts>,
+    unanswered_proposal_titles: HashMap<String, String>,
     agent_config: AgentConfig,
 }
 
@@ -169,10 +175,13 @@ fn router_with_source<S: SessionSource>(source: S) -> Router {
 async fn list_sessions<S: SessionSource>(
     State(source): State<S>,
 ) -> Result<Json<SessionsResponse>, StatusCode> {
-    let snapshot = source
-        .load_snapshot()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snapshot = match source.load_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load agent session list");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     let sessions_to_check = snapshot
         .sessions
@@ -202,6 +211,7 @@ async fn list_sessions<S: SessionSource>(
         .into_iter()
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
+    let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
 
     let mut sessions = snapshot
         .sessions
@@ -225,7 +235,12 @@ async fn list_sessions<S: SessionSource>(
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
                 })
                 .collect::<Vec<_>>();
-            let task = tasks.first().cloned();
+            let state = state_by_id.get(&session.session_id);
+            let task = state
+                .and_then(|state| state.primary_task_id.as_deref())
+                .and_then(|primary_task_id| tasks.iter().find(|task| task.id == primary_task_id))
+                .or_else(|| tasks.first())
+                .cloned();
             let parent = session
                 .ancestor_session_ids
                 .last()
@@ -256,10 +271,11 @@ async fn list_sessions<S: SessionSource>(
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
+            let proposal_title = unanswered_proposal_titles.get(&session.session_id);
+            let needs_action = interrupted || proposal_title.is_some();
             let category_when_not_later =
-                category_for_with_interruption(session, turn, interrupted);
-            let state = state_by_id.get(&session.session_id);
-            let category = category_for_with_later(session, turn, interrupted, state, now);
+                category_for_with_interruption(session, turn, needs_action);
+            let category = category_for_with_later(session, turn, needs_action, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -267,13 +283,15 @@ async fn list_sessions<S: SessionSource>(
                 category,
                 is_paused: session.status == SessionStatus::Paused,
                 category_when_not_later,
-                kind: kind_for(session, turn),
+                kind: kind_for(session, turn, proposal_title.is_some()),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
                     .cloned()
                     .unwrap_or_default(),
-                preview: session.last_message.clone(),
+                preview: proposal_title
+                    .cloned()
+                    .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
                 elapsed_seconds: now
                     .signed_duration_since(session.updated_at)
@@ -302,6 +320,14 @@ async fn list_sessions<S: SessionSource>(
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
+                decision_count: snapshot
+                    .decision_counts
+                    .get(&session.session_id)
+                    .map_or(0, |counts| counts.total),
+                unreviewed_decision_count: snapshot
+                    .decision_counts
+                    .get(&session.session_id)
+                    .map_or(0, |counts| counts.unreviewed),
             }
         })
         .collect::<Vec<_>>();
@@ -336,6 +362,19 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
+    let sessions_dir = store::sessions_dir()?;
+    let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
+    let mut unanswered_proposal_titles = HashMap::new();
+    let visible_session_ids = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+    for (session_id, body) in store::unanswered_agent_proposal_bodies(&visible_session_ids)? {
+        let proposal: ProposalBody = serde_json::from_str(&body)?;
+        unanswered_proposal_titles
+            .entry(session_id)
+            .or_insert(proposal.title);
+    }
 
     Ok(SessionSnapshot {
         revision,
@@ -343,6 +382,8 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
+        decision_counts,
+        unanswered_proposal_titles,
         agent_config: config::load_config_or_default().agent,
     })
 }
@@ -563,6 +604,19 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
     }
 }
 
+pub(super) fn decision_category_is_done(
+    session: &Session,
+    agent_config: &AgentConfig,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> bool {
+    let turn = user_turns(std::iter::once(session), agent_config)
+        .into_iter()
+        .next()
+        .map(|turn| turn.kind);
+    category_for_with_later(session, turn, false, state, now) == SessionCategory::Done
+}
+
 fn category_for_with_later(
     session: &Session,
     turn: Option<UserTurnKind>,
@@ -598,13 +652,27 @@ fn category_for_with_interruption(
     }
 }
 
-fn kind_for(session: &Session, turn: Option<UserTurnKind>) -> Option<SessionKind> {
+fn kind_for(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    has_unanswered_proposal: bool,
+) -> Option<SessionKind> {
     if session
         .current_tool
         .as_deref()
         .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
     {
         return Some(SessionKind::Plan);
+    }
+
+    if turn == Some(UserTurnKind::Ask) {
+        return Some(SessionKind::Question);
+    }
+    if turn == Some(UserTurnKind::Allow) {
+        return Some(SessionKind::Approve);
+    }
+    if has_unanswered_proposal {
+        return Some(SessionKind::Proposal);
     }
 
     let Some(turn) = turn else {
@@ -760,6 +828,8 @@ mod tests {
             later_until: None,
             is_today: false,
             is_compacting: false,
+            decision_count: 0,
+            unreviewed_decision_count: 0,
         }
     }
 
@@ -770,11 +840,13 @@ mod tests {
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
+        unanswered_proposal_titles: HashMap<String, String>,
         task_links: HashMap<String, Vec<LinkedSessionTask>>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
+        decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
         now: DateTime<Utc>,
     }
@@ -787,6 +859,8 @@ mod tests {
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
+                decision_counts: self.decision_counts.clone(),
+                unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 agent_config: AgentConfig {
                     work_types: self
                         .work_type_nav_labels
@@ -859,6 +933,7 @@ mod tests {
                 until_activity: false,
                 is_today: true,
                 is_compacting: false,
+                primary_task_id: None,
             }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
@@ -874,6 +949,7 @@ mod tests {
                     "example-org/parent-repository".to_string(),
                 ),
             ]),
+            unanswered_proposal_titles: HashMap::new(),
             task_links: HashMap::from([
                 (
                     "child-session".to_string(),
@@ -910,6 +986,13 @@ mod tests {
                     state: PrState::Open,
                     url: "https://example.com/pull/42".to_string(),
                 }),
+            )]),
+            decision_counts: HashMap::from([(
+                "child-session".to_string(),
+                store::AgentDecisionCounts {
+                    total: 4,
+                    unreviewed: 2,
+                },
             )]),
             work_type_nav_labels: HashMap::new(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
@@ -1042,6 +1125,8 @@ mod tests {
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,
+                "decisionCount": 4,
+                "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url
             }]
         })
@@ -1118,6 +1203,42 @@ mod tests {
         expected["sessions"][0]["isCompacting"] = serde_json::json!(true);
 
         assert_eq!(actual, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unanswered_proposal_moves_a_running_session_to_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        source
+            .unanswered_proposal_titles
+            .insert("child-session".to_string(), "Sample proposal".to_string());
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Proposal"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["preview"] = serde_json::json!("Sample proposal");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
@@ -1274,6 +1395,48 @@ mod tests {
                     },
                 ]),
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::linked_primary("completed-task", "completed-task")]
+    #[case::unlinked_primary_uses_existing_order("missing-task", "open-task")]
+    #[tokio::test]
+    async fn sessions_route_uses_a_saved_primary_only_while_it_is_linked(
+        mut source: TestSessionSource,
+        #[case] saved_primary_task_id: &str,
+        #[case] expected_primary_task_id: &str,
+    ) {
+        source.web_states[0].primary_task_id = Some(saved_primary_task_id.to_string());
+        source.task_links.insert(
+            "child-session".to_string(),
+            vec![
+                LinkedSessionTask {
+                    task_id: "open-task".to_string(),
+                    task_number: 20,
+                    task_title: "open task".to_string(),
+                    parent_task_id: None,
+                    is_closed: false,
+                },
+                LinkedSessionTask {
+                    task_id: "completed-task".to_string(),
+                    task_number: 19,
+                    task_title: "completed task".to_string(),
+                    parent_task_id: None,
+                    is_closed: true,
+                },
+            ],
+        );
+        source.task_priorities = HashMap::from([
+            ("completed-task".to_string(), Some(2)),
+            ("open-task".to_string(), Some(1)),
+        ]);
+
+        let (status, response) = sessions_response(source).await;
+
+        assert_eq!(
+            (status, response["sessions"][0]["task"]["id"].clone()),
+            (StatusCode::OK, serde_json::json!(expected_primary_task_id)),
         );
     }
 
@@ -1466,7 +1629,7 @@ mod tests {
         #[case] expected: Option<SessionKind>,
     ) {
         assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), Some(turn)),
+            kind_for(&session(SessionStatus::WaitingInput), Some(turn), false),
             expected
         );
     }
@@ -1489,7 +1652,7 @@ mod tests {
         });
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::AgentStatus)),
+            kind_for(&session, Some(UserTurnKind::AgentStatus), false),
             Some(expected)
         );
     }
@@ -1500,8 +1663,21 @@ mod tests {
         session.current_tool = Some("ExitPlanMode".to_string());
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::Ask)),
+            kind_for(&session, Some(UserTurnKind::Ask), true),
             Some(SessionKind::Plan)
+        );
+    }
+
+    #[rstest]
+    #[case::question(Some(UserTurnKind::Ask), SessionKind::Question)]
+    #[case::approval(Some(UserTurnKind::Allow), SessionKind::Approve)]
+    fn pending_question_and_approval_kinds_precede_proposals(
+        #[case] turn: Option<UserTurnKind>,
+        #[case] expected: SessionKind,
+    ) {
+        assert_eq!(
+            kind_for(&session(SessionStatus::WaitingInput), turn, true),
+            Some(expected),
         );
     }
 
@@ -1516,7 +1692,7 @@ mod tests {
     #[test]
     fn stopped_without_a_user_turn_has_stopped_kind() {
         assert_eq!(
-            kind_for(&session(SessionStatus::Stopped), None),
+            kind_for(&session(SessionStatus::Stopped), None, false),
             Some(SessionKind::Stopped)
         );
     }
@@ -1560,7 +1736,11 @@ mod tests {
             .map(|turn| turn.kind);
 
         assert_eq!(
-            (turn, category_for(&session, turn), kind_for(&session, turn)),
+            (
+                turn,
+                category_for(&session, turn),
+                kind_for(&session, turn, false),
+            ),
             (
                 None,
                 SessionCategory::NeedsAction,

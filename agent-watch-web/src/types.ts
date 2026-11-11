@@ -58,11 +58,12 @@ export type Session = {
   unreviewedDecisionCount?: number
 }
 
-export type SessionLinkTarget = Pick<
-  Session,
-  'id' | 'category' | 'isPaused' | 'task' | 'repo'
-> &
-  Partial<Pick<Session, 'title'>>
+export type SessionLinkTarget = Omit<
+  Pick<Session, 'id' | 'category' | 'isPaused' | 'task' | 'repo'>,
+  'task'
+> & {
+  task: Pick<SessionTask, 'id' | 'number' | 'title'> | null
+} & Partial<Pick<Session, 'title'>>
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
@@ -101,8 +102,10 @@ export type ChatItem =
   | { type: 'tool_in_progress'; tool: string; target?: string }
   | {
       type: 'question'
+      header?: string
       question: string
-      choices: string[]
+      choices: QuestionChoice[]
+      multi_select?: boolean
       answer: string | null
     }
   | {
@@ -126,6 +129,11 @@ export type ChatItem =
       createdAt: string
     }
 
+export type QuestionChoice = {
+  label: string
+  description?: string
+}
+
 export type ProposalOption = {
   label: string
   description: string | null
@@ -147,17 +155,25 @@ export type UserContentPart =
 export type ToolOperation = {
   tool: string
   target?: string
+  failed?: boolean
 }
 
 export type BackgroundTask = {
   id: string
   description: string
   elapsedSeconds: number
+  kind: 'subagent' | 'background_task'
+  agentType?: string
 }
 
 export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
+  start: number
+  total: number
+  decisions: Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal: boolean
+  activeQuestionIndex: number | null
 }
 
 export type SessionActions = {
@@ -167,6 +183,12 @@ export type SessionActions = {
   interrupt: boolean
   openInTerminal: boolean
 }
+
+export type OpenInTerminalStatus =
+  | { state: 'sending' }
+  | { state: 'success' }
+  | { state: 'error'; message: string }
+  | null
 
 export type SessionsResponse = {
   revision: number

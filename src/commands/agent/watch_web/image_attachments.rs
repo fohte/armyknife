@@ -48,6 +48,16 @@ pub(super) fn storage_directory() -> anyhow::Result<PathBuf> {
     }
 }
 
+pub(super) fn image_is_available(source: &str) -> bool {
+    let Some(filename) = source.strip_prefix("/api/images/") else {
+        return false;
+    };
+    let Ok(directory) = storage_directory() else {
+        return false;
+    };
+    image_file_is_safe(&directory, filename)
+}
+
 pub(super) fn extract_references(
     content: &str,
     directory: &Path,

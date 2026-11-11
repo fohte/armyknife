@@ -16,13 +16,19 @@ use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 
+mod decisions;
 mod messages;
+mod proposal_answer_locks;
+mod proposals;
+
+use proposal_answer_locks::ProposalAnswerLocks;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
+        proposal_answer_locks: ProposalAnswerLocks::default(),
     })
 }
 
@@ -34,6 +40,18 @@ fn router_with_state(state: ActionState) -> Router {
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
         )
+        .route(
+            "/sessions/{id}/decisions/{seq}/ok",
+            post(decisions::mark_ok),
+        )
+        .route(
+            "/sessions/{id}/decisions/{seq}/change",
+            post(decisions::request_change),
+        )
+        .route(
+            "/sessions/{id}/proposals/{seq}/answer",
+            post(proposals::answer_proposal),
+        )
         .route("/sessions/{id}/answer", post(answer_question))
         .route(
             "/sessions/{id}/permission/approve",
@@ -43,6 +61,7 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/interrupt", post(interrupt))
         .route("/sessions/{id}/focus", post(focus))
         .route("/sessions/{id}/read", post(mark_read))
+        .route("/sessions/{id}/primary-task", post(set_primary_task))
         .route("/sessions/{id}/archive", post(archive))
         .with_state(state)
 }
@@ -52,6 +71,8 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
+    // Delivery precedes persistence, so repeated answers for one proposal must serialize.
+    proposal_answer_locks: ProposalAnswerLocks,
 }
 
 trait ActionRuntime: Send + Sync {
@@ -146,6 +167,13 @@ impl ApiError {
         }
     }
 
+    fn decision_not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: "decision not found".to_string(),
+        }
+    }
+
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,
@@ -217,7 +245,9 @@ async fn actions(
 
 #[derive(Deserialize)]
 struct AnswerRequest {
-    choice: u8,
+    choice: Option<u8>,
+    #[serde(default)]
+    skip: bool,
 }
 
 async fn answer_question(
@@ -232,12 +262,26 @@ async fn answer_question(
         ));
     }
     let tmux_info = require_tmux(&session)?;
-    if !(1..=9).contains(&request.choice) {
-        return Err(ApiError::bad_request("choice must be between 1 and 9"));
+    if request.skip {
+        if request.choice.is_some() {
+            return Err(ApiError::bad_request(
+                "choice cannot be provided when skipping a question",
+            ));
+        }
+        send_keys(state.runtime, &session, tmux_info, vec!["Escape"]).await?;
+    } else {
+        let Some(choice) = request.choice else {
+            return Err(ApiError::bad_request(
+                "choice is required unless skipping a question",
+            ));
+        };
+        if !(1..=9).contains(&choice) {
+            return Err(ApiError::bad_request("choice must be between 1 and 9"));
+        }
+        let mut keys = vec!["Down"; usize::from(choice - 1)];
+        keys.push("Enter");
+        send_keys(state.runtime, &session, tmux_info, keys).await?;
     }
-    let mut keys = vec!["Down"; usize::from(request.choice - 1)];
-    keys.push("Enter");
-    send_keys(state.runtime, &session, tmux_info, keys).await?;
     Ok(Json(Success::new()))
 }
 
@@ -308,6 +352,32 @@ async fn mark_read(
         store::mark_session_read_in(&sessions_dir, &session.session_id, Utc::now())
     })
     .await?;
+    Ok(Json(Success::new()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrimaryTaskRequest {
+    task_id: String,
+}
+
+async fn set_primary_task(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+    Json(request): Json<PrimaryTaskRequest>,
+) -> Result<Json<Success>, ApiError> {
+    let session = load_session(state.clone(), id).await?;
+    if request.task_id.trim().is_empty() {
+        return Err(ApiError::bad_request("taskId cannot be empty"));
+    }
+    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
+    let changed = run_blocking(move || {
+        store::set_watch_web_primary_task_in(&sessions_dir, &session.session_id, &request.task_id)
+    })
+    .await?;
+    if !changed {
+        return Err(ApiError::not_found());
+    }
     Ok(Json(Success::new()))
 }
 
@@ -458,9 +528,22 @@ mod tests {
     #[path = "send_message.rs"]
     mod send_message;
 
+    #[path = "decisions.rs"]
+    mod decisions;
+
+    #[path = "proposals.rs"]
+    mod proposals;
+
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
+        after_message: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        message_gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -471,6 +554,8 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 message_error: Mutex::new(None),
+                after_message: Mutex::new(None),
+                message_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -485,6 +570,13 @@ mod tests {
                 "sessionId": session.session_id,
                 "content": content,
             }));
+            if let Some(after_message) = self.after_message.lock().unwrap().take() {
+                after_message();
+            }
+            if let Some((started, release)) = self.message_gate.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.blocking_recv();
+            }
             if let Some(message) = self.message_error.lock().unwrap().clone() {
                 return Err(anyhow::anyhow!(message));
             }
@@ -547,11 +639,18 @@ mod tests {
 
     impl ActionContext {
         fn router(&self) -> Router {
-            router_with_state(ActionState {
+            self.router_with_proposal_answer_locks().0
+        }
+
+        fn router_with_proposal_answer_locks(&self) -> (Router, ProposalAnswerLocks) {
+            let proposal_answer_locks = ProposalAnswerLocks::default();
+            let router = router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
-            })
+                proposal_answer_locks: proposal_answer_locks.clone(),
+            });
+            (router, proposal_answer_locks)
         }
 
         fn save_session(&self, session: &Session) {
@@ -578,6 +677,22 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_after_message(&self, callback: impl FnOnce() + Send + 'static) {
+            *self.runtime.after_message.lock().unwrap() = Some(Box::new(callback));
+        }
+
+        fn block_next_message(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<()>,
+        ) {
+            let (started, started_receiver) = tokio::sync::oneshot::channel();
+            let (release, release_receiver) = tokio::sync::oneshot::channel();
+            *self.runtime.message_gate.lock().unwrap() = Some((started, release_receiver));
+            (started_receiver, release)
         }
     }
 
@@ -757,6 +872,81 @@ mod tests {
                     "socketPath": "/tmp/example-tmux.sock",
                     "keys": &expected_keys,
                 }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn answer_question_skips_by_sending_escape(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "skip": true }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "pane-command",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": ["Escape"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["Escape"],
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::choice_with_skip(
+        json!({ "skip": true, "choice": 1 }),
+        "choice cannot be provided when skipping a question",
+    )]
+    #[case::missing_choice(json!({}), "choice is required unless skipping a question")]
+    #[tokio::test]
+    async fn answer_question_rejects_invalid_requests(
+        #[case] payload: Value,
+        #[case] error: &str,
+        action_context: ActionContext,
+    ) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post("/sessions/sample-session/answer", payload))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": error },
+                "calls": [],
             }),
         );
     }
@@ -943,6 +1133,80 @@ mod tests {
                     "calls": [],
                 },
                 "session": normalize_session(expected),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn primary_task_selection_is_persisted_and_publishes_a_revision(
+        action_context: ActionContext,
+    ) {
+        let session = session("sample-session");
+        action_context.save_session(&session);
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let before_revision = store::session_store_revision_from(&sessions_dir).unwrap();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/primary-task",
+                json!({ "taskId": "sample-task" }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                store::watch_web_session_states_from(&sessions_dir).unwrap(),
+                store::session_store_revision_from(&sessions_dir).unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                vec![store::WatchWebSessionState {
+                    session_id: "sample-session".to_string(),
+                    later_until: None,
+                    activity_snapshot: None,
+                    until_activity: false,
+                    is_today: false,
+                    is_compacting: false,
+                    primary_task_id: Some("sample-task".to_string()),
+                }],
+                before_revision + 1,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace("  ")]
+    #[tokio::test]
+    async fn primary_task_selection_rejects_empty_task_ids(
+        #[case] task_id: &str,
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/primary-task",
+                json!({ "taskId": task_id }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": "taskId cannot be empty" },
+                "calls": [],
             }),
         );
     }

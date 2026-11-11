@@ -1,10 +1,8 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::{cell::RefCell, collections::HashSet};
-
-#[cfg(test)]
-use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -18,13 +16,17 @@ use crate::shared::cache;
 
 mod archive;
 mod database;
+mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
     AgentDecision, AgentDecisionCounts, AgentProposal, SessionLock, SessionStoreChanges, WakeLock,
-    WatchWebQueuedPrompt, WatchWebSessionState, serialize_session,
+    WatchWebPeerOutMessage, WatchWebQueuedPrompt, WatchWebSessionState, serialize_session,
+};
+pub(crate) use peer_out_messages::{
+    insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
@@ -153,10 +155,6 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -164,21 +162,12 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
-pub(crate) fn agent_decision_counts_from(
+pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
-    session_id: &str,
-) -> Result<AgentDecisionCounts> {
-    database::agent_decision_counts(sessions_dir, session_id)
+) -> Result<HashMap<String, AgentDecisionCounts>> {
+    database::agent_decision_counts_by_session(sessions_dir)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -427,23 +416,38 @@ pub(crate) fn close_unanswered_agent_proposals(
     database::close_unanswered_agent_proposals(sessions_dir, session_id)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
-pub(crate) fn unanswered_agent_proposal_session_ids() -> Result<Vec<String>> {
-    database::unanswered_agent_proposal_session_ids(&sessions_dir()?)
+pub(crate) fn unanswered_agent_proposal_bodies(
+    session_ids: &[String],
+) -> Result<Vec<(String, String)>> {
+    database::unanswered_agent_proposal_bodies(&sessions_dir()?, session_ids)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
 pub(crate) fn agent_proposals(session_id: &str) -> Result<Vec<AgentProposal>> {
-    database::agent_proposals(&sessions_dir()?, session_id)
+    agent_proposals_from(&sessions_dir()?, session_id)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
+pub(crate) fn agent_proposals_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<AgentProposal>> {
+    database::agent_proposals(sessions_dir, session_id)
+}
+
 pub(crate) fn write_agent_proposal_answer(
     session_id: &str,
     seq: i64,
     answer: &str,
 ) -> Result<bool> {
-    database::write_agent_proposal_answer(&sessions_dir()?, session_id, seq, answer)
+    write_agent_proposal_answer_from(&sessions_dir()?, session_id, seq, answer)
+}
+
+pub(crate) fn write_agent_proposal_answer_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    answer: &str,
+) -> Result<bool> {
+    database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
 }
 
 pub(crate) fn watch_web_session_states_from(
@@ -501,6 +505,14 @@ pub(crate) fn set_watch_web_today_in(
     is_today: bool,
 ) -> Result<bool> {
     database::set_watch_web_today(sessions_dir, session_id, is_today)
+}
+
+pub(crate) fn set_watch_web_primary_task_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    task_id: &str,
+) -> Result<bool> {
+    database::set_watch_web_primary_task(sessions_dir, session_id, task_id)
 }
 
 pub(crate) fn session_changes_since(

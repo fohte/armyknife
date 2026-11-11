@@ -21,10 +21,8 @@ export function PeerMessage({
   const sessionName =
     foundTarget?.title ??
     (message.session_id === 'unknown'
-      ? 'Unknown session'
-      : message.session_title === undefined
-        ? message.session_id
-        : `${message.session_title} (${message.session_id})`)
+      ? 'armyknife'
+      : `${message.session_title ?? message.session_id} (ended)`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
   const openSession = () => {
     if (foundTarget === undefined) return

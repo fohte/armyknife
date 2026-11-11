@@ -3,13 +3,11 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 
-import { numberShortcutChoice } from '#components/conversation-keyboard'
-import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
-import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { MessageComposer } from '#components/message-composer'
+import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
@@ -19,23 +17,34 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { useConversationMessageElements } from '#components/use-conversation-message-elements'
+import { useConversationScroll } from '#components/use-conversation-scroll'
 import { formatSessionDecisionCount } from '#session-decision-count'
+import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
   ChatItem,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
-  SessionLinkTarget,
 } from '#types'
 
 type ConversationPaneViewProps = {
   session: Session
   sessions?: readonly Session[]
   messages: readonly ChatItem[]
+  start?: number
+  decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal?: boolean
+  activeQuestionIndex?: number | null
+  loadingOlder?: boolean
+  onLoadOlder?: () => void
+  onPruneOldMessages?: () => void
   backgroundTasks?: readonly BackgroundTask[]
   actions: SessionActions | null
   actionsReady?: boolean
   pendingPermissionAction?: PendingPermissionAction | undefined
+  openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
   sending?: boolean
   error: string | null
@@ -45,6 +54,7 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
+  onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
@@ -53,61 +63,36 @@ type ConversationPaneViewProps = {
   onToggleStatusPanel?: () => void
   onToggleDecisionsPanel?: () => void
   onSelectDecision?: (seq: number) => void
-  runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
-}
-
-function useSessionLinkTargets(
-  sessions: readonly Session[],
-): readonly SessionLinkTarget[] {
-  // Elapsed-time updates replace session objects even when link details are unchanged.
-  const targetsRef = useRef<readonly SessionLinkTarget[]>([])
-  const nextTargets = sessions.map(
-    ({ id, category, isPaused, task, repo, title }) => ({
-      id,
-      category,
-      isPaused,
-      task,
-      repo,
-      title,
-    }),
-  )
-  const targetsAreUnchanged =
-    targetsRef.current.length === nextTargets.length &&
-    targetsRef.current.every((target, index) => {
-      const nextTarget = nextTargets[index]
-      return (
-        nextTarget !== undefined &&
-        target.id === nextTarget.id &&
-        target.category === nextTarget.category &&
-        target.isPaused === nextTarget.isPaused &&
-        target.task?.id === nextTarget.task?.id &&
-        target.task?.number === nextTarget.task?.number &&
-        target.task?.title === nextTarget.task?.title &&
-        target.repo === nextTarget.repo &&
-        target.title === nextTarget.title
-      )
-    })
-
-  if (!targetsAreUnchanged) targetsRef.current = nextTargets
-  return targetsRef.current
+  onArchive?: () => void
+  isToday?: boolean
+  onToggleToday?: (isToday: boolean) => void
 }
 
 export function ConversationPaneView({
   session,
   sessions = [],
   messages,
+  start = 0,
+  decisions,
+  hasUnansweredProposal: responseHasUnansweredProposal,
+  activeQuestionIndex,
+  loadingOlder = false,
+  onLoadOlder = () => undefined,
+  onPruneOldMessages = () => undefined,
   backgroundTasks = [],
   actions,
   actionsReady = true,
   pendingPermissionAction = null,
+  openInTerminalStatus = null,
   loading,
   sending = false,
   error,
   onClearError = () => undefined,
   onAction,
+  onOpenInTerminal,
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
@@ -116,10 +101,12 @@ export function ConversationPaneView({
   onToggleStatusPanel = () => undefined,
   onToggleDecisionsPanel = () => undefined,
   onSelectDecision = () => undefined,
-  runningCount = 0,
   fileDropActive = false,
   onBack,
   onLater,
+  onArchive,
+  isToday = false,
+  onToggleToday,
 }: ConversationPaneViewProps) {
   const { draft, updateDraft, clearDraftIfUnchanged, storageAvailable } =
     useComposerDraft(session.id)
@@ -137,8 +124,18 @@ export function ConversationPaneView({
     clearDraftIfUnchanged,
     onAction,
   })
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const followLatestRef = useRef(true)
+  const {
+    loadOlder,
+    onScroll,
+    scrollRef: conversationScrollRef,
+  } = useConversationScroll({
+    messages,
+    loadingOlder,
+    onLoadOlder,
+    onPruneOldMessages,
+    sessionId: session.id,
+    start,
+  })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
@@ -146,31 +143,42 @@ export function ConversationPaneView({
   const selectLinkedSession = useCallback((id: string) => {
     onSelectSessionRef.current(id)
   }, [])
-  const activeQuestionIndex = messages.findLastIndex(
-    (message) => message.type === 'question',
-  )
-  const activeTool = messages.findLast(
-    (message) => message.type === 'tool_in_progress',
-  )
-  const conversationMessages = messages.filter(
-    (message) =>
-      message.type !== 'tool_in_progress' ||
-      (session.category !== 'in_progress' && session.isCompacting !== true),
-  )
-  const decisions = conversationMessages.filter(
-    (message) => message.type === 'decision',
-  )
-  const decisionPositions = new Map(
-    decisions.map((decision, index) => [decision.seq, index + 1]),
-  )
   const decisionLabel = formatSessionDecisionCount(session)
-  const hasUnansweredProposal = messages.some(
-    (message) =>
-      message.type === 'proposal' &&
-      message.answer === null &&
-      !message.resolved,
-  )
-  const waitingQuestion = messages[activeQuestionIndex]
+  const openInTerminal = useCallback(() => {
+    if (onOpenInTerminal === undefined) {
+      void onAction('focus')
+    } else {
+      onOpenInTerminal()
+    }
+  }, [onAction, onOpenInTerminal])
+  const {
+    activeTool,
+    conversationMessageCount,
+    elements: conversationMessageElements,
+    hasUnansweredProposal,
+  } = useConversationMessageElements({
+    messages,
+    start,
+    ...(decisions === undefined ? {} : { decisions }),
+    ...(responseHasUnansweredProposal === undefined
+      ? {}
+      : { hasUnansweredProposal: responseHasUnansweredProposal }),
+    ...(activeQuestionIndex === undefined ? {} : { activeQuestionIndex }),
+    sessionCategory: session.category,
+    isCompacting: session.isCompacting === true,
+    sessionEngine: session.engine,
+    actions,
+    actionsReady,
+    isMobile,
+    selectedDecisionSeq,
+    onSelectDecision,
+    onAction,
+    onOpenInTerminal: openInTerminal,
+    openInTerminalStatus,
+    onSelectSession: selectLinkedSession,
+    pendingAction: pendingPermissionAction,
+    sessions: sessionLinkTargets,
+  })
   const parent = session.parent
   const isReview = session.kind === 'Review'
   const linkedTasks =
@@ -202,63 +210,26 @@ export function ConversationPaneView({
       void onAction('interrupt')
       return
     }
-    if (event.key === 'Enter' && !isMobile && !event.shiftKey) {
+    if (event.key === 'Enter' && !isMobile && event.altKey && !event.shiftKey) {
+      event.preventDefault()
+      const textarea = event.currentTarget
+      textarea.setRangeText(
+        '\n',
+        textarea.selectionStart,
+        textarea.selectionEnd,
+        'end',
+      )
+      updateDraft(textarea.value)
+      return
+    }
+    if (
+      event.key === 'Enter' &&
+      !isMobile &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
       event.preventDefault()
       sendMessage()
-    }
-  }
-
-  const openInTerminal = () => {
-    void onAction('focus')
-  }
-
-  useEffect(() => {
-    const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      if (
-        isMobile ||
-        waitingQuestion?.type !== 'question' ||
-        waitingQuestion.answer !== null ||
-        activeQuestionIndex < 0 ||
-        !actionsReady ||
-        actions?.answerQuestion !== true
-      ) {
-        return
-      }
-      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
-      if (choice === null) return
-      event.preventDefault()
-      void onAction('answer', { choice: choice + 1 })
-    }
-
-    window.addEventListener('keydown', onQuestionKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onQuestionKeyDown)
-    }
-  }, [
-    actions?.answerQuestion,
-    actionsReady,
-    activeQuestionIndex,
-    isMobile,
-    onAction,
-    waitingQuestion,
-  ])
-
-  useLayoutEffect(() => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer !== null && followLatestRef.current) {
-      scrollContainer.scrollTop =
-        scrollContainer.scrollHeight - scrollContainer.clientHeight
-    }
-  }, [messages])
-
-  const updateFollowLatest = () => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer !== null) {
-      followLatestRef.current =
-        scrollContainer.scrollHeight -
-          scrollContainer.scrollTop -
-          scrollContainer.clientHeight <=
-        24
     }
   }
 
@@ -290,17 +261,24 @@ export function ConversationPaneView({
               ‹
             </Button>
             <div className="mobile-conversation-heading">
-              <div className="mobile-conversation-context">
-                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
-                {session.task ? <span aria-hidden="true">·</span> : null}
-                <span>{session.repo.split('/').at(-1)}</span>
-              </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                sessionId={session.id}
               />
+              <div className="mobile-conversation-context">
+                <SessionTaskLinks
+                  task={session.task}
+                  tasks={linkedTasks}
+                  sessions={sessions}
+                  onMakePrimary={(taskId) =>
+                    onAction('primary-task', { taskId })
+                  }
+                />
+                {session.task ? <span aria-hidden="true">·</span> : null}
+                <span>{session.repo.split('/').at(-1)}</span>
+              </div>
             </div>
-            <CopySessionIdControl sessionId={session.id} compact />
             <Button
               className="mobile-conversation-later cursor-pointer"
               type="button"
@@ -309,12 +287,41 @@ export function ConversationPaneView({
             >
               Later
             </Button>
+            {session.category === 'done' && onArchive !== undefined ? (
+              <Button
+                className="mobile-conversation-archive cursor-pointer"
+                type="button"
+                variant="plain"
+                onClick={onArchive}
+              >
+                Archive
+              </Button>
+            ) : null}
+            <Button
+              className="mobile-conversation-today cursor-pointer"
+              type="button"
+              variant="plain"
+              aria-label={isToday ? 'Remove from TODAY' : 'Add to TODAY'}
+              aria-pressed={isToday}
+              onClick={() => {
+                onToggleToday?.(!isToday)
+              }}
+            >
+              {isToday ? '★' : '☆'}
+            </Button>
           </>
         ) : (
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
-                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                <SessionTaskLinks
+                  task={session.task}
+                  tasks={linkedTasks}
+                  sessions={sessions}
+                  onMakePrimary={(taskId) =>
+                    onAction('primary-task', { taskId })
+                  }
+                />
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}
@@ -335,57 +342,77 @@ export function ConversationPaneView({
                     ↑ Parent: {parent.title ?? 'session'}
                   </a>
                 ) : null}
+                <div className="conversation-header-actions">
+                  <Button
+                    className="conversation-status-panel-toggle"
+                    type="button"
+                    variant="plain"
+                    aria-label="Toggle session status panel with Command Period"
+                    aria-expanded={statusPanelOpen}
+                    aria-controls="session-status-panel"
+                    onClick={() => {
+                      onToggleStatusPanel()
+                    }}
+                  >
+                    <span
+                      className="conversation-status-panel-icon"
+                      aria-hidden="true"
+                    >
+                      ◐
+                    </span>
+                    {backgroundTasks.length > 0 ? (
+                      <span className="conversation-status-panel-count">
+                        {backgroundTasks.length}
+                      </span>
+                    ) : null}
+                  </Button>
+                  {decisionLabel !== null ? (
+                    <Button
+                      className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                      type="button"
+                      variant="plain"
+                      aria-pressed={decisionsPanelOpen}
+                      aria-controls="session-status-panel"
+                      onClick={() => {
+                        onToggleDecisionsPanel()
+                      }}
+                    >
+                      {decisionLabel}
+                    </Button>
+                  ) : null}
+                  {session.pullRequest ? (
+                    <a
+                      className="conversation-pr-link"
+                      href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{session.pullRequest.number} PR
+                    </a>
+                  ) : null}
+                  {session.category === 'done' && onArchive !== undefined ? (
+                    <Button
+                      className="conversation-archive cursor-pointer"
+                      type="button"
+                      variant="plain"
+                      onClick={onArchive}
+                    >
+                      Archive
+                    </Button>
+                  ) : null}
+                  {actions?.openInTerminal === true ? (
+                    <OpenInTerminalAction
+                      status={openInTerminalStatus}
+                      onClick={openInTerminal}
+                    />
+                  ) : null}
+                </div>
               </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                sessionId={session.id}
               />
-            </div>
-            <div className="conversation-header-actions">
-              <Button
-                className="conversation-status-panel-toggle"
-                type="button"
-                variant="plain"
-                aria-label="Toggle session status panel with Command Period"
-                aria-expanded={statusPanelOpen}
-                aria-controls="session-status-panel"
-                onClick={() => {
-                  onToggleStatusPanel()
-                }}
-              >
-                <span aria-hidden="true">◐</span>
-                {runningCount > 0 ? <span>{runningCount}</span> : null}
-              </Button>
-              {decisionLabel !== null ? (
-                <Button
-                  className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
-                  type="button"
-                  variant="plain"
-                  aria-pressed={decisionsPanelOpen}
-                  aria-controls="session-status-panel"
-                  onClick={() => {
-                    onToggleDecisionsPanel()
-                  }}
-                >
-                  {decisionLabel}
-                </Button>
-              ) : null}
-              {session.pullRequest ? (
-                <a
-                  className="conversation-pr-link"
-                  href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  #{session.pullRequest.number} PR
-                </a>
-              ) : null}
-              <CopySessionIdControl sessionId={session.id} />
-              {actions?.openInTerminal === true ? (
-                <Button type="button" variant="plain" onClick={openInTerminal}>
-                  Open in terminal
-                </Button>
-              ) : null}
             </div>
           </>
         )}
@@ -398,52 +425,43 @@ export function ConversationPaneView({
       ) : null}
 
       <div
-        ref={scrollRef}
+        ref={conversationScrollRef}
         className="conversation-scroll"
         aria-live="polite"
-        onScroll={updateFollowLatest}
+        onScroll={onScroll}
       >
+        {start > 0 ? (
+          <Button
+            className="conversation-load-older"
+            type="button"
+            variant="plain"
+            disabled={loadingOlder}
+            onClick={loadOlder}
+          >
+            {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+          </Button>
+        ) : null}
         <div className="conversation-timeline">
           <span>Conversation</span>
         </div>
         {loading && messages.length === 0 ? (
           <p className="conversation-status">Loading conversation…</p>
         ) : null}
-        {!loading && conversationMessages.length === 0 && activeTool == null ? (
+        {!loading && conversationMessageCount === 0 && activeTool == null ? (
           <p className="conversation-status">No messages yet.</p>
         ) : null}
-        {conversationMessages.map((message, index) =>
-          renderConversationMessage({
-            actions,
-            actionsReady,
-            activeQuestionIndex,
-            index,
-            isMobile,
-            selectedDecisionSeq,
-            decisionPosition:
-              message.type === 'decision' && decisionPositions.has(message.seq)
-                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
-                : undefined,
-            onSelectDecision,
-            message,
-            onAction,
-            onOpenInTerminal: openInTerminal,
-            onSelectSession: selectLinkedSession,
-            pendingAction: pendingPermissionAction,
-            session,
-            sessions: sessionLinkTargets,
-          }),
-        )}
+        {conversationMessageElements}
       </div>
 
       {session.isCompacting === true ||
       session.category === 'in_progress' ||
-      backgroundTasks.length > 0 ? (
+      (isMobile && backgroundTasks.length > 0) ? (
         <ConversationWorkingStatus
           showWorking={session.category === 'in_progress'}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
           backgroundTasks={backgroundTasks}
+          showBackgroundTasks={isMobile}
           isCompacting={session.isCompacting === true}
         />
       ) : null}

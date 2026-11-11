@@ -165,6 +165,7 @@ export function App() {
     openSessionInInbox,
     openTodaySession,
     focusSession,
+    archiveDoneSessions,
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
@@ -292,6 +293,18 @@ export function App() {
     [beginLaterMutation, closeLater, finishLaterMutation],
   )
 
+  const archiveDoneSession = useCallback(
+    (sessionId: string) => {
+      const session = sessionsWithElapsedTime.find(
+        (candidate) => candidate.id === sessionId,
+      )
+      if (session !== undefined) {
+        void archiveDoneSessions([session])
+      }
+    },
+    [archiveDoneSessions, sessionsWithElapsedTime],
+  )
+
   useEffect(
     () =>
       startSessionFeed((response) => {
@@ -358,6 +371,7 @@ export function App() {
     laterSessionId,
     laterSubmissionInFlight,
     closeLater,
+    archiveSession: archiveDoneSession,
     submitLater,
     navigableSessions,
     openLater,
@@ -402,6 +416,8 @@ export function App() {
     })
   const inboxProps = {
     error: error ?? savedViews.storageError,
+    connectionError: error,
+    lastUpdatedAt: sessionsReceivedAt,
     loaded,
     selectedId,
     sessions: sessionsWithElapsedTime,
@@ -436,6 +452,9 @@ export function App() {
     doneExpanded,
     onToggleDone: () => {
       setDoneExpanded((expanded) => !expanded)
+    },
+    onArchiveDone: (doneSessions: readonly Session[]) => {
+      void archiveDoneSessions(doneSessions)
     },
   }
   const navigation = !isMobile ? (
@@ -479,6 +498,7 @@ export function App() {
           }}
           onBack={backToInbox}
           onLater={openLater}
+          onArchiveSession={archiveDoneSession}
           onSelectSession={(id) => {
             if (orderedSessions.some((session) => session.id === id)) {
               navigate((current) => ({ ...current, selectedId: id }))
@@ -563,6 +583,12 @@ export function App() {
           onOpenSession={(id) => {
             setCommandPaletteOpen(false)
             openSessionInInbox(id)
+          }}
+          onOpenSessionBeside={(id) => {
+            const query = new URLSearchParams({ session: id })
+            if (isMobile) query.set('screen', 'conversation')
+            window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
+            setCommandPaletteOpen(false)
           }}
           onRunCommand={(command) => {
             void runPaletteCommand(command)

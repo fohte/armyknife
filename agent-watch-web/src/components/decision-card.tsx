@@ -217,7 +217,9 @@ export function DecisionCard({
                     {variant === 'panel' ? (
                       <>
                         Change…{' '}
-                        <span>(sends to {targetName ?? 'this session'})</span>
+                        <span className="decision-card-target-name">
+                          (sends to {targetName ?? 'this session'})
+                        </span>
                         <kbd>C</kbd>
                       </>
                     ) : (

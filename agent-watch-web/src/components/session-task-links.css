@@ -103,6 +103,35 @@
   white-space: nowrap;
 }
 
+.session-task-links-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1 1 auto;
+  gap: 2px;
+}
+
+.session-task-links-summary {
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
+.session-task-links-make-primary {
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.session-task-links-make-primary:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .session-task-links-primary {
   flex: 0 0 auto;
   color: var(--aw-text-muted);

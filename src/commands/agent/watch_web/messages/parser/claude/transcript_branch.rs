@@ -9,6 +9,7 @@ pub(super) enum BranchMembership {
     Disconnected,
 }
 
+#[derive(Clone)]
 pub(super) struct TranscriptNode {
     pub(super) parent_uuid: Option<String>,
     pub(super) membership: BranchMembership,
