@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.584](https://github.com/fohte/armyknife/compare/v0.1.583...v0.1.584) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match the header to the mock ([#1528](https://github.com/fohte/armyknife/issues/1528)) ([88b5dc0](https://github.com/fohte/armyknife/commit/88b5dc04ce062cf4edee83a8530bee26d59d5ebc))
+
 ## [0.1.583](https://github.com/fohte/armyknife/compare/v0.1.582...v0.1.583) (2026-11-11)
 
 
