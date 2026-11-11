@@ -75,11 +75,16 @@ export const QuestionWaitsForAnAnswer: Story = {
       },
       {
         type: 'question',
+        header: 'Retry policy',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          {
+            label: 'Retry **three times** with exponential backoff',
+            description: 'Wait briefly before each retry.',
+          },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: null,
       },
     ],
@@ -111,9 +116,10 @@ export const QuestionShowsSelectedAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry **three times** with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry **three times** with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Retry once without delay',
       },
     ],
@@ -128,9 +134,10 @@ export const QuestionShowsFreeformAnswer: Story = {
         type: 'question',
         question: 'Which **retry policy** should be used?',
         choices: [
-          'Retry three times with exponential backoff',
-          'Retry once without delay',
+          { label: 'Retry three times with exponential backoff' },
+          { label: 'Retry once without delay' },
         ],
+        multi_select: false,
         answer: 'Use a short delay before each retry',
       },
     ],
@@ -292,7 +299,8 @@ export const CodexOnlyOpensInTerminal: Story = {
       {
         type: 'question',
         question: 'Which retry policy should be used?',
-        choices: ['Retry three times', 'Retry once'],
+        choices: [{ label: 'Retry three times' }, { label: 'Retry once' }],
+        multi_select: false,
         answer: null,
       },
       {

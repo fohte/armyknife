@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::super::super::ChatItem;
+use super::super::super::{ChatItem, QuestionChoice};
 
 pub(super) fn parse_question_answers(content: &str) -> Option<Vec<(String, String)>> {
     let mut remaining = content
@@ -100,13 +100,28 @@ pub(super) fn append_questions(items: &mut Vec<ChatItem>, input: Option<&Value>)
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(|option| option.get("label").and_then(Value::as_str))
-            .map(str::to_owned)
+            .filter_map(|option| {
+                Some(QuestionChoice {
+                    label: option.get("label")?.as_str()?.to_owned(),
+                    description: option
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                })
+            })
             .collect();
         indices.push(items.len());
         items.push(ChatItem::Question {
+            header: question
+                .get("header")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
             question: text.to_owned(),
             choices,
+            multi_select: question
+                .get("multiSelect")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
             answer: None,
         });
     }

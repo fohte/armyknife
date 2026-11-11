@@ -3447,7 +3447,11 @@ it('answers an Inbox question with a number key when the pane is not focused', a
             {
               type: 'question',
               question: 'Which retry policy should be used?',
-              choices: ['Retry three times', 'Retry once'],
+              choices: [
+                { label: 'Retry three times' },
+                { label: 'Retry once' },
+              ],
+              multi_select: false,
               answer: null,
             },
           ],
