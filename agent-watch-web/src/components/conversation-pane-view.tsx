@@ -77,16 +77,40 @@ function useSessionLinkTargets(
   // Link cards only use these fields, so unrelated session updates keep rows stable.
   const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
   const nextTargets = sessions.map(
-    ({ id, category, isPaused, task, repo, title }) => ({
+    ({
+      id,
+      category,
+      isPaused,
+      task,
+      tasks,
+      repo,
+      title,
+      engine,
+      workType,
+      kind,
+      preview,
+      elapsedSeconds,
+    }) => ({
       id,
       category,
       isPaused,
       task:
         task === null
           ? null
-          : { id: task.id, number: task.number, title: task.title },
+          : {
+              id: task.id,
+              number: task.number,
+              title: task.title,
+              priority: task.priority,
+            },
+      tasks,
       repo,
       title,
+      engine,
+      workType,
+      kind,
+      preview,
+      elapsedSeconds,
     }),
   )
   targetsRef.current = reuseEqualValue(targetsRef.current, nextTargets)

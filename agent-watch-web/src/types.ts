@@ -62,8 +62,19 @@ export type SessionLinkTarget = Omit<
   Pick<Session, 'id' | 'category' | 'isPaused' | 'task' | 'repo'>,
   'task'
 > & {
-  task: Pick<SessionTask, 'id' | 'number' | 'title'> | null
-} & Partial<Pick<Session, 'title'>>
+  task:
+    | (Pick<SessionTask, 'id' | 'number' | 'title'> &
+        Partial<Pick<SessionTask, 'priority'>>)
+    | null
+} & {
+  title?: Session['title'] | undefined
+  engine?: Session['engine'] | undefined
+  workType?: Session['workType'] | undefined
+  kind?: Session['kind'] | undefined
+  preview?: Session['preview'] | undefined
+  elapsedSeconds?: Session['elapsedSeconds'] | undefined
+  tasks?: Session['tasks'] | undefined
+}
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }
