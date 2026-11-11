@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.597](https://github.com/fohte/armyknife/compare/v0.1.596...v0.1.597) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** contain long target names ([#1557](https://github.com/fohte/armyknife/issues/1557)) ([19f5a0f](https://github.com/fohte/armyknife/commit/19f5a0f6f0fb8a667f8831adab83ff6bd612d6e9))
+
 ## [0.1.596](https://github.com/fohte/armyknife/compare/v0.1.595...v0.1.596) (2026-11-11)
 
 
