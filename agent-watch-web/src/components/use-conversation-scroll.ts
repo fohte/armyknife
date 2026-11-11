@@ -4,12 +4,18 @@ import type { ChatItem } from '#types'
 
 type UseConversationScrollOptions = {
   messages: readonly ChatItem[]
+  loadingOlder: boolean
+  onLoadOlder: () => void
+  onPruneOldMessages: () => void
   sessionId: string
   start: number
 }
 
 export function useConversationScroll({
   messages,
+  loadingOlder,
+  onLoadOlder,
+  onPruneOldMessages,
   sessionId,
   start,
 }: UseConversationScrollOptions) {
@@ -37,28 +43,42 @@ export function useConversationScroll({
     } else if (followLatestRef.current) {
       scrollContainer.scrollTop =
         scrollContainer.scrollHeight - scrollContainer.clientHeight
+      onPruneOldMessages()
     }
-  }, [messages, start])
+  }, [messages, onPruneOldMessages, start])
+
+  const loadOlder = useCallback(() => {
+    if (start <= 0 || loadingOlder) return
+    const scrollContainer = scrollRef.current
+    if (scrollContainer !== null) {
+      pendingScrollAnchorRef.current = {
+        scrollHeight: scrollContainer.scrollHeight,
+        scrollTop: scrollContainer.scrollTop,
+        start,
+      }
+    }
+    onLoadOlder()
+  }, [loadingOlder, onLoadOlder, start])
 
   const onScroll = useCallback(() => {
     const scrollContainer = scrollRef.current
     if (scrollContainer === null) return
+    const pendingAnchor = pendingScrollAnchorRef.current
+    if (pendingAnchor !== null) {
+      pendingScrollAnchorRef.current = {
+        scrollHeight: scrollContainer.scrollHeight,
+        scrollTop: scrollContainer.scrollTop,
+        start: pendingAnchor.start,
+      }
+    }
     followLatestRef.current =
       scrollContainer.scrollHeight -
         scrollContainer.scrollTop -
         scrollContainer.clientHeight <=
       24
-  }, [])
+    if (followLatestRef.current) onPruneOldMessages()
+    if (scrollContainer.scrollTop <= 120) loadOlder()
+  }, [loadOlder, onPruneOldMessages])
 
-  const preserveScrollAnchor = useCallback(() => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer === null) return
-    pendingScrollAnchorRef.current = {
-      scrollHeight: scrollContainer.scrollHeight,
-      scrollTop: scrollContainer.scrollTop,
-      start,
-    }
-  }, [start])
-
-  return { onScroll, preserveScrollAnchor, scrollRef }
+  return { loadOlder, onScroll, scrollRef }
 }

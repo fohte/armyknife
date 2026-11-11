@@ -4935,6 +4935,306 @@ it('prepends an older page without moving existing messages in the viewport', as
   })
 })
 
+it('loads an older page near the top and ignores repeated scrolls while it loads', async () => {
+  const visibleMessages = [
+    { type: 'assistant', text: 'First visible message.' },
+    { type: 'assistant', text: 'Latest visible message.' },
+  ] satisfies ChatItem[]
+  let resolveOlderPage: ((response: Response) => void) | undefined
+  const olderPage = new Promise<Response>((resolve) => {
+    resolveOlderPage = resolve
+  })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(visibleMessages, [], { start: 1, total: 3 }),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockReturnValueOnce(olderPage)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelectorAll('.chat-assistant-message').length === 2,
+  )
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 + container.querySelectorAll('.chat-assistant-message').length * 40,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    scroll.scrollTop = 30
+    scroll.dispatchEvent(new Event('scroll'))
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  act(() => {
+    scroll.scrollTop = 80
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  await waitForState(() => fetcher.mock.calls.length === 3)
+  const loadingState = {
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    loadingLabel: container.querySelector('.conversation-load-older')
+      ?.textContent,
+  }
+  await act(async () => {
+    resolveOlderPage?.(
+      jsonResponse(
+        messagesResponse([{ type: 'assistant', text: 'Older message.' }], [], {
+          start: 0,
+          total: 3,
+        }),
+      ),
+    )
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const anchoredScrollTop = scroll.scrollTop
+  act(() => {
+    scroll.scrollTop = 0
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+
+  const snapshot = () => ({
+    loadingState,
+    scrollTop: anchoredScrollTop,
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+    olderButton: container.querySelector('.conversation-load-older'),
+  })
+  expect(snapshot()).toEqual({
+    loadingState: {
+      requests: [
+        '/api/sessions/sample-session/messages?limit=100',
+        '/api/sessions/sample-session/actions',
+        '/api/sessions/sample-session/messages?before=1&limit=100',
+      ],
+      loadingLabel: 'Loading older messages…',
+    },
+    scrollTop: 120,
+    messages: [
+      'Older message.',
+      'First visible message.',
+      'Latest visible message.',
+    ],
+    olderButton: null,
+  })
+})
+
+it('prunes to the latest 200 messages at the bottom and can load the discarded range again', async () => {
+  const assistantMessage = (index: number): ChatItem => ({
+    type: 'assistant',
+    text: `Message ${String(index)}.`,
+  })
+  const decision = (seq: number): Extract<ChatItem, { type: 'decision' }> => ({
+    type: 'decision',
+    seq,
+    title: `Decision ${String(seq)}`,
+    why: 'Keep the behavior predictable.',
+    considered: ['Use the existing flow'],
+    easyToChange: 'Change one setting.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  })
+  const firstPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 200),
+  )
+  const secondPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 100),
+  )
+  const thirdPage = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index),
+  )
+  const allDecisions = [decision(1), decision(2), decision(3)]
+  const refreshedMessages = Array.from({ length: 301 }, (_, index) =>
+    assistantMessage(index),
+  )
+  refreshedMessages[150] = proposal
+  refreshedMessages[300] = question
+  refreshedMessages[250] = decision(2)
+  const refetchedOlderMessages = Array.from({ length: 100 }, (_, index) =>
+    assistantMessage(index + 1),
+  )
+  const conversationMessageCount = () =>
+    container.querySelectorAll(
+      '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+    ).length
+  let refreshKey = 0
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('before=200')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(secondPage, [], { start: 100, total: 300 }),
+        ),
+      )
+    }
+    if (url.includes('before=100')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse(thirdPage, [], { start: 0, total: 300 })),
+      )
+    }
+    if (url.includes('before=101')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(refetchedOlderMessages, [], {
+            start: 1,
+            total: 301,
+          }),
+        ),
+      )
+    }
+    if (url.includes('from=0')) {
+      return Promise.resolve(
+        jsonResponse(
+          messagesResponse(refreshedMessages, [], {
+            start: 0,
+            total: 301,
+            decisions: allDecisions,
+            hasUnansweredProposal: true,
+            activeQuestionIndex: 300,
+          }),
+        ),
+      )
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(
+      jsonResponse(messagesResponse(firstPage, [], { start: 200, total: 300 })),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = () => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  }
+  act(renderConversation)
+  await waitForState(() => conversationMessageCount() === 100)
+  const scroll = requireElement(
+    container.querySelector<HTMLDivElement>('.conversation-scroll'),
+  )
+  Object.defineProperties(scroll, {
+    scrollHeight: {
+      configurable: true,
+      get: () =>
+        100 +
+        container.querySelectorAll(
+          '.chat-assistant-message, .chat-question-card, .chat-proposal-card, .decision-card--conversation',
+        ).length *
+          10,
+    },
+    clientHeight: { configurable: true, value: 100 },
+    scrollTop: { configurable: true, writable: true, value: 0 },
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(() => conversationMessageCount() === 200)
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-load-older')
+      ?.click()
+  })
+  await waitForState(() => conversationMessageCount() === 300)
+  const retainedMessage = requireElement(
+    Array.from(container.querySelectorAll('.chat-assistant-message')).find(
+      (element) => element.textContent === 'Message 101.',
+    ) ?? null,
+  )
+  refreshKey += 1
+  act(renderConversation)
+  await waitForState(() => conversationMessageCount() === 200)
+  const retainedMessageReused =
+    retainedMessage === container.querySelector('.chat-assistant-message')
+  const prunedState = {
+    startOfMessages: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    endOfMessages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+    ).at(-1)?.textContent,
+    decisionPosition: container.querySelector(
+      '.decision-card--conversation .decision-card-position',
+    )?.textContent,
+    questionChoicesDisabled: Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+      (button) => button.disabled,
+    ),
+    statusPanelDecisions: container.querySelectorAll('.decision-card--panel')
+      .length,
+    composerPlaceholder: container
+      .querySelector<HTMLTextAreaElement>(
+        'form.conversation-composer:not(.chat-question-composer) textarea',
+      )
+      ?.getAttribute('placeholder'),
+  }
+  act(() => {
+    scroll.scrollTop = 0
+    scroll.dispatchEvent(new Event('scroll'))
+  })
+  await waitForState(() => conversationMessageCount() === 300)
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([url]) => requestUrl(url)),
+    loadedMessageCount: conversationMessageCount(),
+    prunedState,
+    reloadedFirstMessage: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    retainedMessageReused,
+    olderButton: container.querySelector('.conversation-load-older') !== null,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/sample-session/messages?limit=100',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=200&limit=100',
+      '/api/sessions/sample-session/messages?before=100&limit=100',
+      '/api/sessions/sample-session/messages?from=0',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/messages?before=101&limit=100',
+    ],
+    loadedMessageCount: 300,
+    prunedState: {
+      startOfMessages: 'Message 101.',
+      endOfMessages: 'Message 299.',
+      decisionPosition: '2 of 3',
+      questionChoicesDisabled: [false, false],
+      statusPanelDecisions: 3,
+      composerPlaceholder: 'Choose an option above, or message the session',
+    },
+    reloadedFirstMessage: 'Message 1.',
+    retainedMessageReused: true,
+    olderButton: true,
+  })
+})
+
 it('re-enables older-page loading after a request fails so it can be retried', async () => {
   const jsonResponse = (body: unknown, status = 200) =>
     new Response(JSON.stringify(body), {
