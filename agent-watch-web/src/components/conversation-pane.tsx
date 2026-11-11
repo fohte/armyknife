@@ -79,6 +79,7 @@ export function ConversationPane({
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [sessionTree, setSessionTree] = useState<SessionTreeNode[] | null>(null)
+  const [sessionTreeError, setSessionTreeError] = useState<string | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -219,18 +220,23 @@ export function ConversationPane({
   useEffect(() => {
     if (session.hasSessionTree !== true) {
       setSessionTree(null)
+      setSessionTreeError(null)
       return
     }
     let current = true
+    setSessionTreeError(null)
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/tree`,
       isSessionTreeResponse,
     ).match(
       (response) => {
-        if (current) setSessionTree(response.sessions)
+        if (current) {
+          setSessionTree(response.sessions)
+          setSessionTreeError(null)
+        }
       },
-      () => {
-        if (current) setSessionTree(null)
+      (treeError) => {
+        if (current) setSessionTreeError(treeError.message)
       },
     )
     return () => {
@@ -391,6 +397,7 @@ export function ConversationPane({
     allDecisions: conversation.decisions,
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
+    sessionTreeError,
     onSelectSession,
     statusPanelOpen,
     onAction,

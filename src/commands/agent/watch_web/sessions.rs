@@ -217,11 +217,7 @@ async fn list_sessions<S: SessionSource>(
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
-    let sessions_with_children = snapshot
-        .all_sessions
-        .iter()
-        .flat_map(|session| session.ancestor_session_ids.iter().cloned())
-        .collect::<HashSet<_>>();
+    let tree_related_session_ids = session_tree_related_ids(&snapshot.all_sessions);
 
     let mut sessions = snapshot
         .sessions
@@ -314,8 +310,7 @@ async fn list_sessions<S: SessionSource>(
                 can_open_in_terminal: session.tmux_info.is_some(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
-                has_session_tree: !session.ancestor_session_ids.is_empty()
-                    || sessions_with_children.contains(&session.session_id),
+                has_session_tree: tree_related_session_ids.contains(&session.session_id),
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
                 crit_url: if turn_kinds.get(session.session_id.as_str())
@@ -444,6 +439,17 @@ fn resolve_project(parent_project: Option<&str>, task_project: Option<&str>, rep
         .or_else(|| (!repo.trim().is_empty()).then_some(repo))
         .unwrap_or("Unsorted")
         .to_string()
+}
+
+fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
+    let mut related_ids = HashSet::new();
+    for session in sessions {
+        if !session.ancestor_session_ids.is_empty() {
+            related_ids.insert(session.session_id.clone());
+        }
+        related_ids.extend(session.ancestor_session_ids.iter().cloned());
+    }
+    related_ids
 }
 
 fn resolve_parent_project<'a>(
@@ -1108,6 +1114,121 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn session_tree_route_returns_siblings_and_descendants_with_nearest_living_parent() {
+        let mut source = source();
+        let mut grandchild = session(SessionStatus::Ended);
+        grandchild.session_id = "grandchild-session".to_string();
+        grandchild.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "deleted-intermediate".to_string(),
+        ];
+        grandchild.updated_at = Utc.timestamp_opt(800, 0).unwrap();
+        grandchild.last_message = Some("completed the delegated work".to_string());
+        let mut sibling = session(SessionStatus::Ended);
+        sibling.session_id = "sibling-session".to_string();
+        sibling.ancestor_session_ids = vec!["parent-session".to_string()];
+        sibling.updated_at = Utc.timestamp_opt(700, 0).unwrap();
+        source.all_sessions.extend([grandchild, sibling]);
+        source.title_by_id.extend([
+            (
+                "grandchild-session".to_string(),
+                "Grandchild session".to_string(),
+            ),
+            ("sibling-session".to_string(), "Sibling session".to_string()),
+        ]);
+        source.repo_by_id.extend([
+            (
+                "grandchild-session".to_string(),
+                "example-org/grandchild-repo".to_string(),
+            ),
+            (
+                "sibling-session".to_string(),
+                "example-org/sibling-repo".to_string(),
+            ),
+        ]);
+
+        let (status, tree) = session_tree_response(source, "child-session").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tree,
+            serde_json::json!({
+                "revision": 7,
+                "sessions": [
+                    {
+                        "id": "child-session",
+                        "parentId": "parent-session",
+                        "category": "later",
+                        "isActive": true,
+                        "kind": "Stopped",
+                        "title": "child title",
+                        "preview": "last message",
+                        "elapsedSeconds": 100,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/example-repo",
+                        "decisionCount": 4,
+                        "pullRequest": { "number": 42, "state": "Open" },
+                    },
+                    {
+                        "id": "parent-session",
+                        "parentId": null,
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "parent title",
+                        "preview": null,
+                        "elapsedSeconds": 200,
+                        "task": {
+                            "id": "parent-task-id",
+                            "number": 18,
+                            "title": "parent task",
+                            "priority": null,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/parent-repository",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                    {
+                        "id": "grandchild-session",
+                        "parentId": "parent-session",
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "Grandchild session",
+                        "preview": "completed the delegated work",
+                        "elapsedSeconds": 300,
+                        "task": null,
+                        "repo": "example-org/grandchild-repo",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                    {
+                        "id": "sibling-session",
+                        "parentId": "parent-session",
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "Sibling session",
+                        "preview": null,
+                        "elapsedSeconds": 400,
+                        "task": null,
+                        "repo": "example-org/sibling-repo",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                ],
+            }),
+        );
+    }
+
     #[test]
     fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
         let mut active = session(SessionStatus::Running);
@@ -1144,6 +1265,20 @@ mod tests {
                 ]),
                 vec![active.cwd],
             ),
+        );
+    }
+
+    #[test]
+    fn session_tree_relation_flag_includes_a_parent_with_only_ended_children() {
+        let mut parent = session(SessionStatus::Running);
+        parent.session_id = "parent-session".to_string();
+        let mut child = session(SessionStatus::Ended);
+        child.session_id = "child-session".to_string();
+        child.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        assert_eq!(
+            super::session_tree_related_ids(&[parent, child]),
+            HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
         );
     }
 

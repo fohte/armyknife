@@ -9,7 +9,13 @@ import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
-import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
+import type {
+  BackgroundTask,
+  ChatItem,
+  Session,
+  SessionActions,
+  SessionTreeNode,
+} from '#types'
 
 vi.mock('#components/conversation-message', async (importOriginal) => {
   const original =
@@ -366,6 +372,132 @@ beforeEach(() => {
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
+})
+
+it('loads and shows the session tree from the tree endpoint', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const tree: SessionTreeNode[] = [
+    {
+      id: session.id,
+      parentId: null,
+      category: 'in_progress',
+      isActive: true,
+      kind: null,
+      title: session.title,
+      preview: 'Delegating the task',
+      elapsedSeconds: 20,
+      task: null,
+      repo: session.repo,
+      decisionCount: 0,
+      pullRequest: null,
+    },
+    {
+      id: 'child-session',
+      parentId: session.id,
+      category: 'needs_action',
+      isActive: true,
+      kind: 'Question',
+      title: 'Child session',
+      preview: 'Waiting for a decision',
+      elapsedSeconds: 8,
+      task: null,
+      repo: session.repo,
+      decisionCount: 0,
+      pullRequest: null,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: tree }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(
+    () =>
+      container.querySelector('#session-status-tab-tree') !== null &&
+      container.querySelector('#session-tree-row-child-session') !== null,
+  )
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    countTone: container.querySelector('.session-status-panel-count')
+      ?.className,
+    rows: Array.from(
+      container.querySelectorAll('.session-tree-title'),
+      (row) => row.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree1',
+    countTone: 'session-status-panel-count session-status-panel-count--warning',
+    rows: ['Choose a retry policy', 'Child session'],
+  })
+})
+
+it('shows a tree request error instead of hiding the tree tab', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ error: 'Sample tree error' }, 503))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree',
+    alert: 'Could not load the session tree: Sample tree error',
+  })
 })
 
 afterEach(() => {

@@ -16,7 +16,9 @@ function childrenByParent(sessions: readonly SessionTreeNode[]) {
       session.parentId !== null && sessionIds.has(session.parentId)
         ? session.parentId
         : null
-    children.set(parentId, [...(children.get(parentId) ?? []), session])
+    const siblings = children.get(parentId) ?? []
+    siblings.push(session)
+    children.set(parentId, siblings)
   }
   return children
 }
@@ -49,14 +51,21 @@ export function visibleSessionTreeRows(
   expandedIds: ReadonlySet<string>,
 ): VisibleSessionTreeRow[] {
   const children = childrenByParent(sessions)
-  const needsActionCount = (session: SessionTreeNode): number =>
-    (children.get(session.id) ?? []).reduce(
-      (count, child) =>
-        count +
+  const actionDescendantCounts = new Map<string, number>()
+  const countActionDescendants = (session: SessionTreeNode): number => {
+    const cachedCount = actionDescendantCounts.get(session.id)
+    if (cachedCount !== undefined) return cachedCount
+    const count = (children.get(session.id) ?? []).reduce(
+      (total, child) =>
+        total +
         (child.category === 'needs_action' ? 1 : 0) +
-        needsActionCount(child),
+        countActionDescendants(child),
       0,
     )
+    actionDescendantCounts.set(session.id, count)
+    return count
+  }
+  sessions.forEach((session) => countActionDescendants(session))
   const rows: VisibleSessionTreeRow[] = []
   const visit = (session: SessionTreeNode, depth: number) => {
     const childSessions = children.get(session.id) ?? []
@@ -65,7 +74,7 @@ export function visibleSessionTreeRows(
       depth,
       hasChildren: childSessions.length > 0,
       isExpanded: expandedIds.has(session.id),
-      needsActionDescendantCount: needsActionCount(session),
+      needsActionDescendantCount: actionDescendantCounts.get(session.id) ?? 0,
     })
     if (expandedIds.has(session.id)) {
       for (const child of childSessions) visit(child, depth + 1)
@@ -87,4 +96,15 @@ export function needsActionDescendantCount(
     rows.find((row) => row.session.id === selectedId)
       ?.needsActionDescendantCount ?? 0
   )
+}
+
+export function directSessionChildCounts(
+  sessions: readonly SessionTreeNode[],
+): ReadonlyMap<string, number> {
+  const counts = new Map<string, number>()
+  for (const session of sessions) {
+    if (session.parentId === null) continue
+    counts.set(session.parentId, (counts.get(session.parentId) ?? 0) + 1)
+  }
+  return counts
 }

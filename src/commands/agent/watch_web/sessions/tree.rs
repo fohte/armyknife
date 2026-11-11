@@ -70,6 +70,10 @@ pub(super) async fn session_tree<S: SessionSource>(
         })
         .cloned()
         .collect::<Vec<_>>();
+    let tree_session_ids = tree_sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<HashSet<_>>();
     let sessions_to_check = tree_sessions
         .iter()
         .filter(|session| {
@@ -149,7 +153,12 @@ pub(super) async fn session_tree<S: SessionSource>(
             );
             TreeSessionView {
                 id: session.session_id.clone(),
-                parent_id: session.ancestor_session_ids.last().cloned(),
+                parent_id: session
+                    .ancestor_session_ids
+                    .iter()
+                    .rev()
+                    .find(|ancestor_id| tree_session_ids.contains(ancestor_id.as_str()))
+                    .cloned(),
                 category,
                 is_active: session.status != SessionStatus::Ended,
                 kind: kind_for(

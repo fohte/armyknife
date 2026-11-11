@@ -1,3 +1,4 @@
+import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type {
   BackgroundTask,
   ChatItem,
@@ -233,22 +234,12 @@ export function isSessionTreeResponse(
           typeof session['preview'] === 'string') &&
         typeof session['elapsedSeconds'] === 'number' &&
         Number.isInteger(session['elapsedSeconds']) &&
-        (session['task'] === null ||
-          (isRecord(session['task']) &&
-            typeof session['task']['id'] === 'string' &&
-            typeof session['task']['number'] === 'number' &&
-            typeof session['task']['title'] === 'string' &&
-            (session['task']['priority'] === null ||
-              typeof session['task']['priority'] === 'number') &&
-            (session['task']['isClosed'] === undefined ||
-              typeof session['task']['isClosed'] === 'boolean'))) &&
+        (session['task'] === null || isSessionTask(session['task'])) &&
         typeof session['repo'] === 'string' &&
         typeof session['decisionCount'] === 'number' &&
         Number.isInteger(session['decisionCount']) &&
         (session['pullRequest'] === null ||
-          (isRecord(session['pullRequest']) &&
-            typeof session['pullRequest']['number'] === 'number' &&
-            typeof session['pullRequest']['state'] === 'string')),
+          isPullRequest(session['pullRequest'])),
     )
   )
 }

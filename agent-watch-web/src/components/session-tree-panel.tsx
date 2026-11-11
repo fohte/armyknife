@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import {
   defaultExpandedSessionIds,
+  directSessionChildCounts,
   visibleSessionTreeRows,
 } from '#session-tree-model'
 import type { SessionTreeNode } from '#types'
@@ -34,6 +35,10 @@ export function SessionTreePanel({
   )
   const sessionById = useMemo(
     () => new Map(sessions.map((session) => [session.id, session])),
+    [sessions],
+  )
+  const directChildCountByParent = useMemo(
+    () => directSessionChildCounts(sessions),
     [sessions],
   )
 
@@ -131,9 +136,7 @@ export function SessionTreePanel({
           const repoDiffers =
             session.repo !== '' && session.repo !== parent?.repo
           const kind = session.kind ?? 'Session'
-          const directChildCount = sessions.filter(
-            (child) => child.parentId === session.id,
-          ).length
+          const directChildCount = directChildCountByParent.get(session.id) ?? 0
           const elapsedSeconds =
             session.elapsedSeconds +
             Math.max(0, Math.floor((nowMs - treeReceivedAt) / 1_000))
