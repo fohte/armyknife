@@ -6,7 +6,7 @@ const meta = {
   component: MessageComposer,
   args: {
     draft: '',
-    placeholder: 'Message session',
+    placeholder: 'Message PR 2',
     disabled: false,
     isSending: false,
     isMobile: false,
@@ -76,7 +76,7 @@ export const MobileComposer: Story = {
   name: 'The composer shows touch sized controls on mobile',
   args: {
     isMobile: true,
-    canInterrupt: true,
+    placeholder: 'Message',
   },
   decorators: [
     (Story) => (
@@ -86,7 +86,31 @@ export const MobileComposer: Story = {
           height: '844px',
           display: 'flex',
           alignItems: 'end',
-          background: '#09090b',
+          background: 'var(--aw-bg-app)',
+        }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const MobileComposerWithInterrupt: Story = {
+  name: 'The mobile composer keeps its interrupt action available',
+  args: {
+    isMobile: true,
+    canInterrupt: true,
+    placeholder: 'Message',
+  },
+  decorators: [
+    (Story) => (
+      <div
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+          alignItems: 'end',
+          background: 'var(--aw-bg-app)',
         }}
       >
         <Story />

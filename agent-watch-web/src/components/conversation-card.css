@@ -1,14 +1,15 @@
 .chat-question-card,
 .chat-permission-card {
-  width: min(100%, 640px);
-  padding: 14px;
+  width: 100%;
+  padding: 0;
   border: 1px solid var(--aw-color-warning);
   border-radius: var(--aw-radius);
 }
 
 .chat-question-card h2,
 .chat-permission-card h2 {
-  margin: 0 0 7px;
+  margin: 0;
+  padding: 12px 16px 4px;
   color: var(--aw-color-warning);
   font-size: 12px;
   font-weight: 700;
@@ -16,8 +17,47 @@
 
 .chat-question-card p,
 .chat-permission-card p {
-  margin: 0 0 10px;
   font-size: 15px;
+}
+
+.chat-question-card .chat-question-text {
+  margin: 0;
+  padding: 0 16px 12px;
+  font-size: 15px;
+}
+
+.chat-question-card .chat-question-text > * {
+  margin: 0;
+}
+
+.chat-permission-card .permission-tool {
+  margin: 0;
+  padding: 0 16px 4px;
+}
+
+.chat-permission-card > p:not(.permission-tool) {
+  margin: 0;
+  padding: 0 16px 12px;
+}
+
+@media (max-width: 760px) {
+  .chat-question-card h2,
+  .chat-permission-card h2 {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
+
+  .chat-question-card .chat-question-text {
+    padding-right: 14px;
+    padding-bottom: 8px;
+    padding-left: 14px;
+  }
+
+  .chat-permission-card .permission-tool,
+  .chat-permission-card > p:not(.permission-tool) {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
 }
 
 .conversation-terminal-fallback {

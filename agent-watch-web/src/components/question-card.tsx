@@ -32,7 +32,10 @@ export function QuestionCard({
     answer !== null && choices.includes(answer) ? answer : null
 
   return (
-    <article className="chat-question-card">
+    <article
+      className="chat-question-card"
+      data-mobile={isMobile ? 'true' : undefined}
+    >
       <h2>Question</h2>
       <MarkdownMessage className="chat-question-text">
         {question}

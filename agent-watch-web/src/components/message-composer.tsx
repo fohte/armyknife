@@ -97,7 +97,7 @@ export function MessageComposer({
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
         disabled={disabled}
-        rows={2}
+        rows={isMobile ? 1 : 2}
       />
       {attachments.length > 0 ? (
         <ul className="composer-attachments" aria-label="Attachments">

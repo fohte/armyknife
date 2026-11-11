@@ -1,5 +1,4 @@
 .chat-permission-card .permission-tool {
-  margin-bottom: 4px;
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -8,17 +7,14 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  padding: 0 16px 12px;
 }
 
-.permission-actions [data-slot='button'] {
-  min-height: 30px;
-  padding: 0 12px;
-  border: 1px solid var(--aw-border-control);
-}
-
-.permission-actions [data-slot='button']:first-child {
-  background: var(--aw-text-primary);
-  color: var(--aw-bg-surface);
+@media (max-width: 760px) {
+  .chat-permission-card .permission-actions {
+    padding-right: 14px;
+    padding-left: 14px;
+  }
 }
 
 .permission-action-status {
