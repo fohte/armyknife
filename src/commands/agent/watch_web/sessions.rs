@@ -40,6 +40,7 @@ enum SessionKind {
     Error,
     Plan,
     Stopped,
+    Proposal,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -112,6 +113,7 @@ struct SessionSnapshot {
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
+    unanswered_proposal_titles: HashMap<String, String>,
     agent_config: AgentConfig,
 }
 
@@ -202,6 +204,7 @@ async fn list_sessions<S: SessionSource>(
         .into_iter()
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
+    let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
 
     let mut sessions = snapshot
         .sessions
@@ -256,10 +259,12 @@ async fn list_sessions<S: SessionSource>(
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
+            let proposal_title = unanswered_proposal_titles.get(&session.session_id);
+            let needs_action = interrupted || proposal_title.is_some();
             let category_when_not_later =
-                category_for_with_interruption(session, turn, interrupted);
+                category_for_with_interruption(session, turn, needs_action);
             let state = state_by_id.get(&session.session_id);
-            let category = category_for_with_later(session, turn, interrupted, state, now);
+            let category = category_for_with_later(session, turn, needs_action, state, now);
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -267,13 +272,15 @@ async fn list_sessions<S: SessionSource>(
                 category,
                 is_paused: session.status == SessionStatus::Paused,
                 category_when_not_later,
-                kind: kind_for(session, turn),
+                kind: kind_for(session, turn, proposal_title.is_some()),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
                     .cloned()
                     .unwrap_or_default(),
-                preview: session.last_message.clone(),
+                preview: proposal_title
+                    .cloned()
+                    .or_else(|| session.last_message.clone()),
                 updated_at: session.updated_at,
                 elapsed_seconds: now
                     .signed_duration_since(session.updated_at)
@@ -336,6 +343,19 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
+    let mut unanswered_proposal_titles = HashMap::new();
+    for session_id in store::unanswered_agent_proposal_session_ids()? {
+        let Some(proposal) = store::agent_proposals(&session_id)?
+            .into_iter()
+            .find(|proposal| proposal.resolved_at.is_none())
+        else {
+            continue;
+        };
+        let body: serde_json::Value = serde_json::from_str(&proposal.body)?;
+        if let Some(title) = body.get("title").and_then(serde_json::Value::as_str) {
+            unanswered_proposal_titles.insert(session_id, title.to_string());
+        }
+    }
 
     Ok(SessionSnapshot {
         revision,
@@ -343,6 +363,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
+        unanswered_proposal_titles,
         agent_config: config::load_config_or_default().agent,
     })
 }
@@ -598,13 +619,27 @@ fn category_for_with_interruption(
     }
 }
 
-fn kind_for(session: &Session, turn: Option<UserTurnKind>) -> Option<SessionKind> {
+fn kind_for(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    has_unanswered_proposal: bool,
+) -> Option<SessionKind> {
     if session
         .current_tool
         .as_deref()
         .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
     {
         return Some(SessionKind::Plan);
+    }
+
+    if turn == Some(UserTurnKind::Ask) {
+        return Some(SessionKind::Question);
+    }
+    if turn == Some(UserTurnKind::Allow) {
+        return Some(SessionKind::Approve);
+    }
+    if has_unanswered_proposal {
+        return Some(SessionKind::Proposal);
     }
 
     let Some(turn) = turn else {
@@ -770,6 +805,7 @@ mod tests {
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
+        unanswered_proposal_titles: HashMap<String, String>,
         task_links: HashMap<String, Vec<LinkedSessionTask>>,
         task_priorities: HashMap<String, Option<i32>>,
         task_priority_order: HashMap<String, usize>,
@@ -787,6 +823,7 @@ mod tests {
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
+                unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 agent_config: AgentConfig {
                     work_types: self
                         .work_type_nav_labels
@@ -874,6 +911,7 @@ mod tests {
                     "example-org/parent-repository".to_string(),
                 ),
             ]),
+            unanswered_proposal_titles: HashMap::new(),
             task_links: HashMap::from([
                 (
                     "child-session".to_string(),
@@ -1118,6 +1156,42 @@ mod tests {
         expected["sessions"][0]["isCompacting"] = serde_json::json!(true);
 
         assert_eq!(actual, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn unanswered_proposal_moves_a_running_session_to_needs_action(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.web_states[0].later_until = None;
+        source
+            .unanswered_proposal_titles
+            .insert("child-session".to_string(), "Sample proposal".to_string());
+
+        let mut expected = expected_response(
+            "needs_action",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Proposal"),
+                category_when_not_later: "needs_action",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["preview"] = serde_json::json!("Sample proposal");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
@@ -1466,7 +1540,7 @@ mod tests {
         #[case] expected: Option<SessionKind>,
     ) {
         assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), Some(turn)),
+            kind_for(&session(SessionStatus::WaitingInput), Some(turn), false),
             expected
         );
     }
@@ -1489,7 +1563,7 @@ mod tests {
         });
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::AgentStatus)),
+            kind_for(&session, Some(UserTurnKind::AgentStatus), false),
             Some(expected)
         );
     }
@@ -1500,8 +1574,21 @@ mod tests {
         session.current_tool = Some("ExitPlanMode".to_string());
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::Ask)),
+            kind_for(&session, Some(UserTurnKind::Ask), true),
             Some(SessionKind::Plan)
+        );
+    }
+
+    #[rstest]
+    #[case::question(Some(UserTurnKind::Ask), SessionKind::Question)]
+    #[case::approval(Some(UserTurnKind::Allow), SessionKind::Approve)]
+    fn pending_question_and_approval_kinds_precede_proposals(
+        #[case] turn: Option<UserTurnKind>,
+        #[case] expected: SessionKind,
+    ) {
+        assert_eq!(
+            kind_for(&session(SessionStatus::WaitingInput), turn, true),
+            Some(expected),
         );
     }
 
@@ -1516,7 +1603,7 @@ mod tests {
     #[test]
     fn stopped_without_a_user_turn_has_stopped_kind() {
         assert_eq!(
-            kind_for(&session(SessionStatus::Stopped), None),
+            kind_for(&session(SessionStatus::Stopped), None, false),
             Some(SessionKind::Stopped)
         );
     }
@@ -1560,7 +1647,11 @@ mod tests {
             .map(|turn| turn.kind);
 
         assert_eq!(
-            (turn, category_for(&session, turn), kind_for(&session, turn)),
+            (
+                turn,
+                category_for(&session, turn),
+                kind_for(&session, turn, false),
+            ),
             (
                 None,
                 SessionCategory::NeedsAction,

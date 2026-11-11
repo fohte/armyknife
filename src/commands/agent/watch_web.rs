@@ -117,6 +117,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         store::watch_web_user_marker,
         |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
         store::delete_watch_web_queued_prompts,
+        store::agent_proposals,
         restart_signal,
     )
 }
@@ -153,6 +154,7 @@ fn app_with_assets_and_loader_and_restart_signal(
         load_user_marker,
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
+        |_| Ok(Vec::new()),
         restart_signal,
     )
 }
@@ -166,6 +168,7 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     + Sync
     + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> anyhow::Result<()> + Send + Sync + 'static,
+    load_proposals: impl Fn(&str) -> anyhow::Result<Vec<store::AgentProposal>> + Send + Sync + 'static,
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
     let enrichment_updates = EnrichmentUpdates::new();
@@ -174,11 +177,12 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(messages::routes_with_queued_prompts(
+        .merge(messages::routes_with_proposals(
             load_session,
             load_user_marker,
             load_queued_prompts,
             delete_queued_prompts,
+            load_proposals,
         ))
         .merge(image_attachments::routes())
         .fallback(api_not_found);

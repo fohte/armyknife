@@ -64,10 +64,6 @@ pub(crate) fn close_unanswered_agent_proposals(
     Ok(changed > 0)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the follow-up watch-web proposal API")
-)]
 pub(crate) fn unanswered_agent_proposal_session_ids(sessions_dir: &Path) -> Result<Vec<String>> {
     if !sessions_dir.exists() {
         return Ok(Vec::new());
@@ -82,10 +78,6 @@ pub(crate) fn unanswered_agent_proposal_session_ids(sessions_dir: &Path) -> Resu
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the follow-up watch-web proposal API")
-)]
 pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentProposal>> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -129,10 +121,6 @@ pub(crate) fn agent_proposals(sessions_dir: &Path, session_id: &str) -> Result<V
     .collect()
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the follow-up watch-web proposal API")
-)]
 pub(crate) fn write_agent_proposal_answer(
     sessions_dir: &Path,
     session_id: &str,

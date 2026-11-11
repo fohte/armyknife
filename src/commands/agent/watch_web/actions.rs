@@ -17,6 +17,7 @@ use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 
 mod messages;
+mod proposals;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
@@ -33,6 +34,10 @@ fn router_with_state(state: ActionState) -> Router {
             "/sessions/{id}/messages",
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
+        )
+        .route(
+            "/sessions/{id}/proposals/{seq}/answer",
+            post(proposals::answer_proposal),
         )
         .route("/sessions/{id}/answer", post(answer_question))
         .route(
@@ -457,6 +462,9 @@ mod tests {
 
     #[path = "send_message.rs"]
     mod send_message;
+
+    #[path = "proposals.rs"]
+    mod proposals;
 
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,

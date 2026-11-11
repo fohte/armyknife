@@ -12,11 +12,11 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::store::WatchWebQueuedPrompt;
+use crate::commands::agent::store::{AgentProposal, WatchWebQueuedPrompt};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -39,12 +39,30 @@ type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
+type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
 
+#[cfg(test)]
 pub(super) fn routes_with_queued_prompts(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+) -> Router {
+    routes_with_proposals(
+        load_session,
+        load_user_marker,
+        load_queued_prompts,
+        delete_queued_prompts,
+        |_| Ok(Vec::new()),
+    )
+}
+
+pub(super) fn routes_with_proposals(
+    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+    load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
 ) -> Router {
     Router::new()
         .route("/sessions/{id}/messages", get(get_messages))
@@ -53,15 +71,23 @@ pub(super) fn routes_with_queued_prompts(
             Arc::new(load_user_marker) as UserMarkerLoader,
             Arc::new(load_queued_prompts) as QueuedPromptLoader,
             Arc::new(delete_queued_prompts) as QueuedPromptDeleter,
+            Arc::new(load_proposals) as ProposalLoader,
         ))
 }
 
 async fn get_messages(
-    State((load_session, load_user_marker, load_queued_prompts, delete_queued_prompts)): State<(
+    State((
+        load_session,
+        load_user_marker,
+        load_queued_prompts,
+        delete_queued_prompts,
+        load_proposals,
+    )): State<(
         SessionLoader,
         UserMarkerLoader,
         QueuedPromptLoader,
         QueuedPromptDeleter,
+        ProposalLoader,
     )>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
@@ -72,6 +98,7 @@ async fn get_messages(
             |id| load_user_marker(id),
             |id| load_queued_prompts(id),
             |id, ids| delete_queued_prompts(id, ids),
+            |id| load_proposals(id),
         )
     })
     .await
@@ -111,6 +138,7 @@ fn load_messages_with(
         |_| Ok(None),
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
+        |_| Ok(Vec::new()),
     )?
     .map(|conversation| conversation.messages))
 }
@@ -121,6 +149,7 @@ fn load_conversation_with_queued_prompts(
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
     delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
+    load_proposals: impl FnOnce(&str) -> Result<Vec<AgentProposal>>,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
@@ -135,6 +164,11 @@ fn load_conversation_with_queued_prompts(
     } else {
         Vec::new()
     };
+    let proposals = load_proposals(session_id)?;
+    let proposal_items = proposals
+        .iter()
+        .map(proposal_chat_item)
+        .collect::<Result<Vec<_>>>()?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -150,6 +184,7 @@ fn load_conversation_with_queued_prompts(
         pending_tool,
         user_marker.as_deref(),
         &queued_prompts,
+        &proposal_items,
     )?;
 
     let messages = &mut conversation.messages;
@@ -169,6 +204,16 @@ fn load_conversation_with_queued_prompts(
                 .clone()
                 .unwrap_or_else(|| "Waiting for permission".to_string()),
         });
+    }
+
+    for (seq, item, unresolved) in &proposal_items {
+        if *unresolved
+            && !messages
+                .iter()
+                .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
+        {
+            messages.push(item.clone());
+        }
     }
 
     for agent_id in session
@@ -228,6 +273,7 @@ fn parse_session_transcript(
     pending_tool: Option<&str>,
     watch_web_user_marker: Option<&str>,
     queued_prompts: &[WatchWebQueuedPrompt],
+    proposals: &[(i64, ChatItem, bool)],
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match engine {
         Engine::Claude => {
@@ -236,25 +282,16 @@ fn parse_session_transcript(
                 None => None,
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
-                let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
-                    reader,
-                    parent,
-                    pending_tool,
-                    watch_web_user_marker,
-                    chrono::Utc::now(),
-                )?;
-                (messages, background_tasks, Vec::new())
-            } else {
-                parser::claude::parse_with_queued_prompts(
+            let (messages, background_tasks, resolved_ids) =
+                parser::claude::parse_with_queued_prompts_and_proposals(
                     reader,
                     parent,
                     pending_tool,
                     watch_web_user_marker,
                     chrono::Utc::now(),
                     queued_prompts,
-                )?
-            };
+                    proposals,
+                )?;
             Ok((
                 ConversationResponse {
                     messages,
@@ -279,6 +316,29 @@ fn parse_session_transcript(
             ))
         }
     }
+}
+
+fn proposal_chat_item(proposal: &AgentProposal) -> Result<(i64, ChatItem, bool)> {
+    let body: ProposalBody = serde_json::from_str(&proposal.body)
+        .with_context(|| format!("parsing proposal {} body", proposal.seq))?;
+    let answer = proposal
+        .answer
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .with_context(|| format!("parsing proposal {} answer", proposal.seq))?;
+    Ok((
+        proposal.seq,
+        ChatItem::Proposal {
+            seq: proposal.seq,
+            title: body.title,
+            summary: body.summary,
+            options: body.options,
+            answer,
+            resolved: proposal.resolved_at.is_some(),
+        },
+        proposal.resolved_at.is_none(),
+    ))
 }
 
 trait SeekableBufRead: BufRead + Seek {}
@@ -391,10 +451,46 @@ enum ChatItem {
         choices: Vec<String>,
         answer: Option<String>,
     },
+    Proposal {
+        seq: i64,
+        title: String,
+        summary: Option<String>,
+        options: Vec<ProposalOption>,
+        answer: Option<ProposalAnswer>,
+        resolved: bool,
+    },
     Permission {
         tool: String,
         description: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalOption {
+    label: String,
+    description: Option<String>,
+    #[serde(default)]
+    pros: Vec<String>,
+    #[serde(default)]
+    cons: Vec<String>,
+    #[serde(default)]
+    recommended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalAnswer {
+    choice: Option<usize>,
+    comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProposalBody {
+    title: String,
+    summary: Option<String>,
+    options: Vec<ProposalOption>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -459,7 +555,7 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{ChatItem, load_messages_with, routes_with_queued_prompts};
-    use crate::commands::agent::store::WatchWebQueuedPrompt;
+    use crate::commands::agent::store::{AgentProposal, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
@@ -472,6 +568,60 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn unanswered_proposal_without_a_transcript_position_is_appended_to_conversation() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let proposal = AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            body: r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
+            created_at,
+            answer: None,
+            resolved_at: None,
+        };
+
+        let conversation = super::load_conversation_with_queued_prompts(
+            "fixture-session",
+            |id| Ok((id == "fixture-session").then(stored_session)),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(vec![proposal]),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(conversation.messages).unwrap(),
+            json!([{
+                "type": "proposal",
+                "seq": 1,
+                "title": "Sample proposal",
+                "summary": null,
+                "options": [
+                    {
+                        "label": "Option A",
+                        "description": null,
+                        "pros": [],
+                        "cons": [],
+                        "recommended": false,
+                    },
+                    {
+                        "label": "Option B",
+                        "description": null,
+                        "pros": [],
+                        "cons": [],
+                        "recommended": false,
+                    },
+                ],
+                "answer": null,
+                "resolved": false,
+            }]),
+        );
     }
 
     fn pending_question_transcript() -> (tempfile::TempDir, PathBuf) {

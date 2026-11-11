@@ -374,23 +374,36 @@ pub(crate) fn close_unanswered_agent_proposals(
     database::close_unanswered_agent_proposals(sessions_dir, session_id)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
 pub(crate) fn unanswered_agent_proposal_session_ids() -> Result<Vec<String>> {
     database::unanswered_agent_proposal_session_ids(&sessions_dir()?)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
 pub(crate) fn agent_proposals(session_id: &str) -> Result<Vec<AgentProposal>> {
-    database::agent_proposals(&sessions_dir()?, session_id)
+    agent_proposals_from(&sessions_dir()?, session_id)
 }
 
-#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
+pub(crate) fn agent_proposals_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<AgentProposal>> {
+    database::agent_proposals(sessions_dir, session_id)
+}
+
 pub(crate) fn write_agent_proposal_answer(
     session_id: &str,
     seq: i64,
     answer: &str,
 ) -> Result<bool> {
-    database::write_agent_proposal_answer(&sessions_dir()?, session_id, seq, answer)
+    write_agent_proposal_answer_from(&sessions_dir()?, session_id, seq, answer)
+}
+
+pub(crate) fn write_agent_proposal_answer_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    answer: &str,
+) -> Result<bool> {
+    database::write_agent_proposal_answer(sessions_dir, session_id, seq, answer)
 }
 
 pub(crate) fn watch_web_session_states_from(
