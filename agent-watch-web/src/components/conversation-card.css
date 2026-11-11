@@ -40,31 +40,12 @@
   padding: 0 16px 12px;
 }
 
-@media (max-width: 760px) {
-  .chat-question-card h2,
-  .chat-permission-card h2 {
-    padding-right: 14px;
-    padding-left: 14px;
-  }
-
-  .chat-question-card .chat-question-text {
-    padding-right: 14px;
-    padding-bottom: 8px;
-    padding-left: 14px;
-  }
-
-  .chat-permission-card .permission-tool,
-  .chat-permission-card > p:not(.permission-tool) {
-    padding-right: 14px;
-    padding-left: 14px;
-  }
-}
-
 .conversation-terminal-fallback {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  padding: 0 16px 12px;
   color: var(--aw-text-muted);
   font-size: 12px;
 }

@@ -38,22 +38,6 @@ export const QuestionWaitsForAnAnswer: Story = {
   ],
 }
 
-export const MobileQuestionWaitsForAnAnswer: Story = {
-  name: 'A mobile question gives each choice a taller touch target',
-  args: {
-    isMobile: true,
-  },
-  decorators: [
-    (Story) => (
-      <div
-        style={{ width: '390px', padding: '0 16px', boxSizing: 'border-box' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
-}
-
 export const QuestionShowsSelectedAnswer: Story = {
   name: 'A question marks the choice selected by the user',
   args: {

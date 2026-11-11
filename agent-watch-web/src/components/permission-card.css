@@ -10,13 +10,6 @@
   padding: 0 16px 12px;
 }
 
-@media (max-width: 760px) {
-  .chat-permission-card .permission-actions {
-    padding-right: 14px;
-    padding-left: 14px;
-  }
-}
-
 .permission-action-status {
   margin-top: 10px !important;
   color: var(--aw-text-muted);

@@ -51,17 +51,6 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('marks the card for mobile styling', () => {
-  renderQuestion(props({ isMobile: true }))
-
-  const card = requireElement(
-    container.querySelector<HTMLElement>('.chat-question-card'),
-  )
-  const snapshot = () => ({ mobile: card.dataset['mobile'] })
-
-  expect(snapshot()).toEqual({ mobile: 'true' })
-})
-
 it('renders answered choice Markdown as inline spans without paragraphs', () => {
   renderQuestion(props({ answer: 'Retry *a few* times' }))
 

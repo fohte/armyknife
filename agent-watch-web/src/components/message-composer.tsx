@@ -1,6 +1,7 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
+import { ArrowUp } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useLayoutEffect, useRef } from 'react'
 
@@ -97,7 +98,7 @@ export function MessageComposer({
         onKeyDown={onKeyDown}
         onPaste={handlePaste}
         disabled={disabled}
-        rows={isMobile ? 1 : 2}
+        rows={2}
       />
       {attachments.length > 0 ? (
         <ul className="composer-attachments" aria-label="Attachments">
@@ -154,7 +155,7 @@ export function MessageComposer({
             isSending
           }
         >
-          ↑
+          <ArrowUp aria-hidden="true" size={14} />
         </Button>
       </div>
     </form>
