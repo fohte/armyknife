@@ -217,6 +217,39 @@ it('toggles TODAY from the iPhone conversation header', () => {
   })
 })
 
+it('places the session ID copy control beside the iPhone title', () => {
+  renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
+
+  const titleRow = container.querySelector(
+    '.mobile-conversation-heading .session-heading-title-row',
+  )
+  const copyButton = titleRow?.querySelector<HTMLButtonElement>(
+    '.conversation-copy-session-id',
+  )
+
+  const snapshot = () => ({
+    title: titleRow?.querySelector('h1')?.textContent,
+    copyButton: {
+      ariaLabel: copyButton?.getAttribute('aria-label'),
+      title: copyButton?.getAttribute('title'),
+      compact: copyButton?.getAttribute('data-compact') ?? null,
+    },
+    compactCopyControl: container.querySelector(
+      '.conversation-copy-session-id[data-compact="true"]',
+    ),
+  })
+
+  expect(snapshot()).toEqual({
+    title: 'Choose a retry policy',
+    copyButton: {
+      ariaLabel: 'Copy session ID',
+      title: 'Copy session ID',
+      compact: null,
+    },
+    compactCopyControl: null,
+  })
+})
+
 function dispatchKey(
   target: EventTarget,
   key: string,
@@ -980,7 +1013,7 @@ it('keeps Enter for newlines and exposes mobile conversation actions', () => {
     actions: [['interrupt']],
     defaultPrevented: [false, false],
     keyboardHint: undefined,
-    choiceLabels: [],
+    choiceLabels: ['1', '2'],
     interruptLabel: 'Interrupt',
   })
 })

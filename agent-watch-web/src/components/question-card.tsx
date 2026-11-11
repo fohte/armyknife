@@ -242,7 +242,7 @@ export function QuestionCard({
               answerChoice(choiceIndex + 1)
             }}
           >
-            {!isMobile ? <kbd>{choiceIndex + 1}</kbd> : null}
+            <kbd>{choiceIndex + 1}</kbd>
             <span className="chat-question-choice-content">
               <MarkdownMessage className="chat-question-choice-text" inline>
                 {choice.label}
