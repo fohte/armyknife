@@ -1,5 +1,6 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use anyhow::Result;
 use axum::extract::{DefaultBodyLimit, Path as RoutePath, State};
@@ -24,7 +25,7 @@ pub(super) fn router() -> Router {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
-        proposal_answer_lock: Arc::new(tokio::sync::Mutex::new(())),
+        proposal_answer_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
     })
 }
 
@@ -53,13 +54,32 @@ fn router_with_state(state: ActionState) -> Router {
         .with_state(state)
 }
 
+type ProposalAnswerLock = tokio::sync::Mutex<()>;
+type ProposalAnswerLocks =
+    Arc<tokio::sync::Mutex<HashMap<(String, i64), Weak<ProposalAnswerLock>>>>;
+
 #[derive(Clone)]
 struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
-    // Delivery precedes persistence, so concurrent answers must share a gate.
-    proposal_answer_lock: Arc<tokio::sync::Mutex<()>>,
+    // Delivery precedes persistence, so repeated answers for one proposal must serialize.
+    proposal_answer_locks: ProposalAnswerLocks,
+}
+
+impl ActionState {
+    async fn proposal_answer_lock(&self, session_id: &str, seq: i64) -> Arc<ProposalAnswerLock> {
+        let key = (session_id.to_owned(), seq);
+        let mut locks = self.proposal_answer_locks.lock().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
 }
 
 trait ActionRuntime: Send + Sync {
@@ -472,6 +492,7 @@ mod tests {
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
+        after_message: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -482,6 +503,7 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 message_error: Mutex::new(None),
+                after_message: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -496,6 +518,9 @@ mod tests {
                 "sessionId": session.session_id,
                 "content": content,
             }));
+            if let Some(after_message) = self.after_message.lock().unwrap().take() {
+                after_message();
+            }
             if let Some(message) = self.message_error.lock().unwrap().clone() {
                 return Err(anyhow::anyhow!(message));
             }
@@ -562,7 +587,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
-                proposal_answer_lock: Arc::new(tokio::sync::Mutex::new(())),
+                proposal_answer_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             })
         }
 
@@ -590,6 +615,10 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_after_message(&self, callback: impl FnOnce() + Send + 'static) {
+            *self.runtime.after_message.lock().unwrap() = Some(Box::new(callback));
         }
     }
 

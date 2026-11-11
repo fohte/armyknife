@@ -1,9 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use axum::http::StatusCode;
 use indoc::indoc;
 use rstest::rstest;
 use serde_json::json;
+use tokio::sync::Mutex;
 use tower::ServiceExt;
 
+use super::super::ActionState;
 use super::{ActionContext, action_context, post, response_snapshot, session};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
@@ -65,57 +70,28 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 
 #[rstest]
 #[tokio::test]
-async fn concurrent_answers_only_notify_the_agent_once(action_context: ActionContext) {
-    action_context.save_session(&session("sample-session"));
-    add_proposal(&action_context, "sample-session");
-    let router = action_context.router();
-
-    let (first, second) = tokio::join!(
-        router.clone().oneshot(post(
-            "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
-        )),
-        router.oneshot(post(
-            "/sessions/sample-session/proposals/1/answer",
-            json!({ "choice": 0, "comment": null }),
-        )),
-    );
-    let mut snapshots = [
-        response_snapshot(first.unwrap(), &action_context).await,
-        response_snapshot(second.unwrap(), &action_context).await,
-    ];
-    snapshots.sort_by_key(|snapshot| snapshot["status"].as_u64().unwrap_or_default());
-    let proposals = store::agent_proposals_from(
-        &action_context.temp_dir.path().join("sessions"),
-        "sample-session",
-    )
-    .unwrap();
-
+async fn proposal_answer_locks_are_scoped_to_one_proposal(action_context: ActionContext) {
+    let state = ActionState {
+        sessions_dir: Some(action_context.temp_dir.path().join("sessions")),
+        attachment_dir: Some(action_context.temp_dir.path().join("attachments")),
+        runtime: action_context.runtime.clone(),
+        proposal_answer_locks: Arc::new(Mutex::new(HashMap::new())),
+    };
+    let first = state.proposal_answer_lock("sample-session", 1).await;
+    let same_proposal = state.proposal_answer_lock("sample-session", 1).await;
+    let other_session = state.proposal_answer_lock("other-session", 1).await;
+    let other_proposal = state.proposal_answer_lock("sample-session", 2).await;
+    let _first_guard = first.lock().await;
     assert_eq!(
-        (snapshots, proposals[0].answer.clone()),
         (
-            [
-                json!({
-                    "status": StatusCode::OK.as_u16(),
-                    "body": { "ok": true },
-                    "calls": [{
-                        "kind": "message",
-                        "sessionId": "sample-session",
-                        "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
-                    }],
-                }),
-                json!({
-                    "status": StatusCode::CONFLICT.as_u16(),
-                    "body": { "error": "proposal is not awaiting an answer" },
-                    "calls": [{
-                        "kind": "message",
-                        "sessionId": "sample-session",
-                        "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
-                    }],
-                }),
-            ],
-            Some(r#"{"choice":0,"comment":null}"#.to_string()),
+            Arc::ptr_eq(&first, &same_proposal),
+            Arc::ptr_eq(&first, &other_session),
+            Arc::ptr_eq(&first, &other_proposal),
+            same_proposal.try_lock().is_err(),
+            other_session.try_lock().is_ok(),
+            other_proposal.try_lock().is_ok(),
         ),
+        (true, false, false, true, true, true),
     );
 }
 
@@ -273,6 +249,54 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
                 }],
             }),
             None,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn proposal_resolved_during_delivery_is_not_reported_as_answered(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        store::close_unanswered_agent_proposals(&sessions_dir, "sample-session").unwrap();
+    });
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({ "choice": 0, "comment": null }),
+        ))
+        .await
+        .unwrap();
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (
+            response_snapshot(response, &action_context).await,
+            proposals[0].answer.clone(),
+            proposals[0].resolved_at.is_some(),
+        ),
+        (
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "proposal is no longer available" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            None,
+            true,
         ),
     );
 }
