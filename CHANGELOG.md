@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.601](https://github.com/fohte/armyknife/compare/v0.1.600...v0.1.601) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** handle Alt+Enter as newline ([#1565](https://github.com/fohte/armyknife/issues/1565)) ([b3da67f](https://github.com/fohte/armyknife/commit/b3da67f61332b9ce3454200f162f16f3f7c8a6c9))
+
+## [0.1.600](https://github.com/fohte/armyknife/compare/v0.1.599...v0.1.600) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** treat stopped notifications as terminal ([#1563](https://github.com/fohte/armyknife/issues/1563)) ([198581e](https://github.com/fohte/armyknife/commit/198581e8571248d4c6eb450137e827c043f471e5))
+
+## [0.1.599](https://github.com/fohte/armyknife/compare/v0.1.598...v0.1.599) (2026-11-11)
+
+
+### Performance Improvements
+
+* **agent-watch-web:** skip unchanged row renders ([#1561](https://github.com/fohte/armyknife/issues/1561)) ([bd942f3](https://github.com/fohte/armyknife/commit/bd942f345e48e8b10928e858db2451336e94627a))
+
 ## [0.1.598](https://github.com/fohte/armyknife/compare/v0.1.597...v0.1.598) (2026-11-11)
 
 

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 mod background_tasks;
+mod decision_position;
 mod proposals;
 mod questions;
 mod transcript_branch;
@@ -25,6 +26,7 @@ use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, Watch
 use background_tasks::{
     BackgroundTaskTracker, record_timestamp, task_notification_envelope, task_notification_text,
 };
+use decision_position::insert_time_placed_decisions;
 use proposals::ProposalTimeline;
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
@@ -203,8 +205,15 @@ fn parse_with_background_tasks_and_image_directory(
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
+    let mut decision_tool_uses = Vec::new();
+    let mut decision_tool_results = Vec::new();
     let mut queue = super::queue::Queue::new(context.queued_prompts);
     for_each_jsonl_record(&mut reader, |record| {
+        decision_position::observe_recorded_decisions(
+            &record,
+            &mut decision_tool_uses,
+            &mut decision_tool_results,
+        );
         queue.observe(&record);
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
             return;
@@ -228,6 +237,11 @@ fn parse_with_background_tasks_and_image_directory(
         );
     })?;
     mark_active_branch(&mut transcript_nodes, latest_uuid.as_deref());
+    let recorded_decision_seqs = decision_position::recorded_decision_seqs(
+        &decision_tool_uses,
+        &decision_tool_results,
+        &transcript_nodes,
+    );
     reader.seek(SeekFrom::Start(0))?;
     let mut items = Vec::new();
     let mut tools = ToolSummary::default();
@@ -259,6 +273,13 @@ fn parse_with_background_tasks_and_image_directory(
                 return;
             }
         }
+        insert_time_placed_decisions(
+            record_timestamp(&record),
+            &recorded_decision_seqs,
+            &mut unplaced_decisions,
+            &mut tools,
+            &mut items,
+        );
         if queued_prompt_delivery_is_on_active_branch(&record, &mut transcript_nodes) {
             queue.observe_queued_prompt_delivery(&record, user_marker);
         }
@@ -988,6 +1009,10 @@ mod tests {
     "#};
 
     fn decision(seq: i64) -> AgentDecision {
+        decision_at(seq, "2026-11-11T00:00:00Z")
+    }
+
+    fn decision_at(seq: i64, created_at: &str) -> AgentDecision {
         AgentDecision {
             session_id: "fixture-session".to_string(),
             seq,
@@ -995,13 +1020,17 @@ mod tests {
             why: "The fixture keeps the example reversible.".to_string(),
             considered: vec!["The other fixture option".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
-            created_at: "2026-11-11T00:00:00Z".to_string(),
+            created_at: created_at.to_string(),
             review: None,
             reviewed_at: None,
         }
     }
 
     fn decision_item(seq: i64) -> ChatItem {
+        decision_item_at(seq, "2026-11-11T00:00:00Z")
+    }
+
+    fn decision_item_at(seq: i64, created_at: &str) -> ChatItem {
         ChatItem::Decision {
             seq,
             title: format!("Decision {seq}"),
@@ -1009,18 +1038,19 @@ mod tests {
             considered: vec!["The other fixture option".to_string()],
             easy_to_change: "Change one fixture value.".to_string(),
             review: None,
-            created_at: "2026-11-11T00:00:00Z".to_string(),
+            created_at: created_at.to_string(),
         }
     }
 
     #[test]
     fn places_a_recorded_decision_at_its_successful_add_call() {
         let transcript = indoc! {r#"
-            {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
-            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
-            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 1"}]}}
-            {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+            {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+            {"uuid":"fixture-decision-call","parentUuid":"fixture-before","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+            {"uuid":"fixture-decision-result","parentUuid":"fixture-decision-call","type":"user","timestamp":"2026-11-11T12:00:00Z","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 1"}]}}
+            {"uuid":"fixture-after","parentUuid":"fixture-decision-result","type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
         "#};
+        let decision = decision_at(1, "2026-11-11T09:00:00Z");
 
         assert_eq!(
             parse_with_decisions_and_queued_prompts(
@@ -1029,7 +1059,7 @@ mod tests {
                 None,
                 None,
                 Utc.timestamp_opt(1_000, 0).unwrap(),
-                &[decision(1)],
+                &[decision],
                 &[],
             )
             .unwrap()
@@ -1038,7 +1068,7 @@ mod tests {
                 ChatItem::Assistant {
                     text: "Before the decision.".to_string(),
                 },
-                decision_item(1),
+                decision_item_at(1, "2026-11-11T09:00:00Z"),
                 ChatItem::Assistant {
                     text: "After the decision.".to_string(),
                 },
@@ -1075,6 +1105,105 @@ mod tests {
     #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT)]
     fn appends_decisions_without_a_successful_recorded_result(#[case] transcript: &str) {
         assert_unplaced_decisions(transcript);
+    }
+
+    #[test]
+    fn places_unrecorded_decisions_before_the_first_later_transcript_record() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+            {"uuid":"fixture-after","parentUuid":"fixture-before","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"text","text":"After the decision."}]}}
+        "#};
+        let decision = decision_at(1, "2026-11-11T10:30:00Z");
+
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &[decision],
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::Assistant {
+                    text: "Before the decision.".to_string(),
+                },
+                decision_item_at(1, "2026-11-11T10:30:00Z"),
+                ChatItem::Assistant {
+                    text: "After the decision.".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn appends_unrecorded_decisions_newer_than_every_transcript_record() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Earlier message."}]}}
+        "#};
+        let decision = decision_at(1, "2026-11-11T10:30:00Z");
+
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &[decision],
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::Assistant {
+                    text: "Earlier message.".to_string(),
+                },
+                decision_item_at(1, "2026-11-11T10:30:00Z"),
+            ],
+        );
+    }
+
+    #[test]
+    fn abandoned_decision_adds_do_not_count_as_active_transcript_positions() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root","parentUuid":null,"type":"user","timestamp":"2026-11-11T10:00:00Z","message":{"content":"Earlier message."}}
+            {"uuid":"fixture-abandoned","parentUuid":"fixture-root","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call-a","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}},{"type":"tool_use","id":"fixture-decision-call-b","name":"Bash","input":{"command":"a agent decision add 'Decision 2'"}}]}}
+            {"uuid":"fixture-abandoned-result","parentUuid":"fixture-abandoned","type":"user","timestamp":"2026-11-11T12:00:00Z","sourceToolAssistantUUID":"fixture-abandoned","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call-a","content":"Recorded decision 1"},{"type":"tool_result","tool_use_id":"fixture-decision-call-b","content":"Recorded decision 2"}]}}
+            {"uuid":"fixture-current","parentUuid":"fixture-root","type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"Current message."}]}}
+        "#};
+        let decisions = [
+            decision_at(1, "2026-11-11T10:30:00Z"),
+            decision_at(2, "2026-11-11T10:30:00Z"),
+        ];
+
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &decisions,
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::User {
+                    text: "Earlier message.".to_string(),
+                    from: None,
+                },
+                decision_item_at(1, "2026-11-11T10:30:00Z"),
+                decision_item_at(2, "2026-11-11T10:30:00Z"),
+                ChatItem::Assistant {
+                    text: "Current message.".to_string(),
+                },
+            ],
+        );
     }
 
     #[rstest]
