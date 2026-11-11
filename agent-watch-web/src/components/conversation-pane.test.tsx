@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
@@ -1524,6 +1525,86 @@ it('shows peer images and supports keyboard navigation', () => {
     selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   expect(snapshot()).toEqual(expected)
+})
+
+it('shows the linked task count in a peer session card', async () => {
+  const linkedSession: Session = {
+    ...session,
+    id: 'fictional-peer-session',
+    category: 'in_progress',
+    kind: 'Review',
+    title: 'Review task links',
+    preview: 'Check the linked task summary.',
+    elapsedSeconds: 120,
+    engine: 'Claude',
+    workType: 'PM',
+    task: {
+      id: 'fixture-task-one',
+      number: 71,
+      title: 'Review the linked task',
+      priority: 1,
+    },
+    tasks: [
+      {
+        id: 'fixture-task-one',
+        number: 71,
+        title: 'Review the linked task',
+        priority: 1,
+      },
+      {
+        id: 'fixture-task-two',
+        number: 72,
+        title: 'Confirm the task count',
+        priority: 2,
+      },
+      {
+        id: 'fixture-task-three',
+        number: 73,
+        title: 'Update the overview',
+        priority: null,
+      },
+    ],
+    repo: 'sample-org/example-repo',
+  }
+  const message: ChatItem = {
+    type: 'peer',
+    direction: 'from',
+    session_id: linkedSession.id,
+    content: [{ type: 'text', text: 'A fictional peer update.' }],
+  }
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    undefined,
+    [message],
+    actions,
+    false,
+    [],
+    [linkedSession],
+  )
+
+  const peerLink = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-peer-message-from .session-link-trigger',
+    ),
+  )
+  await act(async () => {
+    await userEvent.hover(peerLink)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  })
+
+  const openBesideModifier =
+    getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
+      ? '⌘'
+      : 'Ctrl'
+  const card = requireElement(
+    document.querySelector<HTMLElement>('.session-link-card'),
+  )
+  expect(card.textContent).toBe(
+    `Review task linksPM · ClaudeReview · Check the linked task summary. · 2m` +
+      `P1 #71Review the linked task +2sample-org/example-repo` +
+      `Click to open · ${openBesideModifier}-click to open beside`,
+  )
 })
 
 it('refreshes peer session labels when the linked session title changes', () => {
