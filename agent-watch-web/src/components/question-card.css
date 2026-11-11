@@ -40,6 +40,7 @@
 .chat-question-choice-content {
   display: flex;
   flex-direction: column;
+  padding-block: 8px;
 }
 
 .chat-question-choice-description {
@@ -53,15 +54,15 @@
   font-size: 12px;
 }
 
-.chat-question-composer {
+.chat-question-card .chat-question-composer {
   width: auto;
-  margin: 12px 0 0;
-  padding: 0 16px;
+  margin: 12px 16px;
+  padding: 0;
 }
 
 .chat-question-composer label {
   display: block;
-  padding: 8px 0 0;
+  padding: 8px 12px 0;
   color: var(--aw-text-muted);
 }
 
@@ -73,7 +74,7 @@
 }
 
 .chat-question-composer .chat-question-send-error {
-  padding: 0;
+  padding: 0 12px;
 }
 
 .chat-question-actions {
@@ -85,7 +86,11 @@
 }
 
 .chat-question-composer .chat-question-actions {
-  padding: 0;
+  padding: 0 12px;
+}
+
+.chat-question-card > .chat-question-actions {
+  padding-bottom: 12px;
 }
 
 .chat-question-choices kbd {
