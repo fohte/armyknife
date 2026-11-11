@@ -2142,6 +2142,44 @@ it('opens a session in the Inbox when selected from the palette on Board', async
   })
 })
 
+it.each([
+  ['desktop', false, '?session=session%2Fpalette'],
+  ['mobile', true, '?session=session%2Fpalette&screen=conversation'],
+] as const)(
+  'opens a session beside on %s without navigating the current tab',
+  async (_name, isMobile, expectedUrl) => {
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+    if (isMobile) setMobileViewport(true)
+    renderApp()
+    publishSessions({
+      revision: 1,
+      sessions: [session('session/palette', 'Distinctive review session')],
+    })
+    act(() => {
+      dispatchKey(window, 'k', { ctrlKey: true })
+    })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    await act(async () => {
+      await userEvent.type(input, 'Distinctive review session')
+    })
+    act(() => {
+      dispatchKey(input, 'Enter', { ctrlKey: true })
+    })
+
+    const getActual = () => ({
+      openCalls: open.mock.calls,
+      paletteOpen: container.querySelector('[aria-label="Jump to"]') !== null,
+    })
+    expect(getActual()).toEqual({
+      openCalls: [[expectedUrl, '_blank', 'noopener,noreferrer']],
+      paletteOpen: false,
+    })
+  },
+)
+
 it('opens a selected project on Board at the mobile breakpoint', async () => {
   setPlatform('MacIntel')
   renderApp()
