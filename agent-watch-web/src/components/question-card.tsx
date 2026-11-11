@@ -201,7 +201,9 @@ export function QuestionCard({
       <h2>
         {header === undefined || header.length === 0 ? 'Question' : header}
       </h2>
-      {multiSelect ? <p>Multiple select question.</p> : null}
+      {multiSelect ? (
+        <p className="chat-question-multi-select">Multiple select question.</p>
+      ) : null}
       <MarkdownMessage className="chat-question-text">
         {question}
       </MarkdownMessage>

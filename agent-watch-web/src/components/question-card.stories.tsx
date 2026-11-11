@@ -36,6 +36,15 @@ type Story = StoryObj<typeof meta>
 
 export const QuestionWaitsForAnAnswer: Story = {
   name: 'A question offers choices while it waits for an answer',
+  decorators: [
+    (Story) => (
+      <div
+        style={{ width: '740px', padding: '0 24px', boxSizing: 'border-box' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
 }
 
 export const QuestionShowsItsMultipleSelectType: Story = {

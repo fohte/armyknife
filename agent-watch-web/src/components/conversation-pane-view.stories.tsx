@@ -358,6 +358,56 @@ export const TheConversationShowsOperationSummaries: Story = {
   },
 }
 
+export const TheConversationShowsDecisionRows: Story = {
+  name: 'The conversation shows a provisional decision in its transcript',
+  args: {
+    session: { ...session, decisionCount: 1, unreviewedDecisionCount: 1 },
+    messages: [
+      {
+        type: 'assistant',
+        text: 'I will use a fixed retry limit while continuing the work.',
+      },
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Use a fixed retry limit',
+        why: 'The current service has no reliable timing data.',
+        considered: ['Retry using the latest duration'],
+        easyToChange: 'One configuration value in the CI workflow.',
+        review: null,
+        createdAt: '2026-11-11T03:25:59Z',
+      },
+    ],
+  },
+}
+
+export const DoneSessionNeedsDecisionReview: Story = {
+  name: 'A completed session highlights decisions that need review',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      decisionCount: 2,
+      unreviewedDecisionCount: 1,
+    },
+    decisionsPanelOpen: true,
+    selectedDecisionSeq: 1,
+    messages: [
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Use a fixed retry limit',
+        why: 'The current service has no reliable timing data.',
+        considered: ['Retry using the latest duration'],
+        easyToChange: 'One configuration value in the CI workflow.',
+        review: null,
+        createdAt: '2026-11-11T03:25:59Z',
+      },
+    ],
+  },
+}
+
 export const PeerMessagesAndEventsHaveTheirOwnDirection: Story = {
   name: 'The conversation separates peer messages from one-line events',
   args: {

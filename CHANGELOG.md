@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.1.583](https://github.com/fohte/armyknife/compare/v0.1.582...v0.1.583) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align right panel with mock ([#1525](https://github.com/fohte/armyknife/issues/1525)) ([1ff611e](https://github.com/fohte/armyknife/commit/1ff611e45bcc37a74e671225435079b5a60f75c0))
+
+## [0.1.582](https://github.com/fohte/armyknife/compare/v0.1.581...v0.1.582) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match Inbox and Later menu ([#1524](https://github.com/fohte/armyknife/issues/1524)) ([2ae5e3e](https://github.com/fohte/armyknife/commit/2ae5e3e8282c4663b7381bdfc7a83014a816a36c))
+
+## [0.1.581](https://github.com/fohte/armyknife/compare/v0.1.580...v0.1.581) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match cards and composer ([#1522](https://github.com/fohte/armyknife/issues/1522)) ([c819281](https://github.com/fohte/armyknife/commit/c819281fe6a05ba7bf70f304431aaddd16d183a4))
+
+## [0.1.580](https://github.com/fohte/armyknife/compare/v0.1.579...v0.1.580) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** add decision review UI ([#1519](https://github.com/fohte/armyknife/issues/1519)) ([5d1d66c](https://github.com/fohte/armyknife/commit/5d1d66cbd952d467d6f615719b54a3d7a0ffd775))
+
+## [0.1.579](https://github.com/fohte/armyknife/compare/v0.1.578...v0.1.579) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match palette to mock ([#1517](https://github.com/fohte/armyknife/issues/1517)) ([a54dfcf](https://github.com/fohte/armyknife/commit/a54dfcf2ea3a34c57291bd06bd8bc0a1cc270c9b))
+
+## [0.1.578](https://github.com/fohte/armyknife/compare/v0.1.577...v0.1.578) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align conversation cards ([#1516](https://github.com/fohte/armyknife/issues/1516)) ([373955f](https://github.com/fohte/armyknife/commit/373955f90ddf8b09f00df29e2db8162f9a459085))
+
 ## [0.1.577](https://github.com/fohte/armyknife/compare/v0.1.576...v0.1.577) (2026-11-11)
 
 
