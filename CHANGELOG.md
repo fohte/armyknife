@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.589](https://github.com/fohte/armyknife/compare/v0.1.588...v0.1.589) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** exclude ended tasks ([#1540](https://github.com/fohte/armyknife/issues/1540)) ([85379f1](https://github.com/fohte/armyknife/commit/85379f1e58b5f59d5d3f2b2d3af17d4272fa50ac))
+
 ## [0.1.588](https://github.com/fohte/armyknife/compare/v0.1.587...v0.1.588) (2026-11-11)
 
 
