@@ -41,6 +41,10 @@
   cursor: pointer;
 }
 
+.chat-peer-content-unavailable {
+  cursor: default;
+}
+
 .chat-peer-text {
   color: #e4e4e7;
   white-space: pre-wrap;

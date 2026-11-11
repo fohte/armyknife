@@ -20,7 +20,11 @@ export function PeerMessage({
   )
   const sessionName =
     foundTarget?.title ??
-    (message.session_id === 'unknown' ? 'Unknown session' : message.session_id)
+    (message.session_id === 'unknown'
+      ? 'Unknown session'
+      : message.session_title === undefined
+        ? message.session_id
+        : `${message.session_title} (${message.session_id})`)
   const directionLabel = message.direction === 'from' ? 'FROM' : 'TO'
   const openSession = () => {
     if (foundTarget === undefined) return
@@ -42,7 +46,7 @@ export function PeerMessage({
         )}
       </div>
       <div
-        className="chat-peer-content"
+        className={`chat-peer-content${foundTarget === undefined ? ' chat-peer-content-unavailable' : ''}`}
         role={foundTarget === undefined ? undefined : 'link'}
         tabIndex={foundTarget === undefined ? undefined : 0}
         aria-label={

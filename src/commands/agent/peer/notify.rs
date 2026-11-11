@@ -162,8 +162,16 @@ fn resolve_target_session_id(
     }
 }
 
-fn delivery_output(session_id: &str, _delivery: &Delivery) -> String {
-    format!("Delivered to session {session_id}.")
+fn delivery_output(session_id: &str, delivery: &Delivery) -> String {
+    match delivery {
+        Delivery::Sent => format!("Delivered to session {session_id}."),
+        Delivery::Steered => {
+            format!("Injected into the running turn of Codex session {session_id}.")
+        }
+        Delivery::Started => {
+            format!("Started a new turn in idle Codex session {session_id}.")
+        }
+    }
 }
 
 /// Resolves this process's own session_id for the `<peer-message>` sender
@@ -1078,8 +1086,14 @@ mod tests {
 
     #[rstest]
     #[case::claude(Delivery::Sent, "Delivered to session thread-a.")]
-    #[case::steered(Delivery::Steered, "Delivered to session thread-a.")]
-    #[case::started(Delivery::Started, "Delivered to session thread-a.")]
+    #[case::steered(
+        Delivery::Steered,
+        "Injected into the running turn of Codex session thread-a."
+    )]
+    #[case::started(
+        Delivery::Started,
+        "Started a new turn in idle Codex session thread-a."
+    )]
     fn delivery_output_cases(#[case] delivery: Delivery, #[case] expected: &str) {
         assert_eq!(delivery_output("thread-a", &delivery), expected);
     }

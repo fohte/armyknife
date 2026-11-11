@@ -24,40 +24,68 @@ afterEach(() => {
 it.each([
   {
     sessionId: 'fixture-untracked-session',
+    sessionTitle: undefined,
+    direction: 'to',
     label: 'TOfixture-untracked-session',
   },
-  { sessionId: 'unknown', label: 'FROMUnknown session' },
-])('shows $label without a session card', ({ sessionId, label }) => {
-  root = createRoot(container)
-  const message = {
-    type: 'peer',
-    direction: sessionId === 'unknown' ? 'from' : 'to',
-    session_id: sessionId,
-    content: [{ type: 'text', text: 'A fictional peer message.' }],
-  } satisfies Extract<ChatItem, { type: 'peer' }>
+  {
+    sessionId: 'fixture-parent-session',
+    sessionTitle: 'Fixture parent',
+    direction: 'from',
+    label: 'FROMFixture parent (fixture-parent-session)',
+  },
+  {
+    sessionId: 'unknown',
+    sessionTitle: undefined,
+    direction: 'from',
+    label: 'FROMUnknown session',
+  },
+] as const)(
+  'shows $label without a session card',
+  ({ sessionId, sessionTitle, direction, label }) => {
+    root = createRoot(container)
+    const onSelectSession = vi.fn<(id: string) => void>()
+    const message = {
+      type: 'peer',
+      direction,
+      session_id: sessionId,
+      ...(sessionTitle === undefined ? {} : { session_title: sessionTitle }),
+      content: [{ type: 'text', text: 'A fictional peer message.' }],
+    } satisfies Extract<ChatItem, { type: 'peer' }>
 
-  act(() => {
-    root?.render(
-      <PeerMessage
-        message={message}
-        onSelectSession={() => undefined}
-        sessions={[]}
-      />,
-    )
-  })
+    act(() => {
+      root?.render(
+        <PeerMessage
+          message={message}
+          onSelectSession={onSelectSession}
+          sessions={[]}
+        />,
+      )
+    })
 
-  const getActual = () => ({
-    label: container.querySelector('.chat-peer-label')?.textContent ?? null,
-    linkCount: container.querySelectorAll('.session-link-trigger').length,
-    card: document.querySelector('.session-link-card')?.textContent ?? null,
-    contentRole:
-      container.querySelector('.chat-peer-content')?.getAttribute('role') ??
-      null,
-  })
-  expect(getActual()).toEqual({
-    label,
-    linkCount: 0,
-    card: null,
-    contentRole: null,
-  })
-})
+    act(() => {
+      container
+        .querySelector('.chat-peer-content')
+        ?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+
+    const getActual = () => ({
+      label: container.querySelector('.chat-peer-label')?.textContent ?? null,
+      linkCount: container.querySelectorAll('.session-link-trigger').length,
+      card: document.querySelector('.session-link-card')?.textContent ?? null,
+      contentRole:
+        container.querySelector('.chat-peer-content')?.getAttribute('role') ??
+        null,
+      contentClass: container.querySelector('.chat-peer-content')?.className,
+      selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+    })
+    expect(getActual()).toEqual({
+      label,
+      linkCount: 0,
+      card: null,
+      contentRole: null,
+      contentClass: 'chat-peer-content chat-peer-content-unavailable',
+      selectedIds: [],
+    })
+  },
+)
