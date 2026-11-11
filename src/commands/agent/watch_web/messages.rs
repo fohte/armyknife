@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::store::WatchWebQueuedPrompt;
+use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -39,12 +39,14 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
+type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 
-pub(super) fn routes_with_queued_prompts(
+pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+    load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
     Router::new()
@@ -53,15 +55,23 @@ pub(super) fn routes_with_queued_prompts(
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_user_marker) as UserMarkerLoader,
             Arc::new(load_queued_prompts) as QueuedPromptLoader,
+            Arc::new(load_peer_out_messages) as PeerOutMessageLoader,
             Arc::new(delete_queued_prompts) as QueuedPromptDeleter,
         ))
 }
 
 async fn get_messages(
-    State((load_session, load_user_marker, load_queued_prompts, delete_queued_prompts)): State<(
+    State((
+        load_session,
+        load_user_marker,
+        load_queued_prompts,
+        load_peer_out_messages,
+        delete_queued_prompts,
+    )): State<(
         SessionLoader,
         UserMarkerLoader,
         QueuedPromptLoader,
+        PeerOutMessageLoader,
         QueuedPromptDeleter,
     )>,
     AxumPath(session_id): AxumPath<String>,
@@ -72,6 +82,7 @@ async fn get_messages(
             |id| load_session(id),
             |id| load_user_marker(id),
             |id| load_queued_prompts(id),
+            |id| load_peer_out_messages(id),
             |id, ids| delete_queued_prompts(id, ids),
         )
     })
@@ -111,6 +122,7 @@ fn load_messages_with(
         load_session,
         |_| Ok(None),
         |_| Ok(Vec::new()),
+        |_| Ok(Vec::new()),
         |_, _| Ok(()),
     )?
     .map(|conversation| conversation.messages))
@@ -121,6 +133,7 @@ fn load_conversation_with_queued_prompts(
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
     load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
+    load_peer_out_messages: impl FnOnce(&str) -> Result<Vec<WatchWebPeerOutMessage>>,
     delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
@@ -133,6 +146,11 @@ fn load_conversation_with_queued_prompts(
     };
     let queued_prompts = if session.engine == Engine::Claude {
         load_queued_prompts(session_id)?
+    } else {
+        Vec::new()
+    };
+    let peer_out_messages = if session.engine == Engine::Claude {
+        load_peer_out_messages(session_id)?
     } else {
         Vec::new()
     };
@@ -151,6 +169,7 @@ fn load_conversation_with_queued_prompts(
         pending_tool,
         user_marker.as_deref(),
         &queued_prompts,
+        &peer_out_messages,
     )?;
 
     let messages = &mut conversation.messages;
@@ -229,6 +248,7 @@ fn parse_session_transcript(
     pending_tool: Option<&str>,
     watch_web_user_marker: Option<&str>,
     queued_prompts: &[WatchWebQueuedPrompt],
+    peer_out_messages: &[WatchWebPeerOutMessage],
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match engine {
         Engine::Claude => {
@@ -238,22 +258,25 @@ fn parse_session_transcript(
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
             let (mut messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
-                let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
-                    reader,
-                    parent,
-                    pending_tool,
-                    watch_web_user_marker,
-                    chrono::Utc::now(),
-                )?;
+                let (messages, background_tasks) =
+                    parser::claude::parse_with_background_tasks_and_peer_out_messages(
+                        reader,
+                        parent,
+                        pending_tool,
+                        watch_web_user_marker,
+                        chrono::Utc::now(),
+                        peer_out_messages,
+                    )?;
                 (messages, background_tasks, Vec::new())
             } else {
-                parser::claude::parse_with_queued_prompts(
+                parser::claude::parse_with_queued_prompts_and_peer_out_messages(
                     reader,
                     parent,
                     pending_tool,
                     watch_web_user_marker,
                     chrono::Utc::now(),
                     queued_prompts,
+                    peer_out_messages,
                 )?
             };
             if let Some(path) = path {
@@ -481,8 +504,11 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::{ChatItem, QuestionChoice, load_messages_with, routes_with_queued_prompts};
-    use crate::commands::agent::store::WatchWebQueuedPrompt;
+    use super::{
+        ChatItem, QuestionChoice, load_messages_with,
+        routes_with_queued_prompts_and_peer_out_messages,
+    };
+    use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
@@ -748,7 +774,7 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -757,6 +783,7 @@ mod tests {
                 })
             },
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -780,15 +807,90 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::recorded_body("2026-06-01T12:00:01Z", "Expanded fictional request body.")]
+    #[case::outside_delivery_window("2026-06-01T11:59:59Z", "$(cat /fixture/message.txt)")]
+    #[tokio::test]
+    async fn peer_out_route_uses_recorded_content_only_when_delivery_time_matches(
+        #[case] sent_at: &str,
+        #[case] expected_content: &str,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let transcript = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"$(cat /fixture/message.txt)\" fixture-target-id"}}]}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-06-01T12:00:02Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}"#,
+        );
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let sent_at = chrono::DateTime::parse_from_rfc3339(sent_at)
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let router = routes_with_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            move |from| {
+                Ok(if from == "fixture-session" {
+                    vec![WatchWebPeerOutMessage {
+                        id: 1,
+                        from_session_id: "fixture-session".to_string(),
+                        to_session_id: "fixture-target-id".to_string(),
+                        content: "Expanded fictional request body.".to_string(),
+                        sent_at,
+                    }]
+                } else {
+                    Vec::new()
+                })
+            },
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let (status, content_type, body) = response_snapshot(response).await;
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [{
+                        "type": "peer",
+                        "direction": "to",
+                        "session_id": "fixture-target-id",
+                        "content": [{"type": "text", "text": expected_content}],
+                    }],
+                    "backgroundTasks": [],
+                }),
+            ),
+        );
+    }
+
     #[tokio::test]
     async fn question_message_route_serializes_question_metadata() {
         let (_directory, transcript_path) = pending_question_transcript();
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -825,9 +927,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -857,10 +960,11 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
             move |_| Ok(vec![queued.clone()]),
+            |_| Ok(Vec::new()),
             move |_, ids| {
                 delete_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
@@ -906,10 +1010,11 @@ mod tests {
         let queued = saved_prompt(7, "Delivered fixture request.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
             move |_| Ok(vec![queued.clone()]),
+            |_| Ok(Vec::new()),
             move |_, ids| {
                 delete_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
@@ -945,10 +1050,11 @@ mod tests {
     async fn codex_message_route_does_not_load_saved_claude_prompts() {
         let mut session = stored_session();
         session.engine = Engine::Codex;
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
+            |_| Ok(Vec::new()),
             |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
         );
         let response = router
@@ -1024,9 +1130,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -1081,9 +1188,10 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );

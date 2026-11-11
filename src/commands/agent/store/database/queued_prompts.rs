@@ -97,6 +97,9 @@ mod tests {
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
+    use super::super::peer_out_messages::{
+        insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+    };
     use super::{
         WatchWebQueuedPrompt, delete_watch_web_queued_prompts, insert_watch_web_queued_prompt,
         watch_web_queued_prompts,
@@ -216,7 +219,7 @@ mod tests {
     }
 
     #[rstest]
-    fn deleting_a_session_clears_its_queued_prompts(sessions_dir: TempDir) {
+    fn deleting_a_session_clears_its_queued_and_sent_messages(sessions_dir: TempDir) {
         let session: crate::commands::agent::types::Session =
             serde_json::from_value(serde_json::json!({
                 "session_id": "fixture-session-a",
@@ -240,6 +243,14 @@ mod tests {
             sent_at,
         )
         .unwrap();
+        insert_watch_web_peer_out_message(
+            sessions_dir.path(),
+            &session.session_id,
+            "fixture-target-session",
+            "Delivered before this session was deleted",
+            sent_at,
+        )
+        .unwrap();
 
         crate::commands::agent::store::delete_session_from(
             sessions_dir.path(),
@@ -248,8 +259,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            watch_web_queued_prompts(sessions_dir.path(), &session.session_id).unwrap(),
-            Vec::<WatchWebQueuedPrompt>::new(),
+            (
+                watch_web_queued_prompts(sessions_dir.path(), &session.session_id).unwrap(),
+                watch_web_peer_out_messages(sessions_dir.path(), &session.session_id).unwrap(),
+            ),
+            (Vec::<WatchWebQueuedPrompt>::new(), Vec::new(),),
         );
     }
 }
