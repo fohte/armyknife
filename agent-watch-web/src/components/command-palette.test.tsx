@@ -114,6 +114,14 @@ it('shows the primary task and the count of other linked tasks for a session', (
   )
 })
 
+it('uses the error icon for an error session', () => {
+  renderPalette({ sessions: [{ ...session, kind: 'Error' }] })
+
+  expect(
+    container.querySelector('.command-palette-status')?.textContent,
+  ).toEqual('×')
+})
+
 it('opens a matching project from the project scope with Enter', async () => {
   const onOpenProject = vi.fn<(name: string) => void>()
   renderPalette({ onOpenProject })
@@ -160,7 +168,7 @@ it('matches a session by branch name and shows its task and repository', () => {
   renderPalette({ initialQuery: 'feature/notification-preferences' })
 
   expect(container.querySelector('.command-palette-item')?.textContent).toEqual(
-    'Review notification settingsQuestionP1 #42 Improve notifications · feature/notification-preferences · notification refresh · example/web-appQuestion · 5m',
+    '◆Review notification settingsQuestionP1 #42 Improve notifications · feature/notification-preferences · notification refresh · example/web-appQuestion · 5m',
   )
 })
 

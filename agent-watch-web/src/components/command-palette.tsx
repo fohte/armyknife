@@ -38,7 +38,7 @@ function itemTitle(item: PaletteItem) {
     case 'session':
       return item.session.title
     case 'task':
-      return item.task.title
+      return `#${String(item.task.number)} ${item.task.title}`
     case 'project':
       return item.name
     case 'command':
@@ -92,10 +92,31 @@ function itemDetail(item: PaletteItem) {
 
 function itemColor(item: PaletteItem) {
   if (item.type === 'session') {
+    if (item.session.kind === 'Error') return 'error'
     return item.session.category.replace('_', '-')
   }
   if (item.type === 'command') return 'command'
   return item.type
+}
+
+function itemIcon(item: PaletteItem) {
+  if (item.type === 'task') return '#'
+  if (item.type === 'project') return '▤'
+  if (item.type === 'command') return '›'
+  if (item.session.kind === 'Error') return '×'
+
+  switch (item.session.category) {
+    case 'needs_action':
+      return '◆'
+    case 'later':
+      return '◷'
+    case 'in_progress':
+      return '●'
+    case 'done':
+      return '✓'
+    default:
+      return '•'
+  }
 }
 
 export function CommandPalette({
@@ -435,7 +456,9 @@ export function CommandPalette({
                       <span
                         className="command-palette-status"
                         aria-hidden="true"
-                      />
+                      >
+                        {itemIcon(item)}
+                      </span>
                       <span className="command-palette-item-main">
                         <span className="command-palette-item-heading">
                           <strong>{itemTitle(item)}</strong>
@@ -443,14 +466,6 @@ export function CommandPalette({
                             <span className="command-palette-item-kind">
                               {item.session.kind ??
                                 item.session.category.replace('_', ' ')}
-                            </span>
-                          ) : item.type === 'task' ? (
-                            <span className="command-palette-item-kind">
-                              tq task
-                            </span>
-                          ) : item.type === 'project' ? (
-                            <span className="command-palette-item-kind">
-                              Project
                             </span>
                           ) : null}
                         </span>
