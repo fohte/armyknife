@@ -27,12 +27,14 @@ export function itemSubtitle(item: PaletteItem) {
     case 'session': {
       const linkedTaskCount = formatLinkedTaskCount(item.session.tasks)
       const task = item.session.task
-        ? `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title}${linkedTaskCount} · `
+        ? `P${String(item.session.task.priority ?? '—')} #${String(item.session.task.number)} ${item.session.task.title}${linkedTaskCount}`
         : ''
+      const repo = item.session.repo.trim()
       const branch = item.session.branch?.trim()
-      const branchLabel =
-        branch === undefined || branch.length === 0 ? '' : `${branch} · `
-      return `${task}${branchLabel}${item.session.repo}`
+      const labels = [task, repo, branch].filter(
+        (label): label is string => label !== undefined && label.length > 0,
+      )
+      return labels.join(' · ')
     }
     case 'task':
       return aggregateSubtitle(item.sessions, item.task.priority)
@@ -66,9 +68,15 @@ export function itemDetail(item: PaletteItem) {
         return ''
       }
       const elapsedSeconds = Math.floor(item.session.elapsedSeconds)
-      return elapsedSeconds < 60
-        ? `${String(elapsedSeconds)}s`
-        : `${String(Math.floor(elapsedSeconds / 60))}m`
+      if (elapsedSeconds < 60) return `${String(elapsedSeconds)}s`
+
+      const elapsedMinutes = Math.floor(elapsedSeconds / 60)
+      if (elapsedMinutes < 60) return `${String(elapsedMinutes)}m`
+
+      const elapsedHours = Math.floor(elapsedMinutes / 60)
+      if (elapsedHours < 24) return `${String(elapsedHours)}h`
+
+      return `${String(Math.floor(elapsedHours / 24))}d`
     }
     case 'task':
       return 'Show in Board'
