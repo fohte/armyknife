@@ -408,7 +408,11 @@ fn parse_with_background_tasks_and_image_directory(
                                     tools.flush_into(&mut items);
                                     items.push(decision.into());
                                 } else {
-                                    tools.record(&tool_use.name, tool_use.input.as_ref());
+                                    tools.record(
+                                        &tool_use.name,
+                                        tool_use.input.as_ref(),
+                                        tool_result_failed(&record, block),
+                                    );
                                     background_tasks
                                         .complete_tool_use(&tool_use, &record, block, now);
                                 }
@@ -436,7 +440,11 @@ fn parse_with_background_tasks_and_image_directory(
                                     );
                                     items.push(proposal.item.clone());
                                 } else {
-                                    tools.record(&tool_use.name, tool_use.input.as_ref());
+                                    tools.record(
+                                        &tool_use.name,
+                                        tool_use.input.as_ref(),
+                                        tool_result_failed(&record, block),
+                                    );
                                 }
                                 background_tasks.complete_tool_use(&tool_use, &record, block, now);
                             }
@@ -695,7 +703,8 @@ mod tests {
     };
     use crate::commands::agent::store::AgentDecision;
     use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, UserContentPart,
+        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, ToolOperation,
+        UserContentPart,
     };
 
     #[rstest]
@@ -1083,7 +1092,7 @@ mod tests {
         );
     }
 
-    fn assert_unplaced_decisions(transcript: &str) {
+    fn assert_unplaced_decisions(transcript: &str, failed: bool) {
         assert_eq!(
             parse_with_decisions_and_queued_prompts(
                 Cursor::new(transcript),
@@ -1098,8 +1107,16 @@ mod tests {
             .0,
             vec![
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
-                    operations: vec![operation("Bash", Some("a agent decision add 'Decision 1'"),)],
+                    summary: if failed {
+                        "Bash ×1 · 1 failed".to_string()
+                    } else {
+                        "Bash ×1".to_string()
+                    },
+                    operations: vec![ToolOperation {
+                        tool: "Bash".to_string(),
+                        target: Some("a agent decision add 'Decision 1'".to_string()),
+                        failed,
+                    }],
                 },
                 decision_item(1),
                 decision_item(2),
@@ -1108,10 +1125,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case::failed_add(FAILED_ADD_TRANSCRIPT)]
-    #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT)]
-    fn appends_decisions_without_a_successful_recorded_result(#[case] transcript: &str) {
-        assert_unplaced_decisions(transcript);
+    #[case::failed_add(FAILED_ADD_TRANSCRIPT, true)]
+    #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT, false)]
+    fn appends_decisions_without_a_successful_recorded_result(
+        #[case] transcript: &str,
+        #[case] failed: bool,
+    ) {
+        assert_unplaced_decisions(transcript, failed);
     }
 
     #[test]
@@ -1320,7 +1340,7 @@ mod tests {
             parse(Cursor::new(transcript), None, pending_tool, None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "Bash ×1".to_string(),
                     operations: vec![operation("Bash", Some("echo prior work"))],
                 },
                 pending_item,
@@ -1665,7 +1685,7 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "Agent ×1".to_string(),
                 operations: vec![operation("Agent", Some("Explore · Find fixture loaders"))],
             }],
         );
@@ -1753,7 +1773,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "Read ×1".to_string(),
                     operations: vec![operation("Read", None)],
                 },
                 ChatItem::User {
@@ -1872,7 +1892,7 @@ mod tests {
                     text: "I will inspect the event handler.".to_string(),
                 },
                 ChatItem::ToolSummary {
-                    summary: "2 actions · 1 file edited".to_string(),
+                    summary: "Edit flow.rs  Read ×1".to_string(),
                     operations: vec![
                         operation("Read", Some("fixture/flow.rs")),
                         operation("Edit", Some("fixture/flow.rs")),
@@ -1913,6 +1933,34 @@ mod tests {
                     }],
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn preserves_each_tool_result_failure_on_its_operation() {
+        let transcript = indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-read-call","name":"Read","input":{"file_path":"fixture/source.rs"}},{"type":"tool_use","id":"fixture-edit-call","name":"Edit","input":{"file_path":"fixture/change.rs"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-read-call","is_error":true,"content":"fixture read failed"}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-edit-call","content":"fixture edit succeeded"}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "Edit change.rs  Read ×1 · 1 failed".to_string(),
+                operations: vec![
+                    ToolOperation {
+                        tool: "Read".to_string(),
+                        target: Some("fixture/source.rs".to_string()),
+                        failed: true,
+                    },
+                    ToolOperation {
+                        tool: "Edit".to_string(),
+                        target: Some("fixture/change.rs".to_string()),
+                        failed: false,
+                    },
+                ],
+            }]
         );
     }
 
@@ -2044,7 +2092,7 @@ mod tests {
             .unwrap(),
             vec![
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "Bash ×1".to_string(),
                     operations: vec![operation("Bash", Some("echo earlier"))],
                 },
                 ChatItem::Permission {
@@ -2066,7 +2114,7 @@ mod tests {
             parse(Cursor::new(transcript), None, None, None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "Read ×1".to_string(),
                     operations: vec![operation("Read", Some("fixture/old.rs"))],
                 },
                 ChatItem::ToolInProgress {
@@ -2113,7 +2161,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "1 action · 1 file edited".to_string(),
+                    summary: "Edit notes.txt".to_string(),
                     operations: vec![operation("Edit", Some("fixture/notes.txt"))],
                 },
                 ChatItem::User {
@@ -2236,7 +2284,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "2 actions · 1 file edited".to_string(),
+                    summary: "Edit plan.md  Read ×1".to_string(),
                     operations: vec![
                         operation("Read", Some("fixture/plan.md")),
                         operation("Edit", Some("fixture/plan.md")),
@@ -2378,7 +2426,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "Read ×1".to_string(),
                     operations: vec![operation("Read", Some("fixture/plan.md"))],
                 },
             ]
@@ -2549,6 +2597,7 @@ mod tests {
         super::super::super::ToolOperation {
             tool: tool.to_string(),
             target: target.map(str::to_owned),
+            failed: false,
         }
     }
 

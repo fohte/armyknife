@@ -296,6 +296,55 @@ it('toggles TODAY from the iPhone conversation header', () => {
   })
 })
 
+it('sets the primary linked task from desktop and mobile headers', async () => {
+  const primaryTask = {
+    id: 'sample-primary-task',
+    number: 2048,
+    title: 'Improve request reliability',
+    priority: 1,
+  }
+  const secondaryTask = {
+    id: 'sample-secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+  }
+  const sessionWithLinkedTasks = {
+    ...session,
+    task: primaryTask,
+    tasks: [primaryTask, secondaryTask],
+  }
+  const onAction = vi.fn(() => Promise.resolve(true))
+
+  for (const isMobile of [false, true]) {
+    renderView(
+      onAction,
+      sessionWithLinkedTasks,
+      undefined,
+      [],
+      actions,
+      isMobile,
+      [],
+      [sessionWithLinkedTasks],
+    )
+    await act(async () => {
+      container.querySelector('summary')?.click()
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    })
+    await act(async () => {
+      document.body
+        .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
+        ?.click()
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+    })
+  }
+
+  expect(onAction.mock.calls).toEqual([
+    ['primary-task', { taskId: 'sample-secondary-task' }],
+    ['primary-task', { taskId: 'sample-secondary-task' }],
+  ])
+})
+
 it('places the session ID copy control beside the iPhone title', () => {
   renderView(() => Promise.resolve(true), session, undefined, [], actions, true)
 
@@ -2105,7 +2154,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
     tasks: [
       '◐FixtureExplorerInspect the fictional module2h 0m',
-      '▶cargo test -p fictional-crate2h 0m',
+      '▶cargo test -p fictional-crateOutput2h 0m',
     ],
     panelToggle: '◐2',
     workingStatus: undefined,

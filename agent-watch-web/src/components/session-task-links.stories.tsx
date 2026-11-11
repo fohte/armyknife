@@ -3,6 +3,7 @@ import '#components/conversation-pane-view.css'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionTaskLinks } from '#components/session-task-links'
+import type { Session, SessionTask } from '#types'
 
 const openTask = {
   id: 'example-open-task',
@@ -11,27 +12,35 @@ const openTask = {
   priority: 1,
   isClosed: false,
 }
-const linkedTasks = [
-  openTask,
-  {
-    id: 'example-secondary-task',
-    number: 2046,
-    title: 'Add request tracing',
-    priority: 4,
-    isClosed: false,
-  },
-  {
-    id: 'example-completed-task',
-    number: 2047,
-    title: 'Document retry behavior',
-    priority: null,
-    isClosed: true,
-  },
+const secondaryTask = {
+  id: 'example-secondary-task',
+  number: 2046,
+  title: 'Add request tracing',
+  priority: 4,
+  isClosed: false,
+}
+const completedTask = {
+  id: 'example-completed-task',
+  number: 2047,
+  title: 'Document retry behavior',
+  priority: null,
+  isClosed: true,
+}
+const linkedTasks = [openTask, secondaryTask, completedTask]
+function session(category: Session['category'], tasks: SessionTask[]) {
+  return { category, task: tasks[0] ?? null, tasks }
+}
+const linkedSessions = [
+  session('needs_action', [openTask]),
+  session('needs_action', [openTask]),
+  session('in_progress', [openTask, secondaryTask]),
+  session('done', [openTask, secondaryTask]),
+  session('later', [completedTask]),
 ]
 
 const meta = {
   component: SessionTaskLinks,
-  args: { task: openTask, tasks: [openTask] },
+  args: { task: openTask, tasks: [openTask], sessions: linkedSessions },
   decorators: [
     (Story, context) => (
       <div

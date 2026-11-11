@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.608](https://github.com/fohte/armyknife/compare/v0.1.607...v0.1.608) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** show grouped tool activity ([#1583](https://github.com/fohte/armyknife/issues/1583)) ([68b0426](https://github.com/fohte/armyknife/commit/68b0426a190dc0cf2495668054cc4e5f214d29d9))
+* **agent-watch-web:** support task output ([#1584](https://github.com/fohte/armyknife/issues/1584)) ([6fd3c1b](https://github.com/fohte/armyknife/commit/6fd3c1b922b887fa534df1432e0b3788ce03bb07))
+
+## [0.1.607](https://github.com/fohte/armyknife/compare/v0.1.606...v0.1.607) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** allow primary task choice ([#1580](https://github.com/fohte/armyknife/issues/1580)) ([70b452d](https://github.com/fohte/armyknife/commit/70b452d61dd3a247bf3987b1b272367bb9820bbe))
+
+## [0.1.606](https://github.com/fohte/armyknife/compare/v0.1.605...v0.1.606) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** open sessions in a new tab ([#1578](https://github.com/fohte/armyknife/issues/1578)) ([ac86a2d](https://github.com/fohte/armyknife/commit/ac86a2d6449c08c1a788b0b602fad7fab8e24c39))
+
 ## [0.1.605](https://github.com/fohte/armyknife/compare/v0.1.604...v0.1.605) (2026-11-11)
 
 

@@ -5,6 +5,7 @@ import { RunningTasksPanel } from '#components/running-tasks-panel'
 const meta = {
   component: RunningTasksPanel,
   args: {
+    sessionId: 'fixture-session',
     tasks: [
       {
         id: 'fixture-agent-task',

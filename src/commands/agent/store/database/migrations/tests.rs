@@ -25,13 +25,13 @@ fn accepts_database_too_far_ahead_only_for_a_newer_version(
 }
 
 #[test]
-fn adds_peer_out_message_to_version_seven_database() {
+fn adds_primary_task_to_version_eight_database() {
     let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
     let database_path = temp_dir.path().join("sessions.db");
     let mut connection = Connection::open(&database_path).expect("temporary database should open");
-    Migrations::from_slice(&MIGRATION_ENTRIES[..7])
+    Migrations::from_slice(&MIGRATION_ENTRIES[..8])
         .to_latest(&mut connection)
-        .expect("master migrations should create the version seven schema");
+        .expect("master migrations should create the version eight schema");
     let initial_user_version: i64 = connection
         .pragma_query_value(None, "user_version", |row| row.get(0))
         .expect("database migration version should be readable");
@@ -45,11 +45,11 @@ fn adds_peer_out_message_to_version_seven_database() {
             )",
             [],
         )
-        .expect("version seven decision row should be inserted");
+        .expect("version eight decision row should be inserted");
     drop(connection);
 
     let connection = super::super::open_connection(temp_dir.path())
-        .expect("version seven database should migrate to the peer message schema");
+        .expect("version eight database should migrate to the primary task schema");
     let actual = connection
         .query_row(
             indoc! {
@@ -57,6 +57,7 @@ fn adds_peer_out_message_to_version_seven_database() {
                 SELECT
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watch_web_peer_out_message'),
                 EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'watch_web_peer_out_message_sender_target_time'),
+                EXISTS(SELECT 1 FROM pragma_table_info('watch_web_session_state') WHERE name = 'primary_task_id'),
                 (SELECT title || ':' || why FROM agent_decision LIMIT 1)
                 "
             },
@@ -66,6 +67,7 @@ fn adds_peer_out_message_to_version_seven_database() {
                     row.get(0)?,
                     row.get(1)?,
                     row.get(2)?,
+                    row.get(3)?,
                 ))
             },
         )
@@ -77,8 +79,13 @@ fn adds_peer_out_message_to_version_seven_database() {
     assert_eq!(
         (initial_user_version, actual, actual_user_version),
         (
-            7,
-            (true, true, Some("sample choice:sample reason".to_string())),
+            8,
+            (
+                true,
+                true,
+                true,
+                Some("sample choice:sample reason".to_string())
+            ),
             current_version(),
         ),
     );

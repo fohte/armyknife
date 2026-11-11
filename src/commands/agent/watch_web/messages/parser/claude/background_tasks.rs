@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -42,6 +44,7 @@ impl BackgroundTaskTracker {
             } else {
                 None
             },
+            output_path: background_task_output_path(kind, result),
         });
     }
 
@@ -90,6 +93,7 @@ impl BackgroundTaskTracker {
                 .unwrap_or_default(),
                 kind: task.kind,
                 agent_type: task.agent_type,
+                output_path: task.output_path,
             })
             .collect()
     }
@@ -157,6 +161,22 @@ struct RunningBackgroundTask {
     started_at: DateTime<Utc>,
     kind: BackgroundTaskKind,
     agent_type: Option<String>,
+    output_path: Option<PathBuf>,
+}
+
+fn background_task_output_path(kind: BackgroundTaskKind, result: &Value) -> Option<PathBuf> {
+    if kind != BackgroundTaskKind::BackgroundTask {
+        return None;
+    }
+    let text = tool_result_text(result.get("content")?)?;
+    let path = text
+        .split_once("Output is being written to:")?
+        .1
+        .trim()
+        .lines()
+        .next()?
+        .trim();
+    (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
 fn background_task_kind(name: &str, record: &Value) -> BackgroundTaskKind {
@@ -253,6 +273,7 @@ fn tagged_value<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+    use std::path::PathBuf;
 
     use chrono::{DateTime, Utc};
     use indoc::indoc;
@@ -282,6 +303,7 @@ mod tests {
                 elapsed_seconds: 90,
                 kind: BackgroundTaskKind::BackgroundTask,
                 agent_type: None,
+                output_path: Some(PathBuf::from("/fixture/task-output.log")),
             }]
         } else {
             Vec::new()
@@ -311,6 +333,7 @@ mod tests {
         elapsed_seconds: 90,
         kind: BackgroundTaskKind::BackgroundTask,
         agent_type: None,
+        output_path: Some(PathBuf::from("/fixture/task-output.log")),
     }], true, false)]
     #[case::legacy_notification("completed", Vec::new(), false, false)]
     fn task_notifications_only_remove_finished_tasks(
@@ -459,6 +482,7 @@ mod tests {
                     elapsed_seconds: 90,
                     kind: BackgroundTaskKind::BackgroundTask,
                     agent_type: None,
+                    output_path: Some(PathBuf::from("/fixture/task-output.log")),
                 }],
             ),
         );
@@ -560,15 +584,17 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "2 actions".to_string(),
+                        summary: format!("Bash ×1  {result_tool} ×1"),
                         operations: vec![
                             ToolOperation {
                                 tool: "Bash".to_string(),
                                 target: Some("watch fixture build".to_string()),
+                                failed: false,
                             },
                             ToolOperation {
                                 tool: result_tool.to_string(),
                                 target: None,
+                                failed: false,
                             },
                         ],
                     },
@@ -604,10 +630,11 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "1 action".to_string(),
+                        summary: "Task ×1".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Task".to_string(),
                             target: Some("FixtureExplorer · Review the synthetic task".to_string()),
+                            failed: false,
                         }],
                     },
                 ],
@@ -617,6 +644,7 @@ mod tests {
                     elapsed_seconds: 30,
                     kind: BackgroundTaskKind::Subagent,
                     agent_type: Some("FixtureExplorer".to_string()),
+                    output_path: None,
                 }],
             ),
         );
@@ -661,6 +689,7 @@ mod tests {
                 elapsed_seconds: 45,
                 kind: BackgroundTaskKind::Subagent,
                 agent_type: Some("FixtureExplorer".to_string()),
+                output_path: None,
             }]
         } else {
             Vec::new()
@@ -684,12 +713,13 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "1 action".to_string(),
+                        summary: "Agent ×1".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Agent".to_string(),
                             target: Some(
                                 "FixtureExplorer · Review the synthetic change".to_string(),
                             ),
+                            failed: false,
                         }],
                     },
                 ],
@@ -716,10 +746,11 @@ mod tests {
                 from: None,
             },
             ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "Bash ×1".to_string(),
                 operations: vec![ToolOperation {
                     tool: "Bash".to_string(),
                     target: Some("watch fixture build".to_string()),
+                    failed: false,
                 }],
             },
         ]

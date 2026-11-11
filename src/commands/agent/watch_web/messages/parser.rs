@@ -3,7 +3,6 @@ pub(super) mod claude;
 pub(super) mod codex;
 pub(super) mod queue;
 
-use std::collections::BTreeSet;
 use std::io::BufRead;
 use std::path::Path;
 
@@ -68,12 +67,12 @@ pub(super) fn tool_target(name: &str, input: Option<&serde_json::Value>) -> Opti
 #[derive(Default)]
 pub(super) struct ToolSummary {
     actions: usize,
-    edited_files: BTreeSet<String>,
+    edited_files: Vec<String>,
     operations: Vec<ToolOperation>,
 }
 
 impl ToolSummary {
-    pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>) {
+    pub(super) fn record(&mut self, name: &str, input: Option<&serde_json::Value>, failed: bool) {
         if classifier::is_peer_notify_tool(name, input) {
             return;
         }
@@ -81,17 +80,24 @@ impl ToolSummary {
         self.operations.push(ToolOperation {
             tool: name.to_owned(),
             target: operation_target(name, input),
+            failed,
         });
         if matches!(name, "Edit" | "Write" | "MultiEdit" | "NotebookEdit")
             && let Some(path) = input
                 .and_then(|value| value.get("file_path").or_else(|| value.get("path")))
                 .and_then(serde_json::Value::as_str)
+            && !self.edited_files.iter().any(|file| file == path)
         {
-            self.edited_files.insert(path.to_owned());
+            self.edited_files.push(path.to_owned());
         }
     }
 
-    pub(super) fn record_codex(&mut self, name: &str, detail: Option<&serde_json::Value>) {
+    pub(super) fn record_codex(
+        &mut self,
+        name: &str,
+        detail: Option<&serde_json::Value>,
+        failed: bool,
+    ) {
         self.actions += 1;
         let tool = if matches!(name, "McpToolCall" | "mcpToolCall") {
             detail
@@ -104,6 +110,7 @@ impl ToolSummary {
         self.operations.push(ToolOperation {
             tool: tool.to_owned(),
             target: operation_target(tool, detail),
+            failed,
         });
         self.record_codex_files(name, detail);
     }
@@ -118,22 +125,27 @@ impl ToolSummary {
                 .get("file_path")
                 .or_else(|| detail.get("path"))
                 .and_then(serde_json::Value::as_str)
+                && !self.edited_files.iter().any(|file| file == path)
             {
-                self.edited_files.insert(path.to_owned());
+                self.edited_files.push(path.to_owned());
             }
             if let Some(changes) = detail.get("changes") {
                 match changes {
                     serde_json::Value::Object(changes) => {
-                        self.edited_files.extend(changes.keys().cloned());
+                        for path in changes.keys() {
+                            if !self.edited_files.contains(path) {
+                                self.edited_files.push(path.clone());
+                            }
+                        }
                     }
                     serde_json::Value::Array(changes) => {
-                        self.edited_files
-                            .extend(changes.iter().filter_map(|change| {
-                                change
-                                    .get("path")
-                                    .and_then(serde_json::Value::as_str)
-                                    .map(str::to_owned)
-                            }));
+                        for path in changes.iter().filter_map(|change| {
+                            change.get("path").and_then(serde_json::Value::as_str)
+                        }) {
+                            if !self.edited_files.iter().any(|file| file == path) {
+                                self.edited_files.push(path.to_owned());
+                            }
+                        }
                     }
                     _ => {}
                 }
@@ -145,24 +157,48 @@ impl ToolSummary {
         if self.actions == 0 {
             return;
         }
-        let action = if self.actions == 1 {
-            "action"
+        let mut summary_parts = Vec::new();
+        if !self.edited_files.is_empty() {
+            let files = self
+                .edited_files
+                .iter()
+                .map(|path| {
+                    Path::new(path)
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or(path)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            summary_parts.push(format!("Edit {files}"));
+        }
+        let mut tool_counts = Vec::<(&str, usize)>::new();
+        for operation in &self.operations {
+            if self.edited_files.is_empty() || !is_file_edit_tool(&operation.tool) {
+                if let Some((_, count)) = tool_counts
+                    .iter_mut()
+                    .find(|(tool, _)| *tool == operation.tool.as_str())
+                {
+                    *count += 1;
+                } else {
+                    tool_counts.push((&operation.tool, 1));
+                }
+            }
+        }
+        summary_parts.extend(
+            tool_counts
+                .into_iter()
+                .map(|(tool, count)| format!("{tool} ×{count}")),
+        );
+        let failed_count = self
+            .operations
+            .iter()
+            .filter(|operation| operation.failed)
+            .count();
+        let summary = if failed_count == 0 {
+            summary_parts.join("  ")
         } else {
-            "actions"
-        };
-        let summary = if self.edited_files.is_empty() {
-            format!("{} {action}", self.actions)
-        } else {
-            let noun = if self.edited_files.len() == 1 {
-                "file"
-            } else {
-                "files"
-            };
-            format!(
-                "{} {action} · {} {noun} edited",
-                self.actions,
-                self.edited_files.len()
-            )
+            format!("{} · {failed_count} failed", summary_parts.join("  "))
         };
         items.push(ChatItem::ToolSummary {
             summary,
@@ -170,6 +206,21 @@ impl ToolSummary {
         });
         *self = Self::default();
     }
+}
+
+fn is_file_edit_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Edit"
+            | "Write"
+            | "MultiEdit"
+            | "NotebookEdit"
+            | "apply_patch"
+            | "write_file"
+            | "edit_file"
+            | "FileChange"
+            | "fileChange"
+    )
 }
 
 pub(super) fn operation_target(name: &str, detail: Option<&serde_json::Value>) -> Option<String> {
@@ -516,6 +567,7 @@ mod tests {
 
     use indoc::formatdoc;
     use rstest::{fixture, rstest};
+    use serde_json::json;
 
     use super::{
         ChatItem, ToolSummary, UserContentPart, append_text_with_image_directory,
@@ -536,12 +588,12 @@ mod tests {
         (directory, image_directory)
     }
     #[rstest]
-    #[case::singular(1, "1 action")]
-    #[case::plural(2, "2 actions")]
-    fn action_count_uses_the_matching_noun(#[case] count: usize, #[case] expected: &str) {
+    #[case::singular(1, "Read ×1")]
+    #[case::plural(2, "Read ×2")]
+    fn summary_groups_repeated_tool_calls_by_count(#[case] count: usize, #[case] expected: &str) {
         let mut summary = ToolSummary::default();
         for _ in 0..count {
-            summary.record("Read", None);
+            summary.record("Read", None, false);
         }
         let mut items = Vec::new();
 
@@ -555,8 +607,68 @@ mod tests {
                     .map(|_| super::super::ToolOperation {
                         tool: "Read".to_string(),
                         target: None,
+                        failed: false,
                     })
                     .collect(),
+            }]
+        );
+    }
+
+    #[test]
+    fn summarizes_edited_files_tool_counts_and_failed_calls() {
+        let mut summary = ToolSummary::default();
+        summary.record("Edit", Some(&json!({"file_path": "src/queue.rs"})), false);
+        summary.record("Edit", Some(&json!({"file_path": "src/mod.rs"})), false);
+        for _ in 0..3 {
+            summary.record("Read", None, false);
+        }
+        summary.record("Grep", None, false);
+        summary.record("Bash", None, true);
+        let mut items = Vec::new();
+
+        summary.flush_into(&mut items);
+
+        assert_eq!(
+            items,
+            vec![ChatItem::ToolSummary {
+                summary: "Edit queue.rs, mod.rs  Read ×3  Grep ×1  Bash ×1 · 1 failed".to_string(),
+                operations: vec![
+                    super::super::ToolOperation {
+                        tool: "Edit".to_string(),
+                        target: Some("src/queue.rs".to_string()),
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Edit".to_string(),
+                        target: Some("src/mod.rs".to_string()),
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Read".to_string(),
+                        target: None,
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Read".to_string(),
+                        target: None,
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Read".to_string(),
+                        target: None,
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Grep".to_string(),
+                        target: None,
+                        failed: false,
+                    },
+                    super::super::ToolOperation {
+                        tool: "Bash".to_string(),
+                        target: None,
+                        failed: true,
+                    },
+                ],
             }]
         );
     }
