@@ -1,12 +1,20 @@
+import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type {
   BackgroundTask,
   ChatItem,
   ConversationResponse,
   SessionActions,
+  SessionTreeNode,
 } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
+}
+
+function hasValidOptionalTimestamp(value: Record<string, unknown>): boolean {
+  return (
+    value['timestamp'] === undefined || typeof value['timestamp'] === 'string'
+  )
 }
 
 function isUserContentPart(value: unknown): boolean {
@@ -52,15 +60,19 @@ function isProposalAnswer(value: unknown): boolean {
 function isChatItem(value: unknown): value is ChatItem {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   switch (value['type']) {
-    case 'user':
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'user':
+      return (
+        typeof value['text'] === 'string' && hasValidOptionalTimestamp(value)
+      )
     case 'queued_user':
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
         value['content'].every(isUserContentPart) &&
-        (value['from'] === undefined || typeof value['from'] === 'string')
+        (value['from'] === undefined || typeof value['from'] === 'string') &&
+        hasValidOptionalTimestamp(value)
       )
     case 'peer':
       return (
@@ -69,7 +81,8 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['session_title'] === undefined ||
           typeof value['session_title'] === 'string') &&
         Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart)
+        value['content'].every(isUserContentPart) &&
+        hasValidOptionalTimestamp(value)
       )
     case 'subagent_report':
       return (
@@ -85,7 +98,8 @@ function isChatItem(value: unknown): value is ChatItem {
           value['kind'] === 'system' ||
           value['kind'] === 'hook') &&
         typeof value['text'] === 'string' &&
-        typeof value['failed'] === 'boolean'
+        typeof value['failed'] === 'boolean' &&
+        hasValidOptionalTimestamp(value)
       )
     case 'tool_summary':
       return (
@@ -209,5 +223,37 @@ export function isSessionActions(value: unknown): value is SessionActions {
       (isRecord(value['permission']) &&
         typeof value['permission']['approve'] === 'boolean' &&
         typeof value['permission']['reject'] === 'boolean'))
+  )
+}
+
+export function isSessionTreeResponse(
+  value: unknown,
+): value is { revision: number; sessions: SessionTreeNode[] } {
+  return (
+    isRecord(value) &&
+    typeof value['revision'] === 'number' &&
+    Number.isInteger(value['revision']) &&
+    Array.isArray(value['sessions']) &&
+    value['sessions'].every(
+      (session) =>
+        isRecord(session) &&
+        typeof session['id'] === 'string' &&
+        (session['parentId'] === null ||
+          typeof session['parentId'] === 'string') &&
+        typeof session['category'] === 'string' &&
+        typeof session['isActive'] === 'boolean' &&
+        (session['kind'] === null || typeof session['kind'] === 'string') &&
+        typeof session['title'] === 'string' &&
+        (session['preview'] === null ||
+          typeof session['preview'] === 'string') &&
+        typeof session['elapsedSeconds'] === 'number' &&
+        Number.isInteger(session['elapsedSeconds']) &&
+        (session['task'] === null || isSessionTask(session['task'])) &&
+        typeof session['repo'] === 'string' &&
+        typeof session['decisionCount'] === 'number' &&
+        Number.isInteger(session['decisionCount']) &&
+        (session['pullRequest'] === null ||
+          isPullRequest(session['pullRequest'])),
+    )
   )
 }

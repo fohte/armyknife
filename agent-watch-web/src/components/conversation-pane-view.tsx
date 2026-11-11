@@ -3,9 +3,8 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 
-import { reuseEqualValue } from '#components/conversation-message-sharing'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
 import { OpenInTerminalAction } from '#components/open-in-terminal-action'
@@ -14,6 +13,7 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { SessionHeading } from '#components/session-heading'
+import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
@@ -21,13 +21,13 @@ import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { formatSessionDecisionCount } from '#session-decision-count'
+import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
   ChatItem,
   OpenInTerminalStatus,
   Session,
   SessionActions,
-  SessionLinkTarget,
 } from '#types'
 
 type ConversationPaneViewProps = {
@@ -67,30 +67,9 @@ type ConversationPaneViewProps = {
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
+  onArchive?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
-}
-
-function useSessionLinkTargets(
-  sessions: readonly Session[],
-): readonly SessionLinkTarget[] {
-  // Link cards only use these fields, so unrelated session updates keep rows stable.
-  const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
-  const nextTargets = sessions.map(
-    ({ id, category, isPaused, task, repo, title }) => ({
-      id,
-      category,
-      isPaused,
-      task:
-        task === null
-          ? null
-          : { id: task.id, number: task.number, title: task.title },
-      repo,
-      title,
-    }),
-  )
-  targetsRef.current = reuseEqualValue(targetsRef.current, nextTargets)
-  return targetsRef.current
 }
 
 export function ConversationPaneView({
@@ -126,6 +105,7 @@ export function ConversationPaneView({
   fileDropActive = false,
   onBack,
   onLater,
+  onArchive,
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
@@ -158,6 +138,13 @@ export function ConversationPaneView({
     start,
   })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
+  const sessionElapsedSecondsById = useMemo(
+    () =>
+      new Map(
+        sessions.map(({ id, elapsedSeconds }) => [id, elapsedSeconds] as const),
+      ),
+    [sessions],
+  )
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
   onSelectSessionRef.current = onSelectSession
@@ -308,6 +295,16 @@ export function ConversationPaneView({
             >
               Later
             </Button>
+            {session.category === 'done' && onArchive !== undefined ? (
+              <Button
+                className="mobile-conversation-archive cursor-pointer"
+                type="button"
+                variant="plain"
+                onClick={onArchive}
+              >
+                Archive
+              </Button>
+            ) : null}
             <Button
               className="mobile-conversation-today cursor-pointer"
               type="button"
@@ -400,6 +397,16 @@ export function ConversationPaneView({
                     >
                       #{session.pullRequest.number} PR
                     </a>
+                  ) : null}
+                  {session.category === 'done' && onArchive !== undefined ? (
+                    <Button
+                      className="conversation-archive cursor-pointer"
+                      type="button"
+                      variant="plain"
+                      onClick={onArchive}
+                    >
+                      Archive
+                    </Button>
                   ) : null}
                   {actions?.openInTerminal === true ? (
                     <OpenInTerminalAction
@@ -504,7 +511,11 @@ export function ConversationPaneView({
     </section>
   )
 
-  if (isMobile) return conversationPane
-
-  return conversationPane
+  return (
+    <SessionLinkElapsedSecondsContext.Provider
+      value={sessionElapsedSecondsById}
+    >
+      {conversationPane}
+    </SessionLinkElapsedSecondsContext.Provider>
+  )
 }

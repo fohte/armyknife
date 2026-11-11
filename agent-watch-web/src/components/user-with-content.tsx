@@ -3,6 +3,7 @@ import '#components/user-with-content.css'
 import { useEffect, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { formatMessageTime } from '#components/message-time'
 import type { ChatItem, SessionLinkTarget, UserContentPart } from '#types'
 
 type UserMessage = Extract<
@@ -53,15 +54,23 @@ export function UserWithContent({
       ? [{ type: 'text', text: message.text }]
       : message.content
   const queued = message.type === 'queued_user'
+  const time = formatMessageTime(message.timestamp)
+  const label = queued
+    ? 'You · Queued'
+    : message.from != null && message.from !== ''
+      ? `From ${message.from}`
+      : 'You'
 
   return (
     <article className="chat-user-group">
       <div className="chat-from">
-        {queued
-          ? 'You · Queued'
-          : message.from != null && message.from !== ''
-            ? `From ${message.from}`
-            : 'You'}
+        {label}
+        {time !== null && (
+          <>
+            {' · '}
+            <time dateTime={message.timestamp}>{time}</time>
+          </>
+        )}
       </div>
       {content.map((part, partIndex) =>
         part.type === 'text' ? (

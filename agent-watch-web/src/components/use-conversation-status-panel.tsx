@@ -5,13 +5,18 @@ import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
-import type { BackgroundTask, ChatItem, Session } from '#types'
+import { SessionTreePanel } from '#components/session-tree-panel'
+import { needsActionDescendantCount } from '#session-tree-model'
+import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
   messages: readonly ChatItem[]
   allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
+  sessionTree?: readonly SessionTreeNode[] | null
+  sessionTreeError?: string | null
+  onSelectSession?: (id: string) => void
   statusPanelOpen: boolean
   onAction: (
     action: string,
@@ -26,6 +31,9 @@ export function useConversationStatusPanel({
   messages,
   allDecisions,
   backgroundTasks,
+  sessionTree = null,
+  sessionTreeError = null,
+  onSelectSession = () => undefined,
   statusPanelOpen,
   onAction,
   onCloseStatusPanel,
@@ -52,6 +60,15 @@ export function useConversationStatusPanel({
     session.critUrl !== ''
       ? session.critUrl
       : null
+  const treeCount =
+    sessionTree === null
+      ? 0
+      : needsActionDescendantCount(sessionTree, session.id)
+  const treeAvailable =
+    session.hasSessionTree === true &&
+    (sessionTreeError !== null ||
+      sessionTree === null ||
+      sessionTree.length > 1)
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(backgroundTasks.length > 0
       ? [
@@ -68,6 +85,34 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
+    ...(!treeAvailable
+      ? []
+      : [
+          {
+            id: 'tree',
+            label: 'Tree',
+            count: treeCount,
+            visible: true,
+            showCount: treeCount > 0,
+            countTone: 'warning' as const,
+            content:
+              sessionTreeError !== null ? (
+                <div className="session-tree-feedback" role="alert">
+                  Could not load the session tree: {sessionTreeError}
+                </div>
+              ) : sessionTree === null ? (
+                <div className="session-tree-feedback" role="status">
+                  Loading session tree…
+                </div>
+              ) : (
+                <SessionTreePanel
+                  sessions={sessionTree}
+                  selectedSessionId={session.id}
+                  onSelectSession={onSelectSession}
+                />
+              ),
+          },
+        ]),
     ...(decisionCount > 0
       ? [
           {

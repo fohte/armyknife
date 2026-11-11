@@ -32,6 +32,7 @@ mod project;
 use self::project::{
     resolve_parent_project, resolve_project, resolve_repo, resolve_repos_for_sessions,
 };
+mod tree;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -81,6 +82,7 @@ struct SessionView {
     can_open_in_terminal: bool,
     project: String,
     parent: Option<ParentSessionView>,
+    has_session_tree: bool,
     ancestor_session_ids: Vec<String>,
     pull_request: Option<PullRequestView>,
     crit_url: Option<String>,
@@ -102,6 +104,7 @@ struct SessionsResponse {
 struct SessionSnapshot {
     revision: i64,
     sessions: Vec<Session>,
+    all_sessions: Vec<Session>,
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
@@ -197,6 +200,7 @@ pub(super) fn decision_category_is_done(
 fn router_with_source<S: SessionSource>(source: S) -> Router {
     Router::new()
         .route("/sessions", get(list_sessions::<S>))
+        .route("/sessions/{session_id}/tree", get(tree::session_tree::<S>))
         .with_state(source)
 }
 
@@ -256,6 +260,7 @@ async fn list_sessions<S: SessionSource>(
         .map(|state| (state.session_id.clone(), state))
         .collect::<HashMap<_, _>>();
     let unanswered_proposal_titles = snapshot.unanswered_proposal_titles;
+    let tree_related_session_ids = tree::session_tree_related_ids(&snapshot.all_sessions);
 
     let mut sessions = snapshot
         .sessions
@@ -376,6 +381,7 @@ async fn list_sessions<S: SessionSource>(
                 can_open_in_terminal: session.tmux_info.is_some(),
                 project: resolve_project(parent_project, task_project.map(String::as_str), &repo),
                 parent,
+                has_session_tree: tree_related_session_ids.contains(&session.session_id),
                 ancestor_session_ids: session.ancestor_session_ids.clone(),
                 pull_request,
                 crit_url: if turn_kinds.get(session.session_id.as_str())
@@ -433,7 +439,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     let sessions_dir = store::sessions_dir()?;
     let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
-    let visible_session_ids = sessions
+    let visible_session_ids = all_sessions
         .iter()
         .map(|session| session.session_id.clone())
         .collect::<Vec<_>>();
@@ -447,6 +453,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
     Ok(SessionSnapshot {
         revision,
         sessions,
+        all_sessions,
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
@@ -513,6 +520,7 @@ mod tests {
     struct TestSessionSource {
         revision: i64,
         sessions: Vec<Session>,
+        all_sessions: Vec<Session>,
         web_states: Vec<store::WatchWebSessionState>,
         title_by_id: HashMap<String, String>,
         repo_by_id: HashMap<String, String>,
@@ -534,6 +542,7 @@ mod tests {
             Ok(SessionSnapshot {
                 revision: self.revision,
                 sessions: self.sessions.clone(),
+                all_sessions: self.all_sessions.clone(),
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
@@ -595,28 +604,34 @@ mod tests {
 
     #[fixture]
     fn source() -> TestSessionSource {
-        let mut session = session(SessionStatus::Stopped);
-        session.session_id = "child-session".to_string();
-        session.tmux_info = Some(TmuxInfo {
+        let mut child_session = session(SessionStatus::Stopped);
+        child_session.session_id = "child-session".to_string();
+        child_session.tmux_info = Some(TmuxInfo {
             session_name: "example-session".to_string(),
             window_name: "example-window".to_string(),
             window_index: 0,
             pane_id: "%1".to_string(),
             socket_path: None,
         });
-        session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
-        session.last_message = Some("last message".to_string());
-        session.ancestor_session_ids = vec!["parent-session".to_string()];
-        session.pr_context = Some(crate::commands::agent::types::SessionPrContext {
+        child_session.updated_at = Utc.timestamp_opt(1_000, 0).unwrap();
+        child_session.last_message = Some("last message".to_string());
+        child_session.ancestor_session_ids = vec!["parent-session".to_string()];
+        child_session.pr_context = Some(crate::commands::agent::types::SessionPrContext {
             owner: "example-org".to_string(),
             repo: "example-repo".to_string(),
             branch: "feature-example".to_string(),
             checklist_item_id: None,
         });
 
+        let mut parent = session(SessionStatus::Ended);
+        parent.session_id = "parent-session".to_string();
+        parent.ancestor_session_ids.clear();
+        parent.updated_at = Utc.timestamp_opt(900, 0).unwrap();
+
         TestSessionSource {
             revision: 7,
-            sessions: vec![session],
+            sessions: vec![child_session.clone()],
+            all_sessions: vec![child_session, parent],
             web_states: vec![store::WatchWebSessionState {
                 session_id: "child-session".to_string(),
                 later_until: Some(Utc.timestamp_opt(4_700, 0).unwrap()),
@@ -715,6 +730,239 @@ mod tests {
         (status, value)
     }
 
+    async fn session_tree_response(
+        source: TestSessionSource,
+        session_id: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let response = Router::new()
+            .nest("/api", router_with_source(source))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/sessions/{session_id}/tree"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let value = serde_json::from_slice::<serde_json::Value>(&body).unwrap();
+        (status, value)
+    }
+
+    #[tokio::test]
+    async fn session_tree_route_includes_ended_ancestors_and_active_session_data() {
+        let (status, tree) = session_tree_response(source(), "child-session").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tree,
+            serde_json::json!({
+                "revision": 7,
+                "sessions": [
+                    {
+                        "id": "child-session",
+                        "parentId": "parent-session",
+                        "category": "later",
+                        "isActive": true,
+                        "kind": "Stopped",
+                        "title": "child title",
+                        "preview": "last message",
+                        "elapsedSeconds": 100,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/example-repo",
+                        "decisionCount": 4,
+                        "pullRequest": { "number": 42, "state": "Open" },
+                    },
+                    {
+                        "id": "parent-session",
+                        "parentId": null,
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "parent title",
+                        "preview": null,
+                        "elapsedSeconds": 200,
+                        "task": {
+                            "id": "parent-task-id",
+                            "number": 18,
+                            "title": "parent task",
+                            "priority": null,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/parent-repository",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                ],
+            }),
+        );
+    }
+
+    #[tokio::test]
+    async fn session_tree_route_marks_stopped_sessions_with_pending_background_tasks_in_progress() {
+        let mut source = source();
+        source.all_sessions.truncate(1);
+        source.all_sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
+        source.sessions[0]
+            .pending_bg_task_ids
+            .insert("fixture-task-id".to_string());
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            session_tree_response(source, "child-session").await,
+            (
+                StatusCode::OK,
+                serde_json::json!({
+                    "revision": 7,
+                    "sessions": [{
+                        "id": "child-session",
+                        "parentId": null,
+                        "category": "in_progress",
+                        "isActive": true,
+                        "kind": null,
+                        "title": "child title",
+                        "preview": "last message",
+                        "elapsedSeconds": 100,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/example-repo",
+                        "decisionCount": 4,
+                        "pullRequest": { "number": 42, "state": "Open" },
+                    }],
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn session_tree_route_returns_siblings_and_descendants_with_nearest_living_parent() {
+        let mut source = source();
+        let mut grandchild = session(SessionStatus::Ended);
+        grandchild.session_id = "grandchild-session".to_string();
+        grandchild.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "deleted-intermediate".to_string(),
+        ];
+        grandchild.updated_at = Utc.timestamp_opt(800, 0).unwrap();
+        grandchild.last_message = Some("completed the delegated work".to_string());
+        let mut sibling = session(SessionStatus::Ended);
+        sibling.session_id = "sibling-session".to_string();
+        sibling.ancestor_session_ids = vec!["parent-session".to_string()];
+        sibling.updated_at = Utc.timestamp_opt(700, 0).unwrap();
+        source.all_sessions.extend([grandchild, sibling]);
+        source.title_by_id.extend([
+            (
+                "grandchild-session".to_string(),
+                "Grandchild session".to_string(),
+            ),
+            ("sibling-session".to_string(), "Sibling session".to_string()),
+        ]);
+        source.repo_by_id.extend([
+            (
+                "grandchild-session".to_string(),
+                "example-org/grandchild-repo".to_string(),
+            ),
+            (
+                "sibling-session".to_string(),
+                "example-org/sibling-repo".to_string(),
+            ),
+        ]);
+
+        let (status, tree) = session_tree_response(source, "child-session").await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            tree,
+            serde_json::json!({
+                "revision": 7,
+                "sessions": [
+                    {
+                        "id": "child-session",
+                        "parentId": "parent-session",
+                        "category": "later",
+                        "isActive": true,
+                        "kind": "Stopped",
+                        "title": "child title",
+                        "preview": "last message",
+                        "elapsedSeconds": 100,
+                        "task": {
+                            "id": "task-id",
+                            "number": 17,
+                            "title": "task title",
+                            "priority": 1,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/example-repo",
+                        "decisionCount": 4,
+                        "pullRequest": { "number": 42, "state": "Open" },
+                    },
+                    {
+                        "id": "parent-session",
+                        "parentId": null,
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "parent title",
+                        "preview": null,
+                        "elapsedSeconds": 200,
+                        "task": {
+                            "id": "parent-task-id",
+                            "number": 18,
+                            "title": "parent task",
+                            "priority": null,
+                            "isClosed": false,
+                        },
+                        "repo": "example-org/parent-repository",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                    {
+                        "id": "grandchild-session",
+                        "parentId": "parent-session",
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "Grandchild session",
+                        "preview": "completed the delegated work",
+                        "elapsedSeconds": 300,
+                        "task": null,
+                        "repo": "example-org/grandchild-repo",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                    {
+                        "id": "sibling-session",
+                        "parentId": "parent-session",
+                        "category": "done",
+                        "isActive": false,
+                        "kind": null,
+                        "title": "Sibling session",
+                        "preview": null,
+                        "elapsedSeconds": 400,
+                        "task": null,
+                        "repo": "example-org/sibling-repo",
+                        "decisionCount": 0,
+                        "pullRequest": null,
+                    },
+                ],
+            }),
+        );
+    }
+
     #[test]
     fn repo_lookup_uses_active_sessions_and_ancestors_once_per_worktree() {
         let mut active = session(SessionStatus::Running);
@@ -751,6 +999,20 @@ mod tests {
                 ]),
                 vec![active.cwd],
             ),
+        );
+    }
+
+    #[test]
+    fn session_tree_relation_flag_includes_a_parent_with_only_ended_children() {
+        let mut parent = session(SessionStatus::Running);
+        parent.session_id = "parent-session".to_string();
+        let mut child = session(SessionStatus::Ended);
+        child.session_id = "child-session".to_string();
+        child.ancestor_session_ids = vec!["parent-session".to_string()];
+
+        assert_eq!(
+            super::tree::session_tree_related_ids(&[parent, child]),
+            HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
         );
     }
 
@@ -816,6 +1078,7 @@ mod tests {
                     "id": "parent-session",
                     "title": "parent title"
                 },
+                "hasSessionTree": true,
                 "ancestorSessionIds": ["parent-session"],
                 "pullRequest": {
                     "number": 42,

@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.612](https://github.com/fohte/armyknife/compare/v0.1.611...v0.1.612) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** add a session tree tab ([#1591](https://github.com/fohte/armyknife/issues/1591)) ([cb7410c](https://github.com/fohte/armyknife/commit/cb7410c643e6abd252e1c34a39e7cedad0d44272))
+
+## [0.1.611](https://github.com/fohte/armyknife/compare/v0.1.610...v0.1.611) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** improve session link cards ([#1587](https://github.com/fohte/armyknife/issues/1587)) ([03ee18d](https://github.com/fohte/armyknife/commit/03ee18dd31f60ed0ddb1049baea7dc5b33847f45))
+
+## [0.1.610](https://github.com/fohte/armyknife/compare/v0.1.609...v0.1.610) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** show chat timestamps ([#1586](https://github.com/fohte/armyknife/issues/1586)) ([564ed03](https://github.com/fohte/armyknife/commit/564ed03e4529c86639a0986b1491c68d07b4ad15))
+
+## [0.1.609](https://github.com/fohte/armyknife/compare/v0.1.608...v0.1.609) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** archive Done sessions ([#1582](https://github.com/fohte/armyknife/issues/1582)) ([a2183ef](https://github.com/fohte/armyknife/commit/a2183ef3dd2a051e6d3dcb102cf3b3c2b4974bf4))
+
 ## [0.1.608](https://github.com/fohte/armyknife/compare/v0.1.607...v0.1.608) (2026-11-11)
 
 

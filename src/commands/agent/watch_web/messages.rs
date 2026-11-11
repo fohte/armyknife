@@ -502,15 +502,21 @@ enum ChatItem {
     User {
         text: String,
         #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
     QueuedUser {
         content: Vec<UserContentPart>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
     UserWithContent {
         content: Vec<UserContentPart>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         from: Option<String>,
     },
@@ -520,6 +526,8 @@ enum ChatItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
         content: Vec<UserContentPart>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     SubagentReport {
         agent_id: String,
@@ -532,6 +540,8 @@ enum ChatItem {
         kind: EventKind,
         text: String,
         failed: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        timestamp: Option<String>,
     },
     Assistant {
         text: String,
@@ -1513,6 +1523,7 @@ mod tests {
                                 "type": "text",
                                 "text": "Expanded fixture body.",
                             }],
+                            "timestamp": "2026-06-01T12:00:03+00:00",
                         },
                     ],
                     "backgroundTasks": [],
@@ -1961,12 +1972,21 @@ mod tests {
     }
 
     #[rstest]
-    #[case::recorded_body("2026-06-01T12:00:01Z", "Expanded fictional request body.")]
-    #[case::outside_delivery_window("2026-06-01T11:59:59Z", "$(cat /fixture/message.txt)")]
+    #[case::recorded_body(
+        "2026-06-01T12:00:01Z",
+        "Expanded fictional request body.",
+        "2026-06-01T12:00:01+00:00"
+    )]
+    #[case::outside_delivery_window(
+        "2026-06-01T11:59:59Z",
+        "$(cat /fixture/message.txt)",
+        "2026-06-01T12:00:02+00:00"
+    )]
     #[tokio::test]
     async fn peer_out_route_uses_recorded_content_only_when_delivery_time_matches(
         #[case] sent_at: &str,
         #[case] expected_content: &str,
+        #[case] expected_timestamp: &str,
     ) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
@@ -2028,6 +2048,7 @@ mod tests {
                         "direction": "to",
                         "session_id": "fixture-target-id",
                         "content": [{"type": "text", "text": expected_content}],
+                        "timestamp": expected_timestamp,
                     }],
                     "backgroundTasks": [],
                     "start": 0,
@@ -2081,7 +2102,7 @@ mod tests {
         let transcript_path = directory.path().join("transcript.jsonl");
         std::fs::write(
             &transcript_path,
-            br#"{"type":"queue-operation","operation":"enqueue","content":"Continue the fixture build."}"#,
+            br#"{"type":"queue-operation","operation":"enqueue","timestamp":"2026-06-01T12:00:00Z","content":"Continue the fixture build."}"#,
         )
         .unwrap();
 
@@ -2110,7 +2131,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"timestamp":"2026-06-01T12:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
             ),
         );
     }
@@ -2151,7 +2172,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}]}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                    r#"{"messages":[{"type":"queued_user","content":[{"type":"text","text":"Continue the fixture build."}],"timestamp":"2026-01-01T00:00:00+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 Vec::<i64>::new(),
             ),
@@ -2202,7 +2223,7 @@ mod tests {
                 (
                     StatusCode::OK,
                     Some("application/json".to_string()),
-                    r#"{"messages":[{"type":"user","text":"Delivered fixture request."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
+                    r#"{"messages":[{"type":"user","text":"Delivered fixture request.","timestamp":"2026-01-01T00:00:01+00:00"}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#.to_string(),
                 ),
                 vec![7],
             ),

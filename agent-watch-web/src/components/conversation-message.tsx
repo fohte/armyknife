@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'
 import { MarkdownMessage } from '#components/markdown-message'
+import { formatMessageTime } from '#components/message-time'
 import { PeerMessage } from '#components/peer-message'
 import {
   type PendingPermissionAction,
@@ -99,6 +100,7 @@ export function renderConversationMessage({
     )
   }
   if (message.type === 'event') {
+    const time = formatMessageTime(message.timestamp)
     return (
       <div
         className="chat-event"
@@ -107,7 +109,13 @@ export function renderConversationMessage({
         key={`event-${String(index)}`}
         title={message.text}
       >
-        {message.text}
+        <span className="chat-event-text">{message.text}</span>
+        {time !== null && (
+          <>
+            {' '}
+            <time dateTime={message.timestamp}>{time}</time>
+          </>
+        )}
       </div>
     )
   }

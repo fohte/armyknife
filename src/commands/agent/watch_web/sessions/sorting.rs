@@ -64,6 +64,7 @@ mod tests {
             can_open_in_terminal: false,
             project: "Unsorted".to_string(),
             parent: None,
+            has_session_tree: false,
             ancestor_session_ids: Vec::new(),
             pull_request: None,
             crit_url: None,

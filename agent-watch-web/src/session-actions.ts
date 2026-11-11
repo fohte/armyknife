@@ -5,6 +5,7 @@ import {
   type LaterPreset,
   type LaterPresetTimes,
 } from '#session-navigation'
+import type { Session } from '#types'
 
 function requestError(error: unknown) {
   return error instanceof Error
@@ -40,8 +41,23 @@ export function setSessionBackNow(sessionId: string) {
   return postSessionAction(sessionId, 'later', { preset: 'back_now' })
 }
 
-export function archiveSession(sessionId: string) {
+function archiveSession(sessionId: string) {
   return postSessionAction(sessionId, 'archive', {})
+}
+
+export async function archiveDoneSessions(
+  sessions: readonly Pick<Session, 'category' | 'id' | 'title'>[],
+) {
+  for (const session of sessions) {
+    if (session.category !== 'done') continue
+
+    const archived = await archiveSession(session.id).match(
+      () => true,
+      () => false,
+    )
+    if (!archived) return `Could not archive ${session.title}.`
+  }
+  return null
 }
 
 export function openSessionInTerminal(sessionId: string) {

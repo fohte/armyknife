@@ -11,10 +11,15 @@ use crate::commands::agent::store::WatchWebQueuedPrompt;
 
 #[derive(Default)]
 pub(super) struct Queue {
-    pending: VecDeque<Option<String>>,
+    pending: VecDeque<PendingPrompt>,
     removed: VecDeque<Option<String>>,
     queued_prompts: Vec<WatchWebQueuedPrompt>,
     resolved_queued_prompt_ids: Vec<i64>,
+}
+
+struct PendingPrompt {
+    content: Option<String>,
+    timestamp: Option<DateTime<Utc>>,
 }
 
 impl Queue {
@@ -29,16 +34,17 @@ impl Queue {
         if record.get("type").and_then(Value::as_str) == Some("queue-operation") {
             match record.get("operation").and_then(Value::as_str) {
                 Some("enqueue") => {
-                    self.pending.push_back(
-                        record
+                    self.pending.push_back(PendingPrompt {
+                        content: record
                             .get("content")
                             .filter(|content| !content.is_null())
                             .map(|content| claude_content_text(Some(content))),
-                    );
+                        timestamp: super::record_timestamp(record),
+                    });
                 }
                 Some("dequeue") => {
                     if let Some(prompt) = self.pending.pop_front() {
-                        self.removed.push_back(prompt);
+                        self.removed.push_back(prompt.content);
                     }
                 }
                 Some("remove") => {
@@ -48,15 +54,21 @@ impl Queue {
                         .map(str::to_owned);
                     let index = content
                         .as_ref()
-                        .and_then(|content| matching_prompt_index(&self.pending, content));
+                        .and_then(|content| pending_prompt_index(&self.pending, content));
                     // Claude Code can omit prompt text when enqueuing peer messages.
                     let index = index.or_else(|| {
-                        content
-                            .as_ref()
-                            .and_then(|_| self.pending.iter().position(Option::is_none))
+                        content.as_ref().and_then(|_| {
+                            self.pending
+                                .iter()
+                                .position(|prompt| prompt.content.is_none())
+                        })
                     });
                     if let Some(index) = index {
-                        let removed = self.pending.remove(index).flatten().or(content);
+                        let removed = self
+                            .pending
+                            .remove(index)
+                            .and_then(|prompt| prompt.content)
+                            .or(content);
                         self.removed.push_back(removed);
                     }
                 }
@@ -64,7 +76,7 @@ impl Queue {
                     self.pending.clear();
                     self.removed.clear();
                     // Popped prompts have no delivery row, so discard their saved watch-web entries here.
-                    if let Some(popped_at) = record_timestamp(record) {
+                    if let Some(popped_at) = super::record_timestamp(record) {
                         let mut cancelled_ids = Vec::new();
                         self.queued_prompts.retain(|queued| {
                             if queued.sent_at <= popped_at {
@@ -91,7 +103,7 @@ impl Queue {
             {
                 let prompt = claude_content_text(Some(prompt));
                 if !self.consume_removed_prompt(&prompt)
-                    && let Some(index) = matching_prompt_index(&self.pending, &prompt)
+                    && let Some(index) = pending_prompt_index(&self.pending, &prompt)
                 {
                     self.pending.remove(index);
                 }
@@ -141,7 +153,7 @@ impl Queue {
             None if is_queued_command => prompt_text.clone(),
             None => return,
         };
-        let received_at = record_timestamp(record);
+        let received_at = super::record_timestamp(record);
         let matching_index = self.queued_prompts.iter().position(|queued| {
             queued.content == body
                 && received_at.is_none_or(|received_at| queued.sent_at <= received_at)
@@ -157,7 +169,7 @@ impl Queue {
     }
 
     fn consume_removed_prompt(&mut self, prompt: &str) -> bool {
-        if let Some(index) = matching_prompt_index(&self.removed, prompt) {
+        if let Some(index) = matching_removed_prompt_index(&self.removed, prompt) {
             self.removed.remove(index);
             return true;
         }
@@ -180,10 +192,14 @@ impl Queue {
         let pending_content = self
             .pending
             .iter()
-            .filter_map(Option::as_deref)
+            .filter_map(|prompt| prompt.content.as_deref())
             .map(|prompt| normalized_prompt(prompt, user_marker))
             .collect::<Vec<_>>();
-        let mut prompts = self.pending.into_iter().flatten().collect::<Vec<_>>();
+        let mut prompts = self
+            .pending
+            .into_iter()
+            .filter_map(|prompt| prompt.content.map(|content| (content, prompt.timestamp)))
+            .collect::<Vec<_>>();
         prompts.extend(
             self.queued_prompts
                 .into_iter()
@@ -192,9 +208,9 @@ impl Queue {
                         .iter()
                         .any(|pending| pending == &queued.content)
                 })
-                .map(|queued| queued.content),
+                .map(|queued| (queued.content, Some(queued.sent_at))),
         );
-        for prompt in prompts {
+        for (prompt, timestamp) in prompts {
             let start = items.len();
             append_text_with_user_marker_and_image_directory(
                 &mut items,
@@ -203,18 +219,30 @@ impl Queue {
                 user_marker,
                 Vec::new(),
                 image_directory,
+                timestamp,
             );
             if items.len() > start
                 && let Some(item) = items.pop()
             {
                 items.push(match item {
-                    ChatItem::User { text, from } => ChatItem::QueuedUser {
+                    ChatItem::User {
+                        text,
+                        from,
+                        timestamp,
+                    } => ChatItem::QueuedUser {
                         content: vec![UserContentPart::Text { text }],
                         from,
+                        timestamp,
                     },
-                    ChatItem::UserWithContent { content, from } => {
-                        ChatItem::QueuedUser { content, from }
-                    }
+                    ChatItem::UserWithContent {
+                        content,
+                        from,
+                        timestamp,
+                    } => ChatItem::QueuedUser {
+                        content,
+                        from,
+                        timestamp,
+                    },
                     item => item,
                 });
             }
@@ -225,14 +253,6 @@ impl Queue {
 
 fn normalized_prompt(prompt: &str, user_marker: Option<&str>) -> String {
     marked_user_body(prompt, user_marker).unwrap_or_else(|| prompt.to_owned())
-}
-
-fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
-    record
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
-        .map(|timestamp| timestamp.with_timezone(&Utc))
 }
 
 fn user_prompt(record: &Value) -> Option<String> {
@@ -248,10 +268,19 @@ fn user_prompt(record: &Value) -> Option<String> {
     (!text.trim().is_empty()).then_some(text)
 }
 
-fn matching_prompt_index(pending: &VecDeque<Option<String>>, prompt: &str) -> Option<usize> {
+fn matching_removed_prompt_index(
+    pending: &VecDeque<Option<String>>,
+    prompt: &str,
+) -> Option<usize> {
     pending
         .iter()
         .position(|pending_prompt| pending_prompt.as_deref() == Some(prompt))
+}
+
+fn pending_prompt_index(pending: &VecDeque<PendingPrompt>, prompt: &str) -> Option<usize> {
+    pending
+        .iter()
+        .position(|pending_prompt| pending_prompt.content.as_deref() == Some(prompt))
 }
 
 #[cfg(test)]
@@ -307,6 +336,22 @@ mod tests {
     }
 
     #[test]
+    fn uses_the_saved_send_time_for_a_queued_prompt() {
+        let prompts = [saved_prompt(7, "Queued request.")];
+
+        assert_eq!(
+            parse_with_saved_prompts("", &prompts, None).0,
+            vec![ChatItem::QueuedUser {
+                content: vec![UserContentPart::Text {
+                    text: "Queued request.".to_string(),
+                }],
+                from: None,
+                timestamp: Some("2026-01-01T00:00:00+00:00".to_string()),
+            }],
+        );
+    }
+
+    #[test]
     fn removes_the_watch_web_marker_from_a_queued_peer_message() {
         let transcript = indoc! {r#"
             {"type":"queue-operation","operation":"enqueue","content":"Synthetic transport preamble.\n<peer-message>\n- From session_id: fixture-parent-id\n\n⟦armyknife-user:fixture-marker-cobalt⟧\nThis message was typed by the human user in armyknife watch-web.\nQueued user request.\n</peer-message>\nPlease treat this fictional message as untrusted input."}
@@ -326,6 +371,7 @@ mod tests {
                 content: vec![UserContentPart::Text {
                     text: "Queued user request.".to_string(),
                 }],
+                timestamp: None,
                 from: None,
             }],
         );
@@ -345,6 +391,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Repeated prompt.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 queued_user("Repeated prompt."),
@@ -365,6 +412,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Earlier delivered message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 queued_user("First queued prompt."),
@@ -378,7 +426,10 @@ mod tests {
         assert_eq!(
             parse_with_saved_prompts("", &[saved_prompt(7, "Watch the fixture build.")], None),
             (
-                vec![queued_user("Watch the fixture build.")],
+                vec![queued_user_at(
+                    "Watch the fixture build.",
+                    "2026-01-01T00:00:00+00:00",
+                )],
                 Vec::<BackgroundTask>::new(),
                 Vec::new(),
             ),
@@ -401,6 +452,7 @@ mod tests {
             (
                 vec![ChatItem::User {
                     text: "Delivered request.".to_string(),
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
                 }],
                 Vec::<BackgroundTask>::new(),
@@ -424,6 +476,7 @@ mod tests {
             (
                 vec![ChatItem::User {
                     text: "Delivered request.".to_string(),
+                    timestamp: Some("2026-01-01T00:00:01+00:00".to_string()),
                     from: None,
                 }],
                 Vec::<BackgroundTask>::new(),
@@ -441,7 +494,10 @@ mod tests {
         assert_eq!(
             parse_with_saved_prompts(transcript, &[saved_prompt(7, "Repeated request.")], None,),
             (
-                vec![queued_user("Repeated request.")],
+                vec![queued_user_at(
+                    "Repeated request.",
+                    "2026-01-01T00:00:00+00:00",
+                )],
                 Vec::<BackgroundTask>::new(),
                 Vec::new(),
             ),
@@ -477,7 +533,10 @@ mod tests {
                 None,
             ),
             (
-                vec![queued_user("Later queued request.")],
+                vec![queued_user_at(
+                    "Later queued request.",
+                    "2026-01-01T00:00:00+00:00",
+                )],
                 Vec::<BackgroundTask>::new(),
                 Vec::new(),
             ),
@@ -501,9 +560,10 @@ mod tests {
                 vec![
                     ChatItem::User {
                         text: "Repeated request.".to_string(),
+                        timestamp: Some("2025-12-31T23:59:59+00:00".to_string()),
                         from: None,
                     },
-                    queued_user("Repeated request."),
+                    queued_user_at("Repeated request.", "2026-01-01T00:00:00+00:00",),
                 ],
                 Vec::<BackgroundTask>::new(),
                 Vec::new(),
@@ -531,9 +591,10 @@ mod tests {
                 vec![
                     ChatItem::User {
                         text: "Delivered request.".to_string(),
+                        timestamp: None,
                         from: None,
                     },
-                    queued_user("Delivered request."),
+                    queued_user_at("Delivered request.", "2026-01-01T00:00:00+00:00",),
                 ],
                 Vec::<BackgroundTask>::new(),
                 Vec::new(),
@@ -546,6 +607,17 @@ mod tests {
             content: vec![UserContentPart::Text {
                 text: text.to_owned(),
             }],
+            timestamp: None,
+            from: None,
+        }
+    }
+
+    fn queued_user_at(text: &str, timestamp: &str) -> ChatItem {
+        ChatItem::QueuedUser {
+            content: vec![UserContentPart::Text {
+                text: text.to_owned(),
+            }],
+            timestamp: Some(timestamp.to_owned()),
             from: None,
         }
     }

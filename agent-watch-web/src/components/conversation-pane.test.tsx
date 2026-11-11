@@ -3,13 +3,20 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
-import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
+import type {
+  BackgroundTask,
+  ChatItem,
+  Session,
+  SessionActions,
+  SessionTreeNode,
+} from '#types'
 
 vi.mock('#components/conversation-message', async (importOriginal) => {
   const original =
@@ -415,6 +422,132 @@ beforeEach(() => {
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
+})
+
+it('loads and shows the session tree from the tree endpoint', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const tree: SessionTreeNode[] = [
+    {
+      id: session.id,
+      parentId: null,
+      category: 'in_progress',
+      isActive: true,
+      kind: null,
+      title: session.title,
+      preview: 'Delegating the task',
+      elapsedSeconds: 20,
+      task: null,
+      repo: session.repo,
+      decisionCount: 0,
+      pullRequest: null,
+    },
+    {
+      id: 'child-session',
+      parentId: session.id,
+      category: 'needs_action',
+      isActive: true,
+      kind: 'Question',
+      title: 'Child session',
+      preview: 'Waiting for a decision',
+      elapsedSeconds: 8,
+      task: null,
+      repo: session.repo,
+      decisionCount: 0,
+      pullRequest: null,
+    },
+  ]
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ revision: 1, sessions: tree }))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(
+    () =>
+      container.querySelector('#session-status-tab-tree') !== null &&
+      container.querySelector('#session-tree-row-child-session') !== null,
+  )
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    countTone: container.querySelector('.session-status-panel-count')
+      ?.className,
+    rows: Array.from(
+      container.querySelectorAll('.session-tree-title'),
+      (row) => row.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree1',
+    countTone: 'session-status-panel-count session-status-panel-count--warning',
+    rows: ['Choose a retry policy', 'Child session'],
+  })
+})
+
+it('shows a tree request error instead of hiding the tree tab', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(jsonResponse({ error: 'Sample tree error' }, 503))
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree',
+    alert: 'Could not load the session tree: Sample tree error',
+  })
 })
 
 afterEach(() => {
@@ -1375,6 +1508,40 @@ it('marks a queued prompt below the delivered conversation', () => {
   ])
 })
 
+it('shows a local time on system event rows', () => {
+  const timestamp = '2026-06-01T12:00:00Z'
+  const localTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(timestamp))
+  renderView(() => Promise.resolve(true), session, undefined, [
+    {
+      type: 'event',
+      kind: 'system',
+      text: 'A synthetic operation was blocked.',
+      failed: true,
+      timestamp,
+    },
+  ])
+
+  const event = container.querySelector<HTMLElement>('.chat-event')
+  const getActual = () => ({
+    text: event?.querySelector('.chat-event-text')?.textContent ?? null,
+    time: event?.querySelector('time')?.textContent ?? null,
+    dateTime: event?.querySelector('time')?.getAttribute('dateTime') ?? null,
+    kind: event?.getAttribute('data-kind') ?? null,
+    failed: event?.getAttribute('data-failed') ?? null,
+  })
+  expect(getActual()).toEqual({
+    text: 'A synthetic operation was blocked.',
+    time: localTime,
+    dateTime: timestamp,
+    kind: 'system',
+    failed: 'true',
+  })
+})
+
 it('shows peer images and supports keyboard navigation', () => {
   const linkedSession: Session = {
     ...session,
@@ -1415,18 +1582,6 @@ it('shows peer images and supports keyboard navigation', () => {
           { type: 'file', name: 'fixture-peer-layout.html' },
         ],
       },
-      {
-        type: 'event',
-        kind: 'hook',
-        text: 'A fictional hook completed.',
-        failed: false,
-      },
-      {
-        type: 'event',
-        kind: 'system',
-        text: 'A fictional operation was blocked.',
-        failed: true,
-      },
     ],
     actions,
     false,
@@ -1458,14 +1613,10 @@ it('shows peer images and supports keyboard navigation', () => {
   const snapshot = () => ({
     sessionLinkHref: peerLink.getAttribute('href'),
     items: Array.from(
-      container.querySelectorAll<HTMLElement>(
-        '.chat-peer-message, .chat-event',
-      ),
+      container.querySelectorAll<HTMLElement>('.chat-peer-message'),
       (element) => ({
         className: element.className,
         text: element.textContent,
-        failed: element.getAttribute('data-failed'),
-        kind: element.getAttribute('data-kind'),
         imageSources: Array.from(
           element.querySelectorAll<HTMLImageElement>('img'),
           (image) => image.getAttribute('src'),
@@ -1487,8 +1638,6 @@ it('shows peer images and supports keyboard navigation', () => {
       {
         className: 'chat-peer-message chat-peer-message-to',
         text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
-        failed: null,
-        kind: null,
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
@@ -1496,34 +1645,94 @@ it('shows peer images and supports keyboard navigation', () => {
       {
         className: 'chat-peer-message chat-peer-message-from',
         text: 'FROMBuild verificationThe fictional output passed.fixture-peer-layout.html',
-        failed: null,
-        kind: null,
         imageSources: ['/api/images/fixture-peer-image.png'],
         unavailableImageText: undefined,
         fileNames: ['fixture-peer-layout.html'],
-      },
-      {
-        className: 'chat-event',
-        text: 'A fictional hook completed.',
-        failed: null,
-        kind: 'hook',
-        imageSources: [],
-        unavailableImageText: undefined,
-        fileNames: [],
-      },
-      {
-        className: 'chat-event',
-        text: 'A fictional operation was blocked.',
-        failed: 'true',
-        kind: 'system',
-        imageSources: [],
-        unavailableImageText: undefined,
-        fileNames: [],
       },
     ],
     selectedIds: [linkedSession.id, linkedSession.id, linkedSession.id],
   }
   expect(snapshot()).toEqual(expected)
+})
+
+it('shows the linked task count in a peer session card', async () => {
+  const linkedSession: Session = {
+    ...session,
+    id: 'fictional-peer-session',
+    category: 'in_progress',
+    kind: 'Review',
+    title: 'Review task links',
+    preview: 'Check the linked task summary.',
+    elapsedSeconds: 120,
+    engine: 'Claude',
+    workType: 'PM',
+    task: {
+      id: 'fixture-task-one',
+      number: 71,
+      title: 'Review the linked task',
+      priority: 1,
+    },
+    tasks: [
+      {
+        id: 'fixture-task-one',
+        number: 71,
+        title: 'Review the linked task',
+        priority: 1,
+      },
+      {
+        id: 'fixture-task-two',
+        number: 72,
+        title: 'Confirm the task count',
+        priority: 2,
+      },
+      {
+        id: 'fixture-task-three',
+        number: 73,
+        title: 'Update the overview',
+        priority: null,
+      },
+    ],
+    repo: 'sample-org/example-repo',
+  }
+  const message: ChatItem = {
+    type: 'peer',
+    direction: 'from',
+    session_id: linkedSession.id,
+    content: [{ type: 'text', text: 'A fictional peer update.' }],
+  }
+  renderView(
+    vi.fn().mockResolvedValue(true),
+    session,
+    undefined,
+    [message],
+    actions,
+    false,
+    [],
+    [linkedSession],
+  )
+
+  const peerLink = requireElement(
+    container.querySelector<HTMLAnchorElement>(
+      '.chat-peer-message-from .session-link-trigger',
+    ),
+  )
+  await act(async () => {
+    await userEvent.hover(peerLink)
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  })
+
+  const openBesideModifier =
+    getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
+      ? '⌘'
+      : 'Ctrl'
+  const card = requireElement(
+    document.querySelector<HTMLElement>('.session-link-card'),
+  )
+  expect(card.textContent).toBe(
+    `Review task linksPM · ClaudeReview · Check the linked task summary. · 2m` +
+      `P1 #71Review the linked task +2sample-org/example-repo` +
+      `Click to open · ${openBesideModifier}-click to open beside`,
+  )
 })
 
 it('refreshes peer session labels when the linked session title changes', () => {
@@ -5644,7 +5853,7 @@ it('skips committing an unchanged memoized conversation row', () => {
   expect(renderMessage).toHaveBeenCalledTimes(1)
 })
 
-it('keeps message rows memoized when linked session details stay unchanged', () => {
+it('keeps message rows memoized for elapsed and closed-task updates', () => {
   const message: ChatItem = {
     type: 'assistant',
     text: 'The conversation is unchanged.',
@@ -5668,12 +5877,16 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
       id: 'fixture-linked-task',
       number: 17,
       title: 'Refresh linked sessions',
-      priority: 2,
+      priority: 1,
       isClosed: true,
     },
   }
   const initialSessions = [initialSession]
-  const refreshedSessions = [refreshedSession]
+  const priorityChangedSession = {
+    ...refreshedSession,
+    task: { ...refreshedSession.task, priority: 2 },
+  }
+  const priorityChangedSessions = [priorityChangedSession]
   const onAction = () => Promise.resolve(true)
   const onSelectSession = () => undefined
   const renderMessage = vi.mocked(renderConversationMessage)
@@ -5699,7 +5912,23 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
     root?.render(
       <ConversationPaneView
         session={refreshedSession}
-        sessions={refreshedSessions}
+        sessions={[refreshedSession]}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+  const renderCountAfterUnrelatedRefresh = renderMessage.mock.calls.length
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={priorityChangedSession}
+        sessions={priorityChangedSessions}
         messages={messages}
         actions={null}
         loading={false}
@@ -5711,7 +5940,14 @@ it('keeps message rows memoized when linked session details stay unchanged', () 
     )
   })
 
-  expect(renderMessage).toHaveBeenCalledTimes(1)
+  const getActual = () => ({
+    afterUnrelatedRefresh: renderCountAfterUnrelatedRefresh,
+    afterPriorityChange: renderMessage.mock.calls.length,
+  })
+  expect(getActual()).toEqual({
+    afterUnrelatedRefresh: 1,
+    afterPriorityChange: 2,
+  })
 })
 
 it('keeps an unsent proposal comment when its position changes after refresh', async () => {
