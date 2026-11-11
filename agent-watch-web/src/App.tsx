@@ -566,6 +566,12 @@ export function App() {
             setCommandPaletteOpen(false)
             openSessionInInbox(id)
           }}
+          onOpenSessionBeside={(id) => {
+            const query = new URLSearchParams({ session: id })
+            if (isMobile) query.set('screen', 'conversation')
+            window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
+            setCommandPaletteOpen(false)
+          }}
           onRunCommand={(command) => {
             void runPaletteCommand(command)
           }}

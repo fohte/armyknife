@@ -99,7 +99,9 @@ function isChatItem(value: unknown): value is ChatItem {
                 isRecord(operation) &&
                 typeof operation['tool'] === 'string' &&
                 (operation['target'] === undefined ||
-                  typeof operation['target'] === 'string'),
+                  typeof operation['target'] === 'string') &&
+                (operation['failed'] === undefined ||
+                  typeof operation['failed'] === 'boolean'),
             )))
       )
     case 'tool_in_progress':

@@ -171,6 +171,7 @@ export type UserContentPart =
 export type ToolOperation = {
   tool: string
   target?: string
+  failed?: boolean
 }
 
 export type BackgroundTask = {

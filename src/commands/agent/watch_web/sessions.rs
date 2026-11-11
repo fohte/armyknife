@@ -241,7 +241,12 @@ async fn list_sessions<S: SessionSource>(
                     priority_order: task_metadata.priority_order.get(&task.task_id).copied(),
                 })
                 .collect::<Vec<_>>();
-            let task = tasks.first().cloned();
+            let state = state_by_id.get(&session.session_id);
+            let task = state
+                .and_then(|state| state.primary_task_id.as_deref())
+                .and_then(|primary_task_id| tasks.iter().find(|task| task.id == primary_task_id))
+                .or_else(|| tasks.first())
+                .cloned();
             let parent = session
                 .ancestor_session_ids
                 .last()
@@ -276,7 +281,6 @@ async fn list_sessions<S: SessionSource>(
             let needs_action = interrupted || proposal_title.is_some();
             let category_when_not_later =
                 category_for_with_interruption(session, turn, needs_action);
-            let state = state_by_id.get(&session.session_id);
             let category = category_for_with_later(session, turn, needs_action, state, now);
             SessionView {
                 id: session.session_id.clone(),
@@ -957,6 +961,7 @@ mod tests {
                 until_activity: false,
                 is_today: true,
                 is_compacting: false,
+                primary_task_id: None,
             }],
             title_by_id: HashMap::from([
                 ("child-session".to_string(), "child title".to_string()),
@@ -1623,6 +1628,48 @@ mod tests {
                     },
                 ]),
             ),
+        );
+    }
+
+    #[rstest]
+    #[case::linked_primary("completed-task", "completed-task")]
+    #[case::unlinked_primary_uses_existing_order("missing-task", "open-task")]
+    #[tokio::test]
+    async fn sessions_route_uses_a_saved_primary_only_while_it_is_linked(
+        mut source: TestSessionSource,
+        #[case] saved_primary_task_id: &str,
+        #[case] expected_primary_task_id: &str,
+    ) {
+        source.web_states[0].primary_task_id = Some(saved_primary_task_id.to_string());
+        source.task_links.insert(
+            "child-session".to_string(),
+            vec![
+                LinkedSessionTask {
+                    task_id: "open-task".to_string(),
+                    task_number: 20,
+                    task_title: "open task".to_string(),
+                    parent_task_id: None,
+                    is_closed: false,
+                },
+                LinkedSessionTask {
+                    task_id: "completed-task".to_string(),
+                    task_number: 19,
+                    task_title: "completed task".to_string(),
+                    parent_task_id: None,
+                    is_closed: true,
+                },
+            ],
+        );
+        source.task_priorities = HashMap::from([
+            ("completed-task".to_string(), Some(2)),
+            ("open-task".to_string(), Some(1)),
+        ]);
+
+        let (status, response) = sessions_response(source).await;
+
+        assert_eq!(
+            (status, response["sessions"][0]["task"]["id"].clone()),
+            (StatusCode::OK, serde_json::json!(expected_primary_task_id)),
         );
     }
 

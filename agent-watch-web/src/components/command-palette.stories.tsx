@@ -135,6 +135,7 @@ const meta = {
     recentSessionIds: ['session-tests', 'session-docs'],
     onClose: () => undefined,
     onOpenSession: () => undefined,
+    onOpenSessionBeside: () => undefined,
     onLater: () => undefined,
     onOpenInTerminal: () => undefined,
     onOpenProject: () => undefined,

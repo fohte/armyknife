@@ -44,6 +44,7 @@ const appTestFiles = [
   'src/components/inbox-view.test.tsx',
   'src/components/session-status-panel.test.tsx',
   'src/components/session-tree-panel.test.tsx',
+  'src/components/running-tasks-panel.test.tsx',
   'src/components/decision-card.test.tsx',
   'src/components/decisions-panel.test.tsx',
 ]
