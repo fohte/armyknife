@@ -1,6 +1,7 @@
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 
@@ -225,6 +226,35 @@ it('deletes a saved view from the navigation', () => {
   const snapshot = () => onDeleteSavedView.mock.calls
 
   expect(snapshot()).toEqual([['reviews']])
+})
+
+it('deletes a saved view through its hover-visible control', async () => {
+  const onDeleteSavedView = vi.fn<(id: string) => void>()
+  renderNav([], {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    onDeleteSavedView,
+  })
+
+  const item = container.querySelector<HTMLElement>('.saved-view-item')
+  const deleteButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete Sample reviews view"]',
+  )
+  if (item === null || deleteButton === null) {
+    throw new Error('Saved view controls were not rendered')
+  }
+
+  await userEvent.hover(item)
+  await userEvent.click(deleteButton)
+
+  expect(onDeleteSavedView.mock.calls).toEqual([['reviews']])
 })
 
 it('keeps the hidden delete button available to keyboard focus', () => {
