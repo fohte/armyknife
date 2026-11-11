@@ -165,6 +165,7 @@ pub(super) fn peer_out_from_tool(
     name: &str,
     input: Option<&Value>,
     parent_session_id: Option<&str>,
+    result: Option<&str>,
 ) -> Option<PeerOut> {
     let arguments = peer_notify_arguments(name, input)?;
     let mut message = None;
@@ -191,13 +192,43 @@ pub(super) fn peer_out_from_tool(
         index += 1;
     }
     Some(PeerOut {
-        session_id: if parent {
-            parent_session_id?.to_owned()
-        } else {
-            session_id?
-        },
+        session_id: result
+            .and_then(peer_notify_result_session_id)
+            .map(str::to_owned)
+            .or_else(|| {
+                if parent {
+                    parent_session_id.map(str::to_owned)
+                } else {
+                    session_id.filter(|id| is_literal_session_id(id))
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_owned()),
         text: message?,
     })
+}
+
+fn peer_notify_result_session_id(text: &str) -> Option<&str> {
+    const PREFIXES: [&str; 3] = [
+        "Delivered to session ",
+        "Injected into the running turn of Codex session ",
+        "Started a new turn in idle Codex session ",
+    ];
+
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        PREFIXES.iter().find_map(|prefix| {
+            line.strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix('.'))
+                .filter(|id| is_literal_session_id(id))
+        })
+    })
+}
+
+fn is_literal_session_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
 }
 
 fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
@@ -495,7 +526,12 @@ mod tests {
         #[case] parent_session_id: Option<&str>,
     ) {
         assert_eq!(
-            peer_out_from_tool("Bash", Some(&json!({"command":command})), parent_session_id,),
+            peer_out_from_tool(
+                "Bash",
+                Some(&json!({"command":command})),
+                parent_session_id,
+                None,
+            ),
             Some(super::PeerOut {
                 session_id: if command.contains("--parent") {
                     "fixture-parent-id".to_owned()
@@ -503,6 +539,64 @@ mod tests {
                     "fixture-target-id".to_owned()
                 },
                 text: "Please inspect this fictional task.".to_owned(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::shell_variable("a agent peer notify -m 'Please inspect this fictional task.' $sid")]
+    #[case::command_substitution(
+        "a agent peer notify -m 'Please inspect this fictional task.' $(resolve_target)"
+    )]
+    #[case::backtick_substitution(
+        "a agent peer notify -m 'Please inspect this fictional task.' `resolve_target`"
+    )]
+    fn does_not_treat_shell_expansions_as_session_ids(#[case] command: &str) {
+        assert_eq!(
+            peer_out_from_tool("Bash", Some(&json!({"command":command})), None, None,),
+            Some(super::PeerOut {
+                session_id: "unknown".to_owned(),
+                text: "Please inspect this fictional task.".to_owned(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::current_output("Delivered to session fixture-result-target.")]
+    #[case::legacy_codex_output(
+        "Injected into the running turn of Codex session fixture-result-target."
+    )]
+    fn prefers_session_id_from_tool_result(#[case] result: &str) {
+        assert_eq!(
+            peer_out_from_tool(
+                "Bash",
+                Some(
+                    &json!({"command":"a agent peer notify -m 'Inspect the fictional result.' fixture-argument-target"})
+                ),
+                None,
+                Some(result),
+            ),
+            Some(super::PeerOut {
+                session_id: "fixture-result-target".to_owned(),
+                text: "Inspect the fictional result.".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn shows_unknown_when_shell_target_has_no_resolved_result() {
+        assert_eq!(
+            peer_out_from_tool(
+                "Bash",
+                Some(
+                    &json!({"command":"a agent peer notify --message 'Inspect the fictional result.' $sid"})
+                ),
+                None,
+                Some("delivered"),
+            ),
+            Some(super::PeerOut {
+                session_id: "unknown".to_owned(),
+                text: "Inspect the fictional result.".to_owned(),
             }),
         );
     }
