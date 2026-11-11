@@ -303,8 +303,6 @@ export function ConversationPane({
   const [pendingPermissionAction, setPendingPermissionAction] =
     useState<PendingPermissionAction>(null)
   const requestGeneration = useRef(0)
-  const messagesJson = useRef<string | null>(null)
-  const actionsJson = useRef<string | null>(null)
 
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
@@ -328,21 +326,11 @@ export function ConversationPane({
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
         if (messagesResult.isOk()) {
-          const nextMessagesJson = JSON.stringify(messagesResult.value.messages)
-          if (messagesJson.current !== nextMessagesJson) {
-            messagesJson.current = nextMessagesJson
-            setMessages(messagesResult.value.messages)
-          }
+          setMessages(messagesResult.value.messages)
           setBackgroundTasks(messagesResult.value.backgroundTasks)
           setMessagesLoadedAt(Date.now())
         }
-        if (actionsResult.isOk()) {
-          const nextActionsJson = JSON.stringify(actionsResult.value)
-          if (actionsJson.current !== nextActionsJson) {
-            actionsJson.current = nextActionsJson
-            setActions(actionsResult.value)
-          }
-        }
+        if (actionsResult.isOk()) setActions(actionsResult.value)
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =

@@ -8,22 +8,6 @@ import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
 
-const conversationMessageRenders = vi.hoisted(() => ({ count: 0 }))
-
-vi.mock('#components/conversation-message', async (importOriginal) => {
-  const original =
-    await importOriginal<typeof import('#components/conversation-message')>()
-  return {
-    ...original,
-    renderConversationMessage: (
-      ...args: Parameters<typeof original.renderConversationMessage>
-    ) => {
-      conversationMessageRenders.count += 1
-      return original.renderConversationMessage(...args)
-    },
-  }
-})
-
 const session: Session = {
   id: 'sample-session',
   category: 'needs_action',
@@ -302,7 +286,6 @@ function dispatchKeyInAct(
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  conversationMessageRenders.count = 0
   window.localStorage.clear()
   container = document.createElement('div')
   document.body.append(container)
@@ -3915,7 +3898,7 @@ it('reloads the selected conversation when the session feed changes', async () =
   })
 })
 
-it('skips rendering unchanged messages when the status panel opens and refreshes', async () => {
+it('keeps conversation DOM connected while toggling the status panel', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
@@ -3931,8 +3914,6 @@ it('skips rendering unchanged messages when the status panel opens and refreshes
   }
   const fetcher = vi
     .fn<typeof fetch>()
-    .mockResolvedValueOnce(jsonResponse(stableMessages))
-    .mockResolvedValueOnce(jsonResponse(stableActions))
     .mockResolvedValueOnce(jsonResponse(stableMessages))
     .mockResolvedValueOnce(jsonResponse(stableActions))
   vi.stubGlobal('fetch', fetcher)
@@ -3953,7 +3934,9 @@ it('skips rendering unchanged messages when the status panel opens and refreshes
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
-  const initialRenderCount = conversationMessageRenders.count
+  const retainedMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
 
   act(() => {
     renderConversation(true, 0)
@@ -3961,22 +3944,26 @@ it('skips rendering unchanged messages when the status panel opens and refreshes
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
-  const afterOpeningPanel = conversationMessageRenders.count
+  const sameMessageAfterOpening =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
 
   act(() => {
-    renderConversation(true, 1)
+    renderConversation(false, 0)
   })
   await act(async () => {
     for (let index = 0; index < 12; index += 1) await Promise.resolve()
   })
+  const sameMessageAfterClosing =
+    retainedMessage.isConnected &&
+    container.querySelector('.chat-assistant-message') === retainedMessage
 
   const actual = JSON.stringify([
-    initialRenderCount,
-    afterOpeningPanel,
-    conversationMessageRenders.count,
+    sameMessageAfterOpening,
+    sameMessageAfterClosing,
     fetcher.mock.calls.length,
   ])
-  const expected = JSON.stringify([1, 1, 1, 4])
+  const expected = JSON.stringify([true, true, 2])
   expect(actual).toBe(expected)
 })
 
