@@ -148,218 +148,123 @@
 }
 
 :where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
+  .agent-watch-shell[data-layout='desktop'],
+  .story-inbox-container[data-layout='desktop']
+) {
   .inbox-view {
-  font-size: 13.5px;
-  line-height: 1.5;
-}
+    font-size: 13.5px;
+    line-height: 1.5;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  > .view-header {
-  padding-right: 18px;
-  padding-left: 18px;
-  border-bottom-color: var(--aw-border);
-}
+  .inbox-view > .view-header {
+    padding-right: 18px;
+    padding-left: 18px;
+    border-bottom-color: var(--aw-border);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .section-heading {
-  gap: 8px;
-  padding-right: 18px;
-  padding-left: 18px;
-}
+  .inbox-view .section-heading {
+    gap: 8px;
+    padding-right: 18px;
+    padding-left: 18px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .section-count {
-  font-size: 12.5px;
-}
+  .inbox-view .section-count {
+    font-size: 12.5px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .needs-action-section
-  .section-heading {
-  color: var(--aw-text-primary);
-}
+  .inbox-view .needs-action-section .section-heading {
+    color: var(--aw-text-primary);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .in-progress-section
-  .section-heading {
-  margin-top: 6px;
-}
+  .inbox-view .in-progress-section .section-heading {
+    margin-top: 6px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .done-section
-  .section-heading {
-  margin-top: 4px;
-  border-top: 1px solid var(--aw-border);
-}
+  .inbox-view .done-section .section-heading {
+    margin-top: 4px;
+    border-top: 1px solid var(--aw-border);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-title-line {
-  gap: 8px;
-}
+  .inbox-view .session-title-line {
+    gap: 8px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-row {
-  gap: 10px;
-}
+  .inbox-view .session-row {
+    gap: 10px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-content {
-  gap: 0;
-}
+  .inbox-view .session-content {
+    gap: 0;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .in-progress-section
-  .session-status-dot {
-  border-radius: 50%;
-}
+  .inbox-view .in-progress-section .session-status-dot {
+    border-radius: 50%;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .in-progress-section
-  .session-age {
-  color: var(--aw-text-secondary);
-}
+  .inbox-view .in-progress-section .session-age {
+    color: var(--aw-text-secondary);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-preview {
-  color: var(--aw-text-body);
-}
+  .inbox-view .session-preview {
+    color: var(--aw-text-body);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-meta-line {
-  gap: 8px;
-  color: var(--aw-text-secondary);
-}
+  .inbox-view .session-meta-line {
+    gap: 8px;
+    color: var(--aw-text-secondary);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .session-task-reference {
-  color: var(--aw-text-muted);
-  font-family: var(--font-mono);
-}
+  .inbox-view .session-task-reference {
+    color: var(--aw-text-muted);
+    font-family: var(--font-mono);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .later-collapsed-row {
-  gap: 8px;
-  padding-right: 18px;
-  padding-left: 18px;
-  border-bottom-color: var(--aw-border);
-  color: var(--aw-text-body);
-  font-size: 12.5px;
-}
+  .inbox-view .later-collapsed-row {
+    gap: 8px;
+    padding-right: 18px;
+    padding-left: 18px;
+    border-bottom-color: var(--aw-border);
+    color: var(--aw-text-body);
+    font-size: 12.5px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .later-section-count {
-  font-size: 12.5px;
-}
+  .inbox-view .later-section-count {
+    font-size: 12.5px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .later-next-return {
-  color: var(--aw-text-secondary);
-  font-size: 12.5px;
-}
+  .inbox-view .later-next-return {
+    color: var(--aw-text-secondary);
+    font-size: 12.5px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .show-more-button {
-  padding: 2px 18px 6px 33px;
-}
+  .inbox-view .show-more-button {
+    padding: 2px 18px 6px 33px;
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .inbox-footer {
-  gap: 14px;
-  padding-right: 18px;
-  padding-left: 18px;
-  border-top-color: var(--aw-border);
-}
+  .inbox-view .inbox-footer {
+    gap: 14px;
+    padding-right: 18px;
+    padding-left: 18px;
+    border-top-color: var(--aw-border);
+  }
 
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .inbox-footer
-  kbd {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--aw-text-secondary);
-  font-size: 11.5px;
+  .inbox-view .inbox-footer kbd {
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--aw-text-secondary);
+    font-size: 11.5px;
+  }
+
+  .inbox-view .done-section .session-status-dot::before {
+    padding-top: 3px;
+    color: var(--aw-text-muted);
+    font-size: 10px;
+  }
+
+  .inbox-view .done-section .session-status-dot {
+    width: 7px;
+  }
 }
 
 :where(
@@ -371,28 +276,6 @@
   outline: 1px solid var(--aw-border-emphasis);
   outline-offset: -1px;
   background: var(--aw-bg-popover);
-}
-
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .done-section
-  .session-status-dot::before {
-  padding-top: 3px;
-  color: var(--aw-text-muted);
-  font-size: 10px;
-}
-
-:where(
-    .agent-watch-shell[data-layout='desktop'],
-    .story-inbox-container[data-layout='desktop']
-  )
-  .inbox-view
-  .done-section
-  .session-status-dot {
-  width: 7px;
 }
 
 .later-menu-overlay {
