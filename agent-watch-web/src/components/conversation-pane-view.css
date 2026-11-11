@@ -148,6 +148,7 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
+  padding: 0 10px;
   border: 1px solid var(--aw-border);
   color: var(--aw-text-body);
   font-size: 12px;
