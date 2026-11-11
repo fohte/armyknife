@@ -5,6 +5,7 @@ import { Button } from '@fohte/ui/button'
 import { type KeyboardEvent, type SubmitEvent, useId, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
+import { QuestionSendError } from '#components/question-send-error'
 import type { QuestionChoice } from '#types'
 
 type QuestionCardProps = {
@@ -42,6 +43,7 @@ export function QuestionCard({
   const [draft, setDraft] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [questionSkipped, setQuestionSkipped] = useState(false)
+  const [sendFailed, setSendFailed] = useState(false)
   const selectedChoice =
     answer !== null && choices.some((choice) => choice.label === answer)
       ? answer
@@ -59,13 +61,18 @@ export function QuestionCard({
     void (async () => {
       if (!questionSkipped) {
         const skipped = await onSkip()
-        if (!skipped) return false
+        if (!skipped) return null
         setQuestionSkipped(true)
       }
       return onFreeformAnswer(answerText)
     })()
       .then((sent) => {
-        if (sent) setDraft('')
+        if (sent === true) {
+          setDraft('')
+          setSendFailed(false)
+        } else if (sent === false) {
+          setSendFailed(true)
+        }
       })
       .finally(() => {
         setIsSending(false)
@@ -87,6 +94,7 @@ export function QuestionCard({
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
     if (
       event.key !== 'Escape' ||
+      event.target instanceof HTMLTextAreaElement ||
       event.nativeEvent.isComposing ||
       Reflect.get(event.nativeEvent, 'keyCode') === 229 ||
       !canAnswer ||
@@ -170,10 +178,9 @@ export function QuestionCard({
             submitFreeformAnswer(event)
           }}
         >
-          <label htmlFor={inputId}>Chat about this</label>
+          <label htmlFor={inputId}>Type something</label>
           <textarea
             id={inputId}
-            placeholder="Type something."
             value={draft}
             disabled={isSending}
             rows={2}
@@ -181,6 +188,7 @@ export function QuestionCard({
               setDraft(event.currentTarget.value)
             }}
           />
+          {sendFailed ? <QuestionSendError /> : null}
           <div className="chat-question-actions">
             <Button
               type="submit"

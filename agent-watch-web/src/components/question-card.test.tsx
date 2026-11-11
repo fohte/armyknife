@@ -175,6 +175,7 @@ it('shows question metadata', () => {
     multiSelect: 'Multiple select question.',
     description: 'Fits in a short report.',
   })
+  expect(container.querySelector('label')?.textContent).toBe('Type something')
 })
 
 it('skips a question from the no-answer button', async () => {
@@ -194,7 +195,7 @@ it('skips a question from the no-answer button', async () => {
   expect(onSkip.mock.calls).toEqual([[]])
 })
 
-it('skips a question when Escape is pressed inside the card', async () => {
+it('does not skip a question when Escape is pressed in the freeform field', async () => {
   const onSkip = vi.fn(() => Promise.resolve(true))
   renderQuestion(props({ onSkip }))
   const textarea = requireElement(
@@ -207,6 +208,27 @@ it('skips a question when Escape is pressed inside the card', async () => {
   })
   await act(async () => {
     textarea.dispatchEvent(event)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    skipCalls: onSkip.mock.calls,
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ skipCalls: [], defaultPrevented: false })
+})
+
+it('skips a question when Escape is pressed elsewhere in the card', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip }))
+  const card = requireElement(container.querySelector('.chat-question-card'))
+  const event = new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    card.dispatchEvent(event)
     await Promise.resolve()
   })
 
@@ -256,6 +278,7 @@ it('keeps a freeform answer available to retry after the question closes', async
   const failedSendSnapshot = {
     draft: retryTextarea.value,
     retryDisabled: retryButton.disabled,
+    error: container.querySelector('[role="alert"]')?.textContent,
     events: [...events],
   }
 
@@ -268,6 +291,7 @@ it('keeps a freeform answer available to retry after the question closes', async
 
   const snapshot = () => ({
     failedSendSnapshot,
+    errorAfterRetry: container.querySelector('[role="alert"]')?.textContent,
     events,
     skipCalls: onSkip.mock.calls,
     answerCalls: onFreeformAnswer.mock.calls,
@@ -276,8 +300,11 @@ it('keeps a freeform answer available to retry after the question closes', async
     failedSendSnapshot: {
       draft: 'Use a fictional format',
       retryDisabled: false,
+      error:
+        'Your answer was not sent. Your draft is still available; select Send answer to retry.',
       events: ['skip', 'message'],
     },
+    errorAfterRetry: undefined,
     events: ['skip', 'message', 'message'],
     skipCalls: [[]],
     answerCalls: [['Use a fictional format'], ['Use a fictional format']],
