@@ -98,6 +98,16 @@ function requireElement<T extends Element>(element: T | null): T {
   return element
 }
 
+async function waitForState(condition: () => boolean) {
+  const deadline = Date.now() + 1000
+  await act(async () => {
+    while (!condition() && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 10))
+    }
+  })
+  return condition()
+}
+
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   act(() => {
     const valueSetter = Reflect.getOwnPropertyDescriptor(
@@ -1971,12 +1981,23 @@ it('clears pasted attachments after a successful send', async () => {
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  })
+  expect(
+    await waitForState(
+      () =>
+        onAction.mock.calls.length === 1 &&
+        container.querySelector('.composer-attachment') === null,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
