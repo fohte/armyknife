@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.571](https://github.com/fohte/armyknife/compare/v0.1.570...v0.1.571) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** display peer destination IDs ([#1498](https://github.com/fohte/armyknife/issues/1498)) ([5194105](https://github.com/fohte/armyknife/commit/51941054704aae5077eedcc19782cb576c7ed402))
+
+## [0.1.570](https://github.com/fohte/armyknife/compare/v0.1.569...v0.1.570) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** render &lt;br&gt; as line breaks ([#1499](https://github.com/fohte/armyknife/issues/1499)) ([61c3194](https://github.com/fohte/armyknife/commit/61c3194d56ea7efa46be046f484b0fc7278dcc4b))
+
 ## [0.1.569](https://github.com/fohte/armyknife/compare/v0.1.568...v0.1.569) (2026-11-11)
 
 
