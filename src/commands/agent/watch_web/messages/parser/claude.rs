@@ -19,13 +19,11 @@ use super::super::parser::{
     ToolSummary, append_classification_with_image_directory,
     append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
     classifier::{self, MessageKind},
-    for_each_jsonl_record, tool_target,
+    for_each_jsonl_record, record_timestamp, tool_target,
 };
 use super::super::proposals::ProposalItem;
 use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
-use background_tasks::{
-    BackgroundTaskTracker, record_timestamp, task_notification_envelope, task_notification_text,
-};
+use background_tasks::{BackgroundTaskTracker, task_notification_envelope, task_notification_text};
 use decision_position::insert_time_placed_decisions;
 use proposals::ProposalTimeline;
 use questions::{
@@ -361,6 +359,7 @@ fn parse_with_background_tasks_and_image_directory(
                                         Vec::new(),
                                         context.image_directory,
                                         parent,
+                                        record_timestamp(&record),
                                     );
                                 } else if let Some(mut peer) = classifier::peer_out_from_tool(
                                     &tool_use.name,
@@ -369,7 +368,7 @@ fn parse_with_background_tasks_and_image_directory(
                                     Some(&text),
                                 ) {
                                     let completed_at = record_timestamp(&record);
-                                    if let Some(delivered) =
+                                    let delivered =
                                         context.peer_out_messages.iter().find(|message| {
                                             !matched_peer_out_message_ids.contains(&message.id)
                                                 && message.to_session_id == peer.session_id
@@ -379,12 +378,18 @@ fn parse_with_background_tasks_and_image_directory(
                                                 && completed_at.is_some_and(|completed_at| {
                                                     message.sent_at <= completed_at
                                                 })
-                                        })
-                                    {
+                                        });
+                                    if let Some(delivered) = delivered {
                                         peer.text.clone_from(&delivered.content);
                                         matched_peer_out_message_ids.insert(delivered.id);
                                     }
-                                    super::append_peer_out(&mut items, peer);
+                                    super::append_peer_out(
+                                        &mut items,
+                                        peer,
+                                        delivered
+                                            .map(|message| message.sent_at)
+                                            .or_else(|| record_timestamp(&record)),
+                                    );
                                 }
                             } else if classifier::is_agent_add_tool(
                                 &tool_use.name,
@@ -458,6 +463,7 @@ fn parse_with_background_tasks_and_image_directory(
                             images,
                             context.image_directory,
                             parent,
+                            record_timestamp(&record),
                         );
                     }
                 }
@@ -494,6 +500,7 @@ fn parse_with_background_tasks_and_image_directory(
                                         false,
                                         None,
                                         context.image_directory,
+                                        None,
                                     );
                                 }
                             }
@@ -1108,6 +1115,45 @@ mod tests {
     }
 
     #[test]
+    fn preserves_timestamps_for_user_peer_and_event_records() {
+        let transcript = indoc! {r#"
+            {"type":"user","origin":{"kind":"human"},"timestamp":"2026-11-11T10:00:00Z","message":{"content":"Human request."}}
+            {"type":"user","origin":{"kind":"peer","from":"fixture-peer"},"timestamp":"2026-11-11T10:01:00Z","message":{"content":"Peer request."}}
+            {"type":"user","origin":{"kind":"armyknife"},"timestamp":"2026-11-11T10:02:00Z","message":{"content":"Moved a task."}}
+            {"type":"assistant","timestamp":"2026-11-11T10:03:00Z","message":{"content":[{"type":"text","text":"Assistant response."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, None, None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Human request.".to_string(),
+                    from: None,
+                    timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
+                },
+                ChatItem::Peer {
+                    direction: PeerDirection::From,
+                    session_id: "fixture-peer".to_string(),
+                    session_title: None,
+                    content: vec![UserContentPart::Text {
+                        text: "Peer request.".to_string(),
+                    }],
+                    timestamp: Some("2026-11-11T10:01:00+00:00".to_string()),
+                },
+                ChatItem::Event {
+                    kind: super::super::super::EventKind::Armyknife,
+                    text: "Moved a task.".to_string(),
+                    failed: false,
+                    timestamp: Some("2026-11-11T10:02:00+00:00".to_string()),
+                },
+                ChatItem::Assistant {
+                    text: "Assistant response.".to_string(),
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn places_unrecorded_decisions_before_the_first_later_transcript_record() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-before","parentUuid":null,"type":"assistant","timestamp":"2026-11-11T10:00:00Z","message":{"content":[{"type":"text","text":"Before the decision."}]}}
@@ -1195,6 +1241,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Earlier message.".to_string(),
+                    timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
                     from: None,
                 },
                 decision_item_at(1, "2026-11-11T10:30:00Z"),
@@ -1353,6 +1400,7 @@ mod tests {
                         available: true,
                     },
                 ],
+                timestamp: None,
                 from: None,
             }]
         );
@@ -1401,6 +1449,7 @@ mod tests {
                         available: true,
                     },
                 ],
+                timestamp: None,
                 from: None,
             }],
         );
@@ -1448,6 +1497,7 @@ mod tests {
                 direction: PeerDirection::From,
                 session_id: "fixture-peer-session".to_string(),
                 session_title: None,
+                timestamp: None,
                 content: vec![
                     UserContentPart::Text {
                         text: "Inspect this image.".to_string(),
@@ -1486,6 +1536,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-remote-session".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Review the fictional output.".to_string(),
                     }],
@@ -1493,32 +1544,38 @@ mod tests {
                 ChatItem::Event {
                     kind: super::super::super::EventKind::Armyknife,
                     text: "Worker completed the fictional check.".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Background task failed while checking a fixture.".to_string(),
+                    timestamp: None,
                     failed: true,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::Hook,
                     text: "Fictional hook output. Second line.".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Unknown wrapped notice.".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Context compacted".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::To,
                     session_id: "fixture-resolved-session".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Please verify the fictional result.".to_string(),
                     }],
@@ -1575,6 +1632,7 @@ mod tests {
             vec![ChatItem::Event {
                 kind: super::super::super::EventKind::Armyknife,
                 text: expected_text.to_string(),
+                timestamp: None,
                 failed: true,
             }],
         );
@@ -1674,6 +1732,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Before the queued prompt.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::ToolSummary {
@@ -1682,10 +1741,12 @@ mod tests {
                 },
                 ChatItem::User {
                     text: queued_text.to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "After the queued prompt.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -1708,6 +1769,7 @@ mod tests {
                 direction: PeerDirection::From,
                 session_id: "fixture-parent-id".to_string(),
                 session_title: Some("fixture-parent-title".to_string()),
+                timestamp: None,
                 content: vec![UserContentPart::Text {
                     text: "Please group these fictional events.".to_string(),
                 }],
@@ -1739,6 +1801,7 @@ mod tests {
                             text: " after.".to_string(),
                         },
                     ],
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::UserWithContent {
@@ -1754,6 +1817,7 @@ mod tests {
                             text: " request.".to_string(),
                         },
                     ],
+                    timestamp: None,
                     from: None,
                 },
             ],
@@ -1784,6 +1848,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Review the notification flow.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::Assistant {
@@ -1816,6 +1881,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Group the events by source.".to_string(),
                     }],
@@ -1824,6 +1890,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-other-id".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "This came from another child.".to_string(),
                     }],
@@ -2014,15 +2081,18 @@ mod tests {
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "synthetic notification".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::Hook,
                     text: "synthetic output".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::User {
                     text: "/inspect fixture-argument".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::ToolSummary {
@@ -2031,6 +2101,7 @@ mod tests {
                 },
                 ChatItem::User {
                     text: "A visible user message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2056,6 +2127,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Synthetic peer request contains </peer-message> inside.".to_string(),
                     }],
@@ -2064,6 +2136,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-other-id".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Synthetic unrelated request.".to_string(),
                     }],
@@ -2071,6 +2144,7 @@ mod tests {
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Synthetic task notification.".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
             ]
@@ -2088,6 +2162,7 @@ mod tests {
             vec![ChatItem::Event {
                 kind: super::super::super::EventKind::System,
                 text: "Future automation notice.".to_string(),
+                timestamp: None,
                 failed: false,
             }],
         );
@@ -2108,14 +2183,17 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep this earlier message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Show this queued text.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep this replacement message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2137,6 +2215,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Update the fixture.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::ToolSummary {
@@ -2166,15 +2245,18 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep this pre-compact message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Context compacted".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::User {
                     text: "Keep this post-compact message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2196,19 +2278,23 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep the earlier history.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::Event {
                     kind: super::super::super::EventKind::System,
                     text: "Context compacted".to_string(),
+                    timestamp: None,
                     failed: false,
                 },
                 ChatItem::User {
                     text: "Keep the post-compact context.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep this replacement message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2237,10 +2323,12 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep this earlier message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep this current message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2269,6 +2357,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Read the plan.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::ToolSummary {
@@ -2291,10 +2380,12 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep the first legacy message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep the second legacy message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2315,14 +2406,17 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Keep the first legacy message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep the second legacy message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Keep this current message.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
             ]
@@ -2354,16 +2448,19 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Direct user request.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Queued user request.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown queued request."
                             .to_string(),
@@ -2373,22 +2470,26 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Missing queued marker request.".to_string(),
                     }],
                 },
                 ChatItem::User {
                     text: "Direct user request.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::User {
                     text: "Queued user request.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nUnknown direct request."
                             .to_string(),
@@ -2398,6 +2499,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "unknown".to_string(),
                     session_title: None,
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Missing marker request.".to_string(),
                     }],
@@ -2406,6 +2508,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("Fixture parent".to_string()),
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nDirect peer request."
                             .to_string(),
@@ -2415,6 +2518,7 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("Fixture parent".to_string()),
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "⟦armyknife-user:fixture-marker-amber⟧\nQueued peer request."
                             .to_string(),

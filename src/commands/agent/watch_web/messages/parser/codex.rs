@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use super::super::ChatItem;
 use super::super::ParentSession;
-use super::super::parser::{ToolSummary, append_text, for_each_jsonl_record, operation_target};
+use super::super::parser::{
+    ToolSummary, append_text, for_each_jsonl_record, operation_target, record_timestamp,
+};
 
 pub(in crate::commands::agent::watch_web::messages) fn parse(
     reader: impl BufRead,
@@ -15,6 +17,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
     let mut pending_tool_calls: Vec<PendingTool> = Vec::new();
 
     for_each_jsonl_record(reader, |record| {
+        let timestamp = record_timestamp(&record);
         let record_type = record.get("type").and_then(Value::as_str);
         let payload = match record_type {
             Some("response_item") | Some("event_msg") => record.get("payload"),
@@ -32,7 +35,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                         let text = content_text(payload.get("content"));
                         if !text.is_empty() {
                             tools.flush_into(&mut items);
-                            append_text(&mut items, text, false, None);
+                            append_text(&mut items, text, false, None, timestamp);
                         }
                     }
                 }
@@ -88,7 +91,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 Some("UserMessage") => {
                     if let Some(text) = item.get("content").and_then(value_text) {
                         tools.flush_into(&mut items);
-                        append_text(&mut items, text, true, parent);
+                        append_text(&mut items, text, true, parent, timestamp);
                     }
                 }
                 Some("CommandExecution") | Some("commandExecution") => {
@@ -213,6 +216,7 @@ mod tests {
             vec![
                 ChatItem::User {
                     text: "Summarize these settings.".to_string(),
+                    timestamp: None,
                     from: None,
                 },
                 ChatItem::ToolSummary {
@@ -226,9 +230,32 @@ mod tests {
                     direction: PeerDirection::From,
                     session_id: "fixture-parent-id".to_string(),
                     session_title: Some("fixture-parent-title".to_string()),
+                    timestamp: None,
                     content: vec![UserContentPart::Text {
                         text: "Please keep the summary brief.".to_string(),
                     }],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn records_timestamps_for_user_messages_without_marking_assistant_text() {
+        let transcript = indoc! {r#"
+            {"type":"event_msg","timestamp":"2026-11-11T10:00:00Z","payload":{"type":"item_completed","item":{"type":"UserMessage","content":[{"type":"Text","text":"Human request."}]}}}
+            {"type":"response_item","timestamp":"2026-11-11T10:01:00Z","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Assistant response."}]}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![
+                ChatItem::User {
+                    text: "Human request.".to_string(),
+                    from: None,
+                    timestamp: Some("2026-11-11T10:00:00+00:00".to_string()),
+                },
+                ChatItem::Assistant {
+                    text: "Assistant response.".to_string(),
                 },
             ]
         );

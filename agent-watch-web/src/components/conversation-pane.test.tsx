@@ -1334,6 +1334,12 @@ it('shows peer images and supports keyboard navigation', () => {
     title: 'Build verification',
   }
   const onSelectSession = vi.fn<(id: string) => void>()
+  const eventTimestamp = '2026-06-01T12:00:00Z'
+  const eventTime = new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(eventTimestamp))
   renderView(
     vi.fn().mockResolvedValue(true),
     session,
@@ -1377,6 +1383,7 @@ it('shows peer images and supports keyboard navigation', () => {
         kind: 'system',
         text: 'A fictional operation was blocked.',
         failed: true,
+        timestamp: eventTimestamp,
       },
     ],
     actions,
@@ -1417,6 +1424,7 @@ it('shows peer images and supports keyboard navigation', () => {
         text: element.textContent,
         failed: element.getAttribute('data-failed'),
         kind: element.getAttribute('data-kind'),
+        time: element.querySelector('time')?.textContent ?? null,
         imageSources: Array.from(
           element.querySelectorAll<HTMLImageElement>('img'),
           (image) => image.getAttribute('src'),
@@ -1440,6 +1448,7 @@ it('shows peer images and supports keyboard navigation', () => {
         text: 'TOBuild verificationPlease check the fictional output.画像はもうありません',
         failed: null,
         kind: null,
+        time: null,
         imageSources: [],
         unavailableImageText: '画像はもうありません',
         fileNames: [],
@@ -1449,6 +1458,7 @@ it('shows peer images and supports keyboard navigation', () => {
         text: 'FROMBuild verificationThe fictional output passed.fixture-peer-layout.html',
         failed: null,
         kind: null,
+        time: null,
         imageSources: ['/api/images/fixture-peer-image.png'],
         unavailableImageText: undefined,
         fileNames: ['fixture-peer-layout.html'],
@@ -1456,6 +1466,7 @@ it('shows peer images and supports keyboard navigation', () => {
       {
         className: 'chat-event',
         text: 'A fictional hook completed.',
+        time: null,
         failed: null,
         kind: 'hook',
         imageSources: [],
@@ -1464,7 +1475,8 @@ it('shows peer images and supports keyboard navigation', () => {
       },
       {
         className: 'chat-event',
-        text: 'A fictional operation was blocked.',
+        text: `A fictional operation was blocked. ${eventTime}`,
+        time: eventTime,
         failed: 'true',
         kind: 'system',
         imageSources: [],

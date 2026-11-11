@@ -66,12 +66,18 @@ export type SessionLinkTarget = Omit<
 } & Partial<Pick<Session, 'title'>>
 
 export type ChatItem =
-  | { type: 'user'; text: string; from?: string }
-  | { type: 'queued_user'; content: UserContentPart[]; from?: string }
+  | { type: 'user'; text: string; from?: string; timestamp?: string }
+  | {
+      type: 'queued_user'
+      content: UserContentPart[]
+      from?: string
+      timestamp?: string
+    }
   | {
       type: 'user_with_content'
       content: UserContentPart[]
       from?: string
+      timestamp?: string
     }
   | {
       type: 'peer'
@@ -79,6 +85,7 @@ export type ChatItem =
       session_id: string
       session_title?: string
       content: UserContentPart[]
+      timestamp?: string
     }
   | {
       type: 'subagent_report'
@@ -92,6 +99,7 @@ export type ChatItem =
       kind: 'armyknife' | 'system' | 'hook'
       text: string
       failed: boolean
+      timestamp?: string
     }
   | { type: 'assistant'; text: string }
   | {

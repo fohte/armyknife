@@ -9,6 +9,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null
 }
 
+function hasValidOptionalTimestamp(value: Record<string, unknown>): boolean {
+  return (
+    value['timestamp'] === undefined || typeof value['timestamp'] === 'string'
+  )
+}
+
 function isUserContentPart(value: unknown): boolean {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   if (value['type'] === 'text') return typeof value['text'] === 'string'
@@ -52,15 +58,19 @@ function isProposalAnswer(value: unknown): boolean {
 function isChatItem(value: unknown): value is ChatItem {
   if (!isRecord(value) || typeof value['type'] !== 'string') return false
   switch (value['type']) {
-    case 'user':
     case 'assistant':
       return typeof value['text'] === 'string'
+    case 'user':
+      return (
+        typeof value['text'] === 'string' && hasValidOptionalTimestamp(value)
+      )
     case 'queued_user':
     case 'user_with_content':
       return (
         Array.isArray(value['content']) &&
         value['content'].every(isUserContentPart) &&
-        (value['from'] === undefined || typeof value['from'] === 'string')
+        (value['from'] === undefined || typeof value['from'] === 'string') &&
+        hasValidOptionalTimestamp(value)
       )
     case 'peer':
       return (
@@ -69,7 +79,8 @@ function isChatItem(value: unknown): value is ChatItem {
         (value['session_title'] === undefined ||
           typeof value['session_title'] === 'string') &&
         Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart)
+        value['content'].every(isUserContentPart) &&
+        hasValidOptionalTimestamp(value)
       )
     case 'subagent_report':
       return (
@@ -85,7 +96,8 @@ function isChatItem(value: unknown): value is ChatItem {
           value['kind'] === 'system' ||
           value['kind'] === 'hook') &&
         typeof value['text'] === 'string' &&
-        typeof value['failed'] === 'boolean'
+        typeof value['failed'] === 'boolean' &&
+        hasValidOptionalTimestamp(value)
       )
     case 'tool_summary':
       return (
