@@ -1,3 +1,5 @@
+import '#components/conversation-message.css'
+
 import type { ReactNode } from 'react'
 
 import { DecisionCard } from '#components/decision-card'

@@ -1,0 +1,28 @@
+.chat-permission-card .permission-tool {
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.permission-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.permission-actions [data-slot='button'] {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--aw-border-control);
+}
+
+.permission-actions [data-slot='button']:first-child {
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-surface);
+}
+
+.permission-action-status {
+  margin-top: 10px !important;
+  color: var(--aw-text-muted);
+  font-size: 12px !important;
+}

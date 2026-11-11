@@ -1,3 +1,6 @@
+import '#components/conversation-pane.css'
+import '#components/conversation-pane-view.css'
+
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
