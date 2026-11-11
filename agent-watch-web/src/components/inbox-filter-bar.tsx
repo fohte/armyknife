@@ -71,9 +71,8 @@ export function InboxFilterBar({
                 .join(', ')
               return (
                 <span key={filter.key} className="inbox-filter-chip">
-                  <span>
-                    {label} {values}
-                  </span>
+                  <span className="inbox-filter-chip-label">{label}</span>{' '}
+                  <span className="inbox-filter-chip-value">{values}</span>
                   <Button
                     type="button"
                     variant="plain"
@@ -101,55 +100,57 @@ export function InboxFilterBar({
             {matchingNeedsActionCount} of {totalNeedsActionCount}
           </span>
           {onSaveView !== undefined ? (
-            saveViewOpen ? (
-              <form
-                className="inbox-save-view-form"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  onSaveView(saveViewName)
-                }}
-              >
-                <input
-                  aria-label="Saved view name"
-                  autoFocus
-                  maxLength={60}
-                  onChange={(event) => {
-                    onSaveViewNameChange?.(event.currentTarget.value)
+            <div>
+              {saveViewOpen ? (
+                <form
+                  className="inbox-save-view-form"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    onSaveView(saveViewName)
                   }}
-                  placeholder="Name this view"
-                  value={saveViewName}
-                />
-                <Button
-                  type="submit"
-                  variant="plain"
-                  className="inbox-save-view-submit cursor-pointer"
-                  disabled={saveViewName.trim().length === 0}
                 >
-                  Save
-                </Button>
+                  <input
+                    aria-label="Saved view name"
+                    autoFocus
+                    maxLength={60}
+                    onChange={(event) => {
+                      onSaveViewNameChange?.(event.currentTarget.value)
+                    }}
+                    placeholder="Name this view"
+                    value={saveViewName}
+                  />
+                  <Button
+                    type="submit"
+                    variant="plain"
+                    className="inbox-save-view-submit cursor-pointer"
+                    disabled={saveViewName.trim().length === 0}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="plain"
+                    className="inbox-save-view-cancel cursor-pointer"
+                    onClick={() => {
+                      onSaveViewOpenChange?.(false)
+                    }}
+                  >
+                    Cancel
+                  </Button>
+                </form>
+              ) : (
                 <Button
                   type="button"
                   variant="plain"
-                  className="inbox-save-view-cancel cursor-pointer"
+                  className="inbox-save-view aw-button--outline cursor-pointer"
                   onClick={() => {
-                    onSaveViewOpenChange?.(false)
+                    onSaveViewOpenChange?.(true)
                   }}
                 >
-                  Cancel
+                  Save view
                 </Button>
-              </form>
-            ) : (
-              <Button
-                type="button"
-                variant="plain"
-                className="inbox-save-view cursor-pointer"
-                onClick={() => {
-                  onSaveViewOpenChange?.(true)
-                }}
-              >
-                Save view
-              </Button>
-            )
+              )}
+            </div>
           ) : null}
         </>
       )}

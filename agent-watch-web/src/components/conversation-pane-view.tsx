@@ -5,6 +5,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
+import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
@@ -147,6 +148,12 @@ export function ConversationPaneView({
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
   )
+  const hasUnansweredProposal = messages.some(
+    (message) =>
+      message.type === 'proposal' &&
+      message.answer === null &&
+      !message.resolved,
+  )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
@@ -191,22 +198,8 @@ export function ConversationPaneView({
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      const target = event.target
       if (
         isMobile ||
-        event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        (target instanceof HTMLElement &&
-          (target.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
-      ) {
-        return
-      }
-      if (
-        !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
         waitingQuestion.answer !== null ||
         activeQuestionIndex < 0 ||
@@ -215,11 +208,10 @@ export function ConversationPaneView({
       ) {
         return
       }
-      const choice = Number(event.key)
-      if (choice <= waitingQuestion.choices.length) {
-        event.preventDefault()
-        void onAction('answer', { choice })
-      }
+      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
+      if (choice === null) return
+      event.preventDefault()
+      void onAction('answer', { choice: choice + 1 })
     }
 
     window.addEventListener('keydown', onQuestionKeyDown)
@@ -434,9 +426,11 @@ export function ConversationPaneView({
       <MessageComposer
         draft={draft}
         placeholder={
-          session.pullRequest
-            ? `Message PR ${String(session.pullRequest.number)}`
-            : 'Message session'
+          hasUnansweredProposal
+            ? 'Choose an option above, or message the session'
+            : session.pullRequest
+              ? `Message PR ${String(session.pullRequest.number)}`
+              : 'Message session'
         }
         disabled={actions?.message !== true}
         isSending={isSending}

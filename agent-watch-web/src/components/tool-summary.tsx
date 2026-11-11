@@ -1,18 +1,20 @@
 import '#components/tool-summary.css'
 
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 
 import type { ToolOperation } from '#types'
 
 type ToolSummaryProps = {
   summary: string
   operations: readonly ToolOperation[]
+  children?: ReactNode
   open?: boolean
 }
 
 export function ToolSummary({
   summary,
   operations,
+  children,
   open = false,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
@@ -36,6 +38,7 @@ export function ToolSummary({
           <span className="chat-tool-summary-failed">{failedSuffix}</span>
         )}
       </summary>
+      {children}
       {operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (

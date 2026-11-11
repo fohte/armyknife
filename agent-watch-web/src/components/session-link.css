@@ -1,7 +1,10 @@
 .session-link-trigger {
+  padding: 0 2px;
+  background: var(--aw-bg-pressed);
   color: inherit;
   text-decoration-line: underline;
   text-decoration-style: dotted;
+  text-decoration-color: var(--aw-text-muted);
   text-underline-offset: 3px;
 }
 
@@ -17,21 +20,29 @@
 
 .session-link-card {
   display: grid;
-  max-width: min(320px, calc(100vw - 24px));
-  gap: 4px;
-  padding: 9px 11px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 10px 0 0;
   border: 1px solid var(--aw-border-control);
   border-radius: var(--aw-radius);
-  background: var(--aw-bg-surface);
+  background: var(--aw-bg-popover);
   color: var(--aw-text-primary);
   box-shadow: var(--aw-shadow);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.45;
 }
 
+.session-link-card-title {
+  padding: 0 12px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
 .session-link-card-state {
-  color: var(--aw-color-brand);
-  font-weight: 600;
+  margin-top: 2px;
+  padding: 0 12px;
+  color: var(--aw-text-body);
+  font-weight: 700;
 }
 
 .session-link-card-task,
@@ -39,6 +50,29 @@
   overflow-wrap: anywhere;
 }
 
+.session-link-card-task {
+  margin-top: 2px;
+  padding: 0 12px;
+  color: var(--aw-text-secondary);
+}
+
 .session-link-card-repo {
-  color: var(--aw-text-muted);
+  padding: 0 12px 8px;
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+}
+
+.session-link-card-state[data-category='needs_action'] {
+  color: var(--aw-color-warning);
+}
+
+.session-link-card-state[data-category='in_progress'] {
+  color: var(--aw-color-working);
+}
+
+.session-link-card-hint {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--aw-border-control);
+  color: var(--aw-text-secondary);
 }
