@@ -1,5 +1,6 @@
 import { err, errAsync, ok, ResultAsync } from 'neverthrow'
 
+import { isPullRequest, isSessionTask } from '#session-record-validation'
 import type { Session, SessionsResponse } from '#types'
 
 type SessionEventSource = {
@@ -28,22 +29,14 @@ function isSession(value: unknown): value is Session {
   const kind = value['kind']
   const task = value['task']
   const pullRequest = value['pullRequest']
-  const validTask =
-    task === null ||
-    (isRecord(task) &&
-      typeof task['id'] === 'string' &&
-      typeof task['number'] === 'number' &&
-      typeof task['title'] === 'string' &&
-      (task['priority'] === null || typeof task['priority'] === 'number'))
-  const validPullRequest =
-    pullRequest === null ||
-    (isRecord(pullRequest) &&
-      typeof pullRequest['number'] === 'number' &&
-      typeof pullRequest['state'] === 'string')
+  const validTask = task === null || isSessionTask(task)
+  const validPullRequest = pullRequest === null || isPullRequest(pullRequest)
 
   return (
     typeof value['id'] === 'string' &&
     typeof value['isPaused'] === 'boolean' &&
+    (value['hasSessionTree'] === undefined ||
+      typeof value['hasSessionTree'] === 'boolean') &&
     (value['workType'] === undefined ||
       value['workType'] === null ||
       typeof value['workType'] === 'string') &&

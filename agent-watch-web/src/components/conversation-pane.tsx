@@ -8,6 +8,7 @@ import {
 import {
   isConversationResponse,
   isSessionActions,
+  isSessionTreeResponse,
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
@@ -23,6 +24,7 @@ import type {
   OpenInTerminalStatus,
   Session,
   SessionActions,
+  SessionTreeNode,
 } from '#types'
 
 const EMPTY_SESSIONS: readonly Session[] = []
@@ -78,6 +80,8 @@ export function ConversationPane({
   const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
+  const [sessionTree, setSessionTree] = useState<SessionTreeNode[] | null>(null)
+  const [sessionTreeError, setSessionTreeError] = useState<string | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -214,6 +218,33 @@ export function ConversationPane({
       requestGeneration.current += 1
     }
   }, [refresh, refreshKey])
+
+  useEffect(() => {
+    if (session.hasSessionTree !== true) {
+      setSessionTree(null)
+      setSessionTreeError(null)
+      return
+    }
+    let current = true
+    setSessionTreeError(null)
+    void requestJson(
+      `/api/sessions/${encodeURIComponent(session.id)}/tree`,
+      isSessionTreeResponse,
+    ).match(
+      (response) => {
+        if (current) {
+          setSessionTree(response.sessions)
+          setSessionTreeError(null)
+        }
+      },
+      (treeError) => {
+        if (current) setSessionTreeError(treeError.message)
+      },
+    )
+    return () => {
+      current = false
+    }
+  }, [refreshKey, session.hasSessionTree, session.id])
 
   useEffect(() => {
     setPendingPermissionAction(null)
@@ -367,6 +398,9 @@ export function ConversationPane({
     messages,
     allDecisions: conversation.decisions,
     backgroundTasks: displayBackgroundTasks,
+    sessionTree,
+    sessionTreeError,
+    onSelectSession,
     statusPanelOpen,
     onAction,
     onCloseStatusPanel,

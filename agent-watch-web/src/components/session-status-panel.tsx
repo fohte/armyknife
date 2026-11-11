@@ -7,6 +7,9 @@ export type SessionStatusPanelTab = {
   id: string
   label: string
   count: number
+  visible?: boolean
+  showCount?: boolean
+  countTone?: 'running' | 'warning'
   content: ReactNode
 }
 
@@ -23,7 +26,7 @@ export function SessionStatusPanel({
   onTabChange,
   onClose,
 }: SessionStatusPanelProps) {
-  const visibleTabs = tabs.filter((tab) => tab.count > 0)
+  const visibleTabs = tabs.filter((tab) => tab.visible ?? tab.count > 0)
   const activeTab = visibleTabs.find((tab) => tab.id === activeTabId)
 
   return (
@@ -51,9 +54,9 @@ export function SessionStatusPanel({
             }}
           >
             <span>{tab.label}</span>
-            {tab.id === 'running' || tab.count > 1 ? (
+            {(tab.showCount ?? (tab.id === 'running' || tab.count > 1)) ? (
               <span
-                className={`session-status-panel-count${tab.id === 'running' ? ' session-status-panel-count--running' : ''}`}
+                className={`session-status-panel-count${tab.countTone === 'running' || (tab.countTone === undefined && tab.id === 'running') ? ' session-status-panel-count--running' : ''}${tab.countTone === 'warning' ? ' session-status-panel-count--warning' : ''}`}
               >
                 {tab.count}
               </span>

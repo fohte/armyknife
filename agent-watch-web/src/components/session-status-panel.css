@@ -62,6 +62,10 @@
   color: var(--aw-color-working);
 }
 
+.session-status-panel-count--warning {
+  color: var(--aw-color-warning);
+}
+
 .session-status-panel-content {
   display: flex;
   min-height: 0;
@@ -81,4 +85,15 @@
   place-items: center;
   color: var(--aw-text-secondary);
   font-size: 12px;
+}
+
+.session-tree-feedback {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  place-items: center;
+  padding: 16px;
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  text-align: center;
 }

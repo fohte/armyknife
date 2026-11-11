@@ -19,7 +19,7 @@ export type SessionTask = {
   isClosed?: boolean
 }
 
-type PullRequest = {
+export type PullRequest = {
   number: number
   state: 'Open' | 'Closed' | 'Merged' | (string & {})
 }
@@ -49,6 +49,7 @@ export type Session = {
   canOpenInTerminal?: boolean
   project: string
   parent: ParentSession | null
+  hasSessionTree?: boolean
   ancestorSessionIds: string[]
   pullRequest: PullRequest | null
   critUrl?: string | null
@@ -56,6 +57,21 @@ export type Session = {
   isToday?: boolean
   decisionCount?: number
   unreviewedDecisionCount?: number
+}
+
+export type SessionTreeNode = {
+  id: string
+  parentId: string | null
+  category: SessionCategory
+  isActive: boolean
+  kind: SessionKind | null
+  title: string
+  preview: string | null
+  elapsedSeconds: number
+  task: SessionTask | null
+  repo: string
+  decisionCount: number
+  pullRequest: PullRequest | null
 }
 
 export type SessionLinkTarget = Pick<Session, 'id' | 'repo'> & {
