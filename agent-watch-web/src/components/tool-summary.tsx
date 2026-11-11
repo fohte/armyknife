@@ -1,17 +1,8 @@
 import '#components/tool-summary.css'
 
-import hljs from 'highlight.js/lib/core'
-import bash from 'highlight.js/lib/languages/bash'
 import { useState } from 'react'
 
 import type { ToolOperation } from '#types'
-
-const shellHighlighter = hljs.newInstance()
-shellHighlighter.registerLanguage('bash', bash)
-
-function isShellTool(tool: string) {
-  return ['Bash', 'bash', 'exec', 'shell', 'CommandExecution'].includes(tool)
-}
 
 type ToolSummaryProps = {
   summary: string
@@ -25,6 +16,11 @@ export function ToolSummary({
   open = false,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
+  const failedSuffix = summary.match(/· \d+ failed$/)?.[0]
+  const summaryText =
+    failedSuffix === undefined
+      ? summary
+      : summary.slice(0, -failedSuffix.length).trimEnd()
 
   return (
     <details
@@ -34,7 +30,12 @@ export function ToolSummary({
         setIsOpen(event.currentTarget.open)
       }}
     >
-      <summary>{summary}</summary>
+      <summary>
+        <span className="chat-tool-summary-text">{summaryText}</span>
+        {failedSuffix === undefined ? null : (
+          <span className="chat-tool-summary-failed">{failedSuffix}</span>
+        )}
+      </summary>
       {operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (
@@ -42,20 +43,7 @@ export function ToolSummary({
               key={`${String(index)}-${operation.tool}-${operation.target ?? ''}`}
             >
               <span className="chat-tool-name">{operation.tool}</span>
-              {operation.target != null && operation.target !== '' ? (
-                isShellTool(operation.tool) && isOpen ? (
-                  <code
-                    className="chat-tool-command hljs"
-                    dangerouslySetInnerHTML={{
-                      __html: shellHighlighter.highlight(operation.target, {
-                        language: 'bash',
-                      }).value,
-                    }}
-                  />
-                ) : (
-                  <code>{operation.target}</code>
-                )
-              ) : null}
+              <code className="chat-tool-target">{operation.target}</code>
             </li>
           ))}
         </ul>

@@ -1,12 +1,13 @@
 .conversation-working-status {
   display: flex;
-  min-height: 42px;
+  width: min(100%, 720px);
+  box-sizing: border-box;
   align-items: center;
-  gap: 9px;
-  padding: 0 max(24px, calc((100% - 760px) / 2));
-  border-top: 1px solid var(--aw-border-row);
-  color: var(--aw-text-muted);
-  font-size: 12px;
+  align-self: center;
+  gap: 8px;
+  padding: 8px 24px;
+  color: var(--aw-text-secondary);
+  font-size: 13px;
 }
 
 .conversation-working-dot {
@@ -23,13 +24,18 @@
   min-width: 0;
   align-items: baseline;
   gap: 6px;
-  color: var(--aw-text-body);
+  color: var(--aw-text-secondary);
   font-family: var(--font-mono);
+}
+
+.conversation-pane[data-mobile='true'] .conversation-working-status {
+  width: 100%;
+  padding: 8px 12px;
 }
 
 .conversation-working-target {
   overflow: hidden;
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

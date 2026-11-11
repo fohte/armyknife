@@ -3,7 +3,27 @@ import { expect, it } from 'vitest'
 
 import { ToolSummary } from '#components/tool-summary'
 
-it('renders each tool with its target', () => {
+it('renders a collapsed summary without changing its text content', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary summary="2 actions · 1 file edited" operations={[]} />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary"><summary><span class="chat-tool-summary-text">2 actions · 1 file edited</span></summary></details>',
+  )
+})
+
+it('renders a failed count separately from the summary text', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary summary="3 actions · 2 failed" operations={[]} />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary"><summary><span class="chat-tool-summary-text">3 actions</span><span class="chat-tool-summary-failed">· 2 failed</span></summary></details>',
+  )
+})
+
+it('renders expanded operations as tool, target, and status rows', () => {
   expect(
     renderToStaticMarkup(
       <ToolSummary
@@ -16,11 +36,11 @@ it('renders each tool with its target', () => {
       />,
     ),
   ).toBe(
-    '<details class="chat-tool-summary" open=""><summary>2 actions · 1 file edited</summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Read</span><code>src/feature.rs</code></li><li><span class="chat-tool-name">exec</span><code class="chat-tool-command hljs"><span class="hljs-built_in">printf</span> hello</code></li></ul></details>',
+    '<details class="chat-tool-summary" open=""><summary><span class="chat-tool-summary-text">2 actions · 1 file edited</span></summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Read</span><code class="chat-tool-target">src/feature.rs</code></li><li><span class="chat-tool-name">exec</span><code class="chat-tool-target">printf hello</code></li></ul></details>',
   )
 })
 
-it('renders the complete shell command after syntax highlighting', () => {
+it('keeps long targets as plain text for CSS ellipsis', () => {
   const target = `echo ${'x'.repeat(241)}`
 
   expect(
@@ -32,19 +52,6 @@ it('renders the complete shell command after syntax highlighting', () => {
       />,
     ),
   ).toBe(
-    `<details class="chat-tool-summary" open=""><summary>1 action</summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Bash</span><code class="chat-tool-command hljs"><span class="hljs-built_in">echo</span> ${'x'.repeat(241)}</code></li></ul></details>`,
-  )
-})
-
-it('keeps shell commands plain until the summary is expanded', () => {
-  expect(
-    renderToStaticMarkup(
-      <ToolSummary
-        summary="1 action"
-        operations={[{ tool: 'Bash', target: 'printf hello' }]}
-      />,
-    ),
-  ).toBe(
-    '<details class="chat-tool-summary"><summary>1 action</summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Bash</span><code>printf hello</code></li></ul></details>',
+    `<details class="chat-tool-summary" open=""><summary><span class="chat-tool-summary-text">1 action</span></summary><ul class="chat-tool-operations"><li><span class="chat-tool-name">Bash</span><code class="chat-tool-target">${target}</code></li></ul></details>`,
   )
 })

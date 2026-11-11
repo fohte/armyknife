@@ -7,7 +7,7 @@
 }
 
 .chat-from {
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
   font-size: 12px;
   text-align: right;
 }
