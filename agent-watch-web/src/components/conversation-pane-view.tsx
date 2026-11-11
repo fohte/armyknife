@@ -335,57 +335,61 @@ export function ConversationPaneView({
                     ↑ Parent: {parent.title ?? 'session'}
                   </a>
                 ) : null}
+                <div className="conversation-header-actions">
+                  <Button
+                    className="conversation-status-panel-toggle"
+                    type="button"
+                    variant="plain"
+                    aria-label="Toggle session status panel with Command Period"
+                    aria-expanded={statusPanelOpen}
+                    aria-controls="session-status-panel"
+                    onClick={() => {
+                      onToggleStatusPanel()
+                    }}
+                  >
+                    <span aria-hidden="true">◐</span>
+                    {runningCount > 0 ? <span>{runningCount}</span> : null}
+                  </Button>
+                  {decisionLabel !== null ? (
+                    <Button
+                      className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                      type="button"
+                      variant="plain"
+                      aria-pressed={decisionsPanelOpen}
+                      aria-controls="session-status-panel"
+                      onClick={() => {
+                        onToggleDecisionsPanel()
+                      }}
+                    >
+                      {decisionLabel}
+                    </Button>
+                  ) : null}
+                  {session.pullRequest ? (
+                    <a
+                      className="conversation-pr-link"
+                      href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      #{session.pullRequest.number} PR
+                    </a>
+                  ) : null}
+                  {actions?.openInTerminal === true ? (
+                    <Button
+                      type="button"
+                      variant="plain"
+                      onClick={openInTerminal}
+                    >
+                      Open in terminal
+                    </Button>
+                  ) : null}
+                </div>
               </div>
               <SessionHeading
                 title={session.title}
                 isPaused={session.isPaused}
+                sessionId={session.id}
               />
-            </div>
-            <div className="conversation-header-actions">
-              <Button
-                className="conversation-status-panel-toggle"
-                type="button"
-                variant="plain"
-                aria-label="Toggle session status panel with Command Period"
-                aria-expanded={statusPanelOpen}
-                aria-controls="session-status-panel"
-                onClick={() => {
-                  onToggleStatusPanel()
-                }}
-              >
-                <span aria-hidden="true">◐</span>
-                {runningCount > 0 ? <span>{runningCount}</span> : null}
-              </Button>
-              {decisionLabel !== null ? (
-                <Button
-                  className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
-                  type="button"
-                  variant="plain"
-                  aria-pressed={decisionsPanelOpen}
-                  aria-controls="session-status-panel"
-                  onClick={() => {
-                    onToggleDecisionsPanel()
-                  }}
-                >
-                  {decisionLabel}
-                </Button>
-              ) : null}
-              {session.pullRequest ? (
-                <a
-                  className="conversation-pr-link"
-                  href={`https://github.com/${session.repo}/pull/${String(session.pullRequest.number)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  #{session.pullRequest.number} PR
-                </a>
-              ) : null}
-              <CopySessionIdControl sessionId={session.id} />
-              {actions?.openInTerminal === true ? (
-                <Button type="button" variant="plain" onClick={openInTerminal}>
-                  Open in terminal
-                </Button>
-              ) : null}
             </div>
           </>
         )}
