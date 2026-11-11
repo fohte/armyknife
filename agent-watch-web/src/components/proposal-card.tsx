@@ -73,17 +73,10 @@ export function ProposalCard({
       const target = event.target
       const targetElement = target instanceof HTMLElement ? target : null
       const targetCard = targetElement?.closest('.chat-proposal-card') ?? null
-      const answerableCards = document.querySelectorAll(
-        '.chat-proposal-card[data-answerable="true"]',
-      )
-      const latestAnswerableCard = answerableCards.item(
-        answerableCards.length - 1,
-      )
       if (
         isDisabled ||
         event.defaultPrevented ||
-        (targetCard !== null && targetCard !== cardRef.current) ||
-        (targetCard === null && latestAnswerableCard !== cardRef.current)
+        (targetCard !== null && targetCard !== cardRef.current)
       ) {
         return
       }
@@ -93,13 +86,24 @@ export function ProposalCard({
           event.altKey ||
           event.ctrlKey ||
           event.shiftKey ||
-          targetElement?.closest('.conversation-composer')
+          targetCard !== cardRef.current ||
+          selectedChoice === null
         ) {
           return
         }
         event.preventDefault()
         void submitAnswer(selectedChoice)
         return
+      }
+
+      if (targetCard === null) {
+        const answerableCards = document.querySelectorAll(
+          '.chat-proposal-card[data-answerable="true"]',
+        )
+        const latestAnswerableCard = answerableCards.item(
+          answerableCards.length - 1,
+        )
+        if (latestAnswerableCard !== cardRef.current) return
       }
 
       const choice = numberShortcutChoice(event, options.length)

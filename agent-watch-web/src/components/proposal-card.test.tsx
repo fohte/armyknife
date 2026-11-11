@@ -199,13 +199,13 @@ it('selects a numbered option and sends it with the comment on Command-Enter', a
   })
 })
 
-it('sends an another-option answer on Command-Enter when no choice is selected', async () => {
+it('does not send Command-Enter when no choice is selected', () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   renderCard(props({ onAnswer, defaultComment: 'Add a simpler option.' }))
-  const submitEvent = dispatchKey(window, 'Enter', true)
-  await act(async () => {
-    await Promise.resolve()
-  })
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  const submitEvent = dispatchKey(comment, 'Enter', true)
 
   const snapshot = () => ({
     submitPrevented: submitEvent.defaultPrevented,
@@ -213,9 +213,29 @@ it('sends an another-option answer on Command-Enter when no choice is selected',
     status: container.querySelector('h2')?.textContent,
   })
   expect(snapshot()).toEqual({
-    submitPrevented: true,
-    answerCalls: [[{ choice: null, comment: 'Add a simpler option.' }]],
-    status: 'Proposal · asked for another option',
+    submitPrevented: false,
+    answerCalls: [],
+    status: 'Proposal · waiting for your choice',
+  })
+})
+
+it('does not send Command-Enter from an input outside the proposal card', () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ onAnswer, defaultChoice: 1 }))
+  const externalInput = document.createElement('input')
+  document.body.append(externalInput)
+  const submitEvent = dispatchKey(externalInput, 'Enter', true)
+  externalInput.remove()
+
+  const snapshot = () => ({
+    submitPrevented: submitEvent.defaultPrevented,
+    answerCalls: onAnswer.mock.calls,
+    status: container.querySelector('h2')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    submitPrevented: false,
+    answerCalls: [],
+    status: 'Proposal · waiting for your choice',
   })
 })
 
