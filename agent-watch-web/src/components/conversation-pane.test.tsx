@@ -991,7 +991,7 @@ it('shows a freeform answer below the choices', () => {
   })
 })
 
-it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
+it('sends on Enter and Command-Enter and preserves modified newlines', async () => {
   const completedSends: Array<(succeeded: boolean) => void> = []
   const onAction = vi.fn(
     () =>
@@ -1012,6 +1012,8 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
     completedSends[0]?.(true)
     await Promise.resolve()
   })
+  setTextareaValue(textarea, 'Keep this as a draft')
+  const altEvent = dispatchKeyInAct(textarea, 'Enter', { altKey: true })
   setTextareaValue(textarea, 'Keep the error visible')
   act(() => {
     dispatchKey(textarea, 'Enter', { metaKey: true })
@@ -1023,18 +1025,25 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
   setTextareaValue(textarea, 'Add one more detail')
   const shiftEvent = dispatchKeyInAct(textarea, 'Enter', { shiftKey: true })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    shiftEvent.defaultPrevented,
-  ])
-  const expected = JSON.stringify([
-    [
+  const snapshot = () => ({
+    actions: onAction.mock.calls,
+    defaultPrevented: [altEvent.defaultPrevented, shiftEvent.defaultPrevented],
+  })
+  expect(snapshot()).toEqual({
+    actions: [
       ['messages', { content: 'Use bounded retries' }],
       ['messages', { content: 'Keep the error visible' }],
     ],
-    false,
-  ])
-  expect(actual).toBe(expected)
+    defaultPrevented: [false, false],
+  })
+})
+
+it('shows Alt-Enter as a desktop newline shortcut', () => {
+  renderView(() => Promise.resolve(true))
+
+  expect(container.querySelector('.composer-footer > span')?.textContent).toBe(
+    '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
+  )
 })
 
 it('keeps Enter for newlines and exposes mobile conversation actions', () => {

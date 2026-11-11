@@ -200,7 +200,12 @@ export function ConversationPaneView({
       void onAction('interrupt')
       return
     }
-    if (event.key === 'Enter' && !isMobile && !event.shiftKey) {
+    if (
+      event.key === 'Enter' &&
+      !isMobile &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
       event.preventDefault()
       sendMessage()
     }

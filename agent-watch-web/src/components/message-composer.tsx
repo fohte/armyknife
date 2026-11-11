@@ -131,8 +131,8 @@ export function MessageComposer({
             {isSending
               ? 'Sending…'
               : canInterrupt
-                ? '↵ Send · ⇧↵ New line · Esc Interrupt'
-                : '↵ Send · ⇧↵ New line'}
+                ? '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt'
+                : '↵ Send · ⇧↵ / ⌥↵ New line'}
           </span>
         ) : null}
         {isMobile && canInterrupt ? (
