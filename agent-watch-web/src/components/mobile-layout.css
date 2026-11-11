@@ -151,11 +151,6 @@
   height: 8px;
 }
 
-.agent-watch-shell[data-layout='mobile'] .done-section .session-status-dot,
-.story-mobile-layout .done-section .session-status-dot {
-  width: 9px;
-}
-
 .agent-watch-shell[data-layout='mobile']
   .needs-action-section
   .session-row:has([data-session-kind])

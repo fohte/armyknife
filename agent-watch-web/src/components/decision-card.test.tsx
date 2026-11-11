@@ -115,3 +115,18 @@ it('sends the OK action from the expanded card', () => {
 
   expect(onOk.mock.calls).toEqual([[]])
 })
+
+it('shows the decision creation time in the panel heading', () => {
+  renderCard({
+    decision: {
+      ...decision,
+      createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
+    },
+    variant: 'panel',
+    expanded: true,
+  })
+
+  expect(
+    container.querySelector('.decision-panel-card-kicker')?.textContent,
+  ).toBe('◇ Decided · 5m ago')
+})

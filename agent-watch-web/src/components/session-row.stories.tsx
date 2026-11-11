@@ -175,6 +175,20 @@ export const WorkIsDoneWithDecisionsToReview: Story = {
   },
 }
 
+export const WorkIsDoneWithOneDecisionToReview: Story = {
+  name: 'A completed session shows one decision that needs review',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      unread: false,
+      decisionCount: 1,
+      unreviewedDecisionCount: 1,
+    },
+  },
+}
+
 export const WorkShowsDecisionCount: Story = {
   name: 'An active session shows its decision count',
   args: {

@@ -96,9 +96,14 @@ it('uses Y to approve the selected decision and select the next pending one', as
       />,
     )
   })
+  const headerButton = document.createElement('button')
+  document.body.append(headerButton)
+  headerButton.focus()
 
   await act(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y' }))
+    headerButton.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'y', bubbles: true }),
+    )
     return Promise.resolve()
   })
 
@@ -107,6 +112,7 @@ it('uses Y to approve the selected decision and select the next pending one', as
     ok: [[1]],
     next: [[2]],
   })
+  headerButton.remove()
 })
 
 it('keeps the selected decision when the Y action fails', async () => {
@@ -197,9 +203,14 @@ it('does not use Y while a text field is focused', () => {
 
 it('uses C to open and focus the change comment field', () => {
   renderPanel()
+  const cardButton = document.createElement('button')
+  document.body.append(cardButton)
+  cardButton.focus()
 
   act(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'c' }))
+    cardButton.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'c', bubbles: true }),
+    )
   })
 
   const snapshot = () => ({
@@ -210,6 +221,7 @@ it('uses C to open and focus the change comment field', () => {
     field: 'decision-change-1',
     focused: 'decision-change-1',
   })
+  cardButton.remove()
 })
 
 it('uses Enter to jump to the selected conversation row', () => {
@@ -230,7 +242,7 @@ it('uses Enter to jump to the selected conversation row', () => {
   row.remove()
 })
 
-it('leaves Enter on a focused button to the browser', () => {
+it('leaves Enter and Space on a focused button to the browser', () => {
   renderPanel()
   const row = document.createElement('div')
   row.id = 'decision-row-1'
@@ -238,21 +250,25 @@ it('leaves Enter on a focused button to the browser', () => {
   row.scrollIntoView = scrollIntoView
   const button = document.createElement('button')
   document.body.append(row, button)
-  const event = new KeyboardEvent('keydown', {
-    key: 'Enter',
-    bubbles: true,
-    cancelable: true,
-  })
+  button.focus()
+  const events = ['Enter', ' '].map(
+    (key) =>
+      new KeyboardEvent('keydown', {
+        key,
+        bubbles: true,
+        cancelable: true,
+      }),
+  )
 
   act(() => {
-    button.dispatchEvent(event)
+    for (const event of events) button.dispatchEvent(event)
   })
 
   const snapshot = () => ({
-    prevented: event.defaultPrevented,
+    prevented: events.map((event) => event.defaultPrevented),
     scroll: scrollIntoView.mock.calls,
   })
-  expect(snapshot()).toEqual({ prevented: false, scroll: [] })
+  expect(snapshot()).toEqual({ prevented: [false, false], scroll: [] })
   row.remove()
   button.remove()
 })

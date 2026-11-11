@@ -1570,7 +1570,11 @@ it('posts decision reviews and reflects the refreshed review state', async () =>
     container.querySelectorAll('.decision-card-review-state'),
     (element) => element.textContent,
   )
-  const snapshot = () => ({ postRequests, reviewState })
+  const positions = Array.from(
+    container.querySelectorAll('.decision-card-position'),
+    (element) => element.textContent,
+  )
+  const snapshot = () => ({ postRequests, reviewState, positions })
   expect(snapshot()).toEqual({
     postRequests: [
       {
@@ -1585,6 +1589,7 @@ it('posts decision reviews and reflects the refreshed review state', async () =>
       },
     ],
     reviewState: ['Reviewed · OK', 'Change requested'],
+    positions: ['1 of 2', '2 of 2'],
   })
 })
 

@@ -429,9 +429,7 @@ export function ConversationPaneView({
             isMobile,
             selectedDecisionSeq,
             decisionPosition:
-              message.type === 'decision' &&
-              message.seq === selectedDecisionSeq &&
-              decisionPositions.has(message.seq)
+              message.type === 'decision' && decisionPositions.has(message.seq)
                 ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
                 : undefined,
             onSelectDecision,

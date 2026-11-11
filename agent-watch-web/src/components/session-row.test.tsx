@@ -138,6 +138,15 @@ it.each([
     },
     expected: '◇ 2 decisions to review',
   },
+  {
+    name: 'a Done session uses the singular pending review label',
+    viewSession: {
+      ...session,
+      decisionCount: 1,
+      unreviewedDecisionCount: 1,
+    },
+    expected: '◇ 1 decision to review',
+  },
 ])('$name', ({ viewSession, expected }) => {
   renderRow(viewSession)
 

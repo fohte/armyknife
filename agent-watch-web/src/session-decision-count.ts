@@ -10,7 +10,8 @@ export function formatSessionDecisionCount(
   const unreviewedDecisionCount = session.unreviewedDecisionCount ?? 0
 
   if (session.category === 'done' && unreviewedDecisionCount > 0) {
-    return `◇ ${String(unreviewedDecisionCount)} decisions to review`
+    const label = unreviewedDecisionCount === 1 ? 'decision' : 'decisions'
+    return `◇ ${String(unreviewedDecisionCount)} ${label} to review`
   }
   if (decisionCount === 0) return null
 
