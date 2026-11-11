@@ -1921,6 +1921,12 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     })),
     selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
       ?.textContent,
+    descriptionTitles: Array.from(
+      container.querySelectorAll<HTMLElement>(
+        '.running-task-subagent-description, .running-task-description',
+      ),
+      (description) => description.getAttribute('title'),
+    ),
     sections: Array.from(
       container.querySelectorAll('.running-tasks-group h2'),
       (heading) => heading.textContent,
@@ -1939,6 +1945,10 @@ it('shows running tasks in the desktop status panel and counts them in the heade
   expect(snapshot()).toEqual({
     tabs: [{ label: 'Running2', selected: 'true' }],
     selectedTab: 'Running2',
+    descriptionTitles: [
+      'Inspect the fictional module',
+      'cargo test -p fictional-crate',
+    ],
     sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
     tasks: [
       '◐FixtureExplorerInspect the fictional module2h 0m',
@@ -2036,6 +2046,121 @@ it('keeps the Decisions tab active when running tasks appear', async () => {
       ],
       selectedTab: '◇ Decisions',
       decisionHeading: 'Decisions in this session',
+    },
+  })
+})
+
+it('selects Running by default and opens Decisions from the header', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-running-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  const reviewSession: Session = {
+    ...session,
+    category: 'needs_action',
+    decisionCount: 1,
+    unreviewedDecisionCount: 1,
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: reviewSession,
+      messages: [decision],
+      backgroundTasks: [runningTask],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+      onToggleStatusPanel: () => undefined,
+    })
+    return (
+      <>
+        <ConversationPaneView
+          session={reviewSession}
+          messages={[decision]}
+          backgroundTasks={[runningTask]}
+          actions={actions}
+          loading={false}
+          error={null}
+          onAction={() => Promise.resolve(true)}
+          onSelectSession={() => undefined}
+          statusPanelOpen
+          decisionsPanelOpen={statusPanel.decisionsPanelOpen}
+          selectedDecisionSeq={statusPanel.selectedDecisionSeq}
+          onToggleDecisionsPanel={statusPanel.onToggleDecisionsPanel}
+          onSelectDecision={statusPanel.onSelectDecision}
+        />
+        <SessionStatusPanel
+          tabs={statusPanel.tabs}
+          activeTabId={statusPanel.activeTabId}
+          onTabChange={statusPanel.onTabChange}
+          onClose={() => undefined}
+        />
+      </>
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    sections: Array.from(
+      container.querySelectorAll('.running-tasks-group h2'),
+      (heading) => heading.textContent,
+    ),
+    decisionHeading: container.querySelector('.decisions-panel-header h2')
+      ?.textContent,
+    decisionButtonPressed: container
+      .querySelector('.conversation-decisions-toggle')
+      ?.getAttribute('aria-pressed'),
+  })
+  const runningState = snapshot()
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-decisions-toggle',
+      ),
+    ).click()
+  })
+  const states = () => ({ runningState, decisionsState: snapshot() })
+  expect(states()).toEqual({
+    runningState: {
+      tabs: [
+        { label: 'Running1', selected: 'true' },
+        { label: '◇ Decisions', selected: 'false' },
+      ],
+      selectedTab: 'Running1',
+      sections: ['SUBAGENTS'],
+      decisionHeading: undefined,
+      decisionButtonPressed: 'false',
+    },
+    decisionsState: {
+      tabs: [
+        { label: 'Running1', selected: 'false' },
+        { label: '◇ Decisions', selected: 'true' },
+      ],
+      selectedTab: '◇ Decisions',
+      sections: [],
+      decisionHeading: 'Decisions in this session',
+      decisionButtonPressed: 'true',
     },
   })
 })
