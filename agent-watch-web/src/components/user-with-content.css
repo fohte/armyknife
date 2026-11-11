@@ -12,10 +12,6 @@
   text-align: right;
 }
 
-.chat-queued-label {
-  color: inherit;
-}
-
 .chat-user-message {
   padding: 10px 14px;
   border-radius: var(--aw-radius);

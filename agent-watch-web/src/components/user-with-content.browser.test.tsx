@@ -87,7 +87,7 @@ it('labels a queued prompt as You and keeps the user bubble style', () => {
       source: null,
     },
     {
-      className: 'markdown-message chat-user-message chat-user-message-queued',
+      className: 'markdown-message chat-user-message',
       text: 'Please rerun the example check.',
       source: null,
     },

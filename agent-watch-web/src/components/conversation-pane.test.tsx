@@ -865,7 +865,7 @@ it('marks a queued prompt below the delivered conversation', () => {
     ),
   ).map((message) => ({
     className: message.className,
-    label: message.querySelector('.chat-queued-label')?.textContent ?? null,
+    label: message.querySelector('.chat-from')?.textContent ?? null,
     text: message.querySelector('.markdown-message')?.textContent ?? null,
     bubbleClassName:
       message.querySelector('.chat-user-message')?.className ?? null,
@@ -874,7 +874,7 @@ it('marks a queued prompt below the delivered conversation', () => {
   expect(actual).toEqual([
     {
       className: 'chat-user-group',
-      label: null,
+      label: 'You',
       text: 'Please summarize the current changes.',
       bubbleClassName: 'markdown-message chat-user-message',
     },
@@ -885,11 +885,10 @@ it('marks a queued prompt below the delivered conversation', () => {
       bubbleClassName: null,
     },
     {
-      className: 'chat-user-group chat-user-group-queued',
-      label: 'Queued',
+      className: 'chat-user-group',
+      label: 'You · Queued',
       text: 'Also check the error handling.',
-      bubbleClassName:
-        'markdown-message chat-user-message chat-user-message-queued',
+      bubbleClassName: 'markdown-message chat-user-message',
     },
   ])
 })

@@ -55,30 +55,18 @@ export function UserWithContent({
   const queued = message.type === 'queued_user'
 
   return (
-    <article
-      className={
-        queued ? 'chat-user-group chat-user-group-queued' : 'chat-user-group'
-      }
-    >
+    <article className="chat-user-group">
       <div className="chat-from">
-        {queued ? (
-          <>
-            You · <span className="chat-queued-label">Queued</span>
-          </>
-        ) : message.from != null && message.from !== '' ? (
-          `From ${message.from}`
-        ) : (
-          'You'
-        )}
+        {queued
+          ? 'You · Queued'
+          : message.from != null && message.from !== ''
+            ? `From ${message.from}`
+            : 'You'}
       </div>
       {content.map((part, partIndex) =>
         part.type === 'text' ? (
           <MarkdownMessage
-            className={
-              queued
-                ? 'chat-user-message chat-user-message-queued'
-                : 'chat-user-message'
-            }
+            className="chat-user-message"
             key={`text-${String(partIndex)}`}
             {...(onSelectSession === undefined ? {} : { onSelectSession })}
             {...(sessions === undefined ? {} : { sessions })}
