@@ -8,6 +8,7 @@ import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import { renderInboxSessionSection } from '#inbox-session-section'
 import { nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
@@ -33,6 +34,7 @@ type InboxViewProps = {
   onToggleInProgress: () => void
   doneExpanded: boolean
   onToggleDone: () => void
+  onArchiveDone: (sessions: readonly Session[]) => void
   filterQuery?: string
   onFilterQueryChange?: (query: string) => void
   filterDialogOpen?: boolean
@@ -49,55 +51,6 @@ type InboxViewProps = {
   selectedSavedViewId?: string | null
   onSelectSavedView?: (id: string) => void
   onDeleteSavedView?: (id: string) => void
-}
-
-function renderSessionSection({
-  title,
-  sessions,
-  count = sessions.length,
-  selectedId,
-  onSelect,
-  onLater,
-  onToggleToday,
-  compactRepo,
-  isMobile,
-  className = '',
-}: {
-  title: string
-  sessions: readonly Session[]
-  count?: number
-  selectedId: string | null
-  onSelect: (id: string) => void
-  onLater: (id: string) => void
-  onToggleToday: (id: string, isToday: boolean) => void
-  compactRepo: boolean
-  isMobile: boolean
-  className?: string
-}) {
-  return (
-    <section className={`session-section ${className}`} aria-label={title}>
-      <h2 className="section-heading">
-        <span>{title}</span>
-        <span className="section-count">{count}</span>
-      </h2>
-      {sessions.length > 0 ? (
-        <ul className="session-list">
-          {sessions.map((session) => (
-            <SessionRow
-              key={session.id}
-              session={session}
-              selected={session.id === selectedId}
-              onSelect={onSelect}
-              onLater={onLater}
-              onToggleToday={onToggleToday}
-              compactRepo={compactRepo}
-              isMobile={isMobile}
-            />
-          ))}
-        </ul>
-      ) : null}
-    </section>
-  )
 }
 
 export function InboxView({
@@ -121,6 +74,7 @@ export function InboxView({
   onToggleInProgress,
   doneExpanded,
   onToggleDone,
+  onArchiveDone,
   filterQuery: controlledFilterQuery,
   onFilterQueryChange,
   filterDialogOpen: controlledFilterDialogOpen,
@@ -152,6 +106,7 @@ export function InboxView({
     (session) => session.category === 'in_progress',
   )
   const done = filteredSessions.filter((session) => session.category === 'done')
+  const allDone = sessions.filter((session) => session.category === 'done')
   const unreviewedDoneCount = done.reduce(
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
@@ -332,7 +287,7 @@ export function InboxView({
         {loaded && sessions.length > 0 && filteredSessions.length === 0 ? (
           <p className="load-message">No sessions match these filters.</p>
         ) : null}
-        {renderSessionSection({
+        {renderInboxSessionSection({
           title: 'Needs action',
           className: 'needs-action-section',
           sessions: needsAction,
@@ -397,7 +352,7 @@ export function InboxView({
             {inProgressExpanded ? '⌄' : '›'}
           </span>
         </Button>
-        {renderSessionSection({
+        {renderInboxSessionSection({
           title: 'In progress',
           className: 'in-progress-section',
           sessions: visibleInProgress,
@@ -420,29 +375,42 @@ export function InboxView({
             {hiddenInProgressCount} more ▸
           </Button>
         ) : null}
-        <Button
-          type="button"
-          variant="plain"
-          className="mobile-collapse-row mobile-done-row cursor-pointer"
-          aria-expanded={doneExpanded}
-          onClick={onToggleDone}
-        >
-          <span>Done</span>
-          <span className="mobile-collapse-count">{done.length}</span>
-          {unreviewedDoneCount > 0 ? (
-            <span className="mobile-done-review-count">
-              ◇ {String(unreviewedDoneCount)} to review
+        <div className="mobile-collapse-row mobile-done-row">
+          <Button
+            type="button"
+            variant="plain"
+            className="mobile-done-toggle cursor-pointer"
+            aria-expanded={doneExpanded}
+            onClick={onToggleDone}
+          >
+            <span>Done</span>
+            <span className="mobile-collapse-count">{done.length}</span>
+            {unreviewedDoneCount > 0 ? (
+              <span className="mobile-done-review-count">
+                ◇ {String(unreviewedDoneCount)} to review
+                <span className="mobile-collapse-chevron" aria-hidden="true">
+                  {doneExpanded ? '⌄' : '›'}
+                </span>
+              </span>
+            ) : (
               <span className="mobile-collapse-chevron" aria-hidden="true">
                 {doneExpanded ? '⌄' : '›'}
               </span>
-            </span>
-          ) : (
-            <span className="mobile-collapse-chevron" aria-hidden="true">
-              {doneExpanded ? '⌄' : '›'}
-            </span>
-          )}
-        </Button>
-        {renderSessionSection({
+            )}
+          </Button>
+          <Button
+            type="button"
+            variant="plain"
+            className="mobile-archive-all cursor-pointer"
+            disabled={allDone.length === 0}
+            onClick={() => {
+              onArchiveDone(allDone)
+            }}
+          >
+            Archive all
+          </Button>
+        </div>
+        {renderInboxSessionSection({
           title: 'Done',
           className: 'done-section',
           sessions: isMobile && !doneExpanded ? [] : done,
@@ -452,6 +420,10 @@ export function InboxView({
           onToggleToday,
           compactRepo: isMobile,
           isMobile,
+          onArchiveAll: () => {
+            onArchiveDone(allDone)
+          },
+          archiveAllDisabled: allDone.length === 0,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
@@ -460,6 +432,9 @@ export function InboxView({
         </span>
         <span>
           <kbd>L</kbd> Later
+        </span>
+        <span>
+          <kbd>E</kbd> Archive
         </span>
         <span>
           <kbd>⇧B</kbd> Board

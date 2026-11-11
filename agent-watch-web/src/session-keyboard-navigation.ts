@@ -15,6 +15,7 @@ type SessionKeyboardNavigationOptions = {
   laterSessionId: string | null
   laterSubmissionInFlight: { current: boolean }
   closeLater: () => void
+  archiveSession: (sessionId: string) => void
   submitLater: (sessionId: string, preset: LaterPreset) => void
   navigableSessions: readonly Session[]
   openLater: (sessionId: string) => void
@@ -33,6 +34,7 @@ export function useSessionKeyboardNavigation({
   laterSessionId,
   laterSubmissionInFlight,
   closeLater,
+  archiveSession,
   submitLater,
   navigableSessions,
   openLater,
@@ -120,6 +122,16 @@ export function useSessionKeyboardNavigation({
       ) {
         event.preventDefault()
         openLater(selectedId)
+      } else if (
+        action?.type === 'archive' &&
+        selectedId !== null &&
+        view === 'inbox' &&
+        navigableSessions.some(
+          (session) => session.id === selectedId && session.category === 'done',
+        )
+      ) {
+        event.preventDefault()
+        archiveSession(selectedId)
       }
     }
 
@@ -129,6 +141,7 @@ export function useSessionKeyboardNavigation({
     }
   }, [
     closeLater,
+    archiveSession,
     isMobile,
     laterSessionId,
     laterSubmissionInFlight,

@@ -18,6 +18,7 @@ type InboxConversationPanesProps = {
   onCloseStatusPanel?: () => void
   onBack: () => void
   onLater: (id: string) => void
+  onArchiveSession: (id: string) => void
   onSelectSession: (id: string) => void
 }
 
@@ -34,6 +35,7 @@ export function InboxConversationPanes({
   onCloseStatusPanel = () => undefined,
   onBack,
   onLater,
+  onArchiveSession,
   onSelectSession,
 }: InboxConversationPanesProps) {
   const inboxView = <InboxView {...inboxProps} isMobile={isMobile} />
@@ -51,6 +53,9 @@ export function InboxConversationPanes({
         onBack={onBack}
         onLater={() => {
           onLater(selectedSession.id)
+        }}
+        onArchive={() => {
+          onArchiveSession(selectedSession.id)
         }}
         isToday={selectedSession.isToday === true}
         onToggleToday={(isToday) => {

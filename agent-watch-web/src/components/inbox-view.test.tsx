@@ -116,6 +116,7 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         onToggleInProgress={() => undefined}
         doneExpanded
         onToggleDone={() => undefined}
+        onArchiveDone={() => undefined}
         {...props}
       />,
     )
@@ -125,7 +126,11 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
 function sectionSnapshot() {
   return {
     headings: Array.from(container.querySelectorAll('.section-heading')).map(
-      (heading) => heading.textContent,
+      (heading) =>
+        Array.from(heading.children)
+          .filter((child) => !child.matches('button'))
+          .map((child) => child.textContent)
+          .join(''),
     ),
     laterCount: container.querySelector('.later-section-count')?.textContent,
     visibleSessionIds: Array.from(
@@ -146,9 +151,9 @@ function connectionSnapshot() {
 
 function doneRowSnapshot() {
   return {
-    text: container.querySelector('.mobile-done-row')?.textContent,
+    text: container.querySelector('.mobile-done-toggle')?.textContent,
     expanded: container
-      .querySelector('.mobile-done-row')
+      .querySelector('.mobile-done-toggle')
       ?.getAttribute('aria-expanded'),
     chevronHidden: container
       .querySelector('.mobile-done-row .mobile-collapse-chevron')
@@ -351,6 +356,49 @@ it('shows the downward chevron for expanded iPhone Done rows with pending review
     expanded: 'true',
     chevronHidden: 'true',
   })
+})
+
+it('archives the Done sessions from the section action', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ onArchiveDone })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      ?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
+})
+
+it('archives the Done sessions from the mobile collapse row', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ isMobile: true, onArchiveDone })
+
+  act(() => {
+    container.querySelector<HTMLButtonElement>('.mobile-archive-all')?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
+})
+
+it('archives all Done sessions even when filters hide them', () => {
+  const onArchiveDone = vi.fn()
+  renderInbox({ filterQuery: 'project:missing', onArchiveDone })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.done-section .inbox-archive-all')
+      ?.click()
+  })
+
+  expect(onArchiveDone.mock.calls).toEqual([
+    [sessions.filter((s) => s.category === 'done')],
+  ])
 })
 
 it('opens the filter dialog from its button', () => {

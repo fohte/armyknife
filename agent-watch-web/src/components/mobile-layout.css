@@ -402,6 +402,30 @@
   display: flex;
 }
 
+.mobile-done-toggle {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.mobile-done-row .mobile-archive-all {
+  height: 26px;
+  min-height: 26px;
+  flex: 0 0 auto;
+  padding: 0 7px;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-body);
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .agent-watch-shell[data-layout='mobile'] .session-row.is-selected,
 .story-mobile-layout .session-row.is-selected {
   background: transparent;
@@ -448,7 +472,8 @@
   border: 0;
 }
 
-.mobile-conversation-later {
+.mobile-conversation-later,
+.mobile-conversation-archive {
   min-width: 36px;
   min-height: 36px;
   align-self: center;
