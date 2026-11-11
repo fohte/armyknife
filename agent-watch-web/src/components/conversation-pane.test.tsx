@@ -160,9 +160,6 @@ function renderView(
         loading={false}
         error={null}
         onAction={onAction}
-        onOpenInTerminal={() => {
-          void onAction('focus')
-        }}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
         isToday={today.isToday}

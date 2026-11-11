@@ -13,6 +13,11 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+export const Ready: Story = {
+  name: 'The terminal action is ready to use',
+  args: { status: null },
+}
+
 export const Sending: Story = {
   name: 'The terminal switch is in progress',
   args: { status: { state: 'sending' } },

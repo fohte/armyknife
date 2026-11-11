@@ -112,7 +112,7 @@ export function ConversationPaneView({
   error,
   onClearError = () => undefined,
   onAction,
-  onOpenInTerminal = () => undefined,
+  onOpenInTerminal,
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
@@ -214,7 +214,11 @@ export function ConversationPaneView({
   }
 
   const openInTerminal = () => {
-    onOpenInTerminal()
+    if (onOpenInTerminal === undefined) {
+      void onAction('focus')
+    } else {
+      onOpenInTerminal()
+    }
   }
 
   useLayoutEffect(() => {
