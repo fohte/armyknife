@@ -1,3 +1,5 @@
+import '#components/conversation-message.css'
+
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'

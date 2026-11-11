@@ -58,6 +58,29 @@ it('keeps raw HTML as text and blocks unsafe link protocols', () => {
   )
 })
 
+it('renders br tags as line breaks in paragraphs and table cells', () => {
+  const html = renderMessage(
+    `before<br>middle<BR/>after<br />last
+
+| Content |
+| --- |
+| first<br>second<BR/>third<br />fourth |`,
+  )
+
+  expect(html).toBe(
+    [
+      '<div class="markdown-message"><p>before<br/>',
+      'middle<br/>',
+      'after<br/>',
+      'last</p>',
+      '<table><thead><tr><th>Content</th></tr></thead><tbody><tr><td>first<br/>',
+      'second<br/>',
+      'third<br/>',
+      'fourth</td></tr></tbody></table></div>',
+    ].join(String.fromCharCode(10)),
+  )
+})
+
 it('trims non-ASCII text from automatic links and preserves explicit links', () => {
   const html = renderMessage(
     'http://localhost:43127。承認後に処理する [http://localhost:43127。承認後に処理する](http://localhost:43127。承認後に処理する) and http://example.com and http://example.com/日本語',

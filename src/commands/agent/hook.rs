@@ -882,6 +882,10 @@ fn process_hook_event_impl_with_settings(
     session_lock.save(&session)?;
     drop(session_lock);
 
+    if event == HookEvent::UserPromptSubmit && input.agent_id.is_none() {
+        store::close_unanswered_agent_proposals(sessions_dir, &session.session_id)?;
+    }
+
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
             HookEvent::PreCompact => Some(true),
@@ -5294,6 +5298,53 @@ mod tests {
                 .agent_status;
 
             assert_eq!(actual, None);
+        }
+
+        #[rstest]
+        #[case::main_agent(None, true, 2)]
+        #[case::subagent(Some("agent-a"), false, 1)]
+        fn user_prompt_submit_closes_proposals_only_for_the_main_agent(
+            #[case] agent_id: Option<&str>,
+            #[case] expected_resolved: bool,
+            #[case] expected_revision_delta: i64,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let session = create_test_session(None);
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+            store::add_agent_proposal_in(temp_dir.path(), "test-123", "{}")
+                .expect("proposal should save");
+            let before_revision =
+                store::session_store_revision_from(temp_dir.path()).expect("revision should load");
+            let mut input = create_test_input(None);
+            input.agent_id = agent_id.map(str::to_string);
+
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("user-prompt-submit should succeed");
+            });
+
+            let connection = rusqlite::Connection::open(temp_dir.path().join("sessions.db"))
+                .expect("session database should open");
+            let resolved_at: Option<String> = connection
+                .query_row(
+                    "SELECT resolved_at FROM agent_proposal
+                     WHERE session_id = 'test-123' AND seq = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("proposal should load");
+            let after_revision =
+                store::session_store_revision_from(temp_dir.path()).expect("revision should load");
+
+            assert_eq!(
+                (resolved_at.is_some(), after_revision - before_revision),
+                (expected_resolved, expected_revision_delta),
+            );
         }
 
         #[rstest]

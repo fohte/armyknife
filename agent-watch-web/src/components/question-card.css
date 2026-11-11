@@ -1,0 +1,48 @@
+.chat-question-choices {
+  display: grid;
+  gap: 5px;
+}
+
+.chat-question-choices [data-slot='button'] {
+  min-height: 42px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 10px;
+  background: var(--aw-bg-surface);
+  text-align: left;
+}
+
+.chat-question-choices [data-slot='button'].is-selected {
+  border: 1px solid var(--aw-color-neutral);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-body);
+  opacity: 1;
+}
+
+.chat-question-choices [data-slot='button'].is-unselected {
+  opacity: 0.45;
+}
+
+.chat-question-choice-text {
+  flex: 1;
+  text-align: left;
+}
+
+.chat-question-choices kbd {
+  width: 18px;
+  color: var(--aw-color-warning);
+}
+
+.chat-question-choice-check {
+  margin-left: auto;
+  color: var(--aw-color-neutral);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.chat-question-answer {
+  margin: 10px 0 0;
+  color: var(--aw-text-body);
+  font-size: 13px;
+  white-space: pre-wrap;
+}

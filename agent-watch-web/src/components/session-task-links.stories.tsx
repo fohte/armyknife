@@ -1,3 +1,5 @@
+import '#components/conversation-pane-view.css'
+
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionTaskLinks } from '#components/session-task-links'

@@ -1435,7 +1435,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     workingStatus: 'Working · 30s',
     activeTool: 'execcargo test',
     peerMessage:
-      'FROMFixture peer sessionA fictional peer update.fixture-peer-layout.html',
+      'FROMFixture peer session (fixture-peer-session)A fictional peer update.fixture-peer-layout.html',
     peerImage: '/api/images/fixture-peer-image.png',
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
