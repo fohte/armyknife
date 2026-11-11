@@ -139,7 +139,7 @@ it('shows the primary task and the count of other linked tasks on a card', () =>
   ])
 
   expect(container.querySelector('.board-card-task')?.textContent).toBe(
-    'P1 #42 · Improve delivery reliability +1',
+    'P1 #42 Improve delivery reliability +1',
   )
 })
 
