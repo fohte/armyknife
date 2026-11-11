@@ -24,6 +24,7 @@ use crate::commands::agent::store::{
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
+mod background_tasks;
 mod parser;
 mod proposals;
 mod range;
@@ -95,66 +96,10 @@ impl RouteLoaders {
         &self,
         sessions: &[Session],
     ) -> HashSet<String> {
-        let mut session_ids = HashSet::new();
-        let decisions = [];
-        let queued_prompts = [];
-        let peer_out_messages = [];
-        let proposals = [];
-
-        for session in sessions
-            .iter()
-            .filter(|session| session.engine == Engine::Claude)
-        {
-            let fingerprint = match RunningBackgroundTaskCache::fingerprint(session) {
-                Ok(fingerprint) => fingerprint,
-                Err(error) => {
-                    tracing::warn!(
-                        session_id = %session.session_id,
-                        %error,
-                        "failed to inspect Claude transcript metadata for background tasks"
-                    );
-                    continue;
-                }
-            };
-            let has_running_task = self
-                .running_background_task_cache
-                .get(&session.session_id, &fingerprint)
-                .unwrap_or_else(|| {
-                    match parse_session_transcript(TranscriptInput {
-                        path: session.transcript_path.as_deref(),
-                        engine: Engine::Claude,
-                        parent: None,
-                        pending_tool: None,
-                        watch_web_user_marker: None,
-                        additions: parser::claude::ParserAdditions {
-                            decisions: &decisions,
-                            queued_prompts: &queued_prompts,
-                            peer_out_messages: &peer_out_messages,
-                            proposals: &proposals,
-                        },
-                    }) {
-                        Ok((conversation, _)) => !conversation.background_tasks.is_empty(),
-                        Err(error) => {
-                            tracing::warn!(
-                                session_id = %session.session_id,
-                                %error,
-                                "failed to parse Claude transcript background tasks"
-                            );
-                            false
-                        }
-                    }
-                });
-            self.running_background_task_cache.insert(
-                &session.session_id,
-                fingerprint,
-                has_running_task,
-            );
-            if has_running_task {
-                session_ids.insert(session.session_id.clone());
-            }
-        }
-
-        session_ids
+        background_tasks::running_background_task_session_ids(
+            sessions,
+            &self.running_background_task_cache,
+        )
     }
 }
 
@@ -393,7 +338,7 @@ fn load_conversation_with_queued_prompts(
     Ok(Some(conversation))
 }
 
-struct TranscriptInput<'a> {
+pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
     path: Option<&'a Path>,
     engine: Engine,
     parent: Option<&'a ParentSession>,
@@ -402,7 +347,7 @@ struct TranscriptInput<'a> {
     additions: parser::claude::ParserAdditions<'a>,
 }
 
-fn parse_session_transcript(
+pub(in crate::commands::agent::watch_web::messages) fn parse_session_transcript(
     TranscriptInput {
         path,
         engine,
