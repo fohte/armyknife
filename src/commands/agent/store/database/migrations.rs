@@ -161,3 +161,6 @@ fn accept_migration_error(connection: &Connection, error: MigrationError) -> Res
 
     Err(error).context("migrating session database")
 }
+
+#[cfg(test)]
+mod tests;
