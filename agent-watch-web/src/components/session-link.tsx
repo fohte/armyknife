@@ -60,7 +60,11 @@ export function SessionLink({
       <Tooltip.Portal>
         <Tooltip.Positioner className="session-link-positioner" sideOffset={8}>
           <Tooltip.Popup className="session-link-card">
-            <span className="session-link-card-state">
+            <span className="session-link-card-title">{children}</span>
+            <span
+              className="session-link-card-state"
+              data-category={session.category}
+            >
               {sessionStatus(session)}
             </span>
             <span className="session-link-card-task">
@@ -69,6 +73,9 @@ export function SessionLink({
                 : `tq #${String(session.task.number)} ${session.task.title}`}
             </span>
             <span className="session-link-card-repo">repo {session.repo}</span>
+            <span className="session-link-card-hint">
+              Click to open · ⌘-click to open beside
+            </span>
           </Tooltip.Popup>
         </Tooltip.Positioner>
       </Tooltip.Portal>

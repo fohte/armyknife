@@ -69,7 +69,7 @@ it('shows session details on hover', async () => {
     linkClass: 'session-link-trigger',
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     cardText:
-      'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+      'sample-sessionIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
   })
 })
 
@@ -96,7 +96,7 @@ it('keeps the card open while the pointer is over it', async () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    'sample-sessionIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
   )
 })
 
@@ -111,7 +111,7 @@ it('labels a paused session in the detail card', () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-service',
+    'sample-sessionIn progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
   )
 })
 
@@ -126,7 +126,7 @@ it('explains when no tq task is linked', () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progressNo linked tq taskrepo sample-org/example-service',
+    'sample-sessionIn progressNo linked tq taskrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
   )
 })
 
@@ -157,7 +157,7 @@ it('opens the session when clicked while the card is visible', async () => {
   expect(getActual()).toEqual({
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     cardText:
-      'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+      'sample-sessionIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
     selectedIds: [linkedSession.id],
   })
 })
@@ -175,6 +175,6 @@ it('shows the card when a keyboard user focuses the link', async () => {
   await act(async () => userEvent.tab())
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    'In progresstq #24 Inspect the example workflowrepo sample-org/example-service',
+    'sample-sessionIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ⌘-click to open beside',
   )
 })

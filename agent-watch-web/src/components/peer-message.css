@@ -2,36 +2,61 @@
   display: flex;
   box-sizing: border-box;
   width: fit-content;
-  max-width: 80%;
+  max-width: 88%;
   flex-direction: column;
-  gap: 6px;
-  padding: 9px 12px;
   border-radius: var(--aw-radius);
 }
 
 .chat-peer-message-from {
   align-self: flex-start;
   border: 1px solid var(--aw-border-control);
-  background: var(--aw-bg-palette-muted);
+  background: var(--aw-bg-surface);
 }
 
 .chat-peer-message-to {
   align-self: flex-end;
+  width: 88%;
   border: 1px dotted var(--aw-border-dashed);
-  background: var(--aw-bg-palette-muted);
 }
 
 .chat-peer-label {
   display: flex;
-  align-items: baseline;
-  gap: 7px;
-  color: var(--aw-text-primary);
-  font-size: 11px;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: var(--aw-bg-popover);
+  font-size: 12px;
+}
+
+.chat-peer-message-to .chat-peer-label {
+  border-bottom: 1px dashed var(--aw-border-control);
+  background: transparent;
+}
+
+.chat-peer-label > span:first-child {
+  flex: 0 0 auto;
+  padding: 0 6px;
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-size: 10.5px;
   font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.chat-peer-message-to .chat-peer-label > span:first-child {
+  padding: 0 5px;
+  border: 1px solid var(--aw-border-emphasis);
+  background: transparent;
+  color: var(--aw-text-body);
 }
 
 .chat-peer-label .session-link-trigger {
-  font-size: 11px;
+  padding: 0;
+  background: transparent;
+  color: var(--aw-text-primary);
+  font-size: inherit;
+  font-weight: 700;
+  text-decoration-color: var(--aw-border-dashed);
 }
 
 .chat-peer-content {
@@ -39,6 +64,8 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   min-width: 0;
+  padding: 8px 12px;
+  color: var(--aw-text-body);
   cursor: pointer;
 }
 
