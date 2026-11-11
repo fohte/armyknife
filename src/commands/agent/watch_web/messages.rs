@@ -50,42 +50,6 @@ pub(super) struct TranscriptInput<'a> {
     pub(super) peer_out_messages: &'a [WatchWebPeerOutMessage],
 }
 
-#[cfg(test)]
-pub(super) fn routes_with_decisions_and_queued_prompts(
-    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
-    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
-    load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
-    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
-) -> Router {
-    routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-        load_session,
-        load_user_marker,
-        load_decisions,
-        load_queued_prompts,
-        |_| Ok(Vec::new()),
-        delete_queued_prompts,
-    )
-}
-
-#[cfg(test)]
-pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
-    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
-    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
-    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
-    load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
-) -> Router {
-    routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-        load_session,
-        load_user_marker,
-        |_| Ok(Vec::new()),
-        load_queued_prompts,
-        load_peer_out_messages,
-        delete_queued_prompts,
-    )
-}
-
 pub(super) fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
@@ -595,8 +559,8 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, QuestionChoice, load_messages_with, routes_with_decisions_and_queued_prompts,
-        routes_with_queued_prompts_and_peer_out_messages,
+        ChatItem, QuestionChoice, load_messages_with,
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
         AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
@@ -682,7 +646,7 @@ mod tests {
         .unwrap();
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| {
@@ -698,6 +662,7 @@ mod tests {
                     reviewed_at: None,
                 }])
             },
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -722,6 +687,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn claude_message_route_combines_decisions_with_peer_out_messages() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let transcript = concat!(
+            r#"{"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-06-01T12:00:01Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-01T12:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}"#,
+        );
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:03Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 5,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-06-01T11:59:00Z".to_string(),
+                    review: None,
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            move |_| {
+                Ok(vec![WatchWebPeerOutMessage {
+                    id: 1,
+                    from_session_id: "fixture-session".to_string(),
+                    to_session_id: "fixture-target-id".to_string(),
+                    content: "Expanded fixture body.".to_string(),
+                    sent_at,
+                }])
+            },
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, content_type, body) = response_snapshot(response).await;
+
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {
+                            "type": "decision",
+                            "seq": 5,
+                            "title": "Choose the fixture path",
+                            "why": "The fixture remains reversible.",
+                            "considered": ["Choose the other fixture path"],
+                            "easyToChange": "Change one fixture value.",
+                            "review": null,
+                            "createdAt": "2026-06-01T11:59:00Z",
+                        },
+                        {
+                            "type": "peer",
+                            "direction": "to",
+                            "session_id": "fixture-target-id",
+                            "content": [{
+                                "type": "text",
+                                "text": "Expanded fixture body.",
+                            }],
+                        },
+                    ],
+                    "backgroundTasks": [],
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
     async fn codex_message_route_appends_database_decisions_after_the_transcript() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
@@ -733,7 +794,7 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| {
@@ -749,6 +810,7 @@ mod tests {
                     reviewed_at: None,
                 }])
             },
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -972,7 +1034,7 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -981,6 +1043,7 @@ mod tests {
                 })
             },
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1027,9 +1090,10 @@ mod tests {
         let sent_at = chrono::DateTime::parse_from_rfc3339(sent_at)
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             move |from| {
                 Ok(if from == "fixture-session" {
@@ -1085,9 +1149,10 @@ mod tests {
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1125,9 +1190,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1158,9 +1224,10 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -1208,9 +1275,10 @@ mod tests {
         let queued = saved_prompt(7, "Delivered fixture request.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -1248,9 +1316,10 @@ mod tests {
     async fn codex_message_route_does_not_load_saved_claude_prompts() {
         let mut session = stored_session();
         session.engine = Engine::Codex;
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
             |_| Ok(Vec::new()),
             |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
@@ -1328,9 +1397,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1386,9 +1456,10 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),

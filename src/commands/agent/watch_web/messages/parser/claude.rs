@@ -79,7 +79,7 @@ fn parse_with_image_directory(
 }
 
 #[cfg(test)]
-pub(super) fn parse_with_background_tasks_and_peer_out_messages(
+fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -126,7 +126,7 @@ fn parse_with_decisions_and_queued_prompts(
 }
 
 #[cfg(test)]
-pub(super) fn parse_with_queued_prompts_and_peer_out_messages(
+fn parse_with_queued_prompts_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
