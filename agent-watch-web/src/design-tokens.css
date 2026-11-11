@@ -1,0 +1,138 @@
+@theme static {
+  --font-sans:
+    'Helvetica Neue', Arial, 'Hiragino Kaku Gothic ProN', 'Hiragino Sans',
+    'Noto Sans JP', sans-serif;
+  --font-mono: 'JetBrains Mono Variable', monospace;
+  --font-code: 'JetBrains Mono Variable', monospace;
+}
+
+:root {
+  --aw-font-size-body: 14px;
+  --aw-font-size-mobile-body: 15px;
+  --aw-line-height-body: 1.55;
+  --aw-radius: 0;
+  --aw-shadow: none;
+
+  --aw-bg-app: #0a0a0a;
+  --aw-bg-nav: #0f0f0f;
+  --aw-bg-inbox: #0c0c0c;
+  --aw-bg-board: #111111;
+  --aw-bg-surface: #141414;
+  --aw-bg-palette: #161616;
+  --aw-bg-palette-muted: #131313;
+  --aw-bg-popover: #1f1f1f;
+  --aw-bg-pressed: #262626;
+  --aw-bg-selected: #2a2a2e;
+  --aw-bg-active: #3f3f46;
+  --aw-bg-scrim-subtle: rgb(0 0 0 / 35%);
+  --aw-bg-scrim: rgb(0 0 0 / 58%);
+  --aw-bg-scrim-strong: rgb(0 0 0 / 68%);
+  --aw-bg-scrim-overlay: rgb(10 10 10 / 88%);
+
+  --aw-border: #2a2a2a;
+  --aw-border-control: #3f3f46;
+  --aw-border-dashed: #71717a;
+  --aw-border-emphasis: #a1a1aa;
+  --aw-border-row: #1a1a1a;
+  --aw-border-row-mobile: #1f1f1f;
+
+  --aw-text-primary: #fafafa;
+  --aw-text-body: #d4d4d8;
+  --aw-text-muted: #a1a1aa;
+  --aw-text-secondary: #8b8b94;
+  --aw-text-disabled: #71717a;
+  --aw-text-crit-line: #52525b;
+
+  --aw-color-warning: #fbbf24;
+  --aw-color-error: #f87171;
+  --aw-color-brand: #ef4444;
+  --aw-color-working: #60a5fa;
+  --aw-color-neutral: #a1a1aa;
+
+  --background: var(--aw-bg-app);
+  --foreground: var(--aw-text-primary);
+  --card: var(--aw-bg-surface);
+  --card-foreground: var(--aw-text-primary);
+  --popover: var(--aw-bg-popover);
+  --popover-foreground: var(--aw-text-primary);
+  --primary: var(--aw-color-brand);
+  --primary-foreground: var(--aw-text-primary);
+  --secondary: var(--aw-bg-surface);
+  --secondary-foreground: var(--aw-text-primary);
+  --muted: var(--aw-bg-surface);
+  --muted-foreground: var(--aw-text-disabled);
+  --accent: var(--aw-bg-popover);
+  --accent-foreground: var(--aw-text-primary);
+  --destructive: var(--aw-color-error);
+  --border: var(--aw-border);
+  --input: var(--aw-border-control);
+  --ring: var(--aw-border-emphasis);
+  --border-strong: var(--aw-border-emphasis);
+  --surface-strong: var(--aw-bg-popover);
+  --muted-foreground-strong: var(--aw-text-muted);
+  --muted-foreground-faint: var(--aw-text-disabled);
+  --muted-foreground-ghost: var(--aw-text-muted);
+  --tint-red: color-mix(in srgb, var(--aw-color-error) 12%, var(--aw-bg-app));
+  --tint-red-foreground: var(--aw-color-error);
+  --tint-orange: var(--aw-bg-surface);
+  --tint-orange-foreground: var(--aw-color-neutral);
+  --tint-yellow: color-mix(
+    in srgb,
+    var(--aw-color-warning) 12%,
+    var(--aw-bg-app)
+  );
+  --tint-yellow-foreground: var(--aw-color-warning);
+  --tint-green: var(--aw-bg-surface);
+  --tint-green-foreground: var(--aw-color-neutral);
+  --tint-cyan: var(--aw-bg-surface);
+  --tint-cyan-foreground: var(--aw-color-neutral);
+  --tint-blue: color-mix(
+    in srgb,
+    var(--aw-color-working) 12%,
+    var(--aw-bg-app)
+  );
+  --tint-blue-foreground: var(--aw-color-working);
+  --tint-magenta: var(--aw-bg-surface);
+  --tint-magenta-foreground: var(--aw-color-neutral);
+  --radius: var(--aw-radius);
+  --keycap-radius: var(--aw-radius);
+  --btn-radius-xs: var(--aw-radius);
+  --btn-radius-sm: var(--aw-radius);
+}
+
+.aw-button,
+.agent-watch-shell [data-slot='button'] {
+  border-radius: var(--aw-radius);
+  box-shadow: var(--aw-shadow);
+  font-family: var(--font-sans);
+  font-size: 12px;
+}
+
+.agent-watch-shell [data-slot='button'][class~='text-muted-foreground']:hover {
+  color: var(--aw-text-body);
+}
+
+.aw-button--outline {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-border);
+  background: transparent;
+  color: var(--aw-text-body);
+}
+
+.aw-button--primary {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-text-primary);
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-app);
+  font-weight: 700;
+}
+
+.aw-button--pressed {
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-border-emphasis);
+  background: var(--aw-bg-pressed);
+  color: var(--aw-text-primary);
+}

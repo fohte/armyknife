@@ -4,8 +4,8 @@
   min-height: 0;
   flex: 1 1 0;
   flex-direction: column;
-  border-left: 1px solid #1a1a1a;
-  background: #0a0a0a;
+  border-left: 1px solid var(--aw-border-row);
+  background: var(--aw-bg-nav);
 }
 .crit-pane.is-fullscreen {
   position: fixed;
@@ -24,19 +24,19 @@
   align-items: center;
   gap: 10px;
   padding: 0 12px;
-  border-bottom: 1px solid #1a1a1a;
-  background: #141414;
+  border-bottom: 1px solid var(--aw-border-row);
+  background: var(--aw-bg-surface);
 }
 
 .crit-pane-title {
-  color: #fafafa;
+  color: var(--aw-text-primary);
   font-weight: 700;
 }
 
 .crit-pane-header a {
   overflow: hidden;
   flex: 1;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
   text-overflow: ellipsis;
@@ -47,7 +47,7 @@
   min-width: 28px;
   min-height: 28px;
   padding: 0 7px;
-  color: #d4d4d8;
+  color: var(--aw-text-body);
   font-size: 16px;
 }
 
@@ -60,5 +60,5 @@
   min-height: 0;
   flex: 1;
   border: 0;
-  background: #0a0a0a;
+  background: var(--aw-bg-app);
 }
