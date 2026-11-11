@@ -275,6 +275,8 @@ type ConversationPaneProps = {
   onCloseStatusPanel?: () => void
   onBack?: () => void
   onLater?: () => void
+  isToday?: boolean
+  onToggleToday?: (isToday: boolean) => void
 }
 
 export function ConversationPane({
@@ -288,6 +290,8 @@ export function ConversationPane({
   onCloseStatusPanel = () => undefined,
   onBack = () => undefined,
   onLater = () => undefined,
+  isToday = false,
+  onToggleToday = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
@@ -461,6 +465,8 @@ export function ConversationPane({
       onSelectDecision={onSelectDecision}
       onBack={onBack}
       onLater={onLater}
+      isToday={isToday}
+      onToggleToday={onToggleToday}
     />
   )
 

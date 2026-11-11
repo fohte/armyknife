@@ -16,12 +16,16 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
+use crate::commands::agent::store::{AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod parser;
+mod proposals;
 mod subagent_reports;
+
+use self::proposals::proposal_chat_item;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -41,7 +45,35 @@ type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
+type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
 
+pub(super) struct RouteLoaders {
+    queued_prompts: QueuedPromptLoader,
+    peer_out_messages: PeerOutMessageLoader,
+    delete_queued_prompts: QueuedPromptDeleter,
+    proposals: ProposalLoader,
+}
+
+impl RouteLoaders {
+    pub(super) fn new(
+        load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+        load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
+        + Send
+        + Sync
+        + 'static,
+        delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+        load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            queued_prompts: Arc::new(load_queued_prompts),
+            peer_out_messages: Arc::new(load_peer_out_messages),
+            delete_queued_prompts: Arc::new(delete_queued_prompts),
+            proposals: Arc::new(load_proposals),
+        }
+    }
+}
+
+#[cfg(test)]
 pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
@@ -49,14 +81,32 @@ pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
     load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
+    routes_with_proposals_and_peer_out_messages(
+        load_session,
+        load_user_marker,
+        RouteLoaders::new(
+            load_queued_prompts,
+            load_peer_out_messages,
+            delete_queued_prompts,
+            |_| Ok(Vec::new()),
+        ),
+    )
+}
+
+pub(super) fn routes_with_proposals_and_peer_out_messages(
+    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    loaders: RouteLoaders,
+) -> Router {
     Router::new()
         .route("/sessions/{id}/messages", get(get_messages))
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_user_marker) as UserMarkerLoader,
-            Arc::new(load_queued_prompts) as QueuedPromptLoader,
-            Arc::new(load_peer_out_messages) as PeerOutMessageLoader,
-            Arc::new(delete_queued_prompts) as QueuedPromptDeleter,
+            loaders.queued_prompts,
+            loaders.peer_out_messages,
+            loaders.delete_queued_prompts,
+            loaders.proposals,
         ))
 }
 
@@ -67,12 +117,14 @@ async fn get_messages(
         load_queued_prompts,
         load_peer_out_messages,
         delete_queued_prompts,
+        load_proposals,
     )): State<(
         SessionLoader,
         UserMarkerLoader,
         QueuedPromptLoader,
         PeerOutMessageLoader,
         QueuedPromptDeleter,
+        ProposalLoader,
     )>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
@@ -84,6 +136,7 @@ async fn get_messages(
             |id| load_queued_prompts(id),
             |id| load_peer_out_messages(id),
             |id, ids| delete_queued_prompts(id, ids),
+            |id| load_proposals(id),
         )
     })
     .await
@@ -124,6 +177,7 @@ fn load_messages_with(
         |_| Ok(Vec::new()),
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
+        |_| Ok(Vec::new()),
     )?
     .map(|conversation| conversation.messages))
 }
@@ -135,6 +189,7 @@ fn load_conversation_with_queued_prompts(
     load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
     load_peer_out_messages: impl FnOnce(&str) -> Result<Vec<WatchWebPeerOutMessage>>,
     delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
+    load_proposals: impl FnOnce(&str) -> Result<Vec<AgentProposal>>,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
@@ -154,6 +209,11 @@ fn load_conversation_with_queued_prompts(
     } else {
         Vec::new()
     };
+    let proposals = load_proposals(session_id)?;
+    let proposal_items = proposals
+        .iter()
+        .map(proposal_chat_item)
+        .collect::<Result<Vec<_>>>()?;
     let parent = parent_session(&session, &mut load_session)?;
     let main_permission_pending = session
         .pending_permission_agent_ids
@@ -162,15 +222,19 @@ fn load_conversation_with_queued_prompts(
     let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
-    let (mut conversation, resolved_queued_prompt_ids) = parse_session_transcript(
-        session.transcript_path.as_deref(),
-        session.engine,
-        parent.as_ref(),
-        pending_tool,
-        user_marker.as_deref(),
-        &queued_prompts,
-        &peer_out_messages,
-    )?;
+    let (mut conversation, resolved_queued_prompt_ids) =
+        parse_session_transcript(TranscriptInput {
+            path: session.transcript_path.as_deref(),
+            engine: session.engine,
+            parent: parent.as_ref(),
+            pending_tool,
+            watch_web_user_marker: user_marker.as_deref(),
+            additions: parser::claude::ParserAdditions {
+                queued_prompts: &queued_prompts,
+                peer_out_messages: &peer_out_messages,
+                proposals: &proposal_items,
+            },
+        })?;
 
     let messages = &mut conversation.messages;
     if main_permission_pending
@@ -189,6 +253,16 @@ fn load_conversation_with_queued_prompts(
                 .clone()
                 .unwrap_or_else(|| "Waiting for permission".to_string()),
         });
+    }
+
+    for (seq, item, unresolved) in &proposal_items {
+        if (session.engine == Engine::Codex || *unresolved)
+            && !messages
+                .iter()
+                .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
+        {
+            messages.push(item.clone());
+        }
     }
 
     for agent_id in session
@@ -241,14 +315,24 @@ fn parent_session(
     }))
 }
 
-fn parse_session_transcript(
-    path: Option<&Path>,
+struct TranscriptInput<'a> {
+    path: Option<&'a Path>,
     engine: Engine,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    watch_web_user_marker: Option<&str>,
-    queued_prompts: &[WatchWebQueuedPrompt],
-    peer_out_messages: &[WatchWebPeerOutMessage],
+    parent: Option<&'a ParentSession>,
+    pending_tool: Option<&'a str>,
+    watch_web_user_marker: Option<&'a str>,
+    additions: parser::claude::ParserAdditions<'a>,
+}
+
+fn parse_session_transcript(
+    TranscriptInput {
+        path,
+        engine,
+        parent,
+        pending_tool,
+        watch_web_user_marker,
+        additions,
+    }: TranscriptInput<'_>,
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match engine {
         Engine::Claude => {
@@ -257,28 +341,15 @@ fn parse_session_transcript(
                 None => None,
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (mut messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
-                let (messages, background_tasks) =
-                    parser::claude::parse_with_background_tasks_and_peer_out_messages(
-                        reader,
-                        parent,
-                        pending_tool,
-                        watch_web_user_marker,
-                        chrono::Utc::now(),
-                        peer_out_messages,
-                    )?;
-                (messages, background_tasks, Vec::new())
-            } else {
-                parser::claude::parse_with_queued_prompts_and_peer_out_messages(
+            let (mut messages, background_tasks, resolved_ids) =
+                parser::claude::parse_with_queued_prompts_and_peer_out_messages_and_proposals(
                     reader,
                     parent,
                     pending_tool,
                     watch_web_user_marker,
                     chrono::Utc::now(),
-                    queued_prompts,
-                    peer_out_messages,
-                )?
-            };
+                    additions,
+                )?;
             if let Some(path) = path {
                 subagent_reports::add_descriptions(path, &mut messages);
             }
@@ -428,6 +499,14 @@ enum ChatItem {
         multi_select: bool,
         answer: Option<String>,
     },
+    Proposal {
+        seq: i64,
+        title: String,
+        summary: Option<String>,
+        options: Vec<ProposalOption>,
+        answer: Option<ProposalAnswer>,
+        resolved: bool,
+    },
     Permission {
         tool: String,
         description: String,
@@ -518,7 +597,9 @@ mod tests {
         ChatItem, QuestionChoice, load_messages_with,
         routes_with_queued_prompts_and_peer_out_messages,
     };
-    use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+    use crate::commands::agent::store::{
+        AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
@@ -531,6 +612,73 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[rstest]
+    #[case::claude_unanswered(Engine::Claude, false)]
+    #[case::codex_unanswered(Engine::Codex, false)]
+    #[case::codex_answered(Engine::Codex, true)]
+    fn proposals_without_a_transcript_position_are_appended_to_conversation(
+        #[case] engine: Engine,
+        #[case] resolved: bool,
+    ) {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let mut session = stored_session();
+        session.engine = engine;
+        let proposal = AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            body: r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
+            created_at,
+            answer: resolved.then(|| r#"{"choice":0,"comment":"Keep option A."}"#.to_string()),
+            resolved_at: resolved.then_some(created_at),
+        };
+
+        let conversation = super::load_conversation_with_queued_prompts(
+            "fixture-session",
+            |id| Ok((id == "fixture-session").then_some(session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            |_| Ok(vec![proposal]),
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(conversation.messages).unwrap(),
+            json!([{
+                "type": "proposal",
+                "seq": 1,
+                "title": "Sample proposal",
+                "summary": null,
+                "options": [
+                    {
+                        "label": "Option A",
+                        "description": null,
+                        "pros": [],
+                        "cons": [],
+                        "recommended": false,
+                    },
+                    {
+                        "label": "Option B",
+                        "description": null,
+                        "pros": [],
+                        "cons": [],
+                        "recommended": false,
+                    },
+                ],
+                "answer": if resolved {
+                    json!({"choice": 0, "comment": "Keep option A."})
+                } else {
+                    serde_json::Value::Null
+                },
+                "resolved": resolved,
+            }]),
+        );
     }
 
     fn question_choice(label: &str) -> QuestionChoice {

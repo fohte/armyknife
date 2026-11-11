@@ -140,6 +140,10 @@ function renderView(
   } | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
+  today: {
+    isToday: boolean
+    onToggleToday: (isToday: boolean) => void
+  } = { isToday: false, onToggleToday: () => undefined },
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -156,6 +160,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        isToday={today.isToday}
+        onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
         decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
@@ -166,6 +172,50 @@ function renderView(
     )
   })
 }
+
+function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  return {
+    label: toggle?.getAttribute('aria-label'),
+    pressed: toggle?.getAttribute('aria-pressed'),
+    calls: onToggleToday.mock.calls,
+  }
+}
+
+it('toggles TODAY from the iPhone conversation header', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: false, onToggleToday },
+  )
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  act(() => {
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Add to TODAY',
+    pressed: 'false',
+    calls: [[true]],
+  })
+})
 
 function dispatchKey(
   target: EventTarget,
@@ -1348,9 +1398,13 @@ it('renders file attachments returned by the messages endpoint', async () => {
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.chat-user-file')?.textContent ===
+        'sample-layout.html',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     message: container.querySelector('.chat-user-message')?.textContent,
@@ -1763,9 +1817,13 @@ it('accepts classified messages and the active tool from messages endpoint', asy
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.chat-peer-file')?.textContent ===
+        'fixture-peer-layout.html',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     workingStatus: container.querySelector('.conversation-working-status')
@@ -2388,12 +2446,17 @@ it('sends pasted file data with the message and keeps it when sending fails', as
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  })
+  expect(await waitForState(() => onAction.mock.calls.length === 1)).toBe(true)
 
   const snapshot = () => ({
     actionCalls: onAction.mock.calls,
@@ -2442,15 +2505,26 @@ it('attaches dropped files through the composer and sends their data', async () 
   act(() => {
     pane.dispatchEvent(drop)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   act(() => {
     dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  })
+  expect(
+    await waitForState(
+      () =>
+        onAction.mock.calls.length === 1 &&
+        container.querySelector('.composer-attachment') === null,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     targetVisibleDuringDrag,
@@ -2579,7 +2653,7 @@ it('clears pasted attachments after a successful send', async () => {
   })
 })
 
-it('names the attachment that crosses the message size limit before sending', () => {
+it('names the attachment that crosses the message size limit before sending', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
   renderView(onAction)
   const firstFile = new File(['first'], 'first.bin', {
@@ -2604,9 +2678,21 @@ it('names the attachment that crosses the message size limit before sending', ()
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () => container.querySelectorAll('.composer-attachment').length === 2,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+        'limit-crossing.bin would exceed the 50 MiB attachment limit',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -2623,7 +2709,7 @@ it('names the attachment that crosses the message size limit before sending', ()
   })
 })
 
-it('names and blocks the attachment that crosses the attachment count limit', () => {
+it('names and blocks the attachment that crosses the attachment count limit', async () => {
   const onAction = vi.fn(() => Promise.resolve(false))
   renderView(onAction)
   const files = Array.from(
@@ -2640,9 +2726,23 @@ it('names and blocks the attachment that crosses the attachment count limit', ()
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelectorAll('.composer-attachment').length ===
+        files.length,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+        'file-17.txt exceeds the limit of 16 attachments per message',
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,
@@ -2708,9 +2808,13 @@ it('shows a server attachment validation error and retains the rejected attachme
       />,
     )
   })
-  await act(async () => {
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector<HTMLTextAreaElement>('textarea')?.disabled ===
+        false,
+    ),
+  ).toBe(true)
 
   const file = new File(['not an image'], 'document.pdf', {
     type: 'application/pdf',
@@ -2725,13 +2829,26 @@ it('shows a server attachment validation error and retains the rejected attachme
   act(() => {
     void textarea.dispatchEvent(pasteEvent)
   })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('.composer-attachment span')?.textContent ===
+        file.name,
+    ),
+  ).toBe(true)
   act(() => {
     void dispatchKey(textarea, 'Enter')
   })
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 100))
-    for (let index = 0; index < 6; index += 1) await Promise.resolve()
-  })
+  expect(
+    await waitForState(
+      () =>
+        container.querySelector('[role="alert"]')?.textContent ===
+          'file attachment data is invalid' &&
+        fetcher.mock.calls.length === 3 &&
+        container.querySelector('.composer-attachment span')?.textContent ===
+          file.name,
+    ),
+  ).toBe(true)
 
   const snapshot = () => ({
     error: container.querySelector('[role="alert"]')?.textContent ?? null,

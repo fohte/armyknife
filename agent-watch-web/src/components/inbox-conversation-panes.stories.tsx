@@ -26,6 +26,8 @@ const inboxProps = {
   selectedId: session.id,
   loaded: true,
   error: null,
+  connectionError: null,
+  lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
   showAllInProgress: false,
   onShowMore: () => undefined,
   onSelect: () => undefined,
