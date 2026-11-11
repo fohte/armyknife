@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { SessionTaskLinks } from '#components/session-task-links'
+import type { Session, SessionTask } from '#types'
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -77,8 +78,34 @@ function snapshot() {
             '.session-task-links-primary, .session-task-completed',
           ),
         ).map((status) => status.textContent),
+        summary: item.querySelector('.session-task-links-summary')?.textContent,
+        action: item.querySelector('button')?.textContent ?? null,
       }),
     ),
+  }
+}
+
+function makeSession(
+  id: string,
+  category: Session['category'],
+  tasks: SessionTask[],
+): Session {
+  return {
+    id,
+    category,
+    isPaused: false,
+    kind: null,
+    title: id,
+    preview: null,
+    elapsedSeconds: 0,
+    unread: false,
+    task: tasks[0] ?? null,
+    tasks,
+    repo: 'example/project',
+    project: 'example-project',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
   }
 }
 
@@ -107,27 +134,32 @@ it('lists all linked tasks and marks completed tasks', async () => {
     priority: 1,
     isClosed: true,
   }
+  const secondaryTask = {
+    id: 'secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+    isClosed: false,
+  }
+  const completedTask = {
+    id: 'completed-task',
+    number: 2047,
+    title: 'Document retry behavior',
+    priority: null,
+    isClosed: true,
+  }
   root = createRoot(container)
   act(() => {
     root?.render(
       <SessionTaskLinks
         task={task}
-        tasks={[
-          task,
-          {
-            id: 'secondary-task',
-            number: 2046,
-            title: 'Add request tracing',
-            priority: 4,
-            isClosed: false,
-          },
-          {
-            id: 'completed-task',
-            number: 2047,
-            title: 'Document retry behavior',
-            priority: null,
-            isClosed: true,
-          },
+        tasks={[task, secondaryTask, completedTask]}
+        sessions={[
+          makeSession('needs-action-one', 'needs_action', [task]),
+          makeSession('needs-action-two', 'needs_action', [task]),
+          makeSession('in-progress', 'in_progress', [task, secondaryTask]),
+          makeSession('done', 'done', [task, secondaryTask]),
+          makeSession('later', 'later', [completedTask]),
         ]}
       />,
     )
@@ -178,18 +210,24 @@ it('lists all linked tasks and marks completed tasks', async () => {
           id: 'P1 #2048',
           text: 'P1 #2048 Improve request reliability',
           statuses: ['Primary', 'Completed'],
+          summary: '4 sessions · 2 need action',
+          action: null,
         },
         {
           href: 'https://tq.fohte.net/tasks/secondary-task',
           id: 'P4 #2046',
           text: 'P4 #2046 Add request tracing',
           statuses: [],
+          summary: '2 sessions',
+          action: 'Make primary',
         },
         {
           href: 'https://tq.fohte.net/tasks/completed-task',
           id: '#2047',
           text: '#2047 Document retry behavior',
           statuses: ['Completed'],
+          summary: '1 session · Later',
+          action: 'Make primary',
         },
       ],
     },
@@ -211,4 +249,40 @@ it('lists all linked tasks and marks completed tasks', async () => {
       linkedTasks: [],
     },
   ])
+})
+
+it('makes a linked task primary from the menu', async () => {
+  const task = {
+    id: 'primary-task',
+    number: 2048,
+    title: 'Improve request reliability',
+    priority: 1,
+  }
+  const secondaryTask = {
+    id: 'secondary-task',
+    number: 2046,
+    title: 'Add request tracing',
+    priority: 4,
+  }
+  const onMakePrimary = vi.fn(() => Promise.resolve(true))
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionTaskLinks
+        task={task}
+        tasks={[task, secondaryTask]}
+        onMakePrimary={onMakePrimary}
+        taskListOpen
+      />,
+    )
+  })
+
+  await act(async () => {
+    document.body
+      .querySelector<HTMLButtonElement>('.session-task-links-make-primary')
+      ?.click()
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0))
+  })
+
+  expect(onMakePrimary.mock.calls).toEqual([['secondary-task']])
 })

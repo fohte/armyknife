@@ -3,7 +3,7 @@ import '#components/session-task-links.css'
 import { useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
-import type { SessionTask } from '#types'
+import type { Session, SessionTask } from '#types'
 
 type MenuPosition = {
   top: number
@@ -45,15 +45,20 @@ function getMenuPosition(summary: HTMLElement): MenuPosition {
 export function SessionTaskLinks({
   task,
   tasks,
+  sessions = [],
+  onMakePrimary,
   taskListOpen,
 }: {
   task: SessionTask | null
   tasks: SessionTask[]
+  sessions?: readonly Session[]
+  onMakePrimary?: (taskId: string) => Promise<boolean>
   taskListOpen?: boolean
 }) {
   const taskMenuId = useId()
   const summaryRef = useRef<HTMLElement>(null)
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
+  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null)
   const [menuPosition, setMenuPosition] = useState<MenuPosition | null>(null)
   const menuOpen =
     task !== null && tasks.length > 1 && (taskListOpen ?? uncontrolledOpen)
@@ -94,6 +99,45 @@ export function SessionTaskLinks({
   }, [menuOpen])
 
   if (task === null) return null
+
+  const makePrimary = async (taskId: string) => {
+    if (onMakePrimary === undefined) return
+    setPendingTaskId(taskId)
+    await onMakePrimary(taskId)
+    setPendingTaskId(null)
+  }
+
+  const summaryByTaskId = new Map(
+    tasks.map((linkedTask) => {
+      const linkedSessions = sessions.filter((session) =>
+        (session.tasks ?? (session.task === null ? [] : [session.task])).some(
+          (sessionTask) => sessionTask.id === linkedTask.id,
+        ),
+      )
+      const needsActionCount = linkedSessions.filter(
+        (session) => session.category === 'needs_action',
+      ).length
+      const laterCount = linkedSessions.filter(
+        (session) => session.category === 'later',
+      ).length
+      const status = [
+        ...(needsActionCount > 0
+          ? [`${String(needsActionCount)} need action`]
+          : []),
+        ...(laterCount > 0
+          ? [
+              linkedSessions.length === 1 && laterCount === 1
+                ? 'Later'
+                : `${String(laterCount)} Later`,
+            ]
+          : []),
+      ].join(' · ')
+      return [
+        linkedTask.id,
+        `${String(linkedSessions.length)} ${linkedSessions.length === 1 ? 'session' : 'sessions'}${status === '' ? '' : ` · ${status}`}`,
+      ]
+    }),
+  )
 
   return (
     <>
@@ -168,22 +212,36 @@ export function SessionTaskLinks({
                       >
                         {isPrimary ? '✓' : null}
                       </span>
-                      <a
-                        href={`https://tq.fohte.net/tasks/${encodeURIComponent(linkedTask.id)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <SessionTaskId
-                          priority={linkedTask.priority}
-                          number={linkedTask.number}
-                        />{' '}
-                        {linkedTask.title}
-                      </a>
+                      <div className="session-task-links-copy">
+                        <a
+                          href={`https://tq.fohte.net/tasks/${encodeURIComponent(linkedTask.id)}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <SessionTaskId
+                            priority={linkedTask.priority}
+                            number={linkedTask.number}
+                          />{' '}
+                          {linkedTask.title}
+                        </a>
+                        <span className="session-task-links-summary">
+                          {summaryByTaskId.get(linkedTask.id)}
+                        </span>
+                      </div>
                       {isPrimary ? (
                         <span className="session-task-links-primary">
                           Primary
                         </span>
-                      ) : null}
+                      ) : (
+                        <button
+                          className="session-task-links-make-primary"
+                          type="button"
+                          disabled={pendingTaskId !== null}
+                          onClick={() => void makePrimary(linkedTask.id)}
+                        >
+                          Make primary
+                        </button>
+                      )}
                       {linkedTask.isClosed === true ? (
                         <span className="session-task-completed">
                           Completed

@@ -3,6 +3,7 @@ import '#components/conversation-pane-view.css'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionTaskLinks } from '#components/session-task-links'
+import type { Session } from '#types'
 
 const openTask = {
   id: 'example-open-task',
@@ -11,27 +12,58 @@ const openTask = {
   priority: 1,
   isClosed: false,
 }
-const linkedTasks = [
-  openTask,
+const secondaryTask = {
+  id: 'example-secondary-task',
+  number: 2046,
+  title: 'Add request tracing',
+  priority: 4,
+  isClosed: false,
+}
+const completedTask = {
+  id: 'example-completed-task',
+  number: 2047,
+  title: 'Document retry behavior',
+  priority: null,
+  isClosed: true,
+}
+const linkedTasks = [openTask, secondaryTask, completedTask]
+const linkedSessions: Session[] = [
+  ...['needs-action-one', 'needs-action-two'].map((id) => ({
+    id,
+    category: 'needs_action',
+    tasks: [openTask],
+  })),
+  ...['in-progress', 'done'].map((id) => ({
+    id,
+    category: id === 'done' ? 'done' : 'in_progress',
+    tasks: [openTask, secondaryTask],
+  })),
   {
-    id: 'example-secondary-task',
-    number: 2046,
-    title: 'Add request tracing',
-    priority: 4,
-    isClosed: false,
+    id: 'later',
+    category: 'later',
+    tasks: [completedTask],
   },
-  {
-    id: 'example-completed-task',
-    number: 2047,
-    title: 'Document retry behavior',
-    priority: null,
-    isClosed: true,
-  },
-]
+].map(({ id, category, tasks }) => ({
+  id,
+  category,
+  isPaused: false,
+  kind: null,
+  title: id,
+  preview: null,
+  elapsedSeconds: 0,
+  unread: false,
+  task: tasks[0] ?? null,
+  tasks,
+  repo: 'example/project',
+  project: 'example-project',
+  parent: null,
+  ancestorSessionIds: [],
+  pullRequest: null,
+}))
 
 const meta = {
   component: SessionTaskLinks,
-  args: { task: openTask, tasks: [openTask] },
+  args: { task: openTask, tasks: [openTask], sessions: linkedSessions },
   decorators: [
     (Story, context) => (
       <div
