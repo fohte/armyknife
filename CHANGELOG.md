@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.576](https://github.com/fohte/armyknife/compare/v0.1.575...v0.1.576) (2026-11-11)
+
+
+### Features
+
+* **agent:** record provisional decisions ([#1512](https://github.com/fohte/armyknife/issues/1512)) ([5050ec5](https://github.com/fohte/armyknife/commit/5050ec51b7537aeab8c84f1aad3bc66eb63610ee))
+
 ## [0.1.575](https://github.com/fohte/armyknife/compare/v0.1.574...v0.1.575) (2026-11-11)
 
 
