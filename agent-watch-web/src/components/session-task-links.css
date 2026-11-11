@@ -1,4 +1,10 @@
+.conversation-context-line,
+.mobile-conversation-context {
+  container-type: inline-size;
+}
+
 .session-task-links[data-task-links] {
+  position: relative;
   color: var(--aw-text-muted);
   font-size: 12px;
 }
@@ -19,7 +25,7 @@
   height: 22px;
   align-items: center;
   padding: 0 7px;
-  border: 1px solid var(--aw-border-control);
+  border: 1px solid var(--aw-border-emphasis);
   background: transparent;
   color: var(--aw-text-body);
   font: inherit;
@@ -43,7 +49,7 @@
   z-index: 5;
   top: calc(100% + 8px);
   left: 0;
-  width: min(420px, calc(100vw - 40px));
+  width: min(420px, 100cqw);
   border: 1px solid var(--aw-border-control);
   background: var(--aw-bg-popover);
   color: var(--aw-text-primary);
@@ -98,4 +104,12 @@
   flex: 0 0 auto;
   color: var(--aw-text-muted);
   font-size: 11.5px;
+}
+
+@container (width < 420px) {
+  .session-task-links[data-task-links] .session-task-links-menu {
+    right: 0;
+    left: auto;
+    width: min(420px, 100cqw);
+  }
 }

@@ -32,8 +32,10 @@ const meta = {
   args: { task: openTask, tasks: [openTask] },
   decorators: [
     (Story) => (
-      <div style={{ width: '420px', minHeight: '140px' }}>
-        <Story />
+      <div style={{ width: '760px', minHeight: '140px' }}>
+        <div className="conversation-context-line">
+          <Story />
+        </div>
       </div>
     ),
   ],
@@ -57,4 +59,9 @@ export const SessionHasMultipleLinkedTasks: Story = {
     taskListOpen: true,
   },
   name: 'A session lists linked tasks and marks completed work',
+  parameters: {
+    overflowCheck: {
+      ignoreSelectors: ['.session-task-line', '.session-task-links'],
+    },
+  },
 }

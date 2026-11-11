@@ -2,6 +2,18 @@ import '#components/session-task-links.css'
 
 import type { SessionTask } from '#types'
 
+function SessionTaskId({
+  priority,
+  number,
+}: Pick<SessionTask, 'priority' | 'number'>) {
+  const label =
+    priority === null
+      ? `#${String(number)}`
+      : `P${String(priority)} #${String(number)}`
+
+  return <span className="session-task-link-id">{label}</span>
+}
+
 export function SessionTaskLinks({
   task,
   tasks,
@@ -21,10 +33,7 @@ export function SessionTaskLinks({
         target="_blank"
         rel="noreferrer"
       >
-        <span className="session-task-link-id">
-          {task.priority !== null ? `P${String(task.priority)} ` : null}#
-          {task.number}
-        </span>{' '}
+        <SessionTaskId priority={task.priority} number={task.number} />{' '}
         {task.title}
       </a>
       {tasks.length > 1 ? (
@@ -67,12 +76,10 @@ export function SessionTaskLinks({
                       target="_blank"
                       rel="noreferrer"
                     >
-                      <span className="session-task-link-id">
-                        {linkedTask.priority !== null
-                          ? `P${String(linkedTask.priority)} `
-                          : null}
-                        #{linkedTask.number}
-                      </span>{' '}
+                      <SessionTaskId
+                        priority={linkedTask.priority}
+                        number={linkedTask.number}
+                      />{' '}
                       {linkedTask.title}
                     </a>
                     {isPrimary ? (
