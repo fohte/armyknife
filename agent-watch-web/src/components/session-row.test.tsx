@@ -117,3 +117,46 @@ it('shows the primary tq task and the number of other linked tasks', () => {
     'P1 #2048 · Improve request reliability +1',
   )
 })
+
+it.each([
+  {
+    name: 'a working session shows its total decision count',
+    viewSession: {
+      ...session,
+      category: 'in_progress',
+      decisionCount: 2,
+      unreviewedDecisionCount: 1,
+    },
+    expected: '◇ 2 decisions',
+  },
+  {
+    name: 'a Done session shows its pending review count',
+    viewSession: {
+      ...session,
+      decisionCount: 3,
+      unreviewedDecisionCount: 2,
+    },
+    expected: '◇ 2 decisions to review',
+  },
+  {
+    name: 'a Done session uses the singular pending review label',
+    viewSession: {
+      ...session,
+      decisionCount: 1,
+      unreviewedDecisionCount: 1,
+    },
+    expected: '◇ 1 decision to review',
+  },
+])('$name', ({ viewSession, expected }) => {
+  renderRow(viewSession)
+
+  expect(container.querySelector('.session-decision-count')?.textContent).toBe(
+    expected,
+  )
+})
+
+it('keeps the decision count hidden when an older response has no counts', () => {
+  renderRow(session)
+
+  expect(container.querySelector('.session-decision-count')).toBeNull()
+})

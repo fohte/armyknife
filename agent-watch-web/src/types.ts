@@ -7,6 +7,7 @@ type SessionKind =
   | 'Review'
   | 'Error'
   | 'Plan'
+  | 'Proposal'
   | 'Stopped'
   | (string & {})
 
@@ -53,6 +54,8 @@ export type Session = {
   critUrl?: string | null
   laterUntil?: string | null
   isToday?: boolean
+  decisionCount?: number
+  unreviewedDecisionCount?: number
 }
 
 export type SessionLinkTarget = Pick<
@@ -77,6 +80,13 @@ export type ChatItem =
       content: UserContentPart[]
     }
   | {
+      type: 'subagent_report'
+      agent_id: string
+      agent_name: string
+      description?: string
+      text: string
+    }
+  | {
       type: 'event'
       kind: 'armyknife' | 'system' | 'hook'
       text: string
@@ -95,7 +105,39 @@ export type ChatItem =
       choices: string[]
       answer: string | null
     }
+  | {
+      type: 'proposal'
+      seq: number
+      title: string
+      summary: string | null
+      options: ProposalOption[]
+      answer: ProposalAnswer | null
+      resolved: boolean
+    }
   | { type: 'permission'; tool: string; description: string }
+  | {
+      type: 'decision'
+      seq: number
+      title: string
+      why: string
+      considered: string[]
+      easyToChange: string
+      review: 'ok' | 'change' | null
+      createdAt: string
+    }
+
+export type ProposalOption = {
+  label: string
+  description: string | null
+  pros: string[]
+  cons: string[]
+  recommended: boolean
+}
+
+export type ProposalAnswer = {
+  choice: number | null
+  comment: string | null
+}
 
 export type UserContentPart =
   | { type: 'text'; text: string }

@@ -16,7 +16,7 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: '720px', background: '#0a0a0a' }}>
+      <div style={{ width: '460px', background: 'var(--aw-bg-inbox)' }}>
         <Story />
       </div>
     ),
@@ -31,14 +31,14 @@ export const NoFiltersAreActive: Story = {
 }
 
 export const FiltersCanBeSaved: Story = {
-  name: 'The filter bar shows matching counts and a save action',
+  name: 'The filter bar shows active filters and their matching count',
   args: {
     filters: [
-      { key: 'project', values: ['sample-project'] },
-      { key: 'kind', values: ['question', 'review'] },
+      { key: 'project', values: ['web-app'] },
+      { key: 'kind', values: ['Question', 'Review'] },
     ],
-    matchingNeedsActionCount: 2,
-    totalNeedsActionCount: 5,
+    matchingNeedsActionCount: 3,
+    totalNeedsActionCount: 6,
   },
 }
 

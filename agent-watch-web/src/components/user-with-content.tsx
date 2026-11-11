@@ -1,3 +1,5 @@
+import '#components/user-with-content.css'
+
 import { useEffect, useState } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'

@@ -9,6 +9,11 @@ pub(super) enum MessageKind {
         session_id: String,
         text: String,
     },
+    SubagentReport {
+        agent_id: String,
+        agent_name: String,
+        text: String,
+    },
     Event {
         kind: EventKind,
         text: String,
@@ -46,6 +51,9 @@ pub(super) fn classify_inbound(
     let tagged = tagged_body(text);
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
+    }
+    if let Some(report) = subagent_report(record) {
+        return report;
     }
     if origin(record)
         .and_then(|origin| origin.get("kind"))
@@ -137,6 +145,35 @@ pub(super) fn classify_inbound(
     }
 }
 
+fn subagent_report(record: &Value) -> Option<MessageKind> {
+    let origin = origin(record)?;
+    if origin.get("kind").and_then(Value::as_str) != Some("peer")
+        || origin.get("handback").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    let agent_id = origin
+        .get("from")
+        .or_else(|| origin.get("senderTaskId"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    let agent_name = origin
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Subagent")
+        .to_owned();
+    let text = origin
+        .get("handbackReportText")
+        .and_then(Value::as_str)?
+        .to_owned();
+    Some(MessageKind::SubagentReport {
+        agent_id,
+        agent_name,
+        text,
+    })
+}
+
 fn origin(record: &Value) -> Option<&Value> {
     record
         .get("origin")
@@ -164,6 +201,7 @@ pub(super) fn peer_out_from_tool(
     name: &str,
     input: Option<&Value>,
     parent_session_id: Option<&str>,
+    result: Option<&str>,
 ) -> Option<PeerOut> {
     let arguments = peer_notify_arguments(name, input)?;
     let mut message = None;
@@ -190,13 +228,43 @@ pub(super) fn peer_out_from_tool(
         index += 1;
     }
     Some(PeerOut {
-        session_id: if parent {
-            parent_session_id?.to_owned()
-        } else {
-            session_id?
-        },
+        session_id: result
+            .and_then(peer_notify_result_session_id)
+            .map(str::to_owned)
+            .or_else(|| {
+                if parent {
+                    parent_session_id.map(str::to_owned)
+                } else {
+                    session_id.filter(|id| is_literal_session_id(id))
+                }
+            })
+            .unwrap_or_else(|| "unknown".to_owned()),
         text: message?,
     })
+}
+
+fn peer_notify_result_session_id(text: &str) -> Option<&str> {
+    const PREFIXES: [&str; 3] = [
+        "Delivered to session ",
+        "Injected into the running turn of Codex session ",
+        "Started a new turn in idle Codex session ",
+    ];
+
+    text.lines().find_map(|line| {
+        let line = line.trim();
+        PREFIXES.iter().find_map(|prefix| {
+            line.strip_prefix(prefix)
+                .and_then(|value| value.strip_suffix('.'))
+                .filter(|id| is_literal_session_id(id))
+        })
+    })
+}
+
+fn is_literal_session_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
 }
 
 fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
@@ -443,6 +511,16 @@ mod tests {
         None,
         MessageKind::PeerIn { session_id: "fixture-peer-id".to_owned(), text: "Continue the fictional task.".to_owned() }
     )]
+    #[case::subagent_handback_uses_report_text(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-agent-id","name":"general-purpose","handback":true,"handbackReportText":"The fictional task is complete."}}),
+        "Another Claude session sent a message:\n[Subagent hand-back] boilerplate",
+        None,
+        MessageKind::SubagentReport {
+            agent_id: "fixture-agent-id".to_owned(),
+            agent_name: "general-purpose".to_owned(),
+            text: "The fictional task is complete.".to_owned(),
+        }
+    )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
@@ -501,7 +579,12 @@ mod tests {
         #[case] parent_session_id: Option<&str>,
     ) {
         assert_eq!(
-            peer_out_from_tool("Bash", Some(&json!({"command":command})), parent_session_id,),
+            peer_out_from_tool(
+                "Bash",
+                Some(&json!({"command":command})),
+                parent_session_id,
+                None,
+            ),
             Some(super::PeerOut {
                 session_id: if command.contains("--parent") {
                     "fixture-parent-id".to_owned()
@@ -509,6 +592,64 @@ mod tests {
                     "fixture-target-id".to_owned()
                 },
                 text: "Please inspect this fictional task.".to_owned(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::shell_variable("a agent peer notify -m 'Please inspect this fictional task.' $sid")]
+    #[case::command_substitution(
+        "a agent peer notify -m 'Please inspect this fictional task.' $(resolve_target)"
+    )]
+    #[case::backtick_substitution(
+        "a agent peer notify -m 'Please inspect this fictional task.' `resolve_target`"
+    )]
+    fn does_not_treat_shell_expansions_as_session_ids(#[case] command: &str) {
+        assert_eq!(
+            peer_out_from_tool("Bash", Some(&json!({"command":command})), None, None,),
+            Some(super::PeerOut {
+                session_id: "unknown".to_owned(),
+                text: "Please inspect this fictional task.".to_owned(),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[case::current_output("Delivered to session fixture-result-target.")]
+    #[case::legacy_codex_output(
+        "Injected into the running turn of Codex session fixture-result-target."
+    )]
+    fn prefers_session_id_from_tool_result(#[case] result: &str) {
+        assert_eq!(
+            peer_out_from_tool(
+                "Bash",
+                Some(
+                    &json!({"command":"a agent peer notify -m 'Inspect the fictional result.' fixture-argument-target"})
+                ),
+                None,
+                Some(result),
+            ),
+            Some(super::PeerOut {
+                session_id: "fixture-result-target".to_owned(),
+                text: "Inspect the fictional result.".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn shows_unknown_when_shell_target_has_no_resolved_result() {
+        assert_eq!(
+            peer_out_from_tool(
+                "Bash",
+                Some(
+                    &json!({"command":"a agent peer notify --message 'Inspect the fictional result.' $sid"})
+                ),
+                None,
+                Some("delivered"),
+            ),
+            Some(super::PeerOut {
+                session_id: "unknown".to_owned(),
+                text: "Inspect the fictional result.".to_owned(),
             }),
         );
     }

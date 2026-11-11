@@ -28,7 +28,13 @@ const meta = {
   },
   decorators: [
     (Story) => (
-      <div style={{ width: 720, padding: 32, background: '#0a0a0a' }}>
+      <div
+        style={{
+          width: 672,
+          padding: 24,
+          background: 'var(--aw-bg-app)',
+        }}
+      >
         <Story />
       </div>
     ),
@@ -51,5 +57,31 @@ export const PeerMessageIsSentToAnotherSession: Story = {
       session_id: target.id,
       content: [{ type: 'text', text: 'Please inspect the fictional branch.' }],
     },
+  },
+}
+
+export const PeerMessageNamesAnUntrackedSession: Story = {
+  name: 'A peer message shows an untracked session ID as plain text',
+  args: {
+    message: {
+      type: 'peer',
+      direction: 'to',
+      session_id: 'fixture-untracked-session',
+      content: [{ type: 'text', text: 'Please inspect the fictional branch.' }],
+    },
+    sessions: [],
+  },
+}
+
+export const PeerMessageNamesAnUnknownSession: Story = {
+  name: 'A peer message identifies its session as unknown',
+  args: {
+    message: {
+      type: 'peer',
+      direction: 'from',
+      session_id: 'unknown',
+      content: [{ type: 'text', text: 'The fictional result is ready.' }],
+    },
+    sessions: [],
   },
 }

@@ -8,7 +8,7 @@ strip = "symbols"
 
 [package]
 name = "armyknife"
-version = "0.1.569"
+version = "0.1.580"
 edition = "2024"
 build = "build.rs"
 authors = ["Hayato Kawai <fohte.hk@gmail.com>"]

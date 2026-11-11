@@ -213,9 +213,9 @@ it('keeps a user-selected width when a narrow window clamps it', () => {
   snapshots.push(snapshot())
 
   expect(snapshots).toEqual([
-    { width: '600px', value: '600', maximum: '672', saved: '600' },
-    { width: '472px', value: '472', maximum: '472', saved: '600' },
-    { width: '600px', value: '600', maximum: '672', saved: '600' },
+    { width: '600px', value: '600', maximum: '680', saved: '600' },
+    { width: '480px', value: '480', maximum: '480', saved: '600' },
+    { width: '600px', value: '600', maximum: '680', saved: '600' },
   ])
 })
 

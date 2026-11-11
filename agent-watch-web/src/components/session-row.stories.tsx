@@ -162,6 +162,48 @@ export const WorkIsDone: Story = {
   },
 }
 
+export const WorkIsDoneWithDecisionsToReview: Story = {
+  name: 'A completed session shows decisions that still need review',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      unread: false,
+      decisionCount: 3,
+      unreviewedDecisionCount: 2,
+    },
+  },
+}
+
+export const WorkIsDoneWithOneDecisionToReview: Story = {
+  name: 'A completed session shows one decision that needs review',
+  args: {
+    session: {
+      ...session,
+      category: 'done',
+      kind: null,
+      unread: false,
+      decisionCount: 1,
+      unreviewedDecisionCount: 1,
+    },
+  },
+}
+
+export const WorkShowsDecisionCount: Story = {
+  name: 'An active session shows its decision count',
+  args: {
+    session: {
+      ...session,
+      category: 'in_progress',
+      kind: null,
+      unread: false,
+      decisionCount: 1,
+      unreviewedDecisionCount: 1,
+    },
+  },
+}
+
 export const SessionIsPaused: Story = {
   name: 'A paused session stays in Done and shows its paused state',
   args: {
