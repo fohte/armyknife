@@ -1,11 +1,11 @@
 .conversation-working-status {
   display: flex;
-  width: min(100%, 720px);
+  width: 100%;
   box-sizing: border-box;
   align-items: center;
-  align-self: center;
+  align-self: stretch;
   gap: 8px;
-  padding: 8px 24px;
+  padding: 8px max(24px, calc((100% - 672px) / 2));
   color: var(--aw-text-secondary);
   font-size: 13px;
 }
@@ -26,11 +26,6 @@
   gap: 6px;
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
-}
-
-.conversation-pane[data-mobile='true'] .conversation-working-status {
-  width: 100%;
-  padding: 8px 12px;
 }
 
 .conversation-working-target {

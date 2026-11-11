@@ -30,5 +30,24 @@ export const ExpandedSummaryShowsToolTargets: Story = {
 
 export const FailedSummaryHighlightsFailures: Story = {
   name: 'the failed count is highlighted in red',
-  args: { summary: '3 actions · 2 failed' },
+  args: {
+    summary: '3 actions · 2 failed',
+    operations: [
+      { tool: 'Read', target: 'src/sample.rs' },
+      { tool: 'Edit', target: 'src/sample.rs' },
+      { tool: 'exec', target: 'cargo test' },
+    ],
+  },
+}
+
+export const ExpandedOperationsOmitEmptyTargets: Story = {
+  name: 'the expanded summary omits empty targets',
+  args: {
+    summary: '2 actions',
+    operations: [
+      { tool: 'Read', target: null },
+      { tool: 'Edit', target: '' },
+    ],
+    open: true,
+  },
 }

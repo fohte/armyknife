@@ -1522,7 +1522,7 @@ it('hides working status when the session is done', () => {
   expect(snapshot()).toEqual({
     workingStatus: null,
     toolSummary: '1 action',
-    operations: ['execcargo test'],
+    operations: ['execcargo test✓'],
   })
 })
 
