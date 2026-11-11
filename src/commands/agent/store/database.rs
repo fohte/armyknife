@@ -467,6 +467,10 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
             "DELETE FROM watch_web_queued_prompt WHERE session_id = ?1",
             [session_id],
         )?;
+        connection.execute(
+            "DELETE FROM watch_web_peer_out_message WHERE from_session_id = ?1",
+            [session_id],
+        )?;
         increment_revision(connection)?;
     }
     Ok(changed > 0)

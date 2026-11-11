@@ -41,22 +41,6 @@ type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> 
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 
-#[cfg(test)]
-pub(super) fn routes_with_queued_prompts(
-    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
-    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
-    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
-    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
-) -> Router {
-    routes_with_queued_prompts_and_peer_out_messages(
-        load_session,
-        load_user_marker,
-        load_queued_prompts,
-        |_| Ok(Vec::new()),
-        delete_queued_prompts,
-    )
-}
-
 pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
@@ -494,13 +478,11 @@ mod tests {
     use axum::body::{Body, to_bytes};
     use axum::http::header::CONTENT_TYPE;
     use axum::http::{Request, Response, StatusCode};
+    use rstest::rstest;
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::{
-        ChatItem, load_messages_with, routes_with_queued_prompts,
-        routes_with_queued_prompts_and_peer_out_messages,
-    };
+    use super::{ChatItem, load_messages_with, routes_with_queued_prompts_and_peer_out_messages};
     use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -670,7 +652,7 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -679,6 +661,7 @@ mod tests {
                 })
             },
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -702,8 +685,14 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::recorded_body("2026-06-01T12:00:01Z", "Expanded fictional request body.")]
+    #[case::outside_delivery_window("2026-06-01T11:59:59Z", "$(cat /fixture/message.txt)")]
     #[tokio::test]
-    async fn peer_out_route_uses_the_recorded_delivered_message() {
+    async fn peer_out_route_uses_recorded_content_only_when_delivery_time_matches(
+        #[case] sent_at: &str,
+        #[case] expected_content: &str,
+    ) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let transcript = concat!(
@@ -715,7 +704,7 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:01Z")
+        let sent_at = chrono::DateTime::parse_from_rfc3339(sent_at)
             .unwrap()
             .with_timezone(&chrono::Utc);
         let router = routes_with_queued_prompts_and_peer_out_messages(
@@ -747,12 +736,25 @@ mod tests {
             .await
             .unwrap();
 
+        let (status, content_type, body) = response_snapshot(response).await;
         assert_eq!(
-            response_snapshot(response).await,
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
             (
                 StatusCode::OK,
                 Some("application/json".to_string()),
-                r#"{"messages":[{"type":"peer","direction":"to","session_id":"fixture-target-id","content":[{"type":"text","text":"Expanded fictional request body."}]}],"backgroundTasks":[]}"#.to_string(),
+                json!({
+                    "messages": [{
+                        "type": "peer",
+                        "direction": "to",
+                        "session_id": "fixture-target-id",
+                        "content": [{"type": "text", "text": expected_content}],
+                    }],
+                    "backgroundTasks": [],
+                }),
             ),
         );
     }
@@ -769,9 +771,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -801,10 +804,11 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
             move |_| Ok(vec![queued.clone()]),
+            |_| Ok(Vec::new()),
             move |_, ids| {
                 delete_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
@@ -850,10 +854,11 @@ mod tests {
         let queued = saved_prompt(7, "Delivered fixture request.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
             move |_| Ok(vec![queued.clone()]),
+            |_| Ok(Vec::new()),
             move |_, ids| {
                 delete_log.lock().unwrap().extend_from_slice(ids);
                 Ok(())
@@ -889,10 +894,11 @@ mod tests {
     async fn codex_message_route_does_not_load_saved_claude_prompts() {
         let mut session = stored_session();
         session.engine = Engine::Codex;
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
             |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
+            |_| Ok(Vec::new()),
             |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
         );
         let response = router
@@ -968,9 +974,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
@@ -1025,9 +1032,10 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts(
+        let router = routes_with_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );

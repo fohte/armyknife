@@ -554,12 +554,13 @@ mod tests {
         parent: Option<&ParentSession>,
         marker: Option<&str>,
     ) -> Vec<ChatItem> {
-        super::super::claude::parse_with_background_tasks(
+        super::super::claude::parse_with_background_tasks_and_peer_out_messages(
             Cursor::new(transcript),
             parent,
             None,
             marker,
             Utc::now(),
+            &[],
         )
         .unwrap()
         .0
@@ -570,13 +571,14 @@ mod tests {
         prompts: &[WatchWebQueuedPrompt],
         marker: Option<&str>,
     ) -> (Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>) {
-        super::super::claude::parse_with_queued_prompts(
+        super::super::claude::parse_with_queued_prompts_and_peer_out_messages(
             Cursor::new(transcript),
             None,
             None,
             marker,
             Utc::now(),
             prompts,
+            &[],
         )
         .unwrap()
     }

@@ -27,8 +27,6 @@ pub(crate) use database::{
     SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     WatchWebSessionState, serialize_session,
 };
-#[cfg(test)]
-pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
 };

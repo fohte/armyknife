@@ -69,18 +69,6 @@ fn parse_with_image_directory(
     .map(|(messages, _, _)| messages)
 }
 
-#[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
-    reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
-    now: DateTime<Utc>,
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
-    parse_with_queued_prompts(reader, parent, pending_tool, user_marker, now, &[])
-        .map(|(messages, background_tasks, _)| (messages, background_tasks))
-}
-
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
@@ -99,26 +87,6 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
         peer_out_messages,
     )
     .map(|(messages, background_tasks, _)| (messages, background_tasks))
-}
-
-#[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts(
-    reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
-    now: DateTime<Utc>,
-    queued_prompts: &[WatchWebQueuedPrompt],
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
-    parse_with_queued_prompts_and_peer_out_messages(
-        reader,
-        parent,
-        pending_tool,
-        user_marker,
-        now,
-        queued_prompts,
-        &[],
-    )
 }
 
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages(

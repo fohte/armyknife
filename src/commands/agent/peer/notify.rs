@@ -667,6 +667,64 @@ mod tests {
     }
 
     #[test]
+    fn recording_failure_does_not_change_a_successful_delivery() {
+        let cache_dir = tempfile::tempdir().expect("cache directory should be created");
+        let cache_home = cache_dir.path().to_string_lossy().to_string();
+        let args = NotifyArgs {
+            session_id: Some("fixture-target".to_string()),
+            parent: false,
+            message: "Expanded fictional request body".to_string(),
+        };
+        let mut records = Vec::new();
+        let mut saved = Vec::new();
+        let mut alerts = Vec::new();
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home.as_str())),
+                ("ARMYKNIFE_SESSION_ID", Some("fixture-sender")),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || {
+                run_with(
+                    &args,
+                    || anyhow::bail!("the target is explicit"),
+                    |_, _, _, _| Ok(Delivery::Sent),
+                    |target, content| {
+                        saved.push((target.to_string(), content.to_string()));
+                        Ok(())
+                    },
+                    |target, failure| alerts.push((target.to_string(), failure.to_string())),
+                    |from, to, message| {
+                        records.push((from.to_string(), to.to_string(), message.to_string()));
+                        anyhow::bail!("fixture database error")
+                    },
+                )
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                records,
+                saved,
+                alerts,
+            ),
+            (
+                Ok(None),
+                vec![(
+                    "fixture-sender".to_string(),
+                    "fixture-target".to_string(),
+                    "Expanded fictional request body".to_string(),
+                )],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
     fn parent_target_is_delivered_to_the_notifier() {
         use clap::Parser;
 
@@ -730,13 +788,7 @@ mod tests {
                     |_, _| Ok(()),
                     |_, _| {},
                     |from, to, message| {
-                        store::insert_watch_web_peer_out_message_from(
-                            &sessions_dir,
-                            from,
-                            to,
-                            message,
-                            sent_at,
-                        )
+                        store::insert_watch_web_peer_out_message(from, to, message, sent_at)
                     },
                 )
             },
