@@ -2,8 +2,15 @@ import '#components/conversation-card.css'
 import '#components/question-card.css'
 
 import { Button } from '@fohte/ui/button'
-import { type KeyboardEvent, type SubmitEvent, useId, useState } from 'react'
+import {
+  type KeyboardEvent,
+  type SubmitEvent,
+  useEffect,
+  useId,
+  useState,
+} from 'react'
 
+import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
 import { QuestionSendError } from '#components/question-send-error'
 import type { QuestionChoice } from '#types'
@@ -92,19 +99,34 @@ export function QuestionCard({
   }
 
   const answerChoice = (choice: number) => {
-    if (!canAnswer || questionSkipped || answer !== null || isSending) return
+    if (!canAnswer || questionSkipped || answer !== null || isSending) {
+      return false
+    }
     setIsSending(true)
     void onAnswer(choice).finally(() => {
       setIsSending(false)
     })
+    return true
   }
+
+  useEffect(() => {
+    const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
+      if (isMobile) return
+      const choice = numberShortcutChoice(event, choices.length)
+      if (choice === null || !answerChoice(choice + 1)) return
+      event.preventDefault()
+    }
+
+    window.addEventListener('keydown', onQuestionKeyDown)
+    return () => {
+      window.removeEventListener('keydown', onQuestionKeyDown)
+    }
+  }, [answerChoice, choices.length, isMobile])
 
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
     if (
       event.key !== 'Escape' ||
       event.target instanceof HTMLTextAreaElement ||
-      event.nativeEvent.isComposing ||
-      Reflect.get(event.nativeEvent, 'keyCode') === 229 ||
       !canAnswer ||
       questionSkipped ||
       isSending

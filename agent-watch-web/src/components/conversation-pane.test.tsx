@@ -634,6 +634,73 @@ it('does not send a freeform answer when skipping the question fails', async () 
   expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
 })
 
+it('does not answer a choice shortcut while a freeform answer is sending', async () => {
+  let resolveMessage: (sent: boolean) => void = () => undefined
+  const messageResult = new Promise<boolean>((resolve) => {
+    resolveMessage = resolve
+  })
+  const onAction = vi.fn((action: string) =>
+    action === 'messages' ? messageResult : Promise.resolve(true),
+  )
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const event = new KeyboardEvent('keydown', {
+    key: '1',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(event)
+  })
+  const duringSend = {
+    textareaDisabled: textarea.disabled,
+    eventTargetIsBody: event.target === document.body,
+    eventDefaultPrevented: event.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  }
+
+  await act(async () => {
+    resolveMessage(true)
+    await messageResult
+    await Promise.resolve()
+  })
+
+  const expectedCalls = [
+    ['answer', { skip: true }],
+    [
+      'messages',
+      {
+        content:
+          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+      },
+    ],
+  ]
+  const snapshot = () => ({ duringSend, actionCalls: onAction.mock.calls })
+  expect(snapshot()).toEqual({
+    duringSend: {
+      textareaDisabled: true,
+      eventTargetIsBody: true,
+      eventDefaultPrevented: false,
+      actionCalls: expectedCalls,
+    },
+    actionCalls: expectedCalls,
+  })
+})
+
 it('keeps the message composer available while a proposal waits for a choice', () => {
   renderView(
     vi.fn(() => Promise.resolve(true)),
