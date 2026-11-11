@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.568](https://github.com/fohte/armyknife/compare/v0.1.567...v0.1.568) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** avoid peer message overflow ([#1494](https://github.com/fohte/armyknife/issues/1494)) ([8a868c1](https://github.com/fohte/armyknife/commit/8a868c1273833f0f017e642ab582484a3b50aeff))
+* **watch-web:** label messages for Claude ([#1493](https://github.com/fohte/armyknife/issues/1493)) ([0597178](https://github.com/fohte/armyknife/commit/0597178014ed4ca54d175642e5ac92bcc70702fb))
+
 ## [0.1.567](https://github.com/fohte/armyknife/compare/v0.1.566...v0.1.567) (2026-11-10)
 
 

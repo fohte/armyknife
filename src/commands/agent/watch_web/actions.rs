@@ -641,10 +641,14 @@ mod tests {
             let Some(content) = call.get("content").and_then(Value::as_str) else {
                 continue;
             };
-            let Some((marker, body)) = content.split_once('\n') else {
+            let Some((marker, _)) = content.split_once('\n') else {
                 continue;
             };
-            if marker.starts_with("⟦armyknife-user:") && marker.ends_with('⟧') {
+            if marker.starts_with("⟦armyknife-user:")
+                && marker.ends_with('⟧')
+                && let Some(body) =
+                    crate::commands::agent::watch_web_user_marker::strip_message(marker, content)
+            {
                 call["content"] = Value::String(body.to_owned());
             }
         }

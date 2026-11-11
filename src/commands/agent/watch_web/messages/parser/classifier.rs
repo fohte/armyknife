@@ -153,8 +153,7 @@ fn peer_transport_body(text: &str) -> &str {
     let body = text
         .strip_prefix("Another peer session sent a message:\n")
         .unwrap_or(text);
-    body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
-        .map_or(body, |(body, _)| body)
+    without_peer_transport_notice(body)
 }
 
 pub(super) fn is_peer_notify_tool(name: &str, input: Option<&Value>) -> bool {
@@ -366,24 +365,31 @@ fn is_hidden_legacy_row(record: &Value, text: &str) -> bool {
 pub(super) fn marked_user_body(text: &str, marker: Option<&str>) -> Option<String> {
     let marker = marker?;
     if let Some(body) = crate::commands::agent::watch_web_user_marker::strip_message(marker, text) {
-        return Some(body.to_owned());
+        return Some(without_peer_transport_notice(body).to_owned());
     }
     if let Some((_, body)) = peer_message_parts(text)
         && let Some(body) =
             crate::commands::agent::watch_web_user_marker::strip_message(marker, body)
     {
-        return Some(body.to_owned());
+        return Some(without_peer_transport_notice(body).to_owned());
     }
     let marker_offset = text.match_indices(marker).find_map(|(offset, _)| {
         let prefix = &text[..offset];
         (offset == 0 || prefix.ends_with('\n')).then_some(offset)
     })?;
-    let body = text[marker_offset + marker.len()..].strip_prefix('\n')?;
-    Some(
-        body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
-            .map_or(body, |(body, _)| body)
-            .to_owned(),
-    )
+    let marked_text = &text[marker_offset..];
+    if let Some(body) =
+        crate::commands::agent::watch_web_user_marker::strip_message(marker, marked_text)
+    {
+        return Some(without_peer_transport_notice(body).to_owned());
+    }
+    let body = marked_text.strip_prefix(marker)?.strip_prefix('\n')?;
+    Some(without_peer_transport_notice(body).to_owned())
+}
+
+fn without_peer_transport_notice(body: &str) -> &str {
+    body.rsplit_once(concat!("\n", "\n", "This came from another Claude session"))
+        .map_or(body, |(body, _)| body)
 }
 
 fn peer_message_parts(message: &str) -> Option<(&str, &str)> {
