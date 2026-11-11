@@ -14,6 +14,7 @@ import type { Session } from '#types'
 type InboxFilterDialogProps = {
   sessions: readonly Session[]
   query: string
+  initialSelectedKey?: InboxFilterKey
   onQueryChange: (query: string) => void
   onApply: () => void
   onClose: () => void
@@ -22,11 +23,13 @@ type InboxFilterDialogProps = {
 export function InboxFilterDialog({
   sessions,
   query,
+  initialSelectedKey = 'project',
   onQueryChange,
   onApply,
   onClose,
 }: InboxFilterDialogProps) {
-  const [selectedKey, setSelectedKey] = useState<InboxFilterKey>('project')
+  const [selectedKey, setSelectedKey] =
+    useState<InboxFilterKey>(initialSelectedKey)
   const inputRef = useRef<HTMLInputElement>(null)
   const selectedField = INBOX_FILTER_FIELDS.find(
     (field) => field.key === selectedKey,
@@ -137,7 +140,16 @@ export function InboxFilterDialog({
                       }}
                       type="checkbox"
                     />
-                    <span>{option.value}</span>
+                    <span
+                      className="inbox-filter-option-label"
+                      data-tone={
+                        selectedKey === 'kind'
+                          ? option.value.toLowerCase()
+                          : undefined
+                      }
+                    >
+                      {option.value}
+                    </span>
                     <span className="inbox-filter-option-count">
                       {option.count}
                     </span>
@@ -151,7 +163,9 @@ export function InboxFilterDialog({
         </div>
         <p className="inbox-filter-example">
           Type to filter:{' '}
-          <code>project:web-app kind:review,question task:#123</code>
+          <code>
+            project:web-app kind:review,question task:#123 has:decision
+          </code>
         </p>
       </section>
     </div>
