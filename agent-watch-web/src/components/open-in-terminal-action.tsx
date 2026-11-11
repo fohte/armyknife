@@ -7,11 +7,13 @@ import type { OpenInTerminalStatus } from '#types'
 type OpenInTerminalActionProps = {
   status: OpenInTerminalStatus
   onClick: () => void
+  announce?: boolean
 }
 
 export function OpenInTerminalAction({
   status,
   onClick,
+  announce = true,
 }: OpenInTerminalActionProps) {
   return (
     <div className="conversation-open-in-terminal">
@@ -27,9 +29,10 @@ export function OpenInTerminalAction({
       <p
         className="conversation-terminal-action-status"
         data-state={status?.state ?? 'idle'}
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
+        role={announce ? 'status' : undefined}
+        aria-live={announce ? 'polite' : undefined}
+        aria-atomic={announce ? 'true' : undefined}
+        aria-hidden={announce ? undefined : true}
       >
         {status?.state === 'sending'
           ? 'Switching tmux…'

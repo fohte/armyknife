@@ -4146,10 +4146,7 @@ it('shows terminal switch progress and success without reloading messages', asyn
     feedback: terminalFeedback(),
     disabled: terminalButtons().map((button) => button.disabled),
   })
-  expect(pendingSnapshot()).toEqual({
-    feedback: ['Switching tmux…', 'Switching tmux…', 'Switching tmux…'],
-    disabled: [true, true, true],
-  })
+  const pending = pendingSnapshot()
 
   await act(async () => {
     resolveFocus?.(new Response(null, { status: 204 }))
@@ -4167,40 +4164,57 @@ it('shows terminal switch progress and success without reloading messages', asyn
       role: element.getAttribute('role'),
       ariaLive: element.getAttribute('aria-live'),
       ariaAtomic: element.getAttribute('aria-atomic'),
+      ariaHidden: element.getAttribute('aria-hidden'),
     })),
+    announcementCount: container.querySelectorAll(
+      '.conversation-terminal-action-status[role="status"][aria-live="polite"]',
+    ).length,
   })
-  expect(successSnapshot()).toEqual({
-    feedback: [
-      'Tmux switched to this session.',
-      'Tmux switched to this session.',
-      'Tmux switched to this session.',
-    ],
-    requests: [
-      '/api/sessions/sample-session/messages',
-      '/api/sessions/sample-session/actions',
-      '/api/sessions/sample-session/focus',
-    ],
-    liveRegions: [
-      {
-        sameElement: true,
-        role: 'status',
-        ariaLive: 'polite',
-        ariaAtomic: 'true',
-      },
-      {
-        sameElement: true,
-        role: 'status',
-        ariaLive: 'polite',
-        ariaAtomic: 'true',
-      },
-      {
-        sameElement: true,
-        role: 'status',
-        ariaLive: 'polite',
-        ariaAtomic: 'true',
-      },
-    ],
-  })
+  const success = successSnapshot()
+  const snapshot = () => ({ pending, success })
+  const expected = {
+    pending: {
+      feedback: ['Switching tmux…', 'Switching tmux…', 'Switching tmux…'],
+      disabled: [true, true, true],
+    },
+    success: {
+      feedback: [
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+      ],
+      requests: [
+        '/api/sessions/sample-session/messages',
+        '/api/sessions/sample-session/actions',
+        '/api/sessions/sample-session/focus',
+      ],
+      liveRegions: [
+        {
+          sameElement: true,
+          role: 'status',
+          ariaLive: 'polite',
+          ariaAtomic: 'true',
+          ariaHidden: null,
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+      ],
+      announcementCount: 1,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
 })
 
 it('shows the server reason beside every terminal action when switching fails', async () => {

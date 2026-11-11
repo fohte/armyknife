@@ -106,6 +106,7 @@ export function PermissionCard({
             <OpenInTerminalAction
               status={openInTerminalStatus}
               onClick={onOpenInTerminal}
+              announce={false}
             />
           ) : null}
         </div>

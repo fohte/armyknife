@@ -24,7 +24,6 @@
   font-size: 11px;
   line-height: 1.4;
   overflow-wrap: anywhere;
-  pointer-events: none;
   box-shadow: var(--aw-shadow);
 }
 

@@ -383,7 +383,7 @@ export function ConversationPane({
             })
           }
           setError(null)
-          if (action !== 'focus') refresh()
+          refresh()
           return true
         },
         (requestError) => {
