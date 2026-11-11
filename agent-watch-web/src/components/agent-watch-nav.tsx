@@ -58,17 +58,15 @@ export function AgentWatchNav({
           &gt;
         </span>
         <span className="brand-name">agent watch</span>
-        <div className="agent-watch-command">
-          <Search aria-hidden="true" size={12} />
-          <button
-            aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
-            className="agent-watch-command-key"
-            onClick={onOpenPalette}
-            type="button"
-          >
-            {paletteShortcut.label}
-          </button>
-        </div>
+        <button
+          aria-label={`Jump to with ${paletteShortcut.ariaLabel}`}
+          className="agent-watch-command agent-watch-command-key"
+          onClick={onOpenPalette}
+          type="button"
+        >
+          <Search aria-hidden="true" size={13} />
+          <span>{paletteShortcut.label}</span>
+        </button>
         <button
           aria-label={inboxCollapsed ? 'Show Inbox' : 'Hide Inbox'}
           aria-pressed={inboxCollapsed}
@@ -80,9 +78,9 @@ export function AgentWatchNav({
           type="button"
         >
           {inboxCollapsed ? (
-            <PanelLeftOpen aria-hidden="true" size={13} />
+            <PanelLeftOpen aria-hidden="true" size={15} />
           ) : (
-            <PanelLeftClose aria-hidden="true" size={13} />
+            <PanelLeftClose aria-hidden="true" size={15} />
           )}
         </button>
       </div>
@@ -99,7 +97,7 @@ export function AgentWatchNav({
             onViewChange('inbox')
           }}
         >
-          <span>Inbox</span>
+          <span>Inbox</span>{' '}
           <Chip data-view-count="" tone="strong">
             {needsActionCount}
           </Chip>
@@ -140,7 +138,7 @@ export function AgentWatchNav({
                     onSelectSavedView(savedView.id)
                   }}
                 >
-                  <Filter aria-hidden="true" size={13} />
+                  <Filter aria-hidden="true" size={12} />
                   <span className="saved-view-name">{savedView.name}</span>
                   <span
                     className={cn(

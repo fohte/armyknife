@@ -21,6 +21,19 @@ const todaySession: Session = {
   isToday: true,
 }
 
+const todaySessionInProgress: Session = {
+  ...todaySession,
+  id: 'today-session-in-progress',
+  category: 'in_progress',
+  title: 'Review the release notes',
+  task: {
+    id: 'sample-task',
+    number: 17,
+    title: 'Review the release notes',
+    priority: null,
+  },
+}
+
 const meta = {
   component: AgentWatchNav,
   args: {
@@ -84,6 +97,11 @@ export const InboxIsSelected: Story = {
 export const BoardIsSelected: Story = {
   name: 'Board is selected in the main navigation',
   args: { activeView: 'board' },
+}
+
+export const InProgressTodaySession: Story = {
+  name: 'An in-progress Today session shows its task and start label',
+  args: { todaySessions: [todaySessionInProgress] },
 }
 
 export const InboxIsCollapsed: Story = {

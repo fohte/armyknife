@@ -9,36 +9,34 @@ let root: Root | null = null
 
 function renderNav(
   workTypeNavGroups: ComponentProps<typeof AgentWatchNav>['workTypeNavGroups'],
-  onSelectSession: (id: string) => void = () => undefined,
-  savedViews: ComponentProps<typeof AgentWatchNav>['savedViews'] = [],
-  selectedSavedViewId: string | null = null,
-  onSelectSavedView: (id: string) => void = () => undefined,
-  onDeleteSavedView: (id: string) => void = () => undefined,
-  paletteShortcut: ComponentProps<typeof AgentWatchNav>['paletteShortcut'] = {
-    modifier: 'ctrlKey',
-    label: 'Ctrl K',
-    ariaLabel: 'Control K',
-  },
+  overrides: Partial<
+    Omit<ComponentProps<typeof AgentWatchNav>, 'workTypeNavGroups'>
+  > = {},
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <AgentWatchNav
         activeView="inbox"
-        paletteShortcut={paletteShortcut}
+        paletteShortcut={{
+          modifier: 'ctrlKey',
+          label: 'Ctrl K',
+          ariaLabel: 'Control K',
+        }}
         needsActionCount={0}
-        savedViews={savedViews}
-        selectedSavedViewId={selectedSavedViewId}
+        savedViews={[]}
+        selectedSavedViewId={null}
         workTypeNavGroups={workTypeNavGroups}
         onViewChange={() => undefined}
-        onSelectSavedView={onSelectSavedView}
-        onDeleteSavedView={onDeleteSavedView}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
         todaySessions={[]}
         onSelectToday={() => undefined}
-        onSelectSession={onSelectSession}
+        onSelectSession={() => undefined}
         onOpenPalette={() => undefined}
         inboxCollapsed={false}
         onToggleInbox={() => undefined}
+        {...overrides}
       />,
     )
   })
@@ -74,7 +72,7 @@ it('renders the configured label and opens the selected session', () => {
         ],
       },
     ],
-    onSelectSession,
+    { onSelectSession },
   )
 
   const button = container.querySelector<HTMLButtonElement>(
@@ -136,15 +134,7 @@ it.each([
 ] as const)(
   'shows the $label shortcut on $platform',
   ({ paletteShortcut, label, ariaLabel }) => {
-    renderNav(
-      [],
-      () => undefined,
-      [],
-      null,
-      () => undefined,
-      () => undefined,
-      paletteShortcut,
-    )
+    renderNav([], { paletteShortcut })
 
     const shortcut = container.querySelector<HTMLButtonElement>(
       '.agent-watch-command-key',
@@ -157,12 +147,26 @@ it.each([
   },
 )
 
+it('opens the command palette when its search icon is clicked', () => {
+  let paletteOpened = false
+  renderNav([], {
+    onOpenPalette: () => {
+      paletteOpened = true
+    },
+  })
+
+  const searchIcon = container.querySelector('.agent-watch-command-key svg')
+  act(() => {
+    searchIcon?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(paletteOpened).toBe(true)
+})
+
 it('selects the active saved view and shows its needs-action count color', () => {
   const onSelectSavedView = vi.fn<(id: string) => void>()
-  renderNav(
-    [],
-    () => undefined,
-    [
+  renderNav([], {
+    savedViews: [
       {
         id: 'reviews',
         name: 'Sample reviews',
@@ -171,9 +175,9 @@ it('selects the active saved view and shows its needs-action count color', () =>
         countTone: 'needs-action',
       },
     ],
-    'reviews',
+    selectedSavedViewId: 'reviews',
     onSelectSavedView,
-  )
+  })
 
   act(() => {
     container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
@@ -198,10 +202,8 @@ it('selects the active saved view and shows its needs-action count color', () =>
 
 it('deletes a saved view from the navigation', () => {
   const onDeleteSavedView = vi.fn<(id: string) => void>()
-  renderNav(
-    [],
-    () => undefined,
-    [
+  renderNav([], {
+    savedViews: [
       {
         id: 'reviews',
         name: 'Sample reviews',
@@ -210,10 +212,8 @@ it('deletes a saved view from the navigation', () => {
         countTone: 'needs-action',
       },
     ],
-    null,
-    () => undefined,
     onDeleteSavedView,
-  )
+  })
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
