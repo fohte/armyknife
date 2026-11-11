@@ -61,6 +61,13 @@ it('lists all linked tasks and marks completed tasks', () => {
         tasks={[
           task,
           {
+            id: 'secondary-task',
+            number: 2046,
+            title: 'Add request tracing',
+            priority: 4,
+            isClosed: false,
+          },
+          {
             id: 'completed-task',
             number: 2047,
             title: 'Document retry behavior',
@@ -81,13 +88,18 @@ it('lists all linked tasks and marks completed tasks', () => {
       href: 'https://tq.fohte.net/tasks/open-task',
       text: 'P1 #2048 Improve request reliability',
     },
-    count: '+1 tasks ▾',
+    count: '+2 tasks ▾',
     heading: 'Linked tq tasks · Inbox and Board use the primary one',
     linkedTasks: [
       {
         href: 'https://tq.fohte.net/tasks/open-task',
         text: 'P1 #2048 Improve request reliability',
         status: 'Primary',
+      },
+      {
+        href: 'https://tq.fohte.net/tasks/secondary-task',
+        text: 'P4 #2046 Add request tracing',
+        status: null,
       },
       {
         href: 'https://tq.fohte.net/tasks/completed-task',

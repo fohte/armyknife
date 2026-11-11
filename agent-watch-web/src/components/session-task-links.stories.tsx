@@ -34,6 +34,13 @@ export const SessionHasMultipleLinkedTasks: Story = {
     tasks: [
       openTask,
       {
+        id: 'example-secondary-task',
+        number: 2046,
+        title: 'Add request tracing',
+        priority: 4,
+        isClosed: false,
+      },
+      {
         id: 'example-completed-task',
         number: 2047,
         title: 'Document retry behavior',
