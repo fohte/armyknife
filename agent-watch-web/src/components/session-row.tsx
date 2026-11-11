@@ -5,6 +5,7 @@ import { Chip } from '@fohte/ui/chip'
 
 import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -15,6 +16,7 @@ type SessionRowProps = {
   onLater?: (id: string) => void
   onToggleToday?: (id: string, isToday: boolean) => void
   compactRepo?: boolean
+  actionsVisible?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -56,13 +58,16 @@ function sessionStatus(session: Session) {
 
 function sessionTaskLabel(session: Session) {
   if (session.task === null) {
-    return '— No task'
+    return null
   }
 
   const priority =
     session.task.priority === null ? '—' : `P${String(session.task.priority)}`
-  const linkedTaskCount = formatLinkedTaskCount(session.tasks)
-  return `${priority} #${String(session.task.number)} · ${session.task.title}${linkedTaskCount}`
+  return {
+    reference: `${priority} #${String(session.task.number)}`,
+    title: session.task.title,
+    linkedTaskCount: formatLinkedTaskCount(session.tasks),
+  }
 }
 
 function sessionKind(session: Session) {
@@ -76,12 +81,17 @@ export function SessionRow({
   onLater,
   onToggleToday,
   compactRepo = false,
+  actionsVisible = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
+  const taskLabel = sessionTaskLabel(session)
+  const decisionLabel = formatSessionDecisionCount(session)
 
   return (
     <li className="session-list-item">
-      <div className="session-row-layout">
+      <div
+        className={`session-row-layout${actionsVisible ? ' actions-visible' : ''}`}
+      >
         <Button
           type="button"
           variant="plain"
@@ -122,12 +132,26 @@ export function SessionRow({
               </span>
             ) : null}
             <span className="session-meta-line">
-              <span className="session-task">{sessionTaskLabel(session)}</span>
+              <span className="session-task">
+                {taskLabel === null ? (
+                  '— No task'
+                ) : (
+                  <>
+                    <span className="session-task-reference">
+                      {taskLabel.reference}
+                    </span>
+                    {` · ${taskLabel.title}${taskLabel.linkedTaskCount}`}
+                  </>
+                )}
+              </span>
               <span className="session-repo">
                 {compactRepo
                   ? session.repo.split('/').at(-1)
                   : session.repo || '—'}
               </span>
+              {decisionLabel !== null ? (
+                <span className="session-decision-count">{decisionLabel}</span>
+              ) : null}
             </span>
           </span>
         </Button>

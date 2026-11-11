@@ -1,5 +1,5 @@
 .conversation-composer {
-  width: min(712px, calc(100% - 32px));
+  width: min(712px, calc(100% - 48px));
   margin: 0 auto 20px;
   border: 1px solid var(--aw-border-control);
   border-radius: var(--aw-radius);
@@ -14,12 +14,14 @@
   max-height: 50dvh;
   overflow-y: auto;
   resize: none;
-  padding: 10px 12px 4px;
+  padding: 12px 14px 4px;
   border: 0;
   outline: none;
   background: transparent;
   color: var(--aw-text-primary);
   font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
 }
 
 .conversation-composer textarea::placeholder {
@@ -78,9 +80,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 8px 7px 12px;
+  padding: 6px 8px 8px 14px;
   color: var(--aw-text-muted);
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .composer-footer [data-slot='button'] {
@@ -89,7 +91,6 @@
   padding: 0;
   background: var(--aw-text-primary);
   color: var(--aw-bg-surface);
-  font-size: 20px;
 }
 
 .conversation-composer[data-mobile='true'] {

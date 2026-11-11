@@ -1,4 +1,4 @@
-import { act } from 'react'
+import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -34,7 +34,7 @@ const actions: SessionActions = {
 const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
-  choices: ['Retry a few times', 'Retry once'],
+  choices: [{ label: 'Retry a few times' }, { label: 'Retry once' }],
   answer: null,
 }
 
@@ -125,7 +125,7 @@ function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
   onSelectSession: (id: string) => void = () => undefined,
-  viewMessages: readonly ChatItem[] = [question],
+  viewMessages: readonly ChatItem[] = [],
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
@@ -138,6 +138,8 @@ function renderView(
     tool: string
     description: string
   } | null,
+  decisionsPanelOpen = false,
+  onToggleDecisionsPanel?: () => void,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -155,7 +157,11 @@ function renderView(
         onSelectSession={onSelectSession}
         isMobile={isMobile}
         statusPanelOpen={statusPanelOpen}
+        decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
+        {...(onToggleDecisionsPanel === undefined
+          ? {}
+          : { onToggleDecisionsPanel })}
       />,
     )
   })
@@ -318,7 +324,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
 
   const desktopButton = requireElement(
     container.querySelector<HTMLButtonElement>(
-      '.conversation-header-actions .conversation-copy-session-id',
+      '.conversation-header-copy .session-heading-title-row .conversation-copy-session-id',
     ),
   )
   await act(async () => {
@@ -327,7 +333,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
   })
   const desktopButtonText = desktopButton.textContent
 
-  renderView(onAction, session, undefined, [question], actions, true)
+  renderView(onAction, session, undefined, [], actions, true)
   const mobileButton = requireElement(
     container.querySelector<HTMLButtonElement>(
       ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
@@ -373,7 +379,7 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -428,7 +434,7 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -470,7 +476,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -513,7 +519,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -542,32 +548,163 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('answers a question from a number key or a choice click', () => {
+it('prevents a choice click from duplicating a number-key answer', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, session, undefined, [question])
 
-  const keyEvent = dispatchKeyInAct(
-    requireElement(container.querySelector('.conversation-pane')),
-    '2',
-  )
-  act(() => {
+  const keyEvent = new KeyboardEvent('keydown', {
+    key: '2',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    requireElement(container.querySelector('.conversation-pane')).dispatchEvent(
+      keyEvent,
+    )
     container
       .querySelector<HTMLButtonElement>('.chat-question-choices button')
       ?.click()
+    await Promise.resolve()
+    await Promise.resolve()
   })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    keyEvent.defaultPrevented,
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    keyDefaultPrevented: keyEvent.defaultPrevented,
+    choiceDisabled: container.querySelector<HTMLButtonElement>(
+      '.chat-question-choices button',
+    )?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [['answer', { choice: 2 }]],
+    keyDefaultPrevented: true,
+    choiceDisabled: true,
+  })
+})
+
+it('closes a question before sending a contextual freeform answer', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    {
+      ...question,
+      header: 'Output format',
+      question: 'Which format should be used?',
+    },
   ])
-  const expected = JSON.stringify([
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    ['answer', { skip: true }],
     [
-      ['answer', { choice: 2 }],
-      ['answer', { choice: 1 }],
+      'messages',
+      {
+        content:
+          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+      },
     ],
-    true,
   ])
-  expect(actual).toBe(expected)
+})
+
+it('does not send a freeform answer when skipping the question fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  onAction.mockResolvedValueOnce(false)
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+})
+
+it('does not answer a choice shortcut while a freeform answer is sending', async () => {
+  let resolveMessage: (sent: boolean) => void = () => undefined
+  const messageResult = new Promise<boolean>((resolve) => {
+    resolveMessage = resolve
+  })
+  const onAction = vi.fn((action: string) =>
+    action === 'messages' ? messageResult : Promise.resolve(true),
+  )
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const event = new KeyboardEvent('keydown', {
+    key: '1',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(event)
+  })
+  const duringSend = {
+    textareaDisabled: textarea.disabled,
+    eventTargetIsBody: event.target === document.body,
+    eventDefaultPrevented: event.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  }
+
+  await act(async () => {
+    resolveMessage(true)
+    await messageResult
+    await Promise.resolve()
+  })
+
+  const expectedCalls = [
+    ['answer', { skip: true }],
+    [
+      'messages',
+      {
+        content:
+          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+      },
+    ],
+  ]
+  const snapshot = () => ({ duringSend, actionCalls: onAction.mock.calls })
+  expect(snapshot()).toEqual({
+    duringSend: {
+      textareaDisabled: true,
+      eventTargetIsBody: true,
+      eventDefaultPrevented: false,
+      actionCalls: expectedCalls,
+    },
+    actionCalls: expectedCalls,
+  })
 })
 
 it('keeps the message composer available while a proposal waits for a choice', () => {
@@ -628,7 +765,7 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
     {
       ...question,
       question: 'Which **retry** policy should be used?',
-      choices: ['Retry *a few* times', 'Retry once'],
+      choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
       answer: 'Retry once',
     },
   ])
@@ -1660,6 +1797,150 @@ it('accepts classified messages and the active tool from messages endpoint', asy
   })
 })
 
+it('posts decision reviews and reflects the refreshed review state', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const firstDecision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Use a fixed retry limit',
+    why: 'The current service has no reliable timing data.',
+    considered: ['Retry using the latest duration'],
+    easyToChange: 'One configuration value in the CI workflow.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const secondDecision: ChatItem = {
+    ...firstDecision,
+    seq: 2,
+    title: 'Keep the current backoff interval',
+    review: null,
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([firstDecision, secondDecision])),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([{ ...firstDecision, review: 'ok' }, secondDecision]),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([
+          { ...firstDecision, review: 'ok' },
+          { ...secondDecision, review: 'change' },
+        ]),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, decisionCount: 2, unreviewedDecisionCount: 2 }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const cards = () => container.querySelectorAll<HTMLElement>('.decision-card')
+  const summary = (index: number) =>
+    requireElement(
+      container
+        .querySelectorAll<HTMLButtonElement>('.decision-card-summary')
+        .item(index),
+    )
+  act(() => {
+    summary(0).click()
+  })
+  act(() => {
+    requireElement(
+      cards()
+        .item(0)
+        .querySelector<HTMLButtonElement>('.decision-card-buttons button'),
+    ).click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    summary(1).click()
+  })
+  act(() => {
+    requireElement(
+      cards()
+        .item(1)
+        .querySelector<HTMLButtonElement>(
+          '.decision-card-buttons button + button',
+        ),
+    ).click()
+  })
+  setTextareaValue(
+    requireElement(container.querySelector<HTMLTextAreaElement>('textarea')),
+    'Add a timing sample first',
+  )
+  await act(async () => {
+    requireElement(
+      cards()
+        .item(1)
+        .querySelector<HTMLButtonElement>('.decision-card-change-form button'),
+    ).click()
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const postRequests = fetcher.mock.calls
+    .filter(([, init]) => init?.method === 'POST')
+    .map(([input, init]) => ({
+      url:
+        typeof input === 'string'
+          ? input
+          : input instanceof URL
+            ? input.href
+            : input.url,
+      method: init?.method,
+      body: init?.body ?? null,
+    }))
+  const reviewState = Array.from(
+    container.querySelectorAll('.decision-card-review-state'),
+    (element) => element.textContent,
+  )
+  const positions = Array.from(
+    container.querySelectorAll('.decision-card-position'),
+    (element) => element.textContent,
+  )
+  const snapshot = () => ({ postRequests, reviewState, positions })
+  expect(snapshot()).toEqual({
+    postRequests: [
+      {
+        url: '/api/sessions/sample-session/decisions/1/ok',
+        method: 'POST',
+        body: null,
+      },
+      {
+        url: '/api/sessions/sample-session/decisions/2/change',
+        method: 'POST',
+        body: JSON.stringify({ comment: 'Add a timing sample first' }),
+      },
+    ],
+    reviewState: ['Reviewed · OK', 'Change requested'],
+    positions: ['1 of 2', '2 of 2'],
+  })
+})
+
 it('shows the status panel toggle and reports its open state', () => {
   const onToggleStatusPanel = vi.fn<() => void>()
   renderView(
@@ -1692,6 +1973,142 @@ it('shows the status panel toggle and reports its open state', () => {
     expanded: 'true',
     controls: 'session-status-panel',
     calls: [[]],
+  })
+})
+
+it('shows the decision count button and reports its pressed state', () => {
+  const onToggleDecisionsPanel = vi.fn<() => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    {
+      ...session,
+      decisionCount: 2,
+      unreviewedDecisionCount: 0,
+    },
+    undefined,
+    [],
+    actions,
+    false,
+    [],
+    [],
+    false,
+    undefined,
+    undefined,
+    true,
+    onToggleDecisionsPanel,
+  )
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-decisions-toggle',
+    ),
+  )
+  act(() => {
+    toggle.click()
+  })
+
+  const snapshot = () => ({
+    label: toggle.textContent,
+    pressed: toggle.getAttribute('aria-pressed'),
+    calls: onToggleDecisionsPanel.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    label: '◇ 2 decisions',
+    pressed: 'true',
+    calls: [[]],
+  })
+})
+
+it('keeps the decision button hidden when an older session has no count fields', () => {
+  renderView(vi.fn(() => Promise.resolve(true)))
+
+  expect(container.querySelector('.conversation-decisions-toggle')).toBeNull()
+})
+
+it('opens and closes the Decisions tab from the conversation header', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Use a fixed retry limit',
+    why: 'The current service has no reliable timing data.',
+    considered: ['Retry using the latest duration'],
+    easyToChange: 'One configuration value in the CI workflow.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  function ToggleHarness() {
+    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
+    return (
+      <ConversationPane
+        session={{
+          ...session,
+          category: 'done',
+          decisionCount: 1,
+          unreviewedDecisionCount: 1,
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen={statusPanelOpen}
+        onToggleStatusPanel={() => {
+          setStatusPanelOpen((open) => !open)
+        }}
+        onCloseStatusPanel={() => {
+          setStatusPanelOpen(false)
+        }}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => root?.render(<ToggleHarness />))
+  await act(async () => {
+    for (let index = 0; index < 10; index += 1) await Promise.resolve()
+  })
+  const decisionToggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-decisions-toggle',
+    ),
+  )
+
+  act(() => {
+    decisionToggle.click()
+  })
+  const panelState = () => ({
+    pressed: container
+      .querySelector('.conversation-decisions-toggle')
+      ?.getAttribute('aria-pressed'),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    heading: container.querySelector('.decisions-panel-header h2')?.textContent,
+  })
+  const opened = panelState()
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-decisions-toggle',
+      ),
+    ).click()
+  })
+
+  const snapshot = () => ({ opened, closed: panelState() })
+  expect(snapshot()).toEqual({
+    opened: {
+      pressed: 'true',
+      selectedTab: '◇ Decisions',
+      heading: 'Decisions in this session',
+    },
+    closed: {
+      pressed: 'false',
+      selectedTab: undefined,
+      heading: undefined,
+    },
   })
 })
 
@@ -2227,7 +2644,7 @@ it('shows a server attachment validation error and retains the rejected attachme
     void dispatchKey(textarea, 'Enter')
   })
   await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 10))
+    await new Promise((resolve) => setTimeout(resolve, 100))
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
   })
 

@@ -1,15 +1,24 @@
 .chat-question-choices {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--aw-border);
 }
 
 .chat-question-choices [data-slot='button'] {
+  width: 100%;
   min-height: 42px;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 0 10px;
-  background: var(--aw-bg-surface);
+  gap: 12px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-primary);
+  font-size: 14px;
   text-align: left;
+}
+
+.chat-question-choices [data-slot='button'] + [data-slot='button'] {
+  border-top: 1px solid var(--aw-border);
 }
 
 .chat-question-choices [data-slot='button'].is-selected {
@@ -28,9 +37,66 @@
   text-align: left;
 }
 
+.chat-question-choice-content {
+  display: flex;
+  flex-direction: column;
+  padding-block: 8px;
+}
+
+.chat-question-choice-description {
+  color: var(--aw-text-muted);
+}
+
+.chat-question-multi-select {
+  margin: 0;
+  padding: 0 16px 12px;
+  color: var(--aw-text-muted);
+  font-size: 12px;
+}
+
+.chat-question-card .chat-question-composer {
+  width: auto;
+  margin: 12px 16px;
+  padding: 0;
+}
+
+.chat-question-composer label {
+  display: block;
+  padding: 8px 12px 0;
+  color: var(--aw-text-muted);
+}
+
+.chat-question-send-error {
+  margin: 8px 0 0;
+  padding: 0 16px;
+  color: var(--aw-color-error);
+  font-size: 12px;
+}
+
+.chat-question-composer .chat-question-send-error {
+  padding: 0 12px;
+}
+
+.chat-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 16px;
+}
+
+.chat-question-composer .chat-question-actions {
+  padding: 0 12px;
+}
+
+.chat-question-card > .chat-question-actions {
+  padding-bottom: 12px;
+}
+
 .chat-question-choices kbd {
-  width: 18px;
-  color: var(--aw-color-warning);
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .chat-question-choice-check {
@@ -42,6 +108,7 @@
 
 .chat-question-answer {
   margin: 10px 0 0;
+  padding: 0 16px 12px;
   color: var(--aw-text-body);
   font-size: 13px;
   white-space: pre-wrap;

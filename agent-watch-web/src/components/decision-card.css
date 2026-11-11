@@ -1,0 +1,187 @@
+.decision-card {
+  min-width: 0;
+  color: var(--aw-text-body);
+  font-size: 12px;
+}
+
+.decision-card--conversation {
+  background: #111111;
+}
+
+.decision-card--conversation[data-selected='true'] {
+  outline: 1px solid var(--aw-border-emphasis);
+  outline-offset: 1px;
+}
+
+.decision-card-summary,
+.decision-panel-card-heading {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  padding: 8px 12px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.decision-card-symbol {
+  flex: 0 0 auto;
+  color: var(--aw-text-body);
+}
+
+.decision-card-summary-label,
+.decision-card-considered-count,
+.decision-panel-card-kicker,
+.decision-panel-card-collapsed-considered,
+.decision-card-details p > span {
+  color: var(--aw-text-secondary);
+}
+
+.decision-card-title {
+  overflow: hidden;
+  color: var(--aw-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decision-card-position {
+  margin-left: auto;
+  color: var(--aw-text-secondary);
+  white-space: nowrap;
+}
+
+.decision-card-chevron {
+  margin-left: auto;
+  color: var(--aw-text-secondary);
+}
+
+.decision-card-position + .decision-card-chevron {
+  margin-left: 0;
+}
+
+.decision-card-details {
+  padding: 0 12px 10px 35px;
+}
+
+.decision-card-details p {
+  margin: 0 0 6px;
+  line-height: 1.5;
+}
+
+.decision-card-details p:last-of-type {
+  margin-bottom: 8px;
+}
+
+.decision-card-actions,
+.decision-card-buttons {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.decision-card-actions {
+  justify-content: space-between;
+}
+
+.decision-card-buttons [data-slot='button'] {
+  min-height: 26px;
+  gap: 8px;
+}
+
+.decision-card-buttons kbd {
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.decision-card-not-blocking,
+.decision-card-review-state {
+  color: var(--aw-text-secondary);
+  font-size: 11px;
+}
+
+.decision-panel-card-heading {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 14px 0;
+}
+
+.decision-card--panel {
+  border: 1px solid transparent;
+  background: var(--aw-bg-surface);
+}
+
+.decision-card--panel[data-selected='true'] {
+  border-color: var(--aw-border-control);
+}
+
+.decision-panel-card-kicker {
+  font-size: 11px;
+}
+
+.decision-panel-card-collapsed-considered {
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.decision-panel-card-title {
+  margin: 0 0 8px;
+  color: var(--aw-text-primary);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.decision-card--panel .decision-card-details {
+  padding: 8px 14px 12px;
+}
+
+.decision-card--panel .decision-card-details p:last-of-type {
+  margin-bottom: 12px;
+}
+
+.decision-card--panel .decision-card-buttons {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.decision-card--panel .decision-card-buttons [data-slot='button'] {
+  width: 100%;
+  justify-content: space-between;
+  text-align: left;
+}
+
+.decision-card--panel .decision-card-buttons kbd {
+  margin-left: auto;
+}
+
+.decision-card--panel .decision-card-buttons span {
+  font-weight: 400;
+}
+
+.decision-card-change-form {
+  display: grid;
+  gap: 7px;
+}
+
+.decision-card-change-form label {
+  color: var(--aw-text-secondary);
+  font-size: 11px;
+}
+
+.decision-card-change-form textarea {
+  width: 100%;
+  resize: vertical;
+  border: 1px solid var(--aw-border-control);
+  padding: 8px;
+  background: var(--aw-bg-app);
+  color: var(--aw-text-primary);
+  font: inherit;
+}

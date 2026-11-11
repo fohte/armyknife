@@ -6,7 +6,7 @@ const meta = {
   component: LaterMenu,
   args: {
     sessionTitle: 'Session awaiting a decision',
-    isLater: true,
+    isLater: false,
     laterTimes: {
       one_hour: { when: '16:00', deadline: '2030-03-04T16:00:00Z' },
       this_evening: { when: '19:00', deadline: '2030-03-04T19:00:00Z' },
@@ -26,7 +26,12 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const MenuOffersFiveReturnTimes: Story = {
-  name: 'the menu shows return times and a way back now',
+  name: 'The menu shows five return times for an active session',
+}
+
+export const MenuShowsBackNow: Story = {
+  args: { isLater: true },
+  name: 'The menu offers a way back now for a Later session',
 }
 
 export const MenuLoadsReturnTimes: Story = {
@@ -35,7 +40,7 @@ export const MenuLoadsReturnTimes: Story = {
     laterTimes: null,
     laterTimesError: false,
   },
-  name: 'the menu shows placeholders while return times load',
+  name: 'The menu shows placeholders while return times load',
 }
 
 export const MenuCannotLoadReturnTimes: Story = {
@@ -44,12 +49,12 @@ export const MenuCannotLoadReturnTimes: Story = {
     laterTimes: null,
     laterTimesError: true,
   },
-  name: 'the menu disables presets when return times are unavailable',
+  name: 'The menu disables presets when return times are unavailable',
 }
 
 export const MenuSubmitting: Story = {
   args: {
     isSubmitting: true,
   },
-  name: 'the menu disables actions while a request is pending',
+  name: 'The menu disables actions while a request is pending',
 }
