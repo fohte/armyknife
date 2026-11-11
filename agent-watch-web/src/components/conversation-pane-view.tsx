@@ -22,6 +22,7 @@ import { useConversationMessageElements } from '#components/use-conversation-mes
 import { useConversationScroll } from '#components/use-conversation-scroll'
 import { useSessionLinkTargets } from '#components/use-session-link-targets'
 import { formatSessionDecisionCount } from '#session-decision-count'
+import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
   ChatItem,
@@ -67,6 +68,7 @@ type ConversationPaneViewProps = {
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
+  onArchive?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
 }
@@ -104,6 +106,7 @@ export function ConversationPaneView({
   fileDropActive = false,
   onBack,
   onLater,
+  onArchive,
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
@@ -293,6 +296,16 @@ export function ConversationPaneView({
             >
               Later
             </Button>
+            {session.category === 'done' && onArchive !== undefined ? (
+              <Button
+                className="mobile-conversation-archive cursor-pointer"
+                type="button"
+                variant="plain"
+                onClick={onArchive}
+              >
+                Archive
+              </Button>
+            ) : null}
             <Button
               className="mobile-conversation-today cursor-pointer"
               type="button"
@@ -385,6 +398,16 @@ export function ConversationPaneView({
                     >
                       #{session.pullRequest.number} PR
                     </a>
+                  ) : null}
+                  {session.category === 'done' && onArchive !== undefined ? (
+                    <Button
+                      className="conversation-archive cursor-pointer"
+                      type="button"
+                      variant="plain"
+                      onClick={onArchive}
+                    >
+                      Archive
+                    </Button>
                   ) : null}
                   {actions?.openInTerminal === true ? (
                     <OpenInTerminalAction

@@ -469,6 +469,14 @@ export const DoneSessionNeedsDecisionReview: Story = {
   },
 }
 
+export const DoneSessionCanBeArchived: Story = {
+  name: 'A Done session exposes its Archive action',
+  args: {
+    session: { ...session, category: 'done', kind: null },
+    onArchive: () => undefined,
+  },
+}
+
 export const PeerMessagesAndEventsHaveTheirOwnDirection: Story = {
   name: 'The conversation separates peer messages from one-line events',
   args: {

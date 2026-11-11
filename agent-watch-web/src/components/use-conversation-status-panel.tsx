@@ -59,7 +59,12 @@ export function useConversationStatusPanel({
             id: 'running',
             label: 'Running',
             count: backgroundTasks.length,
-            content: <RunningTasksPanel tasks={backgroundTasks} />,
+            content: (
+              <RunningTasksPanel
+                sessionId={session.id}
+                tasks={backgroundTasks}
+              />
+            ),
           },
         ]
       : []),

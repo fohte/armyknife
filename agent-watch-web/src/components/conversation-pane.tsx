@@ -50,6 +50,7 @@ type ConversationPaneProps = {
   onCloseStatusPanel?: () => void
   onBack?: () => void
   onLater?: () => void
+  onArchive?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
 }
@@ -65,6 +66,7 @@ export function ConversationPane({
   onCloseStatusPanel = () => undefined,
   onBack = () => undefined,
   onLater = () => undefined,
+  onArchive,
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
@@ -405,6 +407,7 @@ export function ConversationPane({
       onSelectDecision={onSelectDecision}
       onBack={onBack}
       onLater={onLater}
+      {...(onArchive === undefined ? {} : { onArchive })}
       isToday={isToday}
       onToggleToday={onToggleToday}
     />
