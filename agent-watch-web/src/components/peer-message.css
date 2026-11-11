@@ -42,6 +42,12 @@
   letter-spacing: 0.06em;
 }
 
+.chat-peer-label time {
+  margin-left: auto;
+  color: var(--aw-text-muted);
+  font-size: 11px;
+}
+
 .chat-peer-message-to .chat-peer-label > span:first-child {
   padding: 0 5px;
   border: 1px solid var(--aw-border-emphasis);
@@ -98,13 +104,25 @@
 }
 
 .chat-event {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   overflow: hidden;
   align-self: center;
   max-width: 100%;
   color: var(--aw-text-muted);
   font-size: 11px;
+}
+
+.chat-event-text {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-event time {
+  flex: 0 0 auto;
+  font-size: 10px;
 }
 
 .chat-event[data-failed='true'] {

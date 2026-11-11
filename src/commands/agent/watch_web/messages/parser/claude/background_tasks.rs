@@ -155,14 +155,6 @@ fn task_notification_body(text: &str) -> Option<&str> {
         .strip_suffix("</task-notification>")
 }
 
-pub(super) fn record_timestamp(record: &Value) -> Option<DateTime<Utc>> {
-    record
-        .get("timestamp")
-        .and_then(Value::as_str)
-        .and_then(|timestamp| DateTime::parse_from_rfc3339(timestamp).ok())
-        .map(|timestamp| timestamp.with_timezone(&Utc))
-}
-
 struct RunningBackgroundTask {
     id: String,
     description: String,
@@ -366,6 +358,7 @@ mod tests {
         expected_messages.push(ChatItem::Event {
             kind: super::super::super::super::EventKind::System,
             text: format!("Background task fixture-task-id {status}"),
+            timestamp: None,
             failed: expected_failed,
         });
         assert_notification_transcript(
@@ -403,6 +396,7 @@ mod tests {
         expected_messages.push(ChatItem::Event {
             kind: super::super::super::super::EventKind::System,
             text: format!("Background task fixture-task-id {status}"),
+            timestamp: None,
             failed: status == "failed",
         });
         assert_notification_transcript(
@@ -430,6 +424,7 @@ mod tests {
         expected_messages.push(ChatItem::Event {
             kind: super::super::super::super::EventKind::System,
             text: "Background task fixture-task-id completed".to_string(),
+            timestamp: None,
             failed: false,
         });
 
@@ -465,6 +460,7 @@ mod tests {
         let mut expected_messages = background_bash_messages();
         expected_messages.push(ChatItem::User {
             text: user_text.to_string(),
+            timestamp: None,
             from: None,
         });
 
@@ -584,6 +580,7 @@ mod tests {
                 vec![
                     ChatItem::User {
                         text: "Watch the fixture build.".to_string(),
+                        timestamp: None,
                         from: None,
                     },
                     ChatItem::ToolSummary {
@@ -629,6 +626,7 @@ mod tests {
                 vec![
                     ChatItem::User {
                         text: "Delegate a synthetic task.".to_string(),
+                        timestamp: None,
                         from: None,
                     },
                     ChatItem::ToolSummary {
@@ -711,6 +709,7 @@ mod tests {
                 vec![
                     ChatItem::User {
                         text: "Review the synthetic change.".to_string(),
+                        timestamp: None,
                         from: None,
                     },
                     ChatItem::ToolSummary {
@@ -743,6 +742,7 @@ mod tests {
         vec![
             ChatItem::User {
                 text: "Watch the fixture build.".to_string(),
+                timestamp: None,
                 from: None,
             },
             ChatItem::ToolSummary {
