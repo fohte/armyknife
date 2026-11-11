@@ -1058,7 +1058,8 @@ it('inserts Alt-Enter at the cursor without sending the message', async () => {
     actionCalls: onAction.mock.calls,
   })
   expect(snapshot()).toEqual({
-    draft: 'Keep this\n as a draft',
+    draft: `Keep this
+ as a draft`,
     actionCalls: [],
   })
 })
