@@ -2,6 +2,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
+import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
@@ -194,22 +195,8 @@ export function ConversationPaneView({
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      const target = event.target
       if (
         isMobile ||
-        event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        (target instanceof HTMLElement &&
-          (target.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
-      ) {
-        return
-      }
-      if (
-        !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
         waitingQuestion.answer !== null ||
         activeQuestionIndex < 0 ||
@@ -218,11 +205,10 @@ export function ConversationPaneView({
       ) {
         return
       }
-      const choice = Number(event.key)
-      if (choice <= waitingQuestion.choices.length) {
-        event.preventDefault()
-        void onAction('answer', { choice })
-      }
+      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
+      if (choice === null) return
+      event.preventDefault()
+      void onAction('answer', { choice: choice + 1 })
     }
 
     window.addEventListener('keydown', onQuestionKeyDown)

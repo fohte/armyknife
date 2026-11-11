@@ -583,6 +583,35 @@ it('keeps the message composer available while a proposal waits for a choice', (
   })
 })
 
+it('sends Command-Enter from the message composer without answering the proposal', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [proposal])
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLInputElement>('.chat-proposal-option input'),
+    ).click()
+  })
+  const messageField = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.conversation-composer textarea',
+    ),
+  )
+  setTextareaValue(messageField, 'Send a direct message.')
+  const submitEvent = dispatchKeyInAct(messageField, 'Enter', { metaKey: true })
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    submitPrevented: submitEvent.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    submitPrevented: true,
+    actionCalls: [['messages', { content: 'Send a direct message.' }]],
+  })
+})
+
 it('shows a selected answer, dims other choices, and renders Markdown', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [

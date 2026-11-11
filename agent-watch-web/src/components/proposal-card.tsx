@@ -1,6 +1,7 @@
 import { Button } from '@fohte/ui/button'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
+import { numberShortcutChoice } from '#components/conversation-keyboard'
 import type { ProposalAnswer, ProposalOption } from '#types'
 
 type ProposalCardProps = {
@@ -40,6 +41,7 @@ export function ProposalCard({
     null,
   )
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const cardRef = useRef<HTMLElement | null>(null)
   const latestAnswer = answer ?? submittedAnswer
   const isAnswered = latestAnswer !== null || resolved
   const isDisabled = isAnswered || isSubmitting
@@ -70,39 +72,40 @@ export function ProposalCard({
     const onKeyDown = (event: WindowEventMap['keydown']) => {
       const target = event.target
       const targetElement = target instanceof HTMLElement ? target : null
+      const targetCard = targetElement?.closest('.chat-proposal-card') ?? null
+      const answerableCards = document.querySelectorAll(
+        '.chat-proposal-card[data-answerable="true"]',
+      )
+      const latestAnswerableCard = answerableCards.item(
+        answerableCards.length - 1,
+      )
       if (
         isDisabled ||
         event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.shiftKey
+        (targetCard !== null && targetCard !== cardRef.current) ||
+        (targetCard === null && latestAnswerableCard !== cardRef.current)
       ) {
         return
       }
 
       if (event.metaKey && event.key === 'Enter') {
-        if (targetElement?.closest('.conversation-composer')) return
-        if (selectedChoice === null) return
+        if (
+          event.altKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          targetElement?.closest('.conversation-composer')
+        ) {
+          return
+        }
         event.preventDefault()
         void submitAnswer(selectedChoice)
         return
       }
 
-      if (
-        event.metaKey ||
-        (targetElement !== null &&
-          (targetElement.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(targetElement.tagName)))
-      ) {
-        return
-      }
-      if (!/^[1-9]$/.test(event.key)) return
-
-      const choice = Number(event.key) - 1
-      if (choice < options.length) {
-        event.preventDefault()
-        setSelectedChoice(choice)
-      }
+      const choice = numberShortcutChoice(event, options.length)
+      if (choice === null) return
+      event.preventDefault()
+      setSelectedChoice(choice)
     }
 
     window.addEventListener('keydown', onKeyDown)
@@ -125,6 +128,8 @@ export function ProposalCard({
       className="chat-proposal-card"
       aria-label="Proposal"
       data-mobile={isMobile ? 'true' : undefined}
+      data-answerable={isDisabled ? undefined : 'true'}
+      ref={cardRef}
     >
       <h2>Proposal · {status}</h2>
       <h3>{title}</h3>

@@ -418,7 +418,6 @@
 }
 
 .chat-question-card,
-.chat-proposal-card,
 .chat-permission-card {
   width: min(100%, 640px);
   padding: 14px;
@@ -427,167 +426,11 @@
 }
 
 .chat-question-card h2,
-.chat-proposal-card h2,
 .chat-permission-card h2 {
   margin: 0 0 7px;
   color: var(--aw-color-warning);
   font-size: 12px;
   font-weight: 700;
-}
-
-.chat-proposal-card {
-  width: min(100%, 880px);
-}
-
-.chat-proposal-card h3 {
-  margin: 0 0 6px;
-  color: var(--aw-text-primary);
-  font-size: 17px;
-  font-weight: 700;
-  line-height: 1.4;
-}
-
-.chat-proposal-card .chat-proposal-summary {
-  margin: 0 0 12px;
-  color: var(--aw-text-muted);
-  font-size: 13px;
-}
-
-.chat-proposal-options {
-  display: grid;
-  gap: 7px;
-}
-
-.chat-proposal-option {
-  display: flex;
-  min-height: 48px;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 10px;
-  background: var(--aw-bg-surface);
-  cursor: pointer;
-}
-
-.chat-proposal-option[data-selected='true'] {
-  outline: 2px solid var(--aw-text-primary);
-  outline-offset: -2px;
-}
-
-.chat-proposal-option:has(input:disabled) {
-  cursor: default;
-}
-
-.chat-proposal-option input {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  margin: 3px 0 0;
-  accent-color: var(--aw-text-primary);
-}
-
-.chat-proposal-option-content {
-  display: grid;
-  min-width: 0;
-  flex: 1;
-  gap: 3px;
-}
-
-.chat-proposal-option-heading {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.chat-proposal-option-label {
-  color: var(--aw-text-primary);
-  font-size: 15px;
-  font-weight: 700;
-}
-
-.chat-proposal-recommended {
-  flex: 0 0 auto;
-  padding: 1px 5px;
-  border: 1px solid var(--aw-border-emphasis);
-  color: var(--aw-text-body);
-  font-size: 11px;
-}
-
-.chat-proposal-option-description {
-  color: var(--aw-text-body);
-  font-size: 13px;
-}
-
-.chat-proposal-option-details {
-  display: grid;
-  gap: 2px;
-  color: var(--aw-text-muted);
-  font-size: 12.5px;
-}
-
-.chat-proposal-comment-label {
-  display: block;
-  margin: 12px 0 5px;
-  color: var(--aw-text-body);
-  font-size: 12px;
-}
-
-.chat-proposal-comment {
-  display: block;
-  width: 100%;
-  min-height: 46px;
-  padding: 8px 10px;
-  border: 1px solid var(--aw-border-control);
-  border-radius: var(--aw-radius);
-  background: var(--aw-bg-surface);
-  color: var(--aw-text-primary);
-  font: inherit;
-  resize: vertical;
-}
-
-.chat-proposal-comment:focus-visible {
-  outline: 2px solid var(--aw-text-primary);
-  outline-offset: 1px;
-}
-
-.chat-proposal-footer,
-.chat-proposal-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.chat-proposal-footer {
-  justify-content: space-between;
-  margin-top: 12px;
-}
-
-.chat-proposal-actions .aw-button {
-  white-space: nowrap;
-}
-
-.chat-proposal-actions .aw-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-
-.chat-proposal-hint {
-  color: var(--aw-text-muted);
-  font-size: 11px;
-  text-align: right;
-}
-
-.chat-proposal-card[data-mobile='true'] .chat-proposal-option {
-  min-height: 48px;
-}
-
-.chat-proposal-card[data-mobile='true'] .chat-proposal-footer {
-  align-items: flex-start;
-  flex-direction: column;
-}
-
-.chat-proposal-card[data-mobile='true'] .chat-proposal-actions {
-  flex-wrap: wrap;
 }
 
 .chat-question-card p,

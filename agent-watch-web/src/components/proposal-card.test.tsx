@@ -46,6 +46,19 @@ function renderCard(cardProps: Props) {
   })
 }
 
+function renderCards(cardProps: Props[]) {
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <>
+        {cardProps.map((card) => (
+          <ProposalCard {...card} key={card.seq} />
+        ))}
+      </>,
+    )
+  })
+}
+
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
@@ -183,6 +196,58 @@ it('selects a numbered option and sends it with the comment on Command-Enter', a
     selected: [false, true],
     disabled: [true, true],
     comment: 'Keep the earlier prompt short.',
+  })
+})
+
+it('sends an another-option answer on Command-Enter when no choice is selected', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderCard(props({ onAnswer, defaultComment: 'Add a simpler option.' }))
+  const submitEvent = dispatchKey(window, 'Enter', true)
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    submitPrevented: submitEvent.defaultPrevented,
+    answerCalls: onAnswer.mock.calls,
+    status: container.querySelector('h2')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    submitPrevented: true,
+    answerCalls: [[{ choice: null, comment: 'Add a simpler option.' }]],
+    status: 'Proposal · asked for another option',
+  })
+})
+
+it('sends Command-Enter to the proposal card containing the comment field', async () => {
+  const firstAnswer = vi.fn(() => Promise.resolve(true))
+  const secondAnswer = vi.fn(() => Promise.resolve(true))
+  renderCards([
+    props({ defaultChoice: 0, onAnswer: firstAnswer }),
+    props({ seq: 8, defaultChoice: 1, onAnswer: secondAnswer }),
+  ])
+  const commentFields = container.querySelectorAll<HTMLTextAreaElement>(
+    '.chat-proposal-comment',
+  )
+  const submitEvent = dispatchKey(commentFields[1] ?? window, 'Enter', true)
+  await act(async () => {
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    submitPrevented: submitEvent.defaultPrevented,
+    firstCalls: firstAnswer.mock.calls,
+    secondCalls: secondAnswer.mock.calls,
+    statuses: Array.from(
+      container.querySelectorAll('.chat-proposal-card h2'),
+      (heading) => heading.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    submitPrevented: true,
+    firstCalls: [],
+    secondCalls: [[{ choice: 1, comment: null }]],
+    statuses: ['Proposal · waiting for your choice', 'Proposal · chose B'],
   })
 })
 
