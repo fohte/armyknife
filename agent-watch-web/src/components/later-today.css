@@ -91,15 +91,20 @@
   display: flex;
   align-items: start;
   padding: 8px 8px 0 0;
-  opacity: 0;
-  pointer-events: none;
 }
 
-.session-row-layout:hover .session-row-actions,
-.session-row-layout:focus-within .session-row-actions,
-.session-row-layout.actions-visible .session-row-actions {
-  opacity: 1;
-  pointer-events: auto;
+@media (hover: hover) and (pointer: fine) {
+  .session-row-actions {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .session-row-layout:hover .session-row-actions,
+  .session-row-layout:focus-within .session-row-actions,
+  .session-row-layout.actions-visible .session-row-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .session-action-button {

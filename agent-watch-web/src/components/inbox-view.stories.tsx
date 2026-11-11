@@ -285,7 +285,7 @@ export const InboxCannotLoadSessions: Story = {
 }
 
 export const InboxFitsAnIPhone: Story = {
-  name: 'The inbox keeps its actions usable on an iPhone',
+  name: 'The inbox uses its narrow layout on an iPhone',
   args: {
     isMobile: true,
     laterExpanded: false,
