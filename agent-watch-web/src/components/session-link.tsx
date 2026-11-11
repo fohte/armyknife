@@ -45,9 +45,15 @@ export function SessionLink({
           <a
             className="session-link-trigger"
             href={`?session=${encodeURIComponent(session.id)}`}
+            rel={
+              onSelectSession === undefined ? undefined : 'noopener noreferrer'
+            }
+            target={onSelectSession === undefined ? undefined : '_blank'}
             onClick={(event) => {
+              if (event.button !== 0) {
+                return
+              }
               if (
-                event.button !== 0 ||
                 event.metaKey ||
                 event.ctrlKey ||
                 event.shiftKey ||

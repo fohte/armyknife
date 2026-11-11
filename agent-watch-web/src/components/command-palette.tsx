@@ -7,6 +7,7 @@ import {
   type PaletteItem,
   type PaletteScope,
 } from '#command-palette-model'
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import {
   itemColor,
   itemDetail,
@@ -27,6 +28,7 @@ type CommandPaletteProps = {
   initialActionItemId?: string
   onClose: () => void
   onOpenSession: (id: string) => void
+  onOpenSessionBeside: (id: string) => void
   onLater: (id: string) => void
   onOpenInTerminal: (id: string) => void
   onOpenProject: (project: string) => void
@@ -49,6 +51,7 @@ export function CommandPalette({
   initialActionItemId,
   onClose,
   onOpenSession,
+  onOpenSessionBeside,
   onLater,
   onOpenInTerminal,
   onOpenProject,
@@ -74,10 +77,14 @@ export function CommandPalette({
     [query, recentSessionIds, scope, sessions],
   )
   const items = groups.flatMap((group) => group.items)
+  const openBesideShortcut = getCommandPaletteShortcut(navigator.platform)
+  const openBesideModifier =
+    openBesideShortcut.modifier === 'metaKey' ? '⌘' : 'Ctrl'
   const actions =
     actionsFor?.type === 'session'
       ? [
           { id: 'open', label: 'Open session' },
+          { id: 'open-beside', label: 'Open beside' },
           { id: 'later', label: 'Later' },
           { id: 'copy', label: 'Copy session ID' },
           ...(actionsFor.session.canOpenInTerminal === true
@@ -147,6 +154,12 @@ export function CommandPalette({
     switch (action.id) {
       case 'open':
         if (actionsFor.type === 'session') onOpenSession(actionsFor.session.id)
+        setActionsFor(null)
+        return
+      case 'open-beside':
+        if (actionsFor.type === 'session') {
+          onOpenSessionBeside(actionsFor.session.id)
+        }
         setActionsFor(null)
         return
       case 'later':
@@ -230,7 +243,15 @@ export function CommandPalette({
             setActiveIndex((index) => Math.max(0, index - 1))
           } else if (event.key === 'Enter') {
             event.preventDefault()
-            activate(items[activeIndex])
+            const item = items[activeIndex]
+            if (
+              item?.type === 'session' &&
+              event[openBesideShortcut.modifier]
+            ) {
+              onOpenSessionBeside(item.session.id)
+            } else {
+              activate(item)
+            }
           } else if (event.key === 'ArrowRight') {
             const input = inputRef.current
             if (
@@ -421,6 +442,9 @@ export function CommandPalette({
             <>
               <span>
                 <kbd>↵</kbd> Open
+              </span>
+              <span>
+                <kbd>{openBesideModifier}↵</kbd> Open beside
               </span>
               <span>
                 <kbd>→</kbd> Actions

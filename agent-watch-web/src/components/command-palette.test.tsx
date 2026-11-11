@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { CommandPalette } from '#components/command-palette'
 import type { Session } from '#types'
 
@@ -44,6 +45,7 @@ function renderPalette(
         recentSessionIds={[]}
         onClose={() => undefined}
         onOpenSession={() => undefined}
+        onOpenSessionBeside={() => undefined}
         onLater={() => undefined}
         onOpenInTerminal={() => undefined}
         onOpenProject={() => undefined}
@@ -53,6 +55,11 @@ function renderPalette(
     )
   })
 }
+
+const openBesideModifier =
+  getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
+    ? '⌘'
+    : 'Ctrl'
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -82,6 +89,38 @@ it('opens the project for the active result with a prefix and Enter', async () =
   })
 
   expect(onOpenProject.mock.calls).toEqual([['notification refresh']])
+})
+
+it('opens the selected session beside with the platform modifier and Enter', () => {
+  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
+  const onOpenSession = vi.fn<(id: string) => void>()
+  const onOpenSessionBeside = vi.fn<(id: string) => void>()
+  renderPalette({ onOpenSession, onOpenSessionBeside })
+  const input = container.querySelector<HTMLInputElement>(
+    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+  )
+  if (input === null) throw new Error('Palette input was not rendered')
+  const event = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    metaKey: true,
+    bubbles: true,
+    cancelable: true,
+  })
+
+  act(() => {
+    input.dispatchEvent(event)
+  })
+
+  const getActual = () => ({
+    defaultPrevented: event.defaultPrevented,
+    besideCalls: onOpenSessionBeside.mock.calls,
+    openCalls: onOpenSession.mock.calls,
+  })
+  expect(getActual()).toEqual({
+    defaultPrevented: true,
+    besideCalls: [['session-alerts']],
+    openCalls: [],
+  })
 })
 
 it('shows the primary task and the count of other linked tasks for a session', () => {
@@ -275,7 +314,13 @@ it.each([
   [
     'results',
     undefined,
-    ['↵ Open', '→ Actions', 'Tab Scope', '# task · @ project · > command'],
+    [
+      '↵ Open',
+      `${openBesideModifier}↵ Open beside`,
+      '→ Actions',
+      'Tab Scope',
+      '# task · @ project · > command',
+    ],
     'command-palette-hint-legend',
   ],
   ['actions', 'session-alerts', ['↵ Select', '← Back', '↑↓ Navigate'], ''],
@@ -431,7 +476,13 @@ it('opens the highlighted actions when the query caret is at the end', async () 
     Array.from(container.querySelectorAll('[role="menuitem"]')).map(
       (item) => item.textContent,
     ),
-  ).toEqual(['Open session', 'Later', 'Copy session ID', 'Open in terminal'])
+  ).toEqual([
+    'Open session',
+    'Open beside',
+    'Later',
+    'Copy session ID',
+    'Open in terminal',
+  ])
 })
 
 it('opens the highlighted session actions with ArrowRight and runs Later', async () => {
@@ -439,10 +490,21 @@ it('opens the highlighted session actions with ArrowRight and runs Later', async
   renderPalette({ onLater })
 
   await act(async () => {
-    await userEvent.keyboard('{ArrowRight}{ArrowDown}{Enter}')
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}')
   })
 
   expect(onLater.mock.calls).toEqual([['session-alerts']])
+})
+
+it('opens the highlighted session beside from the actions submenu', async () => {
+  const onOpenSessionBeside = vi.fn<(id: string) => void>()
+  renderPalette({ onOpenSessionBeside })
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}{ArrowDown}{Enter}')
+  })
+
+  expect(onOpenSessionBeside.mock.calls).toEqual([['session-alerts']])
 })
 
 it('opens the highlighted session in its terminal from the actions submenu', async () => {
@@ -451,7 +513,7 @@ it('opens the highlighted session in its terminal from the actions submenu', asy
 
   await act(async () => {
     await userEvent.keyboard(
-      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
+      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
     )
   })
 
@@ -462,11 +524,16 @@ it('copies the session ID from the actions submenu with Enter', async () => {
   const writeText = vi
     .fn<(text: string) => Promise<void>>()
     .mockResolvedValue(undefined)
-  vi.stubGlobal('navigator', { clipboard: { writeText } })
+  vi.stubGlobal('navigator', {
+    clipboard: { writeText },
+    platform: 'Linux x86_64',
+  })
   renderPalette()
 
   await act(async () => {
-    await userEvent.keyboard('{ArrowRight}{ArrowDown}{ArrowDown}{Enter}')
+    await userEvent.keyboard(
+      '{ArrowRight}{ArrowDown}{ArrowDown}{ArrowDown}{Enter}',
+    )
   })
 
   const snapshot = () => ({
@@ -493,5 +560,5 @@ it('hides terminal action when the session has no terminal capability', () => {
     Array.from(container.querySelectorAll('[role="menuitem"]')).map(
       (item) => item.textContent,
     ),
-  ).toEqual(['Open session', 'Later', 'Copy session ID'])
+  ).toEqual(['Open session', 'Open beside', 'Later', 'Copy session ID'])
 })
