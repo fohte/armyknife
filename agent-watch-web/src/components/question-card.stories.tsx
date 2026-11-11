@@ -57,7 +57,7 @@ export const MobileQuestionWaitsForAnAnswer: Story = {
 export const QuestionShowsSelectedAnswer: Story = {
   name: 'A question marks the choice selected by the user',
   args: {
-    answer: 'Retry once without delay',
+    answer: 'はい',
     canAnswer: false,
   },
 }

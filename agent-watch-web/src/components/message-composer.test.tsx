@@ -13,10 +13,12 @@ function requireElement<T extends Element>(element: T | null): T {
 }
 
 function ComposerHarness({
+  isMobile = false,
   onSend = () => undefined,
   onPasteFiles = () => undefined,
   onRemoveAttachment = () => undefined,
 }: {
+  isMobile?: boolean
   onSend?: () => void
   onPasteFiles?: (files: File[]) => void
   onRemoveAttachment?: (id: string) => void
@@ -28,7 +30,7 @@ function ComposerHarness({
       placeholder="Message session"
       disabled={false}
       isSending={false}
-      isMobile={false}
+      isMobile={isMobile}
       canInterrupt={false}
       attachments={[]}
       onDraftChange={setDraft}
@@ -69,6 +71,23 @@ afterEach(() => {
   root = null
   container.remove()
   vi.unstubAllGlobals()
+})
+
+it('uses one textarea row on mobile and two rows on desktop', () => {
+  const desktopRows = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  ).rows
+
+  act(() => {
+    root?.render(<ComposerHarness isMobile />)
+  })
+
+  const mobileRows = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  ).rows
+
+  const snapshot = () => ({ desktopRows, mobileRows })
+  expect(snapshot()).toEqual({ desktopRows: 2, mobileRows: 1 })
 })
 
 it('grows with the draft and scrolls after reaching half the viewport', () => {

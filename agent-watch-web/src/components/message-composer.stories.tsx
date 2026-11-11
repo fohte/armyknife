@@ -1,6 +1,20 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { MessageComposer } from '#components/message-composer'
+
+const mobileDecorator: Decorator = (Story) => (
+  <div
+    style={{
+      width: '390px',
+      height: '844px',
+      display: 'flex',
+      alignItems: 'end',
+      background: 'var(--aw-bg-app)',
+    }}
+  >
+    <Story />
+  </div>
+)
 
 const meta = {
   component: MessageComposer,
@@ -78,21 +92,7 @@ export const MobileComposer: Story = {
     isMobile: true,
     placeholder: 'Message',
   },
-  decorators: [
-    (Story) => (
-      <div
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          alignItems: 'end',
-          background: 'var(--aw-bg-app)',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [mobileDecorator],
 }
 
 export const MobileComposerWithInterrupt: Story = {
@@ -102,19 +102,5 @@ export const MobileComposerWithInterrupt: Story = {
     canInterrupt: true,
     placeholder: 'Message',
   },
-  decorators: [
-    (Story) => (
-      <div
-        style={{
-          width: '390px',
-          height: '844px',
-          display: 'flex',
-          alignItems: 'end',
-          background: 'var(--aw-bg-app)',
-        }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [mobileDecorator],
 }
