@@ -61,6 +61,7 @@ fn router_with_state(state: ActionState) -> Router {
         .route("/sessions/{id}/interrupt", post(interrupt))
         .route("/sessions/{id}/focus", post(focus))
         .route("/sessions/{id}/read", post(mark_read))
+        .route("/sessions/{id}/primary-task", post(set_primary_task))
         .route("/sessions/{id}/archive", post(archive))
         .with_state(state)
 }
@@ -351,6 +352,32 @@ async fn mark_read(
         store::mark_session_read_in(&sessions_dir, &session.session_id, Utc::now())
     })
     .await?;
+    Ok(Json(Success::new()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PrimaryTaskRequest {
+    task_id: String,
+}
+
+async fn set_primary_task(
+    State(state): State<ActionState>,
+    RoutePath(id): RoutePath<String>,
+    Json(request): Json<PrimaryTaskRequest>,
+) -> Result<Json<Success>, ApiError> {
+    let session = load_session(state.clone(), id).await?;
+    if request.task_id.trim().is_empty() {
+        return Err(ApiError::bad_request("taskId cannot be empty"));
+    }
+    let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
+    let changed = run_blocking(move || {
+        store::set_watch_web_primary_task_in(&sessions_dir, &session.session_id, &request.task_id)
+    })
+    .await?;
+    if !changed {
+        return Err(ApiError::not_found());
+    }
     Ok(Json(Success::new()))
 }
 
@@ -1106,6 +1133,80 @@ mod tests {
                     "calls": [],
                 },
                 "session": normalize_session(expected),
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn primary_task_selection_is_persisted_and_publishes_a_revision(
+        action_context: ActionContext,
+    ) {
+        let session = session("sample-session");
+        action_context.save_session(&session);
+        let sessions_dir = action_context.temp_dir.path().join("sessions");
+        let before_revision = store::session_store_revision_from(&sessions_dir).unwrap();
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/primary-task",
+                json!({ "taskId": "sample-task" }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                store::watch_web_session_states_from(&sessions_dir).unwrap(),
+                store::session_store_revision_from(&sessions_dir).unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                vec![store::WatchWebSessionState {
+                    session_id: "sample-session".to_string(),
+                    later_until: None,
+                    activity_snapshot: None,
+                    until_activity: false,
+                    is_today: false,
+                    is_compacting: false,
+                    primary_task_id: Some("sample-task".to_string()),
+                }],
+                before_revision + 1,
+            ),
+        );
+    }
+
+    #[rstest]
+    #[case::empty("")]
+    #[case::whitespace("  ")]
+    #[tokio::test]
+    async fn primary_task_selection_rejects_empty_task_ids(
+        #[case] task_id: &str,
+        action_context: ActionContext,
+    ) {
+        action_context.save_session(&session("sample-session"));
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/primary-task",
+                json!({ "taskId": task_id }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::BAD_REQUEST.as_u16(),
+                "body": { "error": "taskId cannot be empty" },
+                "calls": [],
             }),
         );
     }
