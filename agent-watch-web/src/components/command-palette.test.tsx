@@ -159,6 +159,30 @@ it.each([
   },
 )
 
+it('adds the task number to result rows but not action headings', async () => {
+  renderPalette({ initialQuery: '#notification' })
+
+  expect(
+    container.querySelector('.command-palette-item-heading strong')
+      ?.textContent,
+  ).toBe('#42 Improve notifications')
+
+  await act(async () => {
+    await userEvent.keyboard('{ArrowRight}')
+  })
+
+  const snapshot = () => ({
+    actionHeading: container.querySelector('[role="menu"] h2')?.textContent,
+    actionLabel: container
+      .querySelector('[role="menu"]')
+      ?.getAttribute('aria-label'),
+  })
+  expect(snapshot()).toEqual({
+    actionHeading: 'Improve notifications',
+    actionLabel: 'Improve notifications actions',
+  })
+})
+
 it('opens a matching project from the project scope with Enter', async () => {
   const onOpenProject = vi.fn<(name: string) => void>()
   renderPalette({ onOpenProject })

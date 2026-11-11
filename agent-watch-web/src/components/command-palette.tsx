@@ -38,12 +38,19 @@ function itemTitle(item: PaletteItem) {
     case 'session':
       return item.session.title
     case 'task':
-      return `#${String(item.task.number)} ${item.task.title}`
+      return item.task.title
     case 'project':
       return item.name
     case 'command':
       return item.label
   }
+}
+
+function itemResultTitle(item: PaletteItem) {
+  if (item.type === 'task') {
+    return `#${String(item.task.number)} ${item.task.title}`
+  }
+  return itemTitle(item)
 }
 
 function itemSubtitle(item: PaletteItem) {
@@ -461,7 +468,7 @@ export function CommandPalette({
                       </span>
                       <span className="command-palette-item-main">
                         <span className="command-palette-item-heading">
-                          <strong>{itemTitle(item)}</strong>
+                          <strong>{itemResultTitle(item)}</strong>
                           {item.type === 'session' ? (
                             <span className="command-palette-item-kind">
                               {item.session.kind ??
@@ -473,7 +480,13 @@ export function CommandPalette({
                           {itemSubtitle(item)}
                         </span>
                       </span>
-                      <span className="command-palette-item-detail">
+                      <span
+                        className={`command-palette-item-detail${
+                          item.type === 'session' || item.type === 'command'
+                            ? ' is-monospace'
+                            : ''
+                        }`}
+                      >
                         {itemDetail(item)}
                       </span>
                     </button>
