@@ -3,16 +3,25 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QuestionCard } from '#components/question-card'
 
 const callbacks = {
-  onAnswer: () => undefined,
+  onAnswer: () => Promise.resolve(true),
+  onSkip: () => Promise.resolve(true),
+  onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
 }
 
 const meta = {
   component: QuestionCard,
   args: {
-    question:
-      '設定キー notify.retry.max を追加してよいですか? 既定値は 5 回にします。',
-    choices: ['はい', 'いいえ、別の方法を指示する'],
+    header: 'Retry policy',
+    question: 'Which **retry policy** should be used?',
+    choices: [
+      {
+        label: 'Retry **three times** with exponential backoff',
+        description: 'Wait briefly before each retry.',
+      },
+      { label: 'Retry once without delay' },
+    ],
+    multiSelect: false,
     answer: null,
     canAnswer: true,
     isMobile: false,
@@ -38,10 +47,17 @@ export const QuestionWaitsForAnAnswer: Story = {
   ],
 }
 
+export const QuestionShowsItsMultipleSelectType: Story = {
+  name: 'A question is marked as a multiple select question',
+  args: {
+    multiSelect: true,
+  },
+}
+
 export const QuestionShowsSelectedAnswer: Story = {
   name: 'A question marks the choice selected by the user',
   args: {
-    answer: 'はい',
+    answer: 'Retry once without delay',
     canAnswer: false,
   },
 }
@@ -58,8 +74,8 @@ export const QuestionOffersALinkedChoice: Story = {
   name: 'A choice shows its link destination as plain text',
   args: {
     choices: [
-      'Follow the [setup guide](https://example.org/guide)',
-      'Use the default settings',
+      { label: 'Follow the [setup guide](https://example.org/guide)' },
+      { label: 'Use the default settings' },
     ],
   },
 }

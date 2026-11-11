@@ -34,7 +34,7 @@ const actions: SessionActions = {
 const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
-  choices: ['Retry a few times', 'Retry once'],
+  choices: [{ label: 'Retry a few times' }, { label: 'Retry once' }],
   answer: null,
 }
 
@@ -125,7 +125,7 @@ function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
   onSelectSession: (id: string) => void = () => undefined,
-  viewMessages: readonly ChatItem[] = [question],
+  viewMessages: readonly ChatItem[] = [],
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
@@ -333,7 +333,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
   })
   const desktopButtonText = desktopButton.textContent
 
-  renderView(onAction, session, undefined, [question], actions, true)
+  renderView(onAction, session, undefined, [], actions, true)
   const mobileButton = requireElement(
     container.querySelector<HTMLButtonElement>(
       ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
@@ -379,7 +379,7 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -434,7 +434,7 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -476,7 +476,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -519,7 +519,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -548,32 +548,163 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('answers a question from a number key or a choice click', () => {
+it('prevents a choice click from duplicating a number-key answer', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, session, undefined, [question])
 
-  const keyEvent = dispatchKeyInAct(
-    requireElement(container.querySelector('.conversation-pane')),
-    '2',
-  )
-  act(() => {
+  const keyEvent = new KeyboardEvent('keydown', {
+    key: '2',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    requireElement(container.querySelector('.conversation-pane')).dispatchEvent(
+      keyEvent,
+    )
     container
       .querySelector<HTMLButtonElement>('.chat-question-choices button')
       ?.click()
+    await Promise.resolve()
+    await Promise.resolve()
   })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    keyEvent.defaultPrevented,
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    keyDefaultPrevented: keyEvent.defaultPrevented,
+    choiceDisabled: container.querySelector<HTMLButtonElement>(
+      '.chat-question-choices button',
+    )?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [['answer', { choice: 2 }]],
+    keyDefaultPrevented: true,
+    choiceDisabled: true,
+  })
+})
+
+it('closes a question before sending a contextual freeform answer', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    {
+      ...question,
+      header: 'Output format',
+      question: 'Which format should be used?',
+    },
   ])
-  const expected = JSON.stringify([
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    ['answer', { skip: true }],
     [
-      ['answer', { choice: 2 }],
-      ['answer', { choice: 1 }],
+      'messages',
+      {
+        content:
+          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+      },
     ],
-    true,
   ])
-  expect(actual).toBe(expected)
+})
+
+it('does not send a freeform answer when skipping the question fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  onAction.mockResolvedValueOnce(false)
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+})
+
+it('does not answer a choice shortcut while a freeform answer is sending', async () => {
+  let resolveMessage: (sent: boolean) => void = () => undefined
+  const messageResult = new Promise<boolean>((resolve) => {
+    resolveMessage = resolve
+  })
+  const onAction = vi.fn((action: string) =>
+    action === 'messages' ? messageResult : Promise.resolve(true),
+  )
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const event = new KeyboardEvent('keydown', {
+    key: '1',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(event)
+  })
+  const duringSend = {
+    textareaDisabled: textarea.disabled,
+    eventTargetIsBody: event.target === document.body,
+    eventDefaultPrevented: event.defaultPrevented,
+    actionCalls: onAction.mock.calls,
+  }
+
+  await act(async () => {
+    resolveMessage(true)
+    await messageResult
+    await Promise.resolve()
+  })
+
+  const expectedCalls = [
+    ['answer', { skip: true }],
+    [
+      'messages',
+      {
+        content:
+          'My answer to "Which retry policy should be used?" is:\nUse a fictional format',
+      },
+    ],
+  ]
+  const snapshot = () => ({ duringSend, actionCalls: onAction.mock.calls })
+  expect(snapshot()).toEqual({
+    duringSend: {
+      textareaDisabled: true,
+      eventTargetIsBody: true,
+      eventDefaultPrevented: false,
+      actionCalls: expectedCalls,
+    },
+    actionCalls: expectedCalls,
+  })
 })
 
 it('keeps the message composer available while a proposal waits for a choice', () => {
@@ -634,7 +765,7 @@ it('shows a selected answer, dims other choices, and renders Markdown', () => {
     {
       ...question,
       question: 'Which **retry** policy should be used?',
-      choices: ['Retry *a few* times', 'Retry once'],
+      choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
       answer: 'Retry once',
     },
   ])

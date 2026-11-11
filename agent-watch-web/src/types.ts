@@ -101,8 +101,10 @@ export type ChatItem =
   | { type: 'tool_in_progress'; tool: string; target?: string }
   | {
       type: 'question'
+      header?: string
       question: string
-      choices: string[]
+      choices: QuestionChoice[]
+      multi_select?: boolean
       answer: string | null
     }
   | {
@@ -125,6 +127,11 @@ export type ChatItem =
       review: 'ok' | 'change' | null
       createdAt: string
     }
+
+export type QuestionChoice = {
+  label: string
+  description?: string
+}
 
 export type ProposalOption = {
   label: string

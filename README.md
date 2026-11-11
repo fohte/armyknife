@@ -1128,7 +1128,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
-- `POST /api/sessions/{id}/answer` with `{"choice":1}`
+- `POST /api/sessions/{id}/answer` with `{"choice":1}` or `{"skip":true}`
 - `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve`
 - `POST /api/sessions/{id}/permission/reject`
@@ -1173,6 +1173,15 @@ curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
   -H 'Origin: http://127.0.0.1:4317' \
   -H 'Content-Type: application/json' \
   -d '{"choice":1}'
+```
+
+Skip a question by sending Escape:
+
+```sh
+curl -X POST http://127.0.0.1:4317/api/sessions/example-session/answer \
+  -H 'Origin: http://127.0.0.1:4317' \
+  -H 'Content-Type: application/json' \
+  -d '{"skip":true}'
 ```
 
 ```sh

@@ -3,9 +3,8 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
+import { useCallback, useLayoutEffect, useRef } from 'react'
 
-import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
@@ -170,7 +169,6 @@ export function ConversationPaneView({
       message.answer === null &&
       !message.resolved,
   )
-  const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
   const linkedTasks =
@@ -211,37 +209,6 @@ export function ConversationPaneView({
   const openInTerminal = () => {
     void onAction('focus')
   }
-
-  useEffect(() => {
-    const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      if (
-        isMobile ||
-        waitingQuestion?.type !== 'question' ||
-        waitingQuestion.answer !== null ||
-        activeQuestionIndex < 0 ||
-        !actionsReady ||
-        actions?.answerQuestion !== true
-      ) {
-        return
-      }
-      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
-      if (choice === null) return
-      event.preventDefault()
-      void onAction('answer', { choice: choice + 1 })
-    }
-
-    window.addEventListener('keydown', onQuestionKeyDown)
-    return () => {
-      window.removeEventListener('keydown', onQuestionKeyDown)
-    }
-  }, [
-    actions?.answerQuestion,
-    actionsReady,
-    activeQuestionIndex,
-    isMobile,
-    onAction,
-    waitingQuestion,
-  ])
 
   useLayoutEffect(() => {
     const scrollContainer = scrollRef.current
