@@ -5,33 +5,34 @@ import { userEvent } from 'vitest/browser'
 
 import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import { SessionLink } from '#components/session-link'
-import type { Session } from '#types'
+import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
+import type { SessionLinkTarget } from '#types'
 
-const linkedSession: Session = {
+const linkedSession: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  category: 'in_progress',
-  isPaused: false,
+  engine: 'Claude',
+  workType: 'PM',
   kind: 'Plan',
   title: 'Inspect an example workflow',
-  preview: null,
-  elapsedSeconds: 30,
-  unread: false,
+  preview: 'Review the sample configuration.',
+  elapsedSeconds: 120,
   task: {
     id: 'sample-task',
     number: 24,
     title: 'Inspect the example workflow',
     priority: 2,
   },
+  linkedTaskCount: 3,
   repo: 'sample-org/example-service',
-  project: 'Example service',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
 }
 const openBesideModifier =
   getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
     ? '⌘'
     : 'Ctrl'
+const expectedCardText =
+  `Inspect an example workflowPM · ClaudePlan · Review the sample configuration. · 2m` +
+  `P2 #24Inspect the example workflow +2sample-org/example-service` +
+  `Click to open · ${openBesideModifier}-click to open beside`
 
 let container: HTMLDivElement
 let root: Root | null = null
@@ -69,11 +70,16 @@ it('shows session details on hover', async () => {
     linkClass: link.className,
     linkHref: link.getAttribute('href'),
     cardText: card?.textContent ?? null,
+    kind:
+      card
+        ?.querySelector('.session-link-card-kind')
+        ?.getAttribute('data-session-kind') ?? null,
   })
   expect(getActual()).toEqual({
     linkClass: 'session-link-trigger',
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    cardText: `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
+    cardText: expectedCardText,
+    kind: 'plan',
   })
 })
 
@@ -100,26 +106,92 @@ it('keeps the card open while the pointer is over it', async () => {
   })
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
+    expectedCardText,
   )
 })
 
-it('labels a paused session in the detail card', () => {
+it('hides unavailable session details', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
-      <SessionLink open session={{ ...linkedSession, isPaused: true }}>
+      <SessionLink
+        open
+        session={{
+          ...linkedSession,
+          engine: undefined,
+          workType: null,
+          kind: null,
+          preview: null,
+          elapsedSeconds: undefined,
+          task: null,
+          repo: '',
+        }}
+      >
         sample-session
       </SessionLink>,
     )
   })
 
-  expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    `Inspect an example workflowIn progress (paused)tq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
-  )
+  const card = document.querySelector('.session-link-card')
+  const getActual = () => ({
+    heading:
+      card?.querySelector('.session-link-card-heading')?.textContent ?? null,
+    status:
+      card?.querySelector('.session-link-card-status')?.textContent ?? null,
+    task:
+      card?.querySelector('.session-link-card-task-row')?.textContent ?? null,
+    repo: card?.querySelector('.session-link-card-repo')?.textContent ?? null,
+    hint: card?.querySelector('.session-link-card-hint')?.textContent ?? null,
+  })
+  expect(getActual()).toEqual({
+    heading: 'Inspect an example workflow',
+    status: null,
+    task: null,
+    repo: null,
+    hint: `Click to open · ${openBesideModifier}-click to open beside`,
+  })
 })
 
-it('explains when no tq task is linked', () => {
+it('updates elapsed time without changing the session target', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionLinkElapsedSecondsContext.Provider
+        value={new Map([[linkedSession.id, 120]])}
+      >
+        <SessionLink open session={linkedSession}>
+          sample-session
+        </SessionLink>
+      </SessionLinkElapsedSecondsContext.Provider>,
+    )
+  })
+
+  act(() => {
+    root?.render(
+      <SessionLinkElapsedSecondsContext.Provider
+        value={new Map([[linkedSession.id, 180]])}
+      >
+        <SessionLink open session={linkedSession}>
+          sample-session
+        </SessionLink>
+      </SessionLinkElapsedSecondsContext.Provider>,
+    )
+  })
+
+  const getActual = () => ({
+    status:
+      document.querySelector('.session-link-card-status')?.textContent ?? null,
+    details:
+      document.querySelector('.session-link-card-status-details')
+        ?.textContent ?? null,
+  })
+  expect(getActual()).toEqual({
+    status: 'Plan · Review the sample configuration. · 3m',
+    details: ' · Review the sample configuration. · 3m',
+  })
+})
+
+it('omits the task row when no tq task is linked', () => {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -129,9 +201,17 @@ it('explains when no tq task is linked', () => {
     )
   })
 
-  expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    `Inspect an example workflowIn progressNo linked tq taskrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
-  )
+  const getActual = () => ({
+    task:
+      document.querySelector('.session-link-card-task-row')?.textContent ??
+      null,
+    repo:
+      document.querySelector('.session-link-card-repo')?.textContent ?? null,
+  })
+  expect(getActual()).toEqual({
+    task: null,
+    repo: 'sample-org/example-service',
+  })
 })
 
 it('opens the session when clicked while the card is visible', async () => {
@@ -160,7 +240,7 @@ it('opens the session when clicked while the card is visible', async () => {
   })
   expect(getActual()).toEqual({
     linkHref: '?session=aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-    cardText: `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
+    cardText: expectedCardText,
     selectedIds: [linkedSession.id],
   })
 })
@@ -218,6 +298,6 @@ it('shows the card when a keyboard user focuses the link', async () => {
   await act(async () => userEvent.tab())
 
   expect(document.querySelector('.session-link-card')?.textContent).toBe(
-    `Inspect an example workflowIn progresstq #24 Inspect the example workflowrepo sample-org/example-serviceClick to open · ${openBesideModifier}-click to open beside`,
+    expectedCardText,
   )
 })

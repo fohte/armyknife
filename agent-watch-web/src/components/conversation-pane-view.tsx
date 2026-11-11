@@ -3,7 +3,7 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useRef } from 'react'
+import { useCallback, useMemo, useRef } from 'react'
 
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
@@ -13,6 +13,7 @@ import type {
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { SessionHeading } from '#components/session-heading'
+import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
@@ -137,6 +138,13 @@ export function ConversationPaneView({
     start,
   })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
+  const sessionElapsedSecondsById = useMemo(
+    () =>
+      new Map(
+        sessions.map(({ id, elapsedSeconds }) => [id, elapsedSeconds] as const),
+      ),
+    [sessions],
+  )
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
   onSelectSessionRef.current = onSelectSession
@@ -503,7 +511,11 @@ export function ConversationPaneView({
     </section>
   )
 
-  if (isMobile) return conversationPane
-
-  return conversationPane
+  return (
+    <SessionLinkElapsedSecondsContext.Provider
+      value={sessionElapsedSecondsById}
+    >
+      {conversationPane}
+    </SessionLinkElapsedSecondsContext.Provider>
+  )
 }

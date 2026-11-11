@@ -1,28 +1,24 @@
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionLink } from '#components/session-link'
-import type { Session } from '#types'
+import type { SessionLinkTarget } from '#types'
 
-const session: Session = {
+const session: SessionLinkTarget = {
   id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
-  category: 'needs_action',
-  isPaused: true,
+  engine: 'Claude',
+  workType: 'PM',
   kind: 'Review',
   title: 'Review a sample change',
-  preview: null,
-  elapsedSeconds: 30,
-  unread: false,
+  preview: 'Please review the sample design.',
+  elapsedSeconds: 120,
   task: {
     id: 'sample-task',
     number: 24,
     title: 'Inspect the example workflow',
     priority: 2,
   },
+  linkedTaskCount: 3,
   repo: 'sample-org/example-service',
-  project: 'Example service',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
 }
 
 const meta = {
@@ -38,13 +34,23 @@ type Story = StoryObj<typeof meta>
 
 export const CardIsOpen: Story = {
   args: { open: true },
-  name: 'An open session link card shows state, task, and repository',
+  name: 'The open card shows session activity and linked tasks',
 }
 
 export const SessionHasNoTask: Story = {
   args: {
     open: true,
-    session: { ...session, task: null },
+    session: {
+      ...session,
+      engine: undefined,
+      workType: null,
+      kind: null,
+      preview: null,
+      elapsedSeconds: undefined,
+      task: null,
+      linkedTaskCount: 0,
+      repo: '',
+    },
   },
-  name: 'The session card explains when no tq task is linked',
+  name: 'The card hides activity details when the session has none',
 }

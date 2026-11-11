@@ -33,41 +33,128 @@
 }
 
 .session-link-card-title {
-  padding: 0 12px;
+  min-width: 0;
+  overflow: hidden;
+  flex: 0 1 auto;
   font-size: 14px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.session-link-card-state {
-  margin-top: 2px;
+.session-link-card-heading,
+.session-link-card-status,
+.session-link-card-task-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
   padding: 0 12px;
+}
+
+.session-link-card-heading {
+  overflow: hidden;
+}
+
+.session-link-card-work-details {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  color: var(--aw-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-link-card-status {
+  margin-top: 2px;
   color: var(--aw-text-body);
+}
+
+.session-link-card-kind {
+  flex: none;
   font-weight: 700;
 }
 
-.session-link-card-task,
+.session-link-card-status-details {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-link-card-footer-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 12px 8px;
+}
+
+.session-link-card-task-row {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.session-link-card-task-row,
 .session-link-card-repo {
   overflow-wrap: anywhere;
 }
 
-.session-link-card-task {
+.session-link-card-task-row {
+  flex: 1;
   margin-top: 2px;
-  padding: 0 12px;
   color: var(--aw-text-secondary);
 }
 
+.session-link-card-task-reference,
 .session-link-card-repo {
-  padding: 0 12px 8px;
-  color: var(--aw-text-secondary);
   font-family: var(--font-mono);
 }
 
-.session-link-card-state[data-category='needs_action'] {
+.session-link-card-task-reference {
+  flex: none;
+  white-space: nowrap;
+}
+
+.session-link-card-task-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-link-card-task-count {
+  flex: none;
+  white-space: nowrap;
+}
+
+.session-link-card-repo {
+  max-width: 42%;
+  flex: none;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--aw-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-link-card-kind[data-session-kind='question'],
+.session-link-card-kind[data-session-kind='approve'],
+.session-link-card-kind[data-session-kind='review'],
+.session-link-card-kind[data-session-kind='plan'],
+.session-link-card-kind[data-session-kind='proposal'] {
   color: var(--aw-color-warning);
 }
 
-.session-link-card-state[data-category='in_progress'] {
-  color: var(--aw-color-working);
+.session-link-card-kind[data-session-kind='error'] {
+  color: var(--aw-color-error);
+}
+
+.session-link-card-kind[data-session-kind='stopped'] {
+  color: var(--aw-text-muted);
 }
 
 .session-link-card-hint {
