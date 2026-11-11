@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.599](https://github.com/fohte/armyknife/compare/v0.1.598...v0.1.599) (2026-11-11)
+
+
+### Performance Improvements
+
+* **agent-watch-web:** skip unchanged row renders ([#1561](https://github.com/fohte/armyknife/issues/1561)) ([bd942f3](https://github.com/fohte/armyknife/commit/bd942f345e48e8b10928e858db2451336e94627a))
+
 ## [0.1.598](https://github.com/fohte/armyknife/compare/v0.1.597...v0.1.598) (2026-11-11)
 
 
