@@ -181,6 +181,7 @@ fn parse_with_background_tasks_and_image_directory(
         if queued_prompt_delivery_is_on_active_branch(&record, &mut transcript_nodes) {
             queue.observe_queued_prompt_delivery(&record, user_marker);
         }
+        background_tasks.finish_notification(&record);
         match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
@@ -208,7 +209,6 @@ fn parse_with_background_tasks_and_image_directory(
                 }
             }
             Some("user") => {
-                background_tasks.finish_notification(&record);
                 if let Some(message) = record.get("message") {
                     let tool_use_result = record
                         .get("toolUseResult")
