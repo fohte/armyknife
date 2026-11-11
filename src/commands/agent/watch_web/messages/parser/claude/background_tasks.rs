@@ -563,15 +563,17 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "2 actions".to_string(),
+                        summary: format!("Bash ×1  {result_tool} ×1"),
                         operations: vec![
                             ToolOperation {
                                 tool: "Bash".to_string(),
                                 target: Some("watch fixture build".to_string()),
+                                failed: false,
                             },
                             ToolOperation {
                                 tool: result_tool.to_string(),
                                 target: None,
+                                failed: false,
                             },
                         ],
                     },
@@ -606,10 +608,11 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "1 action".to_string(),
+                        summary: "Task ×1".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Task".to_string(),
                             target: Some("FixtureExplorer · Review the synthetic task".to_string()),
+                            failed: false,
                         }],
                     },
                 ],
@@ -685,12 +688,13 @@ mod tests {
                         from: None,
                     },
                     ChatItem::ToolSummary {
-                        summary: "1 action".to_string(),
+                        summary: "Agent ×1".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Agent".to_string(),
                             target: Some(
                                 "FixtureExplorer · Review the synthetic change".to_string(),
                             ),
+                            failed: false,
                         }],
                     },
                 ],
@@ -716,10 +720,11 @@ mod tests {
                 from: None,
             },
             ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "Bash ×1".to_string(),
                 operations: vec![ToolOperation {
                     tool: "Bash".to_string(),
                     target: Some("watch fixture build".to_string()),
+                    failed: false,
                 }],
             },
         ]
