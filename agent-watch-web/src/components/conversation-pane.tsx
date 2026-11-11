@@ -55,6 +55,14 @@ function isChatItem(value: unknown): value is ChatItem {
         Array.isArray(value['content']) &&
         value['content'].every(isUserContentPart)
       )
+    case 'subagent_report':
+      return (
+        typeof value['agent_id'] === 'string' &&
+        typeof value['agent_name'] === 'string' &&
+        (value['description'] === undefined ||
+          typeof value['description'] === 'string') &&
+        typeof value['text'] === 'string'
+      )
     case 'event':
       return (
         (value['kind'] === 'armyknife' ||
