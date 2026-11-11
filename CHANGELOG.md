@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.588](https://github.com/fohte/armyknife/compare/v0.1.587...v0.1.588) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match iPhone Inbox to mock ([#1537](https://github.com/fohte/armyknife/issues/1537)) ([b76d866](https://github.com/fohte/armyknife/commit/b76d8661087ab570eaf1ddb55d3ae7d0cd1525b5))
+
 ## [0.1.587](https://github.com/fohte/armyknife/compare/v0.1.586...v0.1.587) (2026-11-11)
 
 
