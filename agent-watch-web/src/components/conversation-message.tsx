@@ -40,7 +40,7 @@ type RenderConversationMessageOptions = {
   ) => Promise<boolean>
   onOpenInTerminal: () => void
   onSelectSession: (id: string) => void
-  session: Session
+  sessionEngine: Session['engine']
   sessions: readonly SessionLinkTarget[]
 }
 
@@ -58,7 +58,7 @@ export function renderConversationMessage({
   onAction,
   onOpenInTerminal,
   onSelectSession,
-  session,
+  sessionEngine,
   sessions,
 }: RenderConversationMessageOptions): ReactNode {
   if (
@@ -155,7 +155,7 @@ export function renderConversationMessage({
         canAnswer={canAnswer}
         isMobile={isMobile}
         showTerminalFallback={
-          session.engine === 'Codex' &&
+          sessionEngine === 'Codex' &&
           actions !== null &&
           !actions.answerQuestion
         }
@@ -222,7 +222,7 @@ export function renderConversationMessage({
       actions={actions}
       actionsReady={actionsReady}
       pendingAction={pendingAction}
-      isCodex={session.engine === 'Codex'}
+      isCodex={sessionEngine === 'Codex'}
       onAction={(action, permissionIdentity) => {
         void onAction(action, undefined, permissionIdentity)
       }}

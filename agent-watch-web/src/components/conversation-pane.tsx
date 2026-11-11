@@ -373,46 +373,49 @@ export function ConversationPane({
     setPendingPermissionAction(null)
   }, [session.id])
 
-  const onAction = (
-    action: string,
-    payload?: Record<string, unknown>,
-    permissionIdentity?: PermissionRequestIdentity,
-  ) => {
-    const permissionAction =
-      action === 'permission/approve'
-        ? 'approve'
-        : action === 'permission/reject'
-          ? 'reject'
-          : null
-    if (permissionAction !== null && permissionIdentity !== undefined) {
-      setPendingPermissionAction({
-        action: permissionAction,
-        status: 'sending',
-        ...permissionIdentity,
-      })
-    }
-    return requestAction(session.id, action, payload).match(
-      () => {
-        if (permissionAction !== null && permissionIdentity !== undefined) {
-          setPendingPermissionAction({
-            action: permissionAction,
-            status: 'sent',
-            ...permissionIdentity,
-          })
-        }
-        setError(null)
-        refresh()
-        return true
-      },
-      (requestError) => {
-        if (permissionAction !== null && permissionIdentity !== undefined) {
-          setPendingPermissionAction(null)
-        }
-        setError(requestError.message)
-        return false
-      },
-    )
-  }
+  const onAction = useCallback(
+    (
+      action: string,
+      payload?: Record<string, unknown>,
+      permissionIdentity?: PermissionRequestIdentity,
+    ) => {
+      const permissionAction =
+        action === 'permission/approve'
+          ? 'approve'
+          : action === 'permission/reject'
+            ? 'reject'
+            : null
+      if (permissionAction !== null && permissionIdentity !== undefined) {
+        setPendingPermissionAction({
+          action: permissionAction,
+          status: 'sending',
+          ...permissionIdentity,
+        })
+      }
+      return requestAction(session.id, action, payload).match(
+        () => {
+          if (permissionAction !== null && permissionIdentity !== undefined) {
+            setPendingPermissionAction({
+              action: permissionAction,
+              status: 'sent',
+              ...permissionIdentity,
+            })
+          }
+          setError(null)
+          refresh()
+          return true
+        },
+        (requestError) => {
+          if (permissionAction !== null && permissionIdentity !== undefined) {
+            setPendingPermissionAction(null)
+          }
+          setError(requestError.message)
+          return false
+        },
+      )
+    },
+    [refresh, session.id],
+  )
 
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
@@ -471,19 +474,20 @@ export function ConversationPane({
   )
 
   if (isMobile) return conversationView
-  if (!statusPanelOpen) return conversationView
 
   return (
     <div className="conversation-status-panel-container">
       <ResizableColumns
         first={conversationView}
         second={
-          <SessionStatusPanel
-            tabs={panelTabs}
-            activeTabId={activeTabId}
-            onTabChange={onTabChange}
-            onClose={onCloseStatusPanel}
-          />
+          statusPanelOpen ? (
+            <SessionStatusPanel
+              tabs={panelTabs}
+              activeTabId={activeTabId}
+              onTabChange={onTabChange}
+              onClose={onCloseStatusPanel}
+            />
+          ) : null
         }
         overlaySecondPane
         storageKey="agent-watch:conversation-width"
