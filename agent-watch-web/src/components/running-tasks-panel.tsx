@@ -1,6 +1,6 @@
 import '#components/running-tasks-panel.css'
 
-import { formatElapsedTime } from '#components/conversation-working-status'
+import { formatElapsedTime } from '#components/format-elapsed-time'
 import type { BackgroundTask } from '#types'
 
 type RunningTasksPanelProps = {

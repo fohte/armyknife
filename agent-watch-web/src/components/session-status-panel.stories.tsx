@@ -33,6 +33,21 @@ export const CritIsTheActiveTab: Story = {
   name: 'The panel shows crit as the active tab',
 }
 
+export const OneRunningItemIsAvailable: Story = {
+  name: 'The panel shows a count for one running item',
+  args: {
+    tabs: [
+      {
+        id: 'running',
+        label: 'Running',
+        count: 1,
+        content: <div className="session-status-preview">One running task</div>,
+      },
+    ],
+    activeTabId: 'running',
+  },
+}
+
 export const NoTabsAreAvailable: Story = {
   name: 'The panel shows an empty state when no tabs have items',
   args: {

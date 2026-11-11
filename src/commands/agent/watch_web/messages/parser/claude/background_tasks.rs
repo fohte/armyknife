@@ -168,7 +168,7 @@ struct RunningBackgroundTask {
 }
 
 fn background_task_kind(name: &str, record: &Value) -> BackgroundTaskKind {
-    if name == "Agent" && is_async_agent_result(record.get("toolUseResult")) {
+    if name == "Task" || (name == "Agent" && is_async_agent_result(record.get("toolUseResult"))) {
         BackgroundTaskKind::Subagent
     } else {
         BackgroundTaskKind::BackgroundTask
@@ -575,7 +575,7 @@ mod tests {
     fn reports_a_running_task_tool_subagent() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-task-prompt-row","parentUuid":null,"type":"user","message":{"content":"Delegate a synthetic task."}}
-            {"uuid":"fixture-task-call-row","parentUuid":"fixture-task-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-task-tool-use-id","name":"Task","input":{"description":"Review the synthetic task","prompt":"Review a fictional task.","run_in_background":true}}]}}
+            {"uuid":"fixture-task-call-row","parentUuid":"fixture-task-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-task-tool-use-id","name":"Task","input":{"description":"Review the synthetic task","prompt":"Review a fictional task.","subagent_type":"FixtureExplorer","run_in_background":true}}]}}
             {"uuid":"fixture-task-result-row","parentUuid":"fixture-task-call-row","type":"user","sourceToolAssistantUUID":"fixture-task-call-row","toolUseResult":{"task_id":"fixture-task-id"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-task-tool-use-id","content":"The task was launched."}]}}
         "#};
 
@@ -599,7 +599,7 @@ mod tests {
                         summary: "1 action".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Task".to_string(),
-                            target: Some("Review the synthetic task".to_string()),
+                            target: Some("FixtureExplorer · Review the synthetic task".to_string(),),
                         }],
                     },
                 ],
@@ -607,8 +607,8 @@ mod tests {
                     id: "fixture-task-id".to_string(),
                     description: "Review the synthetic task".to_string(),
                     elapsed_seconds: 30,
-                    kind: BackgroundTaskKind::BackgroundTask,
-                    agent_type: None,
+                    kind: BackgroundTaskKind::Subagent,
+                    agent_type: Some("FixtureExplorer".to_string()),
                 }],
             ),
         );

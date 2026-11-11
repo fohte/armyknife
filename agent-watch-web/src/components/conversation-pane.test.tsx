@@ -1867,12 +1867,22 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
     })
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
       jsonResponse(
         messagesResponse(
-          [],
+          [decision],
           [
             {
               id: 'fixture-agent-task',
@@ -1897,7 +1907,13 @@ it('shows running tasks in the desktop status panel and counts them in the heade
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, category: 'needs_action', elapsedSeconds: 30 }}
+        session={{
+          ...session,
+          category: 'needs_action',
+          elapsedSeconds: 30,
+          decisionCount: 1,
+          unreviewedDecisionCount: 1,
+        }}
         refreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen
@@ -1913,6 +1929,8 @@ it('shows running tasks in the desktop status panel and counts them in the heade
       label: tab.textContent,
       selected: tab.getAttribute('aria-selected'),
     })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
     sections: Array.from(
       container.querySelectorAll('.running-tasks-group h2'),
       (heading) => heading.textContent,
@@ -1925,18 +1943,59 @@ it('shows running tasks in the desktop status panel and counts them in the heade
       ?.textContent,
     workingStatus: container.querySelector('.conversation-working-status')
       ?.textContent,
-    legacyTaskList: container.querySelector('.conversation-background-tasks'),
+    legacyTaskList:
+      container.querySelector('.conversation-background-tasks') !== null,
+    decisionsButton: {
+      label: container.querySelector('.conversation-decisions-toggle')
+        ?.textContent,
+      pressed: container
+        .querySelector('.conversation-decisions-toggle')
+        ?.getAttribute('aria-pressed'),
+    },
+    decisionsHeading: container.querySelector('.decisions-panel-header h2')
+      ?.textContent,
   })
-  expect(snapshot()).toEqual({
-    tabs: [{ label: 'Running2', selected: 'true' }],
-    sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
-    tasks: [
-      '◐FixtureExplorerInspect the fictional module2h 0m',
-      '▶cargo test -p fictional-crate2h 0m',
-    ],
-    panelToggle: '◐2',
-    workingStatus: undefined,
-    legacyTaskList: null,
+  const runningState = snapshot()
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.conversation-decisions-toggle',
+      ),
+    ).click()
+  })
+  const combinedState = () => ({ runningState, decisionsState: snapshot() })
+  expect(combinedState()).toEqual({
+    runningState: {
+      tabs: [
+        { label: 'Running2', selected: 'true' },
+        { label: '◇ Decisions', selected: 'false' },
+      ],
+      selectedTab: 'Running2',
+      sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
+      tasks: [
+        '◐FixtureExplorerInspect the fictional module2h 0m',
+        '▶cargo test -p fictional-crate2h 0m',
+      ],
+      panelToggle: '◐2',
+      workingStatus: undefined,
+      legacyTaskList: false,
+      decisionsButton: { label: '◇ 1 decision', pressed: 'false' },
+      decisionsHeading: undefined,
+    },
+    decisionsState: {
+      tabs: [
+        { label: 'Running2', selected: 'false' },
+        { label: '◇ Decisions', selected: 'true' },
+      ],
+      selectedTab: '◇ Decisions',
+      sections: [],
+      tasks: [],
+      panelToggle: '◐2',
+      workingStatus: undefined,
+      legacyTaskList: false,
+      decisionsButton: { label: '◇ 1 decision', pressed: 'true' },
+      decisionsHeading: 'Decisions in this session',
+    },
   })
 })
 
