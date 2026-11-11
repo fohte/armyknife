@@ -30,10 +30,15 @@ function areJsonValuesEqual(left: unknown, right: unknown): boolean {
 export function shareUnchangedMessages(
   previous: ChatItem[],
   next: ChatItem[],
+  previousStart = 0,
+  nextStart = 0,
 ): ChatItem[] {
-  let unchanged = previous.length === next.length
+  let unchanged = previousStart === nextStart && previous.length === next.length
+  const previousByPosition = new Map(
+    previous.map((message, index) => [previousStart + index, message]),
+  )
   const shared = next.map((message, index) => {
-    const previousMessage = previous[index]
+    const previousMessage = previousByPosition.get(nextStart + index)
     if (
       previousMessage !== undefined &&
       areJsonValuesEqual(previousMessage, message)

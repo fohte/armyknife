@@ -19,14 +19,23 @@ import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
-  BackgroundTask,
-  ChatItem,
+  ConversationResponse,
   OpenInTerminalStatus,
   Session,
   SessionActions,
 } from '#types'
 
 const EMPTY_SESSIONS: readonly Session[] = []
+const EMPTY_CONVERSATION: ConversationResponse = {
+  messages: [],
+  backgroundTasks: [],
+  start: 0,
+  total: 0,
+  decisions: [],
+  hasUnansweredProposal: false,
+  activeQuestionIndex: null,
+}
+const INITIAL_MESSAGE_LIMIT = 100
 
 type ConversationPaneProps = {
   session: Session
@@ -57,8 +66,11 @@ export function ConversationPane({
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
-  const [messages, setMessages] = useState<ChatItem[]>([])
-  const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
+  const [conversation, setConversation] =
+    useState<ConversationResponse>(EMPTY_CONVERSATION)
+  const conversationRef = useRef(conversation)
+  const conversationSessionId = useRef<string | null>(null)
+  const [loadingOlder, setLoadingOlder] = useState(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
@@ -72,6 +84,11 @@ export function ConversationPane({
   currentSessionId.current = session.id
   const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const olderRequestGeneration = useRef(0)
+  const updateConversation = useCallback((next: ConversationResponse) => {
+    conversationRef.current = next
+    setConversation(next)
+  }, [])
   const clearOpenInTerminalTimer = useCallback(() => {
     if (openInTerminalTimer.current !== null) {
       window.clearTimeout(openInTerminalTimer.current)
@@ -83,8 +100,14 @@ export function ConversationPane({
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
+    const loadedConversation =
+      conversationSessionId.current === session.id
+        ? conversationRef.current
+        : null
     const messagesRequest = requestJson(
-      `${sessionPath}/messages`,
+      loadedConversation === null
+        ? `${sessionPath}/messages?limit=${String(INITIAL_MESSAGE_LIMIT)}`
+        : `${sessionPath}/messages?from=${String(loadedConversation.start)}`,
       isConversationResponse,
     ).match(
       (value) => ok(value),
@@ -100,11 +123,38 @@ export function ConversationPane({
     void Promise.all([messagesRequest, actionsRequest]).then(
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
+        let refreshedConversation: ConversationResponse | null = null
         if (messagesResult.isOk()) {
-          setMessages((previous) =>
-            shareUnchangedMessages(previous, messagesResult.value.messages),
-          )
-          setBackgroundTasks(messagesResult.value.backgroundTasks)
+          const alreadyLoaded = conversationSessionId.current === session.id
+          const previous = alreadyLoaded
+            ? conversationRef.current
+            : EMPTY_CONVERSATION
+          const preserveLoadedPrefix =
+            alreadyLoaded && previous.start < messagesResult.value.start
+          const start = preserveLoadedPrefix
+            ? previous.start
+            : messagesResult.value.start
+          const messages = preserveLoadedPrefix
+            ? [
+                ...previous.messages.slice(
+                  0,
+                  messagesResult.value.start - previous.start,
+                ),
+                ...messagesResult.value.messages,
+              ]
+            : messagesResult.value.messages
+          refreshedConversation = {
+            ...messagesResult.value,
+            start,
+            messages: shareUnchangedMessages(
+              previous.messages,
+              messages,
+              previous.start,
+              start,
+            ),
+          }
+          updateConversation(refreshedConversation)
+          conversationSessionId.current = session.id
           setMessagesLoadedAt(Date.now())
         }
         if (actionsResult.isOk()) {
@@ -115,8 +165,8 @@ export function ConversationPane({
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =
-            messagesResult.isOk() &&
-            !messagesResult.value.messages.some(
+            refreshedConversation !== null &&
+            !refreshedConversation.messages.some(
               (message) =>
                 message.type === 'permission' &&
                 message.tool === pending.tool &&
@@ -141,7 +191,7 @@ export function ConversationPane({
         setLoading(false)
       },
     )
-  }, [session.id])
+  }, [session.id, updateConversation])
 
   useEffect(() => {
     refresh()
@@ -153,9 +203,59 @@ export function ConversationPane({
   useEffect(() => {
     setPendingPermissionAction(null)
     setOpenInTerminalStatus(null)
+    if (conversationSessionId.current !== session.id) {
+      updateConversation(EMPTY_CONVERSATION)
+      setMessagesLoadedAt(null)
+      setLoadingOlder(false)
+    }
     clearOpenInTerminalTimer()
-    return clearOpenInTerminalTimer
-  }, [clearOpenInTerminalTimer, session.id])
+    return () => {
+      olderRequestGeneration.current += 1
+      clearOpenInTerminalTimer()
+    }
+  }, [clearOpenInTerminalTimer, session.id, updateConversation])
+
+  const loadOlder = useCallback(() => {
+    const current = conversationRef.current
+    if (
+      conversationSessionId.current !== session.id ||
+      current.start <= 0 ||
+      loadingOlder
+    ) {
+      return
+    }
+    const generation = olderRequestGeneration.current + 1
+    olderRequestGeneration.current = generation
+    setLoadingOlder(true)
+    void requestJson(
+      `/api/sessions/${encodeURIComponent(session.id)}/messages?before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`,
+      isConversationResponse,
+    ).match(
+      (response) => {
+        if (olderRequestGeneration.current !== generation) return
+        if (conversationSessionId.current !== session.id) return
+        const latest = conversationRef.current
+        const messages = [...response.messages, ...latest.messages]
+        updateConversation({
+          ...response,
+          messages: shareUnchangedMessages(
+            latest.messages,
+            messages,
+            latest.start,
+            response.start,
+          ),
+        })
+        setMessagesLoadedAt(Date.now())
+        setError(null)
+        setLoadingOlder(false)
+      },
+      (requestError) => {
+        if (olderRequestGeneration.current !== generation) return
+        setError(requestError.message)
+        setLoadingOlder(false)
+      },
+    )
+  }, [loadingOlder, session.id, updateConversation])
 
   const onOpenInTerminal = useCallback(() => {
     const requestedSessionId = session.id
@@ -226,6 +326,7 @@ export function ConversationPane({
     [refresh, session.id],
   )
 
+  const { messages, backgroundTasks } = conversation
   const backgroundTaskElapsedOffset =
     messagesLoadedAt === null
       ? 0
@@ -245,6 +346,7 @@ export function ConversationPane({
   } = useConversationStatusPanel({
     session,
     messages,
+    allDecisions: conversation.decisions,
     backgroundTasks: displayBackgroundTasks,
     statusPanelOpen,
     onAction,
@@ -257,6 +359,12 @@ export function ConversationPane({
       session={session}
       sessions={sessions}
       messages={messages}
+      start={conversation.start}
+      decisions={conversation.decisions}
+      hasUnansweredProposal={conversation.hasUnansweredProposal}
+      activeQuestionIndex={conversation.activeQuestionIndex}
+      loadingOlder={loadingOlder}
+      onLoadOlder={loadOlder}
       backgroundTasks={displayBackgroundTasks}
       actions={actions}
       actionsReady={actionsReady}

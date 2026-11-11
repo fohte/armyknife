@@ -3,7 +3,7 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 
 import { reuseEqualValue } from '#components/conversation-message-sharing'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
@@ -19,6 +19,7 @@ import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
+import { useConversationScroll } from '#components/use-conversation-scroll'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
@@ -33,6 +34,12 @@ type ConversationPaneViewProps = {
   session: Session
   sessions?: readonly Session[]
   messages: readonly ChatItem[]
+  start?: number
+  decisions?: readonly Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal?: boolean
+  activeQuestionIndex?: number | null
+  loadingOlder?: boolean
+  onLoadOlder?: () => void
   backgroundTasks?: readonly BackgroundTask[]
   actions: SessionActions | null
   actionsReady?: boolean
@@ -89,6 +96,12 @@ export function ConversationPaneView({
   session,
   sessions = [],
   messages,
+  start = 0,
+  decisions,
+  hasUnansweredProposal: responseHasUnansweredProposal,
+  activeQuestionIndex,
+  loadingOlder = false,
+  onLoadOlder = () => undefined,
   backgroundTasks = [],
   actions,
   actionsReady = true,
@@ -130,8 +143,11 @@ export function ConversationPaneView({
     clearDraftIfUnchanged,
     onAction,
   })
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const followLatestRef = useRef(true)
+  const {
+    onScroll,
+    preserveScrollAnchor,
+    scrollRef: conversationScrollRef,
+  } = useConversationScroll({ messages, sessionId: session.id, start })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
@@ -154,6 +170,12 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
+    start,
+    ...(decisions === undefined ? {} : { decisions }),
+    ...(responseHasUnansweredProposal === undefined
+      ? {}
+      : { hasUnansweredProposal: responseHasUnansweredProposal }),
+    ...(activeQuestionIndex === undefined ? {} : { activeQuestionIndex }),
     sessionCategory: session.category,
     isCompacting: session.isCompacting === true,
     sessionEngine: session.engine,
@@ -220,25 +242,6 @@ export function ConversationPaneView({
     ) {
       event.preventDefault()
       sendMessage()
-    }
-  }
-
-  useLayoutEffect(() => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer !== null && followLatestRef.current) {
-      scrollContainer.scrollTop =
-        scrollContainer.scrollHeight - scrollContainer.clientHeight
-    }
-  }, [messages])
-
-  const updateFollowLatest = () => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer !== null) {
-      followLatestRef.current =
-        scrollContainer.scrollHeight -
-          scrollContainer.scrollTop -
-          scrollContainer.clientHeight <=
-        24
     }
   }
 
@@ -400,11 +403,25 @@ export function ConversationPaneView({
       ) : null}
 
       <div
-        ref={scrollRef}
+        ref={conversationScrollRef}
         className="conversation-scroll"
         aria-live="polite"
-        onScroll={updateFollowLatest}
+        onScroll={onScroll}
       >
+        {start > 0 ? (
+          <Button
+            className="conversation-load-older"
+            type="button"
+            variant="plain"
+            disabled={loadingOlder}
+            onClick={() => {
+              preserveScrollAnchor()
+              onLoadOlder()
+            }}
+          >
+            {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+          </Button>
+        ) : null}
         <div className="conversation-timeline">
           <span>Conversation</span>
         </div>

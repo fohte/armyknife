@@ -355,8 +355,8 @@ function requestUrl(input: RequestInfo | URL) {
 }
 
 function isConversationPaneRequest(input: RequestInfo | URL) {
-  const url = requestUrl(input)
-  return url.endsWith('/messages') || url.endsWith('/actions')
+  const path = new URL(requestUrl(input), 'http://localhost').pathname
+  return path.endsWith('/messages') || path.endsWith('/actions')
 }
 
 function mockPendingResponse() {

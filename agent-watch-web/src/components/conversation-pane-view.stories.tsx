@@ -547,3 +547,32 @@ export const BackgroundTaskContinuesWhileTheSessionWaits: Story = {
     ],
   },
 }
+
+export const OlderMessagesCanBeLoaded: Story = {
+  name: 'The conversation offers older messages above the loaded page',
+  args: {
+    start: 40,
+    messages: [
+      { type: 'user', text: 'Check the example request flow.' },
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}
+
+export const OlderMessagesAreLoading: Story = {
+  name: 'The conversation shows progress while older messages load',
+  args: {
+    start: 40,
+    loadingOlder: true,
+    messages: [
+      { type: 'user', text: 'Check the example request flow.' },
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}

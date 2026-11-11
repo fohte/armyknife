@@ -199,6 +199,12 @@
   text-align: center;
 }
 
+.conversation-load-older {
+  align-self: center;
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+}
+
 .conversation-error {
   width: 100%;
   box-sizing: border-box;
