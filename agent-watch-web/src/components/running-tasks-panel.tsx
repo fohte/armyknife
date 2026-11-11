@@ -25,12 +25,14 @@ export function RunningTasksPanel({ tasks }: RunningTasksPanelProps) {
                   ◐
                 </span>
                 <div className="running-task-content">
-                  <span className="running-task-agent-type">
-                    {task.agentType ?? 'Agent'}
-                  </span>
-                  <span className="running-task-subagent-description">
-                    {task.description}
-                  </span>
+                  <div className="running-task-subagent-heading">
+                    <span className="running-task-agent-type">
+                      {task.agentType ?? 'Agent'}
+                    </span>
+                    <span className="running-task-subagent-description">
+                      {task.description}
+                    </span>
+                  </div>
                   <span className="running-task-elapsed">
                     {formatElapsedTime(task.elapsedSeconds)}
                   </span>

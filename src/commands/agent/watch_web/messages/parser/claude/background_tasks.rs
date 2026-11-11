@@ -273,12 +273,30 @@ mod tests {
     };
 
     #[rstest]
-    fn reports_a_running_background_bash_task_with_elapsed_time(
+    #[case::background(true)]
+    #[case::foreground(false)]
+    fn classifies_bash_tasks_by_background_mode(
         background_bash_transcript: String,
+        #[case] run_in_background: bool,
     ) {
+        let transcript = background_bash_transcript.replace(
+            "\"run_in_background\":true",
+            &format!("\"run_in_background\":{run_in_background}"),
+        );
+        let expected_tasks = if run_in_background {
+            vec![BackgroundTask {
+                id: "fixture-task-id".to_string(),
+                description: "Watch the synthetic build".to_string(),
+                elapsed_seconds: 90,
+                kind: BackgroundTaskKind::BackgroundTask,
+                agent_type: None,
+            }]
+        } else {
+            Vec::new()
+        };
         assert_eq!(
             parse_with_background_tasks_and_peer_out_messages(
-                Cursor::new(background_bash_transcript),
+                Cursor::new(transcript),
                 None,
                 None,
                 None,
@@ -286,16 +304,7 @@ mod tests {
                 &[],
             )
             .unwrap(),
-            (
-                background_bash_messages(),
-                vec![BackgroundTask {
-                    id: "fixture-task-id".to_string(),
-                    description: "Watch the synthetic build".to_string(),
-                    elapsed_seconds: 90,
-                    kind: BackgroundTaskKind::BackgroundTask,
-                    agent_type: None,
-                }],
-            ),
+            (background_bash_messages(), expected_tasks),
         );
     }
 
@@ -599,7 +608,7 @@ mod tests {
                         summary: "1 action".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Task".to_string(),
-                            target: Some("FixtureExplorer · Review the synthetic task".to_string(),),
+                            target: Some("FixtureExplorer · Review the synthetic task".to_string()),
                         }],
                     },
                 ],
@@ -614,13 +623,49 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reports_an_async_agent_from_its_structured_tool_result() {
-        let transcript = indoc! {r#"
+    #[rstest]
+    #[case::asynchronous(true, "async_launched", true)]
+    #[case::not_async(false, "async_launched", false)]
+    #[case::not_launched(true, "running", false)]
+    fn reports_only_asynchronous_agent_results(
+        #[case] is_async: bool,
+        #[case] status: &str,
+        #[case] is_reported: bool,
+    ) {
+        let mut transcript = indoc! {r#"
             {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
             {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
-            {"uuid":"fixture-agent-result-row","parentUuid":"fixture-agent-call-row","type":"user","sourceToolAssistantUUID":"fixture-agent-call-row","toolUseResult":{"agentId":"fixture-agent-id","isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-agent-tool-use-id","content":"agentId: fixture-agent-id (internal ID)"}]}}
-        "#};
+        "#}
+        .to_string();
+        let result_record = json!({
+            "uuid": "fixture-agent-result-row",
+            "parentUuid": "fixture-agent-call-row",
+            "type": "user",
+            "sourceToolAssistantUUID": "fixture-agent-call-row",
+            "toolUseResult": {
+                "agentId": "fixture-agent-id",
+                "isAsync": is_async,
+                "status": status,
+            },
+            "message": {"content": [{
+                "type": "tool_result",
+                "tool_use_id": "fixture-agent-tool-use-id",
+                "content": "agentId: fixture-agent-id (internal ID)",
+            }]},
+        });
+        transcript.push_str(&serde_json::to_string(&result_record).unwrap());
+        transcript.push('\n');
+        let expected_tasks = if is_reported {
+            vec![BackgroundTask {
+                id: "fixture-agent-id".to_string(),
+                description: "Review the synthetic change".to_string(),
+                elapsed_seconds: 45,
+                kind: BackgroundTaskKind::Subagent,
+                agent_type: Some("FixtureExplorer".to_string()),
+            }]
+        } else {
+            Vec::new()
+        };
 
         assert_eq!(
             parse_with_background_tasks_and_peer_out_messages(
@@ -648,13 +693,7 @@ mod tests {
                         }],
                     },
                 ],
-                vec![BackgroundTask {
-                    id: "fixture-agent-id".to_string(),
-                    description: "Review the synthetic change".to_string(),
-                    elapsed_seconds: 45,
-                    kind: BackgroundTaskKind::Subagent,
-                    agent_type: Some("FixtureExplorer".to_string()),
-                }],
+                expected_tasks,
             ),
         );
     }

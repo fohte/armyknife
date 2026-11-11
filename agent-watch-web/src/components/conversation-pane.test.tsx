@@ -4,6 +4,8 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { SessionStatusPanel } from '#components/session-status-panel'
+import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
@@ -1867,22 +1869,12 @@ it('shows running tasks in the desktop status panel and counts them in the heade
     new Response(JSON.stringify(body), {
       headers: { 'Content-Type': 'application/json' },
     })
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Choose a retry policy',
-    why: 'The service needs a predictable recovery path.',
-    considered: ['Retry using a fixed limit'],
-    easyToChange: 'One configuration value.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
   const fetcher = vi
     .fn<typeof fetch>()
     .mockResolvedValueOnce(
       jsonResponse(
         messagesResponse(
-          [decision],
+          [],
           [
             {
               id: 'fixture-agent-task',
@@ -1911,8 +1903,6 @@ it('shows running tasks in the desktop status panel and counts them in the heade
           ...session,
           category: 'needs_action',
           elapsedSeconds: 30,
-          decisionCount: 1,
-          unreviewedDecisionCount: 1,
         }}
         refreshKey={0}
         onSelectSession={() => undefined}
@@ -1945,57 +1935,177 @@ it('shows running tasks in the desktop status panel and counts them in the heade
       ?.textContent,
     legacyTaskList:
       container.querySelector('.conversation-background-tasks') !== null,
-    decisionsButton: {
-      label: container.querySelector('.conversation-decisions-toggle')
-        ?.textContent,
-      pressed: container
-        .querySelector('.conversation-decisions-toggle')
-        ?.getAttribute('aria-pressed'),
-    },
-    decisionsHeading: container.querySelector('.decisions-panel-header h2')
+  })
+  expect(snapshot()).toEqual({
+    tabs: [{ label: 'Running2', selected: 'true' }],
+    selectedTab: 'Running2',
+    sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
+    tasks: [
+      '◐FixtureExplorerInspect the fictional module2h 0m',
+      '▶cargo test -p fictional-crate2h 0m',
+    ],
+    panelToggle: '◐2',
+    workingStatus: undefined,
+    legacyTaskList: false,
+  })
+})
+
+it('keeps the Decisions tab active when running tasks appear', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-started-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([decision], [runningTask])),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  const renderConversation = (refreshKey: number) => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          category: 'needs_action',
+          decisionCount: 1,
+          unreviewedDecisionCount: 1,
+        }}
+        refreshKey={refreshKey}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  }
+  act(() => {
+    renderConversation(0)
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
   })
-  const runningState = snapshot()
+  const beforeTaskStarts = snapshot()
   act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-decisions-toggle',
-      ),
-    ).click()
+    renderConversation(1)
   })
-  const combinedState = () => ({ runningState, decisionsState: snapshot() })
-  expect(combinedState()).toEqual({
-    runningState: {
-      tabs: [
-        { label: 'Running2', selected: 'true' },
-        { label: '◇ Decisions', selected: 'false' },
-      ],
-      selectedTab: 'Running2',
-      sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
-      tasks: [
-        '◐FixtureExplorerInspect the fictional module2h 0m',
-        '▶cargo test -p fictional-crate2h 0m',
-      ],
-      panelToggle: '◐2',
-      workingStatus: undefined,
-      legacyTaskList: false,
-      decisionsButton: { label: '◇ 1 decision', pressed: 'false' },
-      decisionsHeading: undefined,
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const states = () => ({ beforeTaskStarts, afterTaskStarts: snapshot() })
+  expect(states()).toEqual({
+    beforeTaskStarts: {
+      tabs: [{ label: '◇ Decisions', selected: 'true' }],
+      selectedTab: '◇ Decisions',
+      decisionHeading: 'Decisions in this session',
     },
-    decisionsState: {
+    afterTaskStarts: {
       tabs: [
-        { label: 'Running2', selected: 'false' },
+        { label: 'Running1', selected: 'false' },
         { label: '◇ Decisions', selected: 'true' },
       ],
       selectedTab: '◇ Decisions',
-      sections: [],
-      tasks: [],
-      panelToggle: '◐2',
-      workingStatus: undefined,
-      legacyTaskList: false,
-      decisionsButton: { label: '◇ 1 decision', pressed: 'true' },
-      decisionsHeading: 'Decisions in this session',
+      decisionHeading: 'Decisions in this session',
     },
+  })
+})
+
+it('prefers crit when other status tabs are available', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 1,
+    title: 'Choose a retry policy',
+    why: 'The service needs a predictable recovery path.',
+    considered: ['Retry using a fixed limit'],
+    easyToChange: 'One configuration value.',
+    review: null,
+    createdAt: '2026-11-11T03:25:59Z',
+  }
+  const runningTask: BackgroundTask = {
+    id: 'fixture-running-subagent',
+    description: 'Inspect the synthetic module',
+    elapsedSeconds: 7,
+    kind: 'subagent',
+    agentType: 'FixtureExplorer',
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: {
+        ...session,
+        category: 'needs_action',
+        kind: 'Review',
+        critUrl: 'http://127.0.0.1:5000/review/sample',
+        decisionCount: 1,
+        unreviewedDecisionCount: 1,
+      },
+      messages: [decision],
+      backgroundTasks: [runningTask],
+      statusPanelOpen: true,
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+      onToggleStatusPanel: () => undefined,
+    })
+    return (
+      <SessionStatusPanel
+        tabs={statusPanel.tabs}
+        activeTabId={statusPanel.activeTabId}
+        onTabChange={statusPanel.onTabChange}
+        onClose={() => undefined}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
+      ?.textContent,
+    critPane: container.querySelector('.crit-pane') !== null,
+  })
+  expect(snapshot()).toEqual({
+    tabs: [
+      { label: 'Running1', selected: 'false' },
+      { label: '◇ Decisions', selected: 'false' },
+      { label: 'crit', selected: 'true' },
+    ],
+    selectedTab: 'crit',
+    critPane: true,
   })
 })
 

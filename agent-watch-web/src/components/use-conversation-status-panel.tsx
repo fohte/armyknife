@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { CritPane } from '#components/crit-pane'
 import type { Decision } from '#components/decision-card'
@@ -92,13 +92,16 @@ export function useConversationStatusPanel({
         ]),
   ]
   const defaultPanelTabId =
-    tabs.find((tab) => tab.id === 'running')?.id ??
     tabs.find((tab) => tab.id === 'crit')?.id ??
+    tabs.find((tab) => tab.id === 'running')?.id ??
     tabs[0]?.id ??
     null
   const activeTabId = tabs.some((tab) => tab.id === activePanelTabId)
     ? activePanelTabId
     : defaultPanelTabId
+  useEffect(() => {
+    if (activePanelTabId !== activeTabId) setActivePanelTabId(activeTabId)
+  }, [activePanelTabId, activeTabId])
   const decisionsPanelOpen = statusPanelOpen && activeTabId === 'decisions'
   const onToggleDecisionsPanel = () => {
     if (decisionsPanelOpen) {
