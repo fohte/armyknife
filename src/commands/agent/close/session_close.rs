@@ -211,12 +211,13 @@ fn close_session_value_without_worktree(
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
-    use std::io;
     use std::path::{Path, PathBuf};
 
     use rstest::{fixture, rstest};
 
-    use super::super::test_support::session;
+    use super::super::test_support::{
+        FakeRuntime, kill_pane_call, pane_exists_call, pane_session_call, resolve_pid_call, session,
+    };
     use super::*;
     use crate::commands::agent::types::SessionStatus;
 
@@ -244,71 +245,6 @@ mod tests {
             force,
             parent_session_id,
             worktree_root: Path::new("/tmp/worktrees/feature"),
-        }
-    }
-
-    #[derive(Default)]
-    struct CloseTestRuntime {
-        calls: RefCell<Vec<&'static str>>,
-    }
-
-    impl super::super::CloseRuntime for CloseTestRuntime {
-        fn pane_exists(&self, _: &TmuxInfo) -> Result<bool> {
-            self.calls.borrow_mut().push("pane exists");
-            Ok(true)
-        }
-
-        fn pane_session_id(&self, _: &TmuxInfo) -> Option<String> {
-            self.calls.borrow_mut().push("pane session");
-            Some("session-1".to_string())
-        }
-
-        fn has_draft(
-            &self,
-            _: &TmuxInfo,
-            _: crate::commands::agent::types::Engine,
-        ) -> Option<bool> {
-            self.calls.borrow_mut().push("check draft");
-            Some(false)
-        }
-
-        fn latest_codex_turn_status(&self, _: &str) -> Result<Option<String>> {
-            self.calls.borrow_mut().push("check Codex turn");
-            Ok(None)
-        }
-
-        fn resolve_agent_pid(
-            &self,
-            _: &TmuxInfo,
-            _: crate::commands::agent::types::Engine,
-        ) -> Result<Option<u32>> {
-            self.calls.borrow_mut().push("resolve agent process");
-            Ok(None)
-        }
-
-        fn request_graceful_quit(&self, _: &TmuxInfo, _: u32) -> io::Result<bool> {
-            self.calls.borrow_mut().push("request graceful quit");
-            Ok(true)
-        }
-
-        fn send_sigterm(&self, _: u32) -> io::Result<()> {
-            self.calls.borrow_mut().push("send SIGTERM");
-            Ok(())
-        }
-
-        fn wait_for_exit(&self, _: u32) -> bool {
-            self.calls.borrow_mut().push("wait for exit");
-            true
-        }
-
-        fn end_codex_session(&self, _: &str) -> Result<()> {
-            self.calls.borrow_mut().push("end Codex session");
-            Ok(())
-        }
-
-        fn kill_pane(&self, _: &TmuxInfo) -> Result<()> {
-            self.calls.borrow_mut().push("kill pane");
-            Ok(())
         }
     }
 
@@ -402,7 +338,10 @@ mod tests {
             ..CloseArgs::default()
         };
         let calls = RefCell::new(Vec::new());
-        let runtime = CloseTestRuntime::default();
+        let runtime = FakeRuntime {
+            pid: None,
+            ..FakeRuntime::default()
+        };
 
         let result = close_session_value_with_dependencies(
             &session,
@@ -427,12 +366,12 @@ mod tests {
                 Ok(()),
                 vec![],
                 vec![
-                    "pane exists",
-                    "pane session",
-                    "resolve agent process",
-                    "pane exists",
-                    "pane session",
-                    "kill pane",
+                    pane_exists_call(),
+                    pane_session_call(),
+                    resolve_pid_call(session.engine),
+                    pane_exists_call(),
+                    pane_session_call(),
+                    kill_pane_call(),
                 ],
             )
         );
@@ -452,7 +391,7 @@ mod tests {
             ..CloseArgs::default()
         };
         let calls = RefCell::new(Vec::new());
-        let runtime = CloseTestRuntime::default();
+        let runtime = FakeRuntime::default();
 
         let result = close_session_value_with_dependencies(
             &session,
@@ -479,7 +418,7 @@ mod tests {
                     session.session_id,
                 )),
                 vec![],
-                vec!["pane exists", "pane session"],
+                vec![pane_exists_call(), pane_session_call()],
             ),
         );
     }
