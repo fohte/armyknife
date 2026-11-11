@@ -2,11 +2,22 @@ import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
+import { renderConversationMessage } from '#components/conversation-message'
+import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
+
+vi.mock('#components/conversation-message', async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import('#components/conversation-message')>()
+  return {
+    ...original,
+    renderConversationMessage: vi.fn(original.renderConversationMessage),
+  }
+})
 
 const session: Session = {
   id: 'sample-session',
@@ -4607,6 +4618,244 @@ it('keeps question and permission actions active after a refresh error', async (
     questionChoiceDisabled: [false, false],
     permissionButtonsDisabled: [false, false],
     error: 'Messages unavailable',
+    requestCount: 4,
+  })
+})
+
+it('keeps unchanged message DOM nodes across a conversation refresh', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const messages: ChatItem[] = [
+    { type: 'assistant', text: 'The conversation is unchanged.' },
+  ]
+  const sessions: Session[] = []
+  const onSelectSession = () => undefined
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(jsonResponse(messagesResponse(messages)))
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        sessions={sessions}
+        refreshKey={0}
+        onSelectSession={onSelectSession}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-assistant-message') !== null,
+  )
+  const assistantMessage = requireElement(
+    container.querySelector('.chat-assistant-message'),
+  )
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        sessions={sessions}
+        refreshKey={1}
+        onSelectSession={onSelectSession}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    sameMessageNode:
+      assistantMessage === container.querySelector('.chat-assistant-message'),
+    messageText: container.querySelector('.chat-assistant-message')
+      ?.textContent,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameMessageNode: true,
+    messageText: 'The conversation is unchanged.',
+    requestCount: 4,
+  })
+})
+
+it('skips committing an unchanged memoized conversation row', () => {
+  const message: ChatItem = {
+    type: 'assistant',
+    text: 'The conversation is unchanged.',
+  }
+  const sessions: Session[] = []
+  const onAction = () => Promise.resolve(true)
+  const onOpenInTerminal = () => undefined
+  const onSelectDecision = () => undefined
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  const rowProps = {
+    actions,
+    actionsReady: true,
+    activeQuestion: false,
+    index: 0,
+    isMobile: false,
+    selected: false,
+    decisionPosition: undefined,
+    message,
+    pendingAction: null,
+    openInTerminalStatus: null,
+    sessionEngine: 'Claude' as const,
+    sessions,
+    onAction,
+    onOpenInTerminal,
+    onSelectDecision,
+    onSelectSession,
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+  act(() => {
+    root?.render(<ConversationMessageRow {...rowProps} />)
+  })
+
+  expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps message rows memoized when linked session details stay unchanged', () => {
+  const message: ChatItem = {
+    type: 'assistant',
+    text: 'The conversation is unchanged.',
+  }
+  const messages = [message]
+  const initialSession = {
+    ...session,
+    elapsedSeconds: 1,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 1,
+      isClosed: false,
+    },
+  }
+  const refreshedSession = {
+    ...initialSession,
+    elapsedSeconds: 2,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 2,
+      isClosed: true,
+    },
+  }
+  const initialSessions = [initialSession]
+  const refreshedSessions = [refreshedSession]
+  const onAction = () => Promise.resolve(true)
+  const onSelectSession = () => undefined
+  const renderMessage = vi.mocked(renderConversationMessage)
+  renderMessage.mockClear()
+  root = createRoot(container)
+
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={initialSession}
+        sessions={initialSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={refreshedSession}
+        sessions={refreshedSessions}
+        messages={messages}
+        actions={null}
+        loading={false}
+        error={null}
+        onAction={onAction}
+        onSelectSession={onSelectSession}
+        isMobile
+      />,
+    )
+  })
+
+  expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps an unsent proposal comment when its position changes after refresh', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const queuedMessage: ChatItem = {
+    type: 'queued_user',
+    content: [{ type: 'text', text: 'A fictional queued request.' }],
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(jsonResponse(messagesResponse([proposal])))
+    .mockResolvedValueOnce(jsonResponse(actions))
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([queuedMessage, proposal])),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await waitForState(
+    () => container.querySelector('.chat-proposal-comment') !== null,
+  )
+  const comment = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-proposal-comment'),
+  )
+  setTextareaValue(comment, 'Keep this draft')
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={1}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    sameCommentNode:
+      comment === container.querySelector('.chat-proposal-comment'),
+    commentValue: container.querySelector<HTMLTextAreaElement>(
+      '.chat-proposal-comment',
+    )?.value,
+    requestCount: fetcher.mock.calls.length,
+  })
+  expect(snapshot()).toEqual({
+    sameCommentNode: true,
+    commentValue: 'Keep this draft',
     requestCount: 4,
   })
 })

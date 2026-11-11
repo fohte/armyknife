@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
+import { createElement, useMemo } from 'react'
 
-import { renderConversationMessage } from '#components/conversation-message'
+import { ConversationMessageRow } from '#components/conversation-message-row'
 import type { PendingPermissionAction } from '#components/permission-card'
 import type {
   ChatItem,
@@ -55,14 +55,19 @@ export function useConversationMessageElements({
     const activeTool = messages.findLast(
       (message) => message.type === 'tool_in_progress',
     )
-    const conversationMessages = messages.filter(
-      (message) =>
-        message.type !== 'tool_in_progress' ||
-        (sessionCategory !== 'in_progress' && !isCompacting),
-    )
-    const decisions = conversationMessages.filter(
-      (message) => message.type === 'decision',
-    )
+    const conversationMessages = messages
+      .map((message, index) => ({ message, index }))
+      .filter(
+        ({ message }) =>
+          message.type !== 'tool_in_progress' ||
+          (sessionCategory !== 'in_progress' && !isCompacting),
+      )
+    const decisions = conversationMessages
+      .map(({ message }) => message)
+      .filter(
+        (message): message is Extract<ChatItem, { type: 'decision' }> =>
+          message.type === 'decision',
+      )
     const decisionPositions = new Map(
       decisions.map((decision, index) => [decision.seq, index + 1]),
     )
@@ -72,16 +77,29 @@ export function useConversationMessageElements({
         message.answer === null &&
         !message.resolved,
     )
-    const elements = conversationMessages.map((message, index) =>
-      renderConversationMessage({
+    const elements = conversationMessages.map(({ message, index }) => {
+      const messagePendingAction =
+        message.type === 'permission' &&
+        message.tool === pendingAction?.tool &&
+        message.description === pendingAction.description
+          ? pendingAction
+          : null
+
+      return createElement(ConversationMessageRow, {
+        key:
+          message.type === 'proposal'
+            ? `proposal-${String(message.seq)}`
+            : String(index),
         actions,
         actionsReady,
-        activeQuestionIndex,
+        activeQuestion:
+          message.type === 'question' && index === activeQuestionIndex,
         index,
         isMobile,
-        selectedDecisionSeq,
+        selected:
+          message.type === 'decision' && message.seq === selectedDecisionSeq,
         decisionPosition:
-          message.type === 'decision' && decisionPositions.has(message.seq)
+          message.type === 'decision'
             ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
             : undefined,
         onSelectDecision,
@@ -89,12 +107,12 @@ export function useConversationMessageElements({
         onAction,
         onOpenInTerminal,
         onSelectSession,
-        pendingAction,
+        pendingAction: messagePendingAction,
         openInTerminalStatus,
         sessionEngine,
         sessions,
-      }),
-    )
+      })
+    })
 
     return {
       activeTool,

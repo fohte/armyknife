@@ -1,6 +1,14 @@
 import { err, ok } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
+import {
+  reuseEqualValue,
+  shareUnchangedMessages,
+} from '#components/conversation-message-sharing'
+import {
+  isConversationResponse,
+  isSessionActions,
+} from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
 import type {
@@ -13,214 +21,12 @@ import { useConversationStatusPanel } from '#components/use-conversation-status-
 import type {
   BackgroundTask,
   ChatItem,
-  ConversationResponse,
   OpenInTerminalStatus,
   Session,
   SessionActions,
 } from '#types'
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function isUserContentPart(value: unknown): boolean {
-  if (!isRecord(value) || typeof value['type'] !== 'string') return false
-  if (value['type'] === 'text') return typeof value['text'] === 'string'
-  if (value['type'] === 'file') return typeof value['name'] === 'string'
-  if (value['type'] !== 'image') return false
-  return (
-    typeof value['source'] === 'string' &&
-    (value['source'].startsWith('/api/images/') ||
-      /^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(
-        value['source'],
-      )) &&
-    typeof value['available'] === 'boolean'
-  )
-}
-
-function isProposalOption(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    typeof value['label'] === 'string' &&
-    (value['description'] === null ||
-      typeof value['description'] === 'string') &&
-    Array.isArray(value['pros']) &&
-    value['pros'].every((pro) => typeof pro === 'string') &&
-    Array.isArray(value['cons']) &&
-    value['cons'].every((con) => typeof con === 'string') &&
-    typeof value['recommended'] === 'boolean'
-  )
-}
-
-function isProposalAnswer(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    (value['choice'] === null ||
-      (typeof value['choice'] === 'number' &&
-        Number.isInteger(value['choice']) &&
-        value['choice'] >= 0)) &&
-    (value['comment'] === null || typeof value['comment'] === 'string')
-  )
-}
-
-function isChatItem(value: unknown): value is ChatItem {
-  if (!isRecord(value) || typeof value['type'] !== 'string') return false
-  switch (value['type']) {
-    case 'user':
-    case 'assistant':
-      return typeof value['text'] === 'string'
-    case 'queued_user':
-    case 'user_with_content':
-      return (
-        Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart) &&
-        (value['from'] === undefined || typeof value['from'] === 'string')
-      )
-    case 'peer':
-      return (
-        (value['direction'] === 'from' || value['direction'] === 'to') &&
-        typeof value['session_id'] === 'string' &&
-        (value['session_title'] === undefined ||
-          typeof value['session_title'] === 'string') &&
-        Array.isArray(value['content']) &&
-        value['content'].every(isUserContentPart)
-      )
-    case 'subagent_report':
-      return (
-        typeof value['agent_id'] === 'string' &&
-        typeof value['agent_name'] === 'string' &&
-        (value['description'] === undefined ||
-          typeof value['description'] === 'string') &&
-        typeof value['text'] === 'string'
-      )
-    case 'event':
-      return (
-        (value['kind'] === 'armyknife' ||
-          value['kind'] === 'system' ||
-          value['kind'] === 'hook') &&
-        typeof value['text'] === 'string' &&
-        typeof value['failed'] === 'boolean'
-      )
-    case 'tool_summary':
-      return (
-        typeof value['summary'] === 'string' &&
-        (value['operations'] === undefined ||
-          (Array.isArray(value['operations']) &&
-            value['operations'].every(
-              (operation) =>
-                isRecord(operation) &&
-                typeof operation['tool'] === 'string' &&
-                (operation['target'] === undefined ||
-                  typeof operation['target'] === 'string'),
-            )))
-      )
-    case 'tool_in_progress':
-      return (
-        typeof value['tool'] === 'string' &&
-        (value['target'] === undefined || typeof value['target'] === 'string')
-      )
-    case 'question':
-      return (
-        typeof value['question'] === 'string' &&
-        (value['header'] === undefined ||
-          typeof value['header'] === 'string') &&
-        Array.isArray(value['choices']) &&
-        value['choices'].every(
-          (choice) =>
-            isRecord(choice) &&
-            typeof choice['label'] === 'string' &&
-            (choice['description'] === undefined ||
-              typeof choice['description'] === 'string'),
-        ) &&
-        (value['multi_select'] === undefined ||
-          typeof value['multi_select'] === 'boolean') &&
-        (value['answer'] === null || typeof value['answer'] === 'string')
-      )
-    case 'proposal':
-      return (
-        typeof value['seq'] === 'number' &&
-        Number.isInteger(value['seq']) &&
-        value['seq'] > 0 &&
-        typeof value['title'] === 'string' &&
-        (value['summary'] === null || typeof value['summary'] === 'string') &&
-        Array.isArray(value['options']) &&
-        value['options'].every(isProposalOption) &&
-        (value['answer'] === null || isProposalAnswer(value['answer'])) &&
-        typeof value['resolved'] === 'boolean'
-      )
-    case 'permission':
-      return (
-        typeof value['tool'] === 'string' &&
-        typeof value['description'] === 'string'
-      )
-    case 'decision':
-      return (
-        typeof value['seq'] === 'number' &&
-        typeof value['title'] === 'string' &&
-        typeof value['why'] === 'string' &&
-        Array.isArray(value['considered']) &&
-        value['considered'].every((item) => typeof item === 'string') &&
-        typeof value['easyToChange'] === 'string' &&
-        (value['review'] === null ||
-          value['review'] === 'ok' ||
-          value['review'] === 'change') &&
-        typeof value['createdAt'] === 'string'
-      )
-    default:
-      return false
-  }
-}
-
-function isBackgroundTask(value: unknown): value is BackgroundTask {
-  return (
-    isRecord(value) &&
-    typeof value['id'] === 'string' &&
-    typeof value['description'] === 'string' &&
-    typeof value['elapsedSeconds'] === 'number' &&
-    (value['kind'] === 'subagent' || value['kind'] === 'background_task') &&
-    (value['agentType'] === undefined || typeof value['agentType'] === 'string')
-  )
-}
-
-function isConversationResponse(value: unknown): value is ConversationResponse {
-  return (
-    isRecord(value) &&
-    Array.isArray(value['messages']) &&
-    value['messages'].every(isChatItem) &&
-    Array.isArray(value['backgroundTasks']) &&
-    value['backgroundTasks'].every(isBackgroundTask) &&
-    typeof value['start'] === 'number' &&
-    Number.isInteger(value['start']) &&
-    value['start'] >= 0 &&
-    typeof value['total'] === 'number' &&
-    Number.isInteger(value['total']) &&
-    value['total'] >= value['start'] + value['messages'].length &&
-    Array.isArray(value['decisions']) &&
-    value['decisions'].every(
-      (decision) => isChatItem(decision) && decision.type === 'decision',
-    ) &&
-    typeof value['hasUnansweredProposal'] === 'boolean' &&
-    (value['activeQuestionIndex'] === null ||
-      (typeof value['activeQuestionIndex'] === 'number' &&
-        Number.isInteger(value['activeQuestionIndex']) &&
-        value['activeQuestionIndex'] >= 0 &&
-        value['activeQuestionIndex'] < value['total']))
-  )
-}
-
-function isSessionActions(value: unknown): value is SessionActions {
-  return (
-    isRecord(value) &&
-    typeof value['message'] === 'boolean' &&
-    typeof value['answerQuestion'] === 'boolean' &&
-    typeof value['interrupt'] === 'boolean' &&
-    typeof value['openInTerminal'] === 'boolean' &&
-    (value['permission'] === undefined ||
-      (isRecord(value['permission']) &&
-        typeof value['permission']['approve'] === 'boolean' &&
-        typeof value['permission']['reject'] === 'boolean'))
-  )
-}
+const EMPTY_SESSIONS: readonly Session[] = []
 
 type ConversationPaneProps = {
   session: Session
@@ -239,7 +45,7 @@ type ConversationPaneProps = {
 
 export function ConversationPane({
   session,
-  sessions = [],
+  sessions = EMPTY_SESSIONS,
   refreshKey,
   onSelectSession,
   isMobile = false,
@@ -295,11 +101,17 @@ export function ConversationPane({
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
         if (messagesResult.isOk()) {
-          setMessages(messagesResult.value.messages)
+          setMessages((previous) =>
+            shareUnchangedMessages(previous, messagesResult.value.messages),
+          )
           setBackgroundTasks(messagesResult.value.backgroundTasks)
           setMessagesLoadedAt(Date.now())
         }
-        if (actionsResult.isOk()) setActions(actionsResult.value)
+        if (actionsResult.isOk()) {
+          setActions((previous) =>
+            reuseEqualValue(previous, actionsResult.value),
+          )
+        }
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =

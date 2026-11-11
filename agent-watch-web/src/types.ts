@@ -58,11 +58,12 @@ export type Session = {
   unreviewedDecisionCount?: number
 }
 
-export type SessionLinkTarget = Pick<
-  Session,
-  'id' | 'category' | 'isPaused' | 'task' | 'repo'
-> &
-  Partial<Pick<Session, 'title'>>
+export type SessionLinkTarget = Omit<
+  Pick<Session, 'id' | 'category' | 'isPaused' | 'task' | 'repo'>,
+  'task'
+> & {
+  task: Pick<SessionTask, 'id' | 'number' | 'title'> | null
+} & Partial<Pick<Session, 'title'>>
 
 export type ChatItem =
   | { type: 'user'; text: string; from?: string }

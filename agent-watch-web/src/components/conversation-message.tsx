@@ -23,13 +23,13 @@ import type {
   SessionLinkTarget,
 } from '#types'
 
-type RenderConversationMessageOptions = {
+export type ConversationMessageRowProps = {
   actions: SessionActions | null
   actionsReady: boolean
-  activeQuestionIndex: number
+  activeQuestion: boolean
   index: number
   isMobile: boolean
-  selectedDecisionSeq: number | null
+  selected: boolean
   decisionPosition: string | undefined
   onSelectDecision: (seq: number) => void
   message: ChatItem
@@ -49,10 +49,10 @@ type RenderConversationMessageOptions = {
 export function renderConversationMessage({
   actions,
   actionsReady,
-  activeQuestionIndex,
+  activeQuestion,
   index,
   isMobile,
-  selectedDecisionSeq,
+  selected,
   decisionPosition,
   onSelectDecision,
   message,
@@ -63,7 +63,7 @@ export function renderConversationMessage({
   onSelectSession,
   sessionEngine,
   sessions,
-}: RenderConversationMessageOptions): ReactNode {
+}: ConversationMessageRowProps): ReactNode {
   if (
     message.type === 'user' ||
     message.type === 'queued_user' ||
@@ -143,7 +143,7 @@ export function renderConversationMessage({
   }
   if (message.type === 'question') {
     const canAnswer =
-      index === activeQuestionIndex &&
+      activeQuestion &&
       message.answer === null &&
       actionsReady &&
       actions?.answerQuestion === true
@@ -185,7 +185,7 @@ export function renderConversationMessage({
         key={`decision-${String(message.seq)}-${String(index)}`}
         decision={message}
         variant="conversation"
-        selected={message.seq === selectedDecisionSeq}
+        selected={selected}
         {...(decisionPosition === undefined
           ? {}
           : { position: decisionPosition })}
