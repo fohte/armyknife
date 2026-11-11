@@ -248,40 +248,42 @@ it('opens the session when clicked while the card is visible', async () => {
 it.each([
   ['Meta', { metaKey: true }],
   ['Control', { ctrlKey: true }],
-] as const)(
-  '%s-click keeps the native session link behavior',
-  (_, modifiers) => {
-    root = createRoot(container)
-    const onSelectSession = vi.fn<(id: string) => void>()
+] as const)('%s-click opens the session in a separate tab', (_, modifiers) => {
+  root = createRoot(container)
+  const onSelectSession = vi.fn<(id: string) => void>()
 
-    act(() => {
-      root?.render(
-        <SessionLink onSelectSession={onSelectSession} session={linkedSession}>
-          sample-session
-        </SessionLink>,
-      )
-    })
+  act(() => {
+    root?.render(
+      <SessionLink onSelectSession={onSelectSession} session={linkedSession}>
+        sample-session
+      </SessionLink>,
+    )
+  })
 
-    const link = container.querySelector('a')
-    if (link === null) throw new Error('Expected a session link')
-    link.removeAttribute('href')
-    const click = new MouseEvent('click', {
-      bubbles: true,
-      cancelable: true,
-      ...modifiers,
-    })
+  const link = container.querySelector('a')
+  if (link === null) throw new Error('Expected a session link')
+  const click = new MouseEvent('click', {
+    bubbles: true,
+    cancelable: true,
+    ...modifiers,
+  })
+  act(() => {
     link.dispatchEvent(click)
+  })
 
-    const getActual = () => ({
-      defaultPrevented: click.defaultPrevented,
-      selectedIds: onSelectSession.mock.calls.map(([id]) => id),
-    })
-    expect(getActual()).toEqual({
-      defaultPrevented: false,
-      selectedIds: [],
-    })
-  },
-)
+  const getActual = () => ({
+    defaultPrevented: click.defaultPrevented,
+    selectedIds: onSelectSession.mock.calls.map(([id]) => id),
+    target: link.target,
+    rel: link.rel,
+  })
+  expect(getActual()).toEqual({
+    defaultPrevented: false,
+    selectedIds: [],
+    target: '_blank',
+    rel: 'noopener noreferrer',
+  })
+})
 
 it('shows the card when a keyboard user focuses the link', async () => {
   root = createRoot(container)

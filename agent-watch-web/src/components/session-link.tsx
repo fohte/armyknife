@@ -3,7 +3,10 @@ import '#components/session-link.css'
 import { Tooltip } from '@base-ui/react/tooltip'
 import { type ReactNode, useContext, useState } from 'react'
 
-import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import {
+  getCommandPaletteModifierLabel,
+  getCommandPaletteShortcut,
+} from '#command-palette-shortcut'
 import { formatElapsedTime } from '#components/format-elapsed-time'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import type { SessionLinkTarget } from '#types'
@@ -117,10 +120,9 @@ export function SessionLink({
 }: SessionLinkProps) {
   const [internalOpen, setInternalOpen] = useState(false)
   const isOpen = open ?? internalOpen
-  const openBesideModifier =
-    getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
-      ? '⌘'
-      : 'Ctrl'
+  const openBesideModifier = getCommandPaletteModifierLabel(
+    getCommandPaletteShortcut(navigator.platform),
+  )
 
   return (
     <Tooltip.Root open={isOpen} onOpenChange={setInternalOpen}>
@@ -130,9 +132,15 @@ export function SessionLink({
           <a
             className="session-link-trigger"
             href={`?session=${encodeURIComponent(session.id)}`}
+            rel={
+              onSelectSession === undefined ? undefined : 'noopener noreferrer'
+            }
+            target={onSelectSession === undefined ? undefined : '_blank'}
             onClick={(event) => {
+              if (event.button !== 0) {
+                return
+              }
               if (
-                event.button !== 0 ||
                 event.metaKey ||
                 event.ctrlKey ||
                 event.shiftKey ||

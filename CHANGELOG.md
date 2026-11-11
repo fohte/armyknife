@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.606](https://github.com/fohte/armyknife/compare/v0.1.605...v0.1.606) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** open sessions in a new tab ([#1578](https://github.com/fohte/armyknife/issues/1578)) ([ac86a2d](https://github.com/fohte/armyknife/commit/ac86a2d6449c08c1a788b0b602fad7fab8e24c39))
+
 ## [0.1.605](https://github.com/fohte/armyknife/compare/v0.1.604...v0.1.605) (2026-11-11)
 
 
