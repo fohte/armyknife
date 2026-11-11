@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Result, ensure};
@@ -120,29 +121,30 @@ pub(crate) fn agent_decisions(sessions_dir: &Path, session_id: &str) -> Result<V
     .collect()
 }
 
-pub(crate) fn agent_decision_counts(
+pub(crate) fn agent_decision_counts_by_session(
     sessions_dir: &Path,
-    session_id: &str,
-) -> Result<AgentDecisionCounts> {
-    validate_session_id(session_id)?;
+) -> Result<HashMap<String, AgentDecisionCounts>> {
     if !sessions_dir.exists() {
-        return Ok(AgentDecisionCounts {
-            total: 0,
-            unreviewed: 0,
-        });
+        return Ok(HashMap::new());
     }
     let connection = open_connection(sessions_dir)?;
-    Ok(connection.query_row(
-        "SELECT COUNT(*), COALESCE(SUM(CASE WHEN review IS NULL THEN 1 ELSE 0 END), 0)
-         FROM agent_decision WHERE session_id = ?1",
-        [session_id],
-        |row| {
-            Ok(AgentDecisionCounts {
-                total: row.get(0)?,
-                unreviewed: row.get(1)?,
-            })
-        },
-    )?)
+    let mut statement = connection.prepare(
+        "SELECT session_id, COUNT(*),
+                COALESCE(SUM(CASE WHEN review IS NULL THEN 1 ELSE 0 END), 0)
+         FROM agent_decision
+         GROUP BY session_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get(0)?,
+            AgentDecisionCounts {
+                total: row.get(1)?,
+                unreviewed: row.get(2)?,
+            },
+        ))
+    })?;
+    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
+        .map_err(Into::into)
 }
 
 pub(crate) fn set_agent_decision_review(
@@ -189,7 +191,9 @@ fn bump_session_revision(transaction: &rusqlite::Transaction<'_>, session_id: &s
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::agent::store::session_store_revision_from;
+    use crate::commands::agent::store::{
+        agent_decision_counts_by_session_from, session_store_revision_from,
+    };
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
 
@@ -204,6 +208,16 @@ mod tests {
             .execute(
                 "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
                 ["session-cobalt"],
+            )
+            .expect("session row should be stored");
+    }
+
+    fn create_additional_session(sessions_dir: &Path, session_id: &str) {
+        let connection = open_connection(sessions_dir).expect("database should open");
+        connection
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
+                [session_id],
             )
             .expect("session row should be stored");
     }
@@ -292,11 +306,7 @@ mod tests {
             .expect("session should be deleted");
         let decisions =
             agent_decisions(sessions_dir.path(), "session-cobalt").expect("decisions load");
-        let counts = crate::commands::agent::store::agent_decision_counts_from(
-            sessions_dir.path(),
-            "session-cobalt",
-        )
-        .expect("counts load");
+        let counts = decision_counts(sessions_dir.path(), "session-cobalt");
 
         assert_eq!(
             (removed, decisions, counts),
@@ -314,11 +324,7 @@ mod tests {
     #[rstest]
     fn listing_counts_and_review_updates_cover_the_saved_decisions(sessions_dir: TempDir) {
         create_session(sessions_dir.path());
-        let initial_counts = crate::commands::agent::store::agent_decision_counts_from(
-            sessions_dir.path(),
-            "session-cobalt",
-        )
-        .expect("empty counts load");
+        let initial_counts = decision_counts(sessions_dir.path(), "session-cobalt");
         insert_agent_decision(
             sessions_dir.path(),
             "session-cobalt",
@@ -328,11 +334,7 @@ mod tests {
             "easy",
         )
         .expect("decision is stored");
-        let unreviewed_counts = crate::commands::agent::store::agent_decision_counts_from(
-            sessions_dir.path(),
-            "session-cobalt",
-        )
-        .expect("unreviewed counts load");
+        let unreviewed_counts = decision_counts(sessions_dir.path(), "session-cobalt");
         let before_review =
             session_store_revision_from(sessions_dir.path()).expect("revision loads");
         crate::commands::agent::store::set_agent_decision_review_from(
@@ -345,11 +347,7 @@ mod tests {
 
         let decisions =
             agent_decisions(sessions_dir.path(), "session-cobalt").expect("decisions load");
-        let counts = crate::commands::agent::store::agent_decision_counts_from(
-            sessions_dir.path(),
-            "session-cobalt",
-        )
-        .expect("counts load");
+        let counts = decision_counts(sessions_dir.path(), "session-cobalt");
         let revision = session_store_revision_from(sessions_dir.path()).expect("revision loads");
 
         assert_eq!(
@@ -394,6 +392,81 @@ mod tests {
                 },
                 before_review + 1,
             ),
+        );
+    }
+
+    fn decision_counts(sessions_dir: &Path, session_id: &str) -> AgentDecisionCounts {
+        agent_decision_counts_by_session_from(sessions_dir)
+            .expect("grouped counts load")
+            .get(session_id)
+            .copied()
+            .unwrap_or(AgentDecisionCounts {
+                total: 0,
+                unreviewed: 0,
+            })
+    }
+
+    #[rstest]
+    fn decision_counts_are_grouped_by_session(sessions_dir: TempDir) {
+        create_session(sessions_dir.path());
+        create_additional_session(sessions_dir.path(), "session-amber");
+        let considered = ["alternative".to_string()];
+        insert_agent_decision(
+            sessions_dir.path(),
+            "session-cobalt",
+            "first",
+            "reason",
+            &considered,
+            "easy",
+        )
+        .expect("first decision is stored");
+        insert_agent_decision(
+            sessions_dir.path(),
+            "session-cobalt",
+            "second",
+            "reason",
+            &considered,
+            "easy",
+        )
+        .expect("second decision is stored");
+        insert_agent_decision(
+            sessions_dir.path(),
+            "session-amber",
+            "third",
+            "reason",
+            &considered,
+            "easy",
+        )
+        .expect("third decision is stored");
+        crate::commands::agent::store::set_agent_decision_review_from(
+            sessions_dir.path(),
+            "session-cobalt",
+            1,
+            "ok",
+        )
+        .expect("review is stored");
+
+        let counts = agent_decision_counts_by_session_from(sessions_dir.path())
+            .expect("grouped counts load");
+
+        assert_eq!(
+            counts,
+            HashMap::from([
+                (
+                    "session-cobalt".to_string(),
+                    AgentDecisionCounts {
+                        total: 2,
+                        unreviewed: 1,
+                    },
+                ),
+                (
+                    "session-amber".to_string(),
+                    AgentDecisionCounts {
+                        total: 1,
+                        unreviewed: 1,
+                    },
+                ),
+            ]),
         );
     }
 }

@@ -351,15 +351,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
     let sessions_dir = store::sessions_dir()?;
-    let decision_counts = sessions
-        .iter()
-        .map(|session| {
-            Ok((
-                session.session_id.clone(),
-                store::agent_decision_counts_from(&sessions_dir, &session.session_id)?,
-            ))
-        })
-        .collect::<anyhow::Result<HashMap<_, _>>>()?;
+    let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
 
     Ok(SessionSnapshot {
         revision,

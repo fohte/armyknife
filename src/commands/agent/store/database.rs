@@ -20,7 +20,7 @@ mod wake;
 mod web_state;
 
 pub(crate) use decisions::{
-    AgentDecision, AgentDecisionCounts, agent_decision_counts, agent_decisions,
+    AgentDecision, AgentDecisionCounts, agent_decision_counts_by_session, agent_decisions,
     insert_agent_decision, set_agent_decision_review,
 };
 pub(crate) use proposals::AgentProposal;

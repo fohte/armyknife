@@ -1,10 +1,8 @@
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::{cell::RefCell, collections::HashSet};
-
-#[cfg(test)]
-use std::collections::HashMap;
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -160,11 +158,10 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
-pub(crate) fn agent_decision_counts_from(
+pub(crate) fn agent_decision_counts_by_session_from(
     sessions_dir: &Path,
-    session_id: &str,
-) -> Result<AgentDecisionCounts> {
-    database::agent_decision_counts(sessions_dir, session_id)
+) -> Result<HashMap<String, AgentDecisionCounts>> {
+    database::agent_decision_counts_by_session(sessions_dir)
 }
 
 pub(crate) fn set_agent_decision_review_from(
