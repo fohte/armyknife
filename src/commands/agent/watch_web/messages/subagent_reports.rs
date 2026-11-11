@@ -30,8 +30,29 @@ fn description_for(transcript_path: &Path, agent_id: &str) -> Option<String> {
         .parent()?
         .join("subagents")
         .join(format!("agent-{agent_id}.meta.json"));
-    let metadata = std::fs::read(metadata_path).ok()?;
-    let metadata: Value = serde_json::from_slice(&metadata).ok()?;
+    let metadata = match std::fs::read(&metadata_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(error) => {
+            tracing::warn!(
+                path = %metadata_path.display(),
+                %error,
+                "failed to read subagent metadata"
+            );
+            return None;
+        }
+    };
+    let metadata: Value = match serde_json::from_slice(&metadata) {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            tracing::warn!(
+                path = %metadata_path.display(),
+                %error,
+                "failed to parse subagent metadata"
+            );
+            return None;
+        }
+    };
     metadata
         .get("description")
         .and_then(Value::as_str)
