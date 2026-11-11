@@ -248,7 +248,7 @@ fn load_conversation_with_queued_prompts(
         });
     }
 
-    for (seq, item, _) in &proposal_items {
+    for (seq, item) in &proposal_items {
         if !messages
             .iter()
             .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
