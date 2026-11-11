@@ -10,8 +10,6 @@ import {
   useState,
 } from 'react'
 
-const separatorSize = 8
-
 type ResizableColumnsProps = {
   first: ReactNode
   second: ReactNode
@@ -54,7 +52,7 @@ function getMaximumFirstSize(
   secondMinSize: number,
 ) {
   if (containerWidth === 0) return undefined
-  return Math.max(firstMinSize, containerWidth - secondMinSize - separatorSize)
+  return Math.max(firstMinSize, containerWidth - secondMinSize)
 }
 
 export function ResizableColumns({

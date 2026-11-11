@@ -10,7 +10,9 @@ import {
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
+import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
+import { SubagentReport } from '#components/subagent-report'
 import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
@@ -77,6 +79,16 @@ export function renderConversationMessage({
     return (
       <PeerMessage
         key={`peer-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
+    )
+  }
+  if (message.type === 'subagent_report') {
+    return (
+      <SubagentReport
+        key={`subagent-report-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
@@ -169,6 +181,26 @@ export function renderConversationMessage({
         onOk={() => onAction(`decisions/${String(message.seq)}/ok`)}
         onRequestChange={(comment) =>
           onAction(`decisions/${String(message.seq)}/change`, { comment })
+        }
+      />
+    )
+  }
+  if (message.type === 'proposal') {
+    return (
+      <ProposalCard
+        key={`proposal-${String(message.seq)}`}
+        seq={message.seq}
+        title={message.title}
+        summary={message.summary}
+        options={message.options}
+        answer={message.answer}
+        resolved={message.resolved}
+        isMobile={isMobile}
+        onAnswer={(answer) =>
+          onAction(`proposals/${String(message.seq)}/answer`, {
+            choice: answer.choice,
+            comment: answer.comment,
+          })
         }
       />
     )

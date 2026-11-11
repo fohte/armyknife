@@ -9,6 +9,11 @@ pub(super) enum MessageKind {
         session_id: String,
         text: String,
     },
+    SubagentReport {
+        agent_id: String,
+        agent_name: String,
+        text: String,
+    },
     Event {
         kind: EventKind,
         text: String,
@@ -46,6 +51,9 @@ pub(super) fn classify_inbound(
     let tagged = tagged_body(text);
     if tagged.is_some_and(|(tag, _)| is_hidden_tag(tag)) {
         return MessageKind::Hidden;
+    }
+    if let Some(report) = subagent_report(record) {
+        return report;
     }
     if origin(record)
         .and_then(|origin| origin.get("kind"))
@@ -135,6 +143,35 @@ pub(super) fn classify_inbound(
     MessageKind::User {
         text: text.to_owned(),
     }
+}
+
+fn subagent_report(record: &Value) -> Option<MessageKind> {
+    let origin = origin(record)?;
+    if origin.get("kind").and_then(Value::as_str) != Some("peer")
+        || origin.get("handback").and_then(Value::as_bool) != Some(true)
+    {
+        return None;
+    }
+    let agent_id = origin
+        .get("from")
+        .or_else(|| origin.get("senderTaskId"))
+        .and_then(Value::as_str)?
+        .to_owned();
+    let agent_name = origin
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Subagent")
+        .to_owned();
+    let text = origin
+        .get("handbackReportText")
+        .and_then(Value::as_str)?
+        .to_owned();
+    Some(MessageKind::SubagentReport {
+        agent_id,
+        agent_name,
+        text,
+    })
 }
 
 fn origin(record: &Value) -> Option<&Value> {
@@ -473,6 +510,16 @@ mod tests {
         "#},
         None,
         MessageKind::PeerIn { session_id: "fixture-peer-id".to_owned(), text: "Continue the fictional task.".to_owned() }
+    )]
+    #[case::subagent_handback_uses_report_text(
+        json!({"type":"user","origin":{"kind":"peer","from":"fixture-agent-id","name":"general-purpose","handback":true,"handbackReportText":"The fictional task is complete."}}),
+        "Another Claude session sent a message:\n[Subagent hand-back] boilerplate",
+        None,
+        MessageKind::SubagentReport {
+            agent_id: "fixture-agent-id".to_owned(),
+            agent_name: "general-purpose".to_owned(),
+            text: "The fictional task is complete.".to_owned(),
+        }
     )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]

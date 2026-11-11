@@ -73,13 +73,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
-        return write_stop_response(args.engine, event, None);
+        return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
     // Headless runs inherit TMUX_PANE from their parent interactive session;
     // skip them to avoid overwriting the parent's registered session state.
     if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
-        return write_stop_response(args.engine, event, None);
+        return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
     let run_id = short_run_id();
@@ -115,21 +115,46 @@ pub fn run(args: &HookArgs) -> Result<()> {
         ProcessResult::StopBlocked(reason) => Some(reason),
         ProcessResult::SessionSaved | ProcessResult::SessionEnded | ProcessResult::Skipped => None,
     };
-    if event == HookEvent::SessionStart
-        && args.engine == Engine::Claude
-        && let Some(marker) = store::watch_web_user_marker(&session_id)?
-    {
-        return stop::write_session_start_response(
-            &super::watch_web_user_marker::session_start_context(&marker),
-            &mut io::stdout().lock(),
-        );
+    if event == HookEvent::SessionStart && args.engine == Engine::Claude {
+        let marker = store::watch_web_user_marker(&session_id)?;
+        return write_claude_session_start_response(marker.as_deref(), &mut io::stdout().lock());
     }
-    write_stop_response(args.engine, event, block_reason.as_deref())
+    write_stop_response(
+        args.engine,
+        event,
+        block_reason.as_deref(),
+        &mut io::stdout().lock(),
+    )
 }
 
-fn write_stop_response(engine: Engine, event: HookEvent, block_reason: Option<&str>) -> Result<()> {
-    let stdout = io::stdout();
-    stop::write_response(engine, event, block_reason, &mut stdout.lock())
+fn write_stop_response(
+    engine: Engine,
+    event: HookEvent,
+    block_reason: Option<&str>,
+    output: impl Write,
+) -> Result<()> {
+    if event == HookEvent::SessionStart && engine == Engine::Claude {
+        return write_claude_session_start_response_without_agent_instruction(output);
+    }
+    stop::write_response(engine, event, block_reason, output)
+}
+
+fn session_start_context(marker: Option<&str>) -> String {
+    let mut context = super::decision::session_start_instruction().to_string();
+    if let Some(marker) = marker {
+        context.push('\n');
+        context.push('\n');
+        context.push_str(&super::watch_web_user_marker::session_start_context(marker));
+    }
+    context
+}
+
+fn write_claude_session_start_response(marker: Option<&str>, output: impl Write) -> Result<()> {
+    stop::write_session_start_response(&session_start_context(marker), output)
+}
+
+fn write_claude_session_start_response_without_agent_instruction(output: impl Write) -> Result<()> {
+    stop::write_session_start_response("", output)
 }
 
 /// Result of processing a hook event.
@@ -882,6 +907,10 @@ fn process_hook_event_impl_with_settings(
     session_lock.save(&session)?;
     drop(session_lock);
 
+    if event == HookEvent::UserPromptSubmit && input.agent_id.is_none() {
+        store::close_unanswered_agent_proposals(sessions_dir, &session.session_id)?;
+    }
+
     if session.engine == Engine::Claude && input.agent_id.is_none() {
         let compacting = match event {
             HookEvent::PreCompact => Some(true),
@@ -1586,6 +1615,48 @@ mod tests {
         side_effects: &SideEffects,
     ) -> Result<ProcessResult> {
         process_hook_event_impl_with_instruction(event, input, sessions_dir, side_effects, None)
+    }
+
+    #[rstest]
+    #[case::without_watch_web_marker(None)]
+    #[case::with_watch_web_marker(Some("⟦armyknife-user:fixture-marker-cobalt⟧"))]
+    fn claude_session_start_response_includes_the_decision_instruction(
+        #[case] marker: Option<&str>,
+    ) {
+        let mut output = Vec::new();
+
+        write_claude_session_start_response(marker, &mut output)
+            .expect("SessionStart response should serialize");
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output)
+                .expect("response should be valid JSON"),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": session_start_context(marker),
+                }
+            }),
+        );
+    }
+
+    #[test]
+    fn skipped_claude_session_start_response_omits_the_agent_instruction() {
+        let mut output = Vec::new();
+
+        write_stop_response(Engine::Claude, HookEvent::SessionStart, None, &mut output)
+            .expect("skipped SessionStart response should serialize");
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output)
+                .expect("response should be valid JSON"),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": "",
+                }
+            }),
+        );
     }
 
     struct TqArchiveContext {
@@ -5294,6 +5365,53 @@ mod tests {
                 .agent_status;
 
             assert_eq!(actual, None);
+        }
+
+        #[rstest]
+        #[case::main_agent(None, true, 2)]
+        #[case::subagent(Some("agent-a"), false, 1)]
+        fn user_prompt_submit_closes_proposals_only_for_the_main_agent(
+            #[case] agent_id: Option<&str>,
+            #[case] expected_resolved: bool,
+            #[case] expected_revision_delta: i64,
+        ) {
+            let temp_dir = create_temp_sessions_dir();
+            let session = create_test_session(None);
+            store::save_session_to(temp_dir.path(), &session).expect("session should save");
+            store::add_agent_proposal_in(temp_dir.path(), "test-123", "{}")
+                .expect("proposal should save");
+            let before_revision =
+                store::session_store_revision_from(temp_dir.path()).expect("revision should load");
+            let mut input = create_test_input(None);
+            input.agent_id = agent_id.map(str::to_string);
+
+            temp_env::with_vars([("TMUX_PANE", None::<&str>)], || {
+                process_hook_event_impl(
+                    HookEvent::UserPromptSubmit,
+                    input,
+                    temp_dir.path(),
+                    &SideEffects::none(),
+                )
+                .expect("user-prompt-submit should succeed");
+            });
+
+            let connection = rusqlite::Connection::open(temp_dir.path().join("sessions.db"))
+                .expect("session database should open");
+            let resolved_at: Option<String> = connection
+                .query_row(
+                    "SELECT resolved_at FROM agent_proposal
+                     WHERE session_id = 'test-123' AND seq = 1",
+                    [],
+                    |row| row.get(0),
+                )
+                .expect("proposal should load");
+            let after_revision =
+                store::session_store_revision_from(temp_dir.path()).expect("revision should load");
+
+            assert_eq!(
+                (resolved_at.is_some(), after_revision - before_revision),
+                (expected_resolved, expected_revision_delta),
+            );
         }
 
         #[rstest]
