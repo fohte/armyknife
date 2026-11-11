@@ -71,7 +71,7 @@ export function InboxFilterBar({
                 .join(', ')
               return (
                 <span key={filter.key} className="inbox-filter-chip">
-                  <span className="inbox-filter-chip-label">{label}</span>
+                  <span className="inbox-filter-chip-label">{label}</span>{' '}
                   <span className="inbox-filter-chip-value">{values}</span>
                   <Button
                     type="button"
