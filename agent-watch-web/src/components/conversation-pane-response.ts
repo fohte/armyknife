@@ -176,7 +176,23 @@ export function isConversationResponse(
     Array.isArray(value['messages']) &&
     value['messages'].every(isChatItem) &&
     Array.isArray(value['backgroundTasks']) &&
-    value['backgroundTasks'].every(isBackgroundTask)
+    value['backgroundTasks'].every(isBackgroundTask) &&
+    typeof value['start'] === 'number' &&
+    Number.isInteger(value['start']) &&
+    value['start'] >= 0 &&
+    typeof value['total'] === 'number' &&
+    Number.isInteger(value['total']) &&
+    value['total'] >= value['start'] + value['messages'].length &&
+    Array.isArray(value['decisions']) &&
+    value['decisions'].every(
+      (decision) => isChatItem(decision) && decision.type === 'decision',
+    ) &&
+    typeof value['hasUnansweredProposal'] === 'boolean' &&
+    (value['activeQuestionIndex'] === null ||
+      (typeof value['activeQuestionIndex'] === 'number' &&
+        Number.isInteger(value['activeQuestionIndex']) &&
+        value['activeQuestionIndex'] >= 0 &&
+        value['activeQuestionIndex'] < value['total']))
   )
 }
 

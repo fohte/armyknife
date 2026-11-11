@@ -81,6 +81,11 @@ const meta = {
               },
             ],
             backgroundTasks: [],
+            start: 0,
+            total: 1,
+            decisions: [],
+            hasUnansweredProposal: false,
+            activeQuestionIndex: null,
           }),
         ),
         http.get('/api/sessions/:sessionId/actions', () =>

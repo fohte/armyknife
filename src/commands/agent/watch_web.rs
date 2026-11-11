@@ -332,7 +332,7 @@ mod tests {
         "/api/sessions/fixture-session/messages",
         StatusCode::OK,
         Some("application/json"),
-        r#"{"messages":[],"backgroundTasks":[]}"#
+        r#"{"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null}"#
     )]
     #[case::unknown_session(
         "/api/sessions/unregistered-session/messages",
