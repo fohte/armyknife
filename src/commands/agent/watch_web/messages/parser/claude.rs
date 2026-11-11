@@ -943,6 +943,45 @@ mod tests {
         );
     }
 
+    #[test]
+    fn abandoned_decision_adds_do_not_count_as_active_transcript_positions() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-root","parentUuid":null,"type":"user","timestamp":"2026-11-11T10:00:00Z","message":{"content":"Earlier message."}}
+            {"uuid":"fixture-abandoned","parentUuid":"fixture-root","type":"assistant","timestamp":"2026-11-11T11:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call-a","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}},{"type":"tool_use","id":"fixture-decision-call-b","name":"Bash","input":{"command":"a agent decision add 'Decision 2'"}}]}}
+            {"uuid":"fixture-abandoned-result","parentUuid":"fixture-abandoned","type":"user","timestamp":"2026-11-11T12:00:00Z","sourceToolAssistantUUID":"fixture-abandoned","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call-a","content":"Recorded decision 1"},{"type":"tool_result","tool_use_id":"fixture-decision-call-b","content":"Recorded decision 2"}]}}
+            {"uuid":"fixture-current","parentUuid":"fixture-root","type":"assistant","timestamp":"2026-11-11T13:00:00Z","message":{"content":[{"type":"text","text":"Current message."}]}}
+        "#};
+        let decisions = [
+            decision_at(1, "2026-11-11T10:30:00Z"),
+            decision_at(2, "2026-11-11T10:30:00Z"),
+        ];
+
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &decisions,
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::User {
+                    text: "Earlier message.".to_string(),
+                    from: None,
+                },
+                decision_item_at(1, "2026-11-11T10:30:00Z"),
+                decision_item_at(2, "2026-11-11T10:30:00Z"),
+                ChatItem::Assistant {
+                    text: "Current message.".to_string(),
+                },
+            ],
+        );
+    }
+
     #[rstest]
     #[case::permission_requested(
         "a agent decision add 'Decision 1'",

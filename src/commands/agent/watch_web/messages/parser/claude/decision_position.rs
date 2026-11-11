@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -108,20 +108,21 @@ pub(super) fn recorded_decision_seqs(
     transcript_nodes: &BTreeMap<String, TranscriptNode>,
 ) -> HashSet<i64> {
     let mut transcript_nodes = transcript_nodes.clone();
+    let mut branch_membership_by_uuid = HashMap::<String, bool>::new();
     let mut active_tool_uses = tool_uses
         .iter()
         .filter_map(|(id, uuid)| {
             let Some(uuid) = uuid else {
                 return Some(id.clone());
             };
-            let membership = transcript_nodes.get(uuid)?.membership;
-            if membership == BranchMembership::Unknown
-                && is_inactive_branch(uuid, &mut transcript_nodes)
-            {
-                None
-            } else {
-                Some(id.clone())
+            if let Some(is_active) = branch_membership_by_uuid.get(uuid) {
+                return (*is_active).then(|| id.clone());
             }
+            let membership = transcript_nodes.get(uuid)?.membership;
+            let is_active = membership != BranchMembership::Unknown
+                || !is_inactive_branch(uuid, &mut transcript_nodes);
+            branch_membership_by_uuid.insert(uuid.clone(), is_active);
+            if is_active { Some(id.clone()) } else { None }
         })
         .collect::<Vec<_>>();
     tool_results
