@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.602](https://github.com/fohte/armyknife/compare/v0.1.601...v0.1.602) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** page conversation messages ([#1570](https://github.com/fohte/armyknife/issues/1570)) ([af018bd](https://github.com/fohte/armyknife/commit/af018bdbb9ecee187cee6314a55e99f06e7b33c5))
+
 ## [0.1.601](https://github.com/fohte/armyknife/compare/v0.1.600...v0.1.601) (2026-11-11)
 
 
