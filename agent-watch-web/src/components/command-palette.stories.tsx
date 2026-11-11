@@ -11,7 +11,7 @@ const sessions: Session[] = [
     kind: 'Question',
     title: 'Review the notification rollout',
     preview: null,
-    elapsedSeconds: 3_600,
+    elapsedSeconds: 8,
     unread: true,
     task: {
       id: 'task-notifications',
@@ -48,7 +48,7 @@ const sessions: Session[] = [
     kind: null,
     title: 'Add delivery retry coverage',
     preview: null,
-    elapsedSeconds: 7_200,
+    elapsedSeconds: 30,
     unread: false,
     task: {
       id: 'task-notifications',
@@ -93,7 +93,7 @@ const sessions: Session[] = [
     kind: 'Plan',
     title: 'Plan notification deployment',
     preview: null,
-    elapsedSeconds: 1800,
+    elapsedSeconds: 120,
     unread: true,
     task: {
       id: 'task-deployment',

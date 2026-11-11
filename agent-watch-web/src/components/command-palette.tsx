@@ -14,6 +14,7 @@ import {
   itemResultTitle,
   itemSubtitle,
   itemTitle,
+  sessionKindLabel,
 } from '#components/command-palette-item'
 import { useCopySessionId } from '#components/use-copy-session-id'
 import type { Session } from '#types'
@@ -385,8 +386,7 @@ export function CommandPalette({
                           <strong>{itemResultTitle(item)}</strong>
                           {item.type === 'session' ? (
                             <span className="command-palette-item-kind">
-                              {item.session.kind ??
-                                item.session.category.replace('_', ' ')}
+                              {sessionKindLabel(item.session)}
                             </span>
                           ) : null}
                         </span>
@@ -394,13 +394,7 @@ export function CommandPalette({
                           {itemSubtitle(item)}
                         </span>
                       </span>
-                      <span
-                        className={`command-palette-item-detail${
-                          item.type === 'session' || item.type === 'command'
-                            ? ' is-monospace'
-                            : ''
-                        }`}
-                      >
+                      <span className="command-palette-item-detail is-monospace">
                         {itemDetail(item)}
                       </span>
                     </button>
@@ -429,12 +423,12 @@ export function CommandPalette({
                 <kbd>↵</kbd> Open
               </span>
               <span>
-                <kbd>Tab</kbd> Scope
-              </span>
-              <span>
                 <kbd>→</kbd> Actions
               </span>
               <span>
+                <kbd>Tab</kbd> Scope
+              </span>
+              <span className="command-palette-hint-legend">
                 <kbd>#</kbd> task · <kbd>@</kbd> project · <kbd>&gt;</kbd>{' '}
                 command
               </span>

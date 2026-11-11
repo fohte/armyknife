@@ -142,7 +142,7 @@
 .command-palette-item {
   display: grid;
   width: 100%;
-  min-height: 54px;
+  min-height: 44px;
   grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 12px;
@@ -303,7 +303,7 @@
   white-space: nowrap;
 }
 
-.command-palette-hints span:last-child {
+.command-palette-hints .command-palette-hint-legend {
   margin-left: auto;
 }
 

@@ -32,10 +32,10 @@ export function itemSubtitle(item: PaletteItem) {
       const branch = item.session.branch?.trim()
       const branchLabel =
         branch === undefined || branch.length === 0 ? '' : `${branch} · `
-      return `${task}${branchLabel}${item.session.project} · ${item.session.repo}`
+      return `${task}${branchLabel}${item.session.repo}`
     }
     case 'task':
-      return aggregateSubtitle(item.sessions)
+      return aggregateSubtitle(item.sessions, item.task.priority)
     case 'project':
       return aggregateSubtitle(item.sessions)
     case 'command':
@@ -43,27 +43,51 @@ export function itemSubtitle(item: PaletteItem) {
   }
 }
 
-function aggregateSubtitle(sessions: readonly Session[]) {
+function aggregateSubtitle(
+  sessions: readonly Session[],
+  priority?: number | null,
+) {
   const needsActionCount = sessions.filter(
     (session) => session.category === 'needs_action',
   ).length
   const repos = Array.from(new Set(sessions.map((session) => session.repo)))
-  return `${String(sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
+  const priorityLabel =
+    priority === undefined ? '' : `P${String(priority ?? '—')} · `
+  return `${priorityLabel}${String(sessions.length)} sessions · ${String(needsActionCount)} need action · ${repos.join(', ')}`
 }
 
 export function itemDetail(item: PaletteItem) {
   switch (item.type) {
-    case 'session':
-      return item.session.category === 'needs_action'
-        ? `${item.session.kind ?? 'Needs action'} · ${String(Math.floor(item.session.elapsedSeconds / 60))}m`
-        : `${item.session.category.replace('_', ' ')} · ${String(Math.floor(item.session.elapsedSeconds / 60))}m`
+    case 'session': {
+      if (
+        item.session.category === 'later' ||
+        item.session.category === 'done'
+      ) {
+        return ''
+      }
+      const elapsedSeconds = Math.floor(item.session.elapsedSeconds)
+      return elapsedSeconds < 60
+        ? `${String(elapsedSeconds)}s`
+        : `${String(Math.floor(elapsedSeconds / 60))}m`
+    }
     case 'task':
       return 'Show in Board'
     case 'project':
       return 'Show in Board'
     case 'command':
-      return '↵'
+      return item.id === 'switch-board' ? '⇧B' : ''
   }
+}
+
+export function sessionKindLabel(session: Session) {
+  if (session.kind !== null) return session.kind
+  const labels: Record<Session['category'], string> = {
+    needs_action: 'Needs action',
+    in_progress: 'Working',
+    later: 'Later',
+    done: 'Done',
+  }
+  return labels[session.category]
 }
 
 export function itemColor(item: PaletteItem) {
