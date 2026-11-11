@@ -177,6 +177,12 @@ export type SessionActions = {
   openInTerminal: boolean
 }
 
+export type OpenInTerminalStatus =
+  | { state: 'sending' }
+  | { state: 'success' }
+  | { state: 'error'; message: string }
+  | null
+
 export type SessionsResponse = {
   revision: number
   workTypeNavLabels?: Record<string, string>

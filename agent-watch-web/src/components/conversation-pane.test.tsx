@@ -160,6 +160,9 @@ function renderView(
         loading={false}
         error={null}
         onAction={onAction}
+        onOpenInTerminal={() => {
+          void onAction('focus')
+        }}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
         isToday={today.isToday}
@@ -3994,6 +3997,161 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
     permissionButtonsDisabled: [false, false],
     conversationStatus: undefined,
     requestsStarted: 4,
+  })
+})
+
+it('shows terminal switch progress and success without reloading messages', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const codexActions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    permission: { approve: false, reject: false },
+    interrupt: true,
+    openInTerminal: true,
+  }
+  let resolveFocus: ((response: Response) => void) | undefined
+  const focusResponse = new Promise<Response>((resolve) => {
+    resolveFocus = resolve
+  })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexActions))
+    .mockReturnValueOnce(focusResponse)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const terminalButtons = () =>
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.conversation-open-in-terminal button',
+      ),
+    )
+  act(() => {
+    terminalButtons()[0]?.click()
+  })
+  const pendingSnapshot = () => ({
+    feedback: Array.from(
+      container.querySelectorAll('.conversation-terminal-action-status'),
+      (element) => element.textContent,
+    ),
+    disabled: terminalButtons().map((button) => button.disabled),
+  })
+  expect(pendingSnapshot()).toEqual({
+    feedback: ['Switching tmux…', 'Switching tmux…', 'Switching tmux…'],
+    disabled: [true, true, true],
+  })
+
+  await act(async () => {
+    resolveFocus?.(new Response(null, { status: 204 }))
+    await focusResponse
+  })
+  const successSnapshot = () => ({
+    feedback: Array.from(
+      container.querySelectorAll('.conversation-terminal-action-status'),
+      (element) => element.textContent,
+    ),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(successSnapshot()).toEqual({
+    feedback: [
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+    ],
+    requests: [
+      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
+  })
+})
+
+it('shows the server reason beside every terminal action when switching fails', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const codexActions: SessionActions = {
+    message: true,
+    answerQuestion: false,
+    permission: { approve: false, reject: false },
+    interrupt: true,
+    openInTerminal: true,
+  }
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexActions))
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ error: 'The terminal session is unavailable.' }),
+        {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        },
+      ),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    feedback: Array.from(
+      container.querySelectorAll('[role="alert"]'),
+      (element) => element.textContent,
+    ),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    feedback: [
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+    ],
+    requests: [
+      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
   })
 })
 

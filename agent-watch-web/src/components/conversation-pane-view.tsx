@@ -8,6 +8,7 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { MessageComposer } from '#components/message-composer'
+import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
@@ -21,6 +22,7 @@ import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
   ChatItem,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -34,6 +36,7 @@ type ConversationPaneViewProps = {
   actions: SessionActions | null
   actionsReady?: boolean
   pendingPermissionAction?: PendingPermissionAction | undefined
+  openInTerminalStatus?: OpenInTerminalStatus
   loading: boolean
   sending?: boolean
   error: string | null
@@ -43,6 +46,7 @@ type ConversationPaneViewProps = {
     payload?: Record<string, unknown>,
     permissionIdentity?: PermissionRequestIdentity,
   ) => Promise<boolean>
+  onOpenInTerminal?: () => void
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
@@ -102,11 +106,13 @@ export function ConversationPaneView({
   actions,
   actionsReady = true,
   pendingPermissionAction = null,
+  openInTerminalStatus = null,
   loading,
   sending = false,
   error,
   onClearError = () => undefined,
   onAction,
+  onOpenInTerminal = () => undefined,
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
@@ -208,7 +214,7 @@ export function ConversationPaneView({
   }
 
   const openInTerminal = () => {
-    void onAction('focus')
+    onOpenInTerminal()
   }
 
   useLayoutEffect(() => {
@@ -364,13 +370,10 @@ export function ConversationPaneView({
                     </a>
                   ) : null}
                   {actions?.openInTerminal === true ? (
-                    <Button
-                      type="button"
-                      variant="plain"
+                    <OpenInTerminalAction
+                      status={openInTerminalStatus}
                       onClick={openInTerminal}
-                    >
-                      Open in terminal
-                    </Button>
+                    />
                   ) : null}
                 </div>
               </div>
@@ -423,6 +426,7 @@ export function ConversationPaneView({
             onOpenInTerminal: openInTerminal,
             onSelectSession: selectLinkedSession,
             pendingAction: pendingPermissionAction,
+            openInTerminalStatus,
             session,
             sessions: sessionLinkTargets,
           }),
