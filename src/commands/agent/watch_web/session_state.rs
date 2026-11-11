@@ -447,6 +447,7 @@ mod tests {
                     until_activity: true,
                     is_today: true,
                     is_compacting: false,
+                    primary_task_id: None,
                 }],
                 before_revision + 2,
                 session.updated_at,
@@ -500,6 +501,7 @@ mod tests {
                     until_activity: false,
                     is_today: true,
                     is_compacting: false,
+                    primary_task_id: None,
                 }],
                 before_revision + 1,
             ),
@@ -658,6 +660,7 @@ mod tests {
                     until_activity,
                     is_today: false,
                     is_compacting: false,
+                    primary_task_id: None,
                 }],
             ),
         );
@@ -721,6 +724,7 @@ mod tests {
             until_activity: false,
             is_today: false,
             is_compacting: false,
+            primary_task_id: None,
         };
         assert_eq!(
             (
@@ -797,6 +801,7 @@ mod tests {
                 until_activity: true,
                 is_today: true,
                 is_compacting: false,
+                primary_task_id: None,
             }]
         );
     }

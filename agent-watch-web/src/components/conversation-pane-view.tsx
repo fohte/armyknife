@@ -273,7 +273,14 @@ export function ConversationPaneView({
                 sessionId={session.id}
               />
               <div className="mobile-conversation-context">
-                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                <SessionTaskLinks
+                  task={session.task}
+                  tasks={linkedTasks}
+                  sessions={sessions}
+                  onMakePrimary={(taskId) =>
+                    onAction('primary-task', { taskId })
+                  }
+                />
                 {session.task ? <span aria-hidden="true">·</span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
@@ -303,7 +310,14 @@ export function ConversationPaneView({
           <>
             <div className="conversation-header-copy">
               <div className="conversation-context-line">
-                <SessionTaskLinks task={session.task} tasks={linkedTasks} />
+                <SessionTaskLinks
+                  task={session.task}
+                  tasks={linkedTasks}
+                  sessions={sessions}
+                  onMakePrimary={(taskId) =>
+                    onAction('primary-task', { taskId })
+                  }
+                />
                 <a
                   className="conversation-repo"
                   href={`https://github.com/${session.repo}`}

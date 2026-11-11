@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.607](https://github.com/fohte/armyknife/compare/v0.1.606...v0.1.607) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** allow primary task choice ([#1580](https://github.com/fohte/armyknife/issues/1580)) ([70b452d](https://github.com/fohte/armyknife/commit/70b452d61dd3a247bf3987b1b272367bb9820bbe))
+
 ## [0.1.606](https://github.com/fohte/armyknife/compare/v0.1.605...v0.1.606) (2026-11-11)
 
 
