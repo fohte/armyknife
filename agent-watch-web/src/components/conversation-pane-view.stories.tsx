@@ -1,4 +1,4 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import type { ChatItem, Session, SessionActions } from '#types'
@@ -64,6 +64,16 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+const iPhoneViewportDecorator: Decorator = (Story) => (
+  <div
+    className="story-mobile-layout"
+    data-layout="mobile"
+    style={{ width: '390px', height: '844px', display: 'flex' }}
+  >
+    <Story />
+  </div>
+)
 
 export const QuestionWaitsForAnAnswer: Story = {
   name: 'A question offers numbered choices',
@@ -169,17 +179,7 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
       unread: false,
     },
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
@@ -188,17 +188,7 @@ export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
     isMobile: true,
     isToday: true,
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const IPhoneConversationShowsAQuestion: Story = {
@@ -243,17 +233,7 @@ export const IPhoneConversationShowsAQuestion: Story = {
       },
     ],
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const IPhoneConversationShowsItsWorkingStatus: Story = {
@@ -270,17 +250,7 @@ export const IPhoneConversationShowsItsWorkingStatus: Story = {
       },
     ],
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const PermissionWaitsForApproval: Story = {
@@ -379,17 +349,7 @@ export const ReviewGuidanceFitsAnIPhone: Story = {
       },
     ],
   },
-  decorators: [
-    (Story) => (
-      <div
-        className="story-mobile-layout"
-        data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
-      >
-        <Story />
-      </div>
-    ),
-  ],
+  decorators: [iPhoneViewportDecorator],
 }
 
 export const CodexOnlyOpensInTerminal: Story = {
