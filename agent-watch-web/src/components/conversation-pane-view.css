@@ -34,11 +34,22 @@
   border-bottom: 1px solid var(--aw-border-row);
 }
 
+.conversation-pane:not([data-mobile='true']) .conversation-header {
+  min-height: unset;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: unset;
+  gap: 0;
+  padding: 10px 24px 0;
+  border-bottom-color: var(--aw-border);
+}
+
 .conversation-header-copy {
   display: flex;
   min-width: 0;
+  flex: 1;
   flex-direction: column;
-  gap: 1px;
+  gap: 0;
 }
 
 .session-task-line {
@@ -55,8 +66,10 @@
 .conversation-context-line {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  gap: 12px;
+  align-items: center;
+  gap: 10px;
+  color: var(--aw-text-secondary);
+  font-size: 12px;
 }
 
 .conversation-pane[data-mobile='true'] .mobile-conversation-context {
@@ -104,41 +117,47 @@
 
 .conversation-repo,
 .conversation-parent {
-  font-size: 10.5px;
-}
-
-.conversation-parent {
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .conversation-header-actions {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
+  margin-left: auto;
 }
 
 .conversation-header-actions [data-slot='button'] {
-  min-height: 28px;
-  padding: 0 9px;
-  border: 1px solid var(--aw-border-control);
+  height: 26px;
+  min-height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--aw-border);
   color: var(--aw-text-body);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .conversation-status-panel-toggle {
   display: inline-flex;
   min-width: 32px;
-  min-height: 28px;
+  height: 26px;
+  min-height: 26px;
   align-items: center;
   justify-content: center;
-  gap: 5px;
-  border: 1px solid var(--aw-border-control);
+  gap: 6px;
+  border: 1px solid var(--aw-border);
   color: var(--aw-text-body);
-  font-size: 11.5px;
+  font-size: 12px;
+}
+
+.conversation-status-panel-toggle > span[aria-hidden='true'] {
+  font-size: 13px;
 }
 
 .conversation-status-panel-toggle[aria-expanded='true'] {
+  border-color: var(--aw-border-emphasis);
   background: var(--aw-bg-pressed);
   color: var(--aw-text-primary);
 }

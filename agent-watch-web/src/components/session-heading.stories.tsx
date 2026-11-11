@@ -4,6 +4,11 @@ import { SessionHeading } from '#components/session-heading'
 
 const meta = {
   component: SessionHeading,
+  render: (args) => (
+    <div className="conversation-header-copy">
+      <SessionHeading {...args} />
+    </div>
+  ),
   args: {
     title: 'Investigate a failing build',
     isPaused: true,
