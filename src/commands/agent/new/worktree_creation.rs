@@ -19,8 +19,14 @@ use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
 use crate::shared::worktree::{LinkedWorktree, branch_to_worktree_name, list_linked_worktrees};
 
+enum WorktreeHookMode<'a> {
+    Skipped,
+    Created(&'a Path),
+    Reused(&'a Path),
+}
+
 struct WorktreeHookContext<'a> {
-    worktree_dir: Option<&'a Path>,
+    mode: WorktreeHookMode<'a>,
     actual_branch: &'a str,
     repo_root: &'a str,
 }
@@ -31,14 +37,22 @@ fn run_worktree_hooks(
     rollback: impl FnOnce(&str),
 ) -> Result<()> {
     let WorktreeHookContext {
-        worktree_dir,
+        mode,
         actual_branch,
         repo_root,
     } = context;
 
-    let Some(worktree_dir) = worktree_dir else {
-        eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
-        return run_pre_session_start_hook(None, run_hook);
+    let worktree_dir = match mode {
+        WorktreeHookMode::Skipped => {
+            eprintln!("Skipping post-worktree-create hook (--skip-hooks)");
+            return run_pre_session_start_hook(None, run_hook);
+        }
+        WorktreeHookMode::Reused(worktree_dir) => {
+            let worktree_abs =
+                std::fs::canonicalize(worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
+            return run_pre_session_start_hook(Some(&worktree_abs), run_hook);
+        }
+        WorktreeHookMode::Created(worktree_dir) => worktree_dir,
     };
 
     // `worktree_dir` is built from the absolute repository root. Keep that
@@ -65,11 +79,23 @@ fn run_worktree_hooks(
     Ok(())
 }
 
-fn find_linked_worktree_for_branch(
+enum WorktreeAction {
+    Force,
+    Reuse(LinkedWorktree),
+    ExistingBranch(String),
+    NewBranch(String),
+}
+
+fn select_worktree_action(
     repo: &crate::infra::git::GitRepo,
     name: &str,
     branch_prefix: &str,
-) -> Result<Option<LinkedWorktree>> {
+    force: bool,
+) -> Result<WorktreeAction> {
+    if force {
+        return Ok(WorktreeAction::Force);
+    }
+
     let branch = if repo_branch_exists(repo, name) {
         Some(name.to_string())
     } else {
@@ -77,22 +103,31 @@ fn find_linked_worktree_for_branch(
         let prefixed_branch = format!("{branch_prefix}{name_no_prefix}");
         repo_branch_exists(repo, &prefixed_branch).then_some(prefixed_branch)
     };
-    let Some(branch) = branch else {
-        return Ok(None);
-    };
 
-    Ok(list_linked_worktrees(repo)?
-        .into_iter()
-        .find(|worktree| worktree.branch == branch))
+    if let Some(branch) = branch {
+        if let Some(worktree) = list_linked_worktrees(repo)?
+            .into_iter()
+            .find(|worktree| worktree.branch == branch)
+        {
+            return Ok(WorktreeAction::Reuse(worktree));
+        }
+        return Ok(WorktreeAction::ExistingBranch(branch));
+    }
+
+    let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
+    Ok(WorktreeAction::NewBranch(format!(
+        "{branch_prefix}{name_no_prefix}"
+    )))
 }
 
-fn run_reused_worktree_hook(
-    worktree_dir: &Path,
-    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
-) -> Result<()> {
-    let worktree_abs =
-        std::fs::canonicalize(worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
-    run_pre_session_start_hook(Some(&worktree_abs), run_hook)
+fn worktree_hook_mode(skip_hooks: bool, reused: bool, worktree_dir: &Path) -> WorktreeHookMode<'_> {
+    if skip_hooks {
+        WorktreeHookMode::Skipped
+    } else if reused {
+        WorktreeHookMode::Reused(worktree_dir)
+    } else {
+        WorktreeHookMode::Created(worktree_dir)
+    }
 }
 
 fn prompt_base_for_existing_branch(
@@ -125,92 +160,69 @@ pub(super) fn run_worktree_creation(
     // The hook may update shared Git config, so keep the lock through the hook and rollback.
     let creation_lock = WorktreeCreationLock::acquire(&repo)?;
 
-    // Remove branch prefix to avoid double prefix
-    let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
-
-    // Determine action based on branch existence and flags.
-    // Keep the actual branch base separate from `--from`, which only selects
-    // the base used when creating or resetting a branch.
-    let actual_branch;
-    let actual_base: Option<String>;
-    let branch_rollback;
+    let action = select_worktree_action(&repo, name, branch_prefix, args.force)?;
+    let reused_worktree = matches!(&action, WorktreeAction::Reuse(_));
     let mut selected_worktree_dir = worktree_dir.clone();
     let mut selected_worktree_name = worktree_name.clone();
-    let mut reused_worktree = false;
-
-    if args.force {
-        std::fs::create_dir_all(&worktrees_dir).context("Failed to create worktrees directory")?;
-        // Force create new branch with prefix
-        let main_branch = get_main_branch_for_repo(&repo)?;
-        let base_branch = args
-            .from
-            .clone()
-            .unwrap_or_else(|| format!("origin/{main_branch}"));
-        let branch = format!("{branch_prefix}{name_no_prefix}");
-
-        // ForceNewBranch resets a pre-existing local branch's tip; capture
-        // it so rollback can restore the user's branch to its previous
-        // commit on hook failure. Without the prior tip we cannot undo the
-        // reset safely, so refuse rather than risk silent branch loss.
-        branch_rollback = if repo.local_branch_exists(&branch) {
-            let tip = run_git(repo.workdir(), ["rev-parse", &branch]).with_context(|| {
-                format!("Failed to capture tip of '{branch}' before force reset")
-            })?;
-            BranchRollback::RestoreTip(tip)
-        } else {
-            BranchRollback::Delete
-        };
-
-        git_worktree_add(
-            &repo,
-            &worktree_dir,
-            WorktreeAddMode::ForceNewBranch {
-                branch: &branch,
-                base: &base_branch,
-            },
-        )?;
-
-        actual_branch = branch;
-        actual_base = Some(base_branch);
-    } else {
-        let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
-        if let Some(linked_worktree) = find_linked_worktree_for_branch(&repo, name, branch_prefix)?
-        {
-            actual_branch = linked_worktree.branch.clone();
-            selected_worktree_dir = linked_worktree.path;
-            selected_worktree_name = linked_worktree.name;
-            reused_worktree = true;
-            branch_rollback = BranchRollback::Keep;
-            actual_base = prompt_base_for_existing_branch(&repo, prompt)?;
-        } else if repo_branch_exists(&repo, name) {
-            // Branch exists in the main worktree or is available to check out.
+    let (actual_branch, actual_base, branch_rollback) = match action {
+        WorktreeAction::Force => {
             std::fs::create_dir_all(&worktrees_dir)
                 .context("Failed to create worktrees directory")?;
-            add_worktree_for_branch(&repo, &selected_worktree_dir, name)?;
-
-            actual_branch = name.to_string();
-            branch_rollback = BranchRollback::Keep;
-            actual_base = prompt_base_for_existing_branch(&repo, prompt)?;
-        } else if repo_branch_exists(&repo, &branch_with_prefix) {
-            // Branch exists with prefix
-            std::fs::create_dir_all(&worktrees_dir)
-                .context("Failed to create worktrees directory")?;
-            add_worktree_for_branch(&repo, &selected_worktree_dir, &branch_with_prefix)?;
-
-            actual_branch = branch_with_prefix;
-            branch_rollback = BranchRollback::Keep;
-            actual_base = prompt_base_for_existing_branch(&repo, prompt)?;
-        } else {
-            std::fs::create_dir_all(&worktrees_dir)
-                .context("Failed to create worktrees directory")?;
-            // Branch doesn't exist, create new one with prefix
             let main_branch = get_main_branch_for_repo(&repo)?;
             let base_branch = args
                 .from
                 .clone()
                 .unwrap_or_else(|| format!("origin/{main_branch}"));
+            let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
             let branch = format!("{branch_prefix}{name_no_prefix}");
 
+            let branch_rollback = if repo.local_branch_exists(&branch) {
+                let tip = run_git(repo.workdir(), ["rev-parse", &branch]).with_context(|| {
+                    format!("Failed to capture tip of '{branch}' before force reset")
+                })?;
+                BranchRollback::RestoreTip(tip)
+            } else {
+                BranchRollback::Delete
+            };
+
+            git_worktree_add(
+                &repo,
+                &worktree_dir,
+                WorktreeAddMode::ForceNewBranch {
+                    branch: &branch,
+                    base: &base_branch,
+                },
+            )?;
+
+            (branch, Some(base_branch), branch_rollback)
+        }
+        WorktreeAction::Reuse(linked_worktree) => {
+            selected_worktree_dir = linked_worktree.path;
+            selected_worktree_name = linked_worktree.name;
+            (
+                linked_worktree.branch,
+                prompt_base_for_existing_branch(&repo, prompt)?,
+                BranchRollback::Keep,
+            )
+        }
+        WorktreeAction::ExistingBranch(branch) => {
+            std::fs::create_dir_all(&worktrees_dir)
+                .context("Failed to create worktrees directory")?;
+            add_worktree_for_branch(&repo, &worktree_dir, &branch)?;
+            (
+                branch,
+                prompt_base_for_existing_branch(&repo, prompt)?,
+                BranchRollback::Keep,
+            )
+        }
+        WorktreeAction::NewBranch(branch) => {
+            std::fs::create_dir_all(&worktrees_dir)
+                .context("Failed to create worktrees directory")?;
+            let main_branch = get_main_branch_for_repo(&repo)?;
+            let base_branch = args
+                .from
+                .clone()
+                .unwrap_or_else(|| format!("origin/{main_branch}"));
             git_worktree_add(
                 &repo,
                 &worktree_dir,
@@ -219,12 +231,9 @@ pub(super) fn run_worktree_creation(
                     base: &base_branch,
                 },
             )?;
-
-            actual_branch = branch;
-            actual_base = Some(base_branch);
-            branch_rollback = BranchRollback::Delete;
+            (branch, Some(base_branch), BranchRollback::Delete)
         }
-    }
+    };
 
     let final_prompt = if prompt.is_some() {
         let delegator_cwd = std::env::current_dir()
@@ -247,7 +256,7 @@ pub(super) fn run_worktree_creation(
         prompt.map(String::from)
     };
 
-    // Hook failures roll back the worktree and any branch created for it.
+    // Hook failures roll back worktrees created by this invocation.
     let rollback = |failed_hook: &str| {
         rollback_worktree(
             &repo,
@@ -257,19 +266,15 @@ pub(super) fn run_worktree_creation(
             failed_hook,
         )
     };
-    if reused_worktree && !args.skip_hooks {
-        run_reused_worktree_hook(&selected_worktree_dir, hooks::run_hook)?;
-    } else {
-        run_worktree_hooks(
-            WorktreeHookContext {
-                worktree_dir: (!args.skip_hooks).then_some(selected_worktree_dir.as_path()),
-                actual_branch: &actual_branch,
-                repo_root,
-            },
-            hooks::run_hook,
-            rollback,
-        )?;
-    }
+    run_worktree_hooks(
+        WorktreeHookContext {
+            mode: worktree_hook_mode(args.skip_hooks, reused_worktree, &selected_worktree_dir),
+            actual_branch: &actual_branch,
+            repo_root,
+        },
+        hooks::run_hook,
+        rollback,
+    )?;
 
     let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
@@ -415,8 +420,11 @@ mod tests {
         test_repo.create_worktree(branch);
         let repo = test_repo.open();
 
-        let selected = find_linked_worktree_for_branch(&repo, requested_name, "team-").unwrap();
-        let selected = selected.unwrap();
+        let action = select_worktree_action(&repo, requested_name, "team-", false).unwrap();
+        let selected = match action {
+            WorktreeAction::Reuse(worktree) => worktree,
+            _ => unreachable!(),
+        };
         let (config, launch_options) = launch_setup;
         let repo_root = test_repo.path();
         let repo_root = repo_root.to_str().unwrap();
@@ -456,10 +464,40 @@ mod tests {
         let repo = test_repo.open();
         let main_branch = repo.current_branch().unwrap();
 
-        let linked_worktree =
-            find_linked_worktree_for_branch(&repo, &main_branch, "team-").unwrap();
+        let action = select_worktree_action(&repo, &main_branch, "team-", false).unwrap();
 
-        assert_eq!(linked_worktree.map(|worktree| worktree.branch), None);
+        let selected_branch = match action {
+            WorktreeAction::ExistingBranch(branch) => Some(branch),
+            _ => None,
+        };
+        assert_eq!(selected_branch, Some(main_branch));
+    }
+
+    #[rstest]
+    fn force_selects_creation_even_when_branch_has_a_linked_worktree(test_repo: TestRepo) {
+        test_repo.create_worktree("team-topic");
+        let repo = test_repo.open();
+
+        let action = select_worktree_action(&repo, "topic", "team-", true).unwrap();
+
+        let forced = match action {
+            WorktreeAction::Force => Some(()),
+            _ => None,
+        };
+        assert_eq!(forced, Some(()));
+    }
+
+    #[rstest]
+    fn selects_a_new_prefixed_branch_when_no_candidate_exists(test_repo: TestRepo) {
+        let repo = test_repo.open();
+
+        let action = select_worktree_action(&repo, "topic", "team-", false).unwrap();
+
+        let new_branch = match action {
+            WorktreeAction::NewBranch(branch) => Some(branch),
+            _ => None,
+        };
+        assert_eq!(new_branch, Some("team-topic".to_string()));
     }
 
     #[rstest]
@@ -468,19 +506,34 @@ mod tests {
     ) {
         test_repo.create_worktree("topic");
         let worktree_path = test_repo.worktree_path("topic");
+        let repo = test_repo.open();
+        let action = select_worktree_action(&repo, "topic", "team-", false).unwrap();
+        let reused = matches!(action, WorktreeAction::Reuse(_));
         let events = RefCell::new(Vec::new());
+        let rollback_events = RefCell::new(Vec::new());
+        let repo_root = test_repo.path();
+        let repo_root = repo_root.to_str().unwrap();
 
-        let result = run_reused_worktree_hook(&worktree_path, |name, env_vars| {
-            events.borrow_mut().push(capture_hook(name, env_vars));
-            anyhow::bail!("hook failed")
-        });
+        let result = run_worktree_hooks(
+            WorktreeHookContext {
+                mode: worktree_hook_mode(false, reused, &worktree_path),
+                actual_branch: "topic",
+                repo_root,
+            },
+            |name, env_vars| {
+                events.borrow_mut().push(capture_hook(name, env_vars));
+                anyhow::bail!("hook failed")
+            },
+            |hook_name| rollback_events.borrow_mut().push(hook_name.to_string()),
+        );
 
         assert_eq!(
             (
                 result.err().map(|error| error.to_string()),
                 events.into_inner(),
+                rollback_events.into_inner(),
                 worktree_path.exists(),
-                test_repo.open().local_branch_exists("topic"),
+                repo.local_branch_exists("topic"),
             ),
             (
                 Some("Failed to run pre-session-start hook".to_string()),
@@ -491,6 +544,7 @@ mod tests {
                         worktree_path.to_string_lossy().to_string(),
                     )],
                 }],
+                Vec::<String>::new(),
                 true,
                 true,
             ),
@@ -553,7 +607,7 @@ mod tests {
         let events = RefCell::new(Vec::new());
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                worktree_dir: Some(&worktree_path),
+                mode: WorktreeHookMode::Created(&worktree_path),
                 actual_branch: "sample-branch",
                 repo_root: "/repo",
             },
@@ -617,7 +671,7 @@ mod tests {
         let rollback_call = RefCell::new(None);
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                worktree_dir: Some(&worktree_path),
+                mode: WorktreeHookMode::Created(&worktree_path),
                 actual_branch: "sample-branch",
                 repo_root: "/repo",
             },
@@ -651,11 +705,12 @@ mod tests {
     }
 
     #[test]
-    fn skip_hooks_skips_worktree_hook_chain() {
+    fn skip_hooks_skips_worktree_hook_chain_and_rollback() {
         let events = RefCell::new(Vec::new());
+        let worktree_path = Path::new("/unused/worktree");
         let result = run_worktree_hooks(
             WorktreeHookContext {
-                worktree_dir: None,
+                mode: worktree_hook_mode(true, true, worktree_path),
                 actual_branch: "sample-branch",
                 repo_root: "/repo",
             },
