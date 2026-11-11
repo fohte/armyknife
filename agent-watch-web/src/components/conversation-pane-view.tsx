@@ -200,7 +200,24 @@ export function ConversationPaneView({
       void onAction('interrupt')
       return
     }
-    if (event.key === 'Enter' && !isMobile && !event.shiftKey) {
+    if (event.key === 'Enter' && !isMobile && event.altKey && !event.shiftKey) {
+      event.preventDefault()
+      const textarea = event.currentTarget
+      textarea.setRangeText(
+        '\n',
+        textarea.selectionStart,
+        textarea.selectionEnd,
+        'end',
+      )
+      updateDraft(textarea.value)
+      return
+    }
+    if (
+      event.key === 'Enter' &&
+      !isMobile &&
+      !event.shiftKey &&
+      !event.altKey
+    ) {
       event.preventDefault()
       sendMessage()
     }

@@ -1,6 +1,7 @@
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
@@ -991,7 +992,7 @@ it('shows a freeform answer below the choices', () => {
   })
 })
 
-it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
+it('sends on Enter and Command-Enter and preserves modified newlines', async () => {
   const completedSends: Array<(succeeded: boolean) => void> = []
   const onAction = vi.fn(
     () =>
@@ -1012,6 +1013,8 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
     completedSends[0]?.(true)
     await Promise.resolve()
   })
+  setTextareaValue(textarea, 'Keep this as a draft')
+  const altEvent = dispatchKeyInAct(textarea, 'Enter', { altKey: true })
   setTextareaValue(textarea, 'Keep the error visible')
   act(() => {
     dispatchKey(textarea, 'Enter', { metaKey: true })
@@ -1023,18 +1026,60 @@ it('sends on Enter and Command-Enter and preserves Shift-Enter', async () => {
   setTextareaValue(textarea, 'Add one more detail')
   const shiftEvent = dispatchKeyInAct(textarea, 'Enter', { shiftKey: true })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    shiftEvent.defaultPrevented,
-  ])
-  const expected = JSON.stringify([
-    [
+  const snapshot = () => ({
+    actions: onAction.mock.calls,
+    defaultPrevented: [altEvent.defaultPrevented, shiftEvent.defaultPrevented],
+  })
+  expect(snapshot()).toEqual({
+    actions: [
       ['messages', { content: 'Use bounded retries' }],
       ['messages', { content: 'Keep the error visible' }],
     ],
-    false,
-  ])
-  expect(actual).toBe(expected)
+    defaultPrevented: [true, false],
+  })
+})
+
+it('inserts Alt-Enter at the cursor without sending the message', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep this as a draft')
+  textarea.focus()
+  textarea.setSelectionRange(9, 9)
+
+  await act(async () => {
+    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: `Keep this
+ as a draft`,
+    actionCalls: [],
+  })
+})
+
+it('shows desktop newline shortcuts with the applicable interrupt hint', () => {
+  const onAction = () => Promise.resolve(true)
+  renderView(onAction)
+  const interruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
+  renderView(onAction, session, undefined, [], { ...actions, interrupt: false })
+  const nonInterruptibleHint = container.querySelector(
+    '.composer-footer > span',
+  )?.textContent
+
+  const snapshot = () => ({ interruptibleHint, nonInterruptibleHint })
+  expect(snapshot()).toEqual({
+    interruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line · Esc Interrupt',
+    nonInterruptibleHint: '↵ Send · ⇧↵ / ⌥↵ New line',
+  })
 })
 
 it('keeps Enter for newlines and exposes mobile conversation actions', () => {
