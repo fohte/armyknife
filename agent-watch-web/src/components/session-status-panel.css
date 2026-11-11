@@ -8,52 +8,62 @@
 }
 
 .session-status-panel-tabs {
+  box-sizing: border-box;
   display: flex;
-  min-height: 44px;
-  flex: 0 0 44px;
+  height: 48px;
+  min-height: 48px;
+  flex: 0 0 48px;
   align-items: stretch;
-  gap: 4px;
-  padding: 0 12px;
-  border-bottom: 1px solid var(--aw-border-row);
-  background: var(--aw-bg-surface);
+  gap: 16px;
+  padding: 0 10px 0 18px;
+  border-bottom: 1px solid var(--aw-border);
 }
 
 .session-status-panel-tab {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   border: 0;
   border-bottom: 2px solid transparent;
-  padding: 0 8px;
+  padding: 0;
   background: transparent;
-  color: var(--aw-text-secondary);
+  color: var(--aw-text-muted);
   cursor: pointer;
   font: inherit;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .session-status-panel-tab[aria-selected='true'] {
-  border-bottom-color: var(--aw-text-muted);
+  border-bottom-color: var(--aw-text-primary);
   color: var(--aw-text-primary);
+  font-weight: 700;
 }
 
 .session-status-panel-close {
+  box-sizing: border-box;
+  width: 28px;
   min-width: 28px;
+  height: 28px;
+  min-height: 28px;
   margin-left: auto;
-  color: var(--aw-text-body);
+  align-self: center;
+  padding: 0;
+  color: var(--aw-text-muted);
   font-size: 16px;
 }
 
 .session-status-panel-count {
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11.5px;
 }
 
 .session-status-panel-content {
   display: flex;
   min-height: 0;
   flex: 1 1 auto;
+  overflow: hidden;
+  padding: 6px 0;
 }
 
 .session-status-panel-content > * {

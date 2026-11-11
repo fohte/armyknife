@@ -13,6 +13,13 @@ const openTask = {
 const meta = {
   component: SessionTaskLinks,
   args: { task: openTask, tasks: [openTask] },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '420px', minHeight: '140px' }}>
+        <Story />
+      </div>
+    ),
+  ],
 } satisfies Meta<typeof SessionTaskLinks>
 
 export default meta

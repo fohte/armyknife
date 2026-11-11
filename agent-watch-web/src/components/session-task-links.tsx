@@ -1,3 +1,5 @@
+import '#components/session-task-links.css'
+
 import type { SessionTask } from '#types'
 
 export function SessionTaskLinks({
@@ -12,7 +14,7 @@ export function SessionTaskLinks({
   if (task === null) return null
 
   return (
-    <div className="session-task-line">
+    <div className="session-task-line" data-session-task-links-root="">
       <a
         className="conversation-task-link"
         href={`https://tq.fohte.net/tasks/${encodeURIComponent(task.id)}`}
@@ -31,27 +33,54 @@ export function SessionTaskLinks({
           <summary
             aria-label={`${String(tasks.length - 1)} more linked tq tasks`}
           >
-            +{tasks.length - 1}
+            +{tasks.length - 1} tasks ▾
           </summary>
-          <ul>
-            {tasks.map((linkedTask) => (
-              <li key={linkedTask.id}>
-                <a
-                  href={`https://tq.fohte.net/tasks/${encodeURIComponent(linkedTask.id)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {linkedTask.priority !== null ? (
-                    <span>P{linkedTask.priority} </span>
-                  ) : null}
-                  #{linkedTask.number} {linkedTask.title}
-                </a>
-                {linkedTask.isClosed === true ? (
-                  <span className="session-task-completed">Completed</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
+          <div
+            className="session-task-links-menu"
+            role="dialog"
+            aria-label="Linked tq tasks"
+          >
+            <div className="session-task-links-heading">
+              Linked tq tasks · Inbox and Board use the primary one
+            </div>
+            <ul>
+              {tasks.map((linkedTask) => {
+                const isPrimary = linkedTask.id === task.id
+
+                return (
+                  <li
+                    key={linkedTask.id}
+                    className="session-task-links-item"
+                    data-primary={isPrimary}
+                  >
+                    <span
+                      className="session-task-links-check"
+                      aria-hidden="true"
+                    >
+                      {isPrimary ? '✓' : null}
+                    </span>
+                    <a
+                      href={`https://tq.fohte.net/tasks/${encodeURIComponent(linkedTask.id)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {linkedTask.priority !== null ? (
+                        <span>P{linkedTask.priority} </span>
+                      ) : null}
+                      #{linkedTask.number} {linkedTask.title}
+                    </a>
+                    {isPrimary ? (
+                      <span className="session-task-links-primary">
+                        Primary
+                      </span>
+                    ) : linkedTask.isClosed === true ? (
+                      <span className="session-task-completed">Completed</span>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
         </details>
       ) : null}
     </div>

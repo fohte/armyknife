@@ -17,13 +17,17 @@ function snapshot() {
       text: container.querySelector('.session-task-line > a')?.textContent,
     },
     count: container.querySelector('.session-task-links summary')?.textContent,
+    heading: container.querySelector('.session-task-links-heading')
+      ?.textContent,
     linkedTasks: Array.from(
       container.querySelectorAll('.session-task-links li'),
     ).map((item) => ({
       href: item.querySelector('a')?.getAttribute('href'),
       text: item.querySelector('a')?.textContent,
       status:
-        item.querySelector('.session-task-completed')?.textContent ?? null,
+        item.querySelector(
+          '.session-task-completed, .session-task-links-primary',
+        )?.textContent ?? null,
     })),
   }
 }
@@ -77,12 +81,13 @@ it('lists all linked tasks and marks completed tasks', () => {
       href: 'https://tq.fohte.net/tasks/open-task',
       text: 'P1 #2048 Improve request reliability',
     },
-    count: '+1',
+    count: '+1 tasks ▾',
+    heading: 'Linked tq tasks · Inbox and Board use the primary one',
     linkedTasks: [
       {
         href: 'https://tq.fohte.net/tasks/open-task',
         text: 'P1 #2048 Improve request reliability',
-        status: null,
+        status: 'Primary',
       },
       {
         href: 'https://tq.fohte.net/tasks/completed-task',
