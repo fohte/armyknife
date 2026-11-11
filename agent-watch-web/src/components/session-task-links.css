@@ -1,0 +1,81 @@
+.session-task-links {
+  position: relative;
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+  font-size: 10px;
+}
+
+.session-task-links summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.session-task-links summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-task-links[open] {
+  box-sizing: border-box;
+  width: min(240px, 80vw);
+  margin-left: calc(22px - min(240px, 80vw));
+}
+
+.session-task-links[open] summary {
+  position: absolute;
+  right: 0;
+}
+
+.session-task-links ul {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 7px);
+  left: 0;
+  display: grid;
+  box-sizing: border-box;
+  width: 100%;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
+  box-shadow: var(--aw-shadow);
+  list-style: none;
+}
+
+.session-task-links li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.session-task-links a {
+  overflow: hidden;
+  color: var(--aw-text-body);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-task-completed {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+}
+
+.conversation-task-link,
+.conversation-task-link span {
+  overflow: hidden;
+  color: var(--aw-text-muted);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-task-link {
+  font-size: 11.5px;
+}
+
+.conversation-task-link span {
+  font-family: var(--font-mono);
+}

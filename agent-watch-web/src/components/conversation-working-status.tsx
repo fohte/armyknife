@@ -1,3 +1,5 @@
+import '#components/conversation-working-status.css'
+
 import type { BackgroundTask, ToolOperation } from '#types'
 
 type ConversationWorkingStatusProps = {
