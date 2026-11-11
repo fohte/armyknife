@@ -20,7 +20,9 @@ use super::super::parser::{
     for_each_jsonl_record, tool_target,
 };
 use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
-use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
+use background_tasks::{
+    BackgroundTaskTracker, record_timestamp, task_notification_envelope, task_notification_text,
+};
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
 };
@@ -163,16 +165,16 @@ fn parse_with_background_tasks_and_image_directory(
     let mut background_tasks = BackgroundTaskTracker::default();
 
     for_each_jsonl_record(&mut reader, |record| {
+        let task_notification = task_notification_text(&record);
         if let Some(uuid) = record.get("uuid").and_then(Value::as_str) {
             let membership = transcript_nodes.get(uuid).map(|node| node.membership);
             let is_tool_result_only = is_tool_result_only_user_record(&record);
-            let is_task_notification = is_task_notification(&record);
-            if membership.is_none() && !is_tool_result_only && !is_task_notification {
+            if membership.is_none() && !is_tool_result_only && task_notification.is_none() {
                 return;
             }
             if membership == Some(BranchMembership::Unknown)
                 && !is_tool_result_only
-                && !is_task_notification
+                && task_notification.is_none()
                 && is_inactive_branch(uuid, &mut transcript_nodes)
             {
                 return;
@@ -180,6 +182,9 @@ fn parse_with_background_tasks_and_image_directory(
         }
         if queued_prompt_delivery_is_on_active_branch(&record, &mut transcript_nodes) {
             queue.observe_queued_prompt_delivery(&record, user_marker);
+        }
+        if let Some(text) = task_notification.as_deref() {
+            background_tasks.finish_notification(text);
         }
         match record.get("type").and_then(Value::as_str) {
             _ if record
@@ -195,6 +200,11 @@ fn parse_with_background_tasks_and_image_directory(
                     let (text, images) = user_content(Some(prompt));
                     if !text.is_empty() || !images.is_empty() {
                         tools.flush_into(&mut items);
+                        let text = task_notification
+                            .as_deref()
+                            .and_then(task_notification_envelope)
+                            .unwrap_or(&text)
+                            .to_owned();
                         append_record_with_user_marker_and_image_directory(
                             &mut items,
                             &record,
@@ -208,7 +218,6 @@ fn parse_with_background_tasks_and_image_directory(
                 }
             }
             Some("user") => {
-                background_tasks.finish_notification(&record);
                 if let Some(message) = record.get("message") {
                     let tool_use_result = record
                         .get("toolUseResult")
@@ -285,8 +294,12 @@ fn parse_with_background_tasks_and_image_directory(
                     let (text, images) = user_content(message.get("content"));
                     if !text.is_empty() || !images.is_empty() {
                         tools.flush_into(&mut items);
+                        let classification_text = task_notification
+                            .as_deref()
+                            .and_then(task_notification_envelope)
+                            .unwrap_or(&text);
                         let classification =
-                            classifier::classify_inbound(&record, &text, user_marker);
+                            classifier::classify_inbound(&record, classification_text, user_marker);
                         let classification = match classification {
                             MessageKind::User { text } => MessageKind::User {
                                 text: slash_command_text(&text).unwrap_or(text),
