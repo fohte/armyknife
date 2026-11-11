@@ -403,13 +403,11 @@ fn parse_with_background_tasks_and_image_directory(
                                     });
                                 if let Some(proposal) = proposal {
                                     tools.flush_into(&mut items);
-                                    if let ChatItem::Proposal { seq, .. } = &proposal.item {
-                                        proposal_timeline.move_to_transcript_position(
-                                            *seq,
-                                            &mut items,
-                                            &mut question_uses,
-                                        );
-                                    }
+                                    proposal_timeline.move_to_transcript_position(
+                                        proposal.seq,
+                                        &mut items,
+                                        &mut question_uses,
+                                    );
                                     items.push(proposal.item.clone());
                                 } else {
                                     tools.record(&tool_use.name, tool_use.input.as_ref());
