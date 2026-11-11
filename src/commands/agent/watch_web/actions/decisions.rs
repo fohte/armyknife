@@ -52,6 +52,7 @@ pub(super) async fn request_change(
     enum ChangeOutcome {
         Sent,
         DecisionNotFound,
+        ParentNotFound,
         ParentArchived,
     }
 
@@ -77,8 +78,9 @@ pub(super) async fn request_change(
             .then(|| session.ancestor_session_ids.last())
             .flatten();
         let target = if let Some(parent_id) = parent_id {
-            let parent = store::load_session_from(&sessions_dir, parent_id)?
-                .ok_or_else(|| anyhow::anyhow!("parent session not found: {parent_id}"))?;
+            let Some(parent) = store::load_session_from(&sessions_dir, parent_id)? else {
+                return Ok(ChangeOutcome::ParentNotFound);
+            };
             if parent.archived_at.is_some() {
                 return Ok(ChangeOutcome::ParentArchived);
             }
@@ -92,14 +94,17 @@ pub(super) async fn request_change(
             .transpose()?;
         let content =
             super::messages::watch_web_message_content(&target, marker.as_deref(), &content);
-        store::set_agent_decision_review_from(&sessions_dir, &id, seq, "change")?;
         runtime.send_message(&target, &content)?;
+        store::set_agent_decision_review_from(&sessions_dir, &id, seq, "change")?;
         Ok(ChangeOutcome::Sent)
     })
     .await?;
     match outcome {
         ChangeOutcome::Sent => {}
         ChangeOutcome::DecisionNotFound => return Err(ApiError::decision_not_found()),
+        ChangeOutcome::ParentNotFound => {
+            return Err(ApiError::conflict("parent session not found"));
+        }
         ChangeOutcome::ParentArchived => {
             return Err(ApiError::conflict("parent session is archived"));
         }

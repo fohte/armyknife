@@ -119,15 +119,25 @@ async fn change_endpoint_rejects_an_empty_comment_without_side_effects(
 }
 
 #[rstest]
+#[case::missing_parent(None, "parent session not found")]
+#[case::archived_parent(Some(true), "parent session is archived")]
 #[tokio::test]
-async fn change_endpoint_rejects_an_archived_parent(action_context: ActionContext) {
+async fn change_endpoint_rejects_an_unavailable_parent(
+    #[case] archived_parent: Option<bool>,
+    #[case] expected_error: &str,
+    action_context: ActionContext,
+) {
     let mut child = session("fixture-child-session");
     child.status = SessionStatus::Ended;
     child.ancestor_session_ids = vec!["fixture-parent-session".to_string()];
-    let mut parent = session("fixture-parent-session");
-    parent.archived_at = Some(parent.updated_at);
     action_context.save_session(&child);
-    action_context.save_session(&parent);
+    if let Some(archived) = archived_parent {
+        let mut parent = session("fixture-parent-session");
+        if archived {
+            parent.archived_at = Some(parent.updated_at);
+        }
+        action_context.save_session(&parent);
+    }
     let seq = seed_decision(&action_context, &child.session_id);
 
     let response = action_context
@@ -148,8 +158,56 @@ async fn change_endpoint_rejects_an_archived_parent(action_context: ActionContex
         (
             json!({
                 "status": StatusCode::CONFLICT.as_u16(),
-                "body": {"error": "parent session is archived"},
+                "body": {"error": expected_error},
                 "calls": [],
+            }),
+            None,
+        ),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn change_endpoint_keeps_the_decision_unreviewed_when_delivery_fails(
+    action_context: ActionContext,
+) {
+    let session = session("fixture-session");
+    action_context.save_session(&session);
+    let seq = seed_decision(&action_context, &session.session_id);
+    action_context.set_message_error("delivery failed");
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            &format!("/sessions/{}/decisions/{seq}/change", session.session_id),
+            json!({"comment": "Use the fixture alternative."}),
+        ))
+        .await
+        .unwrap();
+    let review = store::agent_decisions_from(
+        &action_context.temp_dir.path().join("sessions"),
+        &session.session_id,
+    )
+    .unwrap()[0]
+        .review
+        .clone();
+    let expected_content = indoc! {"
+        Requested change to decision: Choose the fixture path
+
+        Use the fixture alternative.
+    "};
+
+    assert_eq!(
+        (response_snapshot(response, &action_context).await, review,),
+        (
+            json!({
+                "status": StatusCode::BAD_GATEWAY.as_u16(),
+                "body": {"error": "delivery failed"},
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "fixture-session",
+                    "content": expected_content,
+                }],
             }),
             None,
         ),
