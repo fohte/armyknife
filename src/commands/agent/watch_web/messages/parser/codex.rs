@@ -50,7 +50,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                             input,
                         });
                     } else {
-                        tools.record_codex(name, input.as_ref());
+                        tools.record_codex(name, input.as_ref(), false);
                     }
                 }
                 Some("custom_tool_call_output") | Some("function_call_output") => {
@@ -60,12 +60,16 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                             .position(|pending| pending.call_id == call_id)
                     {
                         let completed = pending_tool_calls.remove(index);
-                        tools.record_codex(&completed.name, completed.input.as_ref());
+                        tools.record_codex(
+                            &completed.name,
+                            completed.input.as_ref(),
+                            codex_tool_failed(payload),
+                        );
                     }
                 }
                 Some("fileChange") => {
                     if pending_tool_calls.is_empty() {
-                        tools.record_codex("edit_file", Some(payload));
+                        tools.record_codex("edit_file", Some(payload), codex_tool_failed(payload));
                     } else {
                         tools.record_codex_files("edit_file", Some(payload));
                     }
@@ -77,8 +81,9 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
             Some("task_complete" | "turn_aborted")
         ) {
             // Missing tool outputs must not suppress actions from the next turn.
+            let failed = payload.get("type").and_then(Value::as_str) == Some("turn_aborted");
             for pending in pending_tool_calls.drain(..) {
-                tools.record_codex(&pending.name, pending.input.as_ref());
+                tools.record_codex(&pending.name, pending.input.as_ref(), failed);
             }
         } else if payload.get("type").and_then(Value::as_str) == Some("item_completed")
             && let Some(item) = payload.get("item")
@@ -97,6 +102,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                         tools.record_codex(
                             item.get("type").and_then(Value::as_str).unwrap_or_default(),
                             Some(item),
+                            codex_tool_failed(item),
                         );
                     }
                 }
@@ -104,7 +110,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
                 | Some("mcpToolCall") => {
                     let item_type = item.get("type").and_then(Value::as_str).unwrap_or_default();
                     if pending_tool_calls.is_empty() {
-                        tools.record_codex(item_type, Some(item));
+                        tools.record_codex(item_type, Some(item), codex_tool_failed(item));
                     } else {
                         tools.record_codex_files(item_type, Some(item));
                     }
@@ -125,6 +131,23 @@ pub(in crate::commands::agent::watch_web::messages) fn parse(
         items.push(active_tool);
     }
     Ok(items)
+}
+
+fn codex_tool_failed(result: &Value) -> bool {
+    let values = [Some(result), result.get("output")];
+    values.into_iter().flatten().any(|value| {
+        ["is_error", "isError", "failed"]
+            .into_iter()
+            .any(|key| value.get(key).and_then(Value::as_bool) == Some(true))
+            || value
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|exit_code| exit_code != 0)
+            || value
+                .get("status")
+                .and_then(Value::as_str)
+                .is_some_and(|status| matches!(status, "failed" | "error" | "aborted"))
+    })
 }
 
 struct PendingTool {
@@ -216,7 +239,7 @@ mod tests {
                     from: None,
                 },
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "exec ×1".to_string(),
                     operations: vec![operation("exec", Some("printf 'fictional command output'"))],
                 },
                 ChatItem::Assistant {
@@ -243,7 +266,7 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "CommandExecution ×1".to_string(),
                 operations: vec![operation("CommandExecution", Some("echo fixture"))],
             }]
         );
@@ -260,8 +283,24 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "exec ×1".to_string(),
                 operations: vec![operation("exec", Some("printf 'fictional command output'"))],
+            }]
+        );
+    }
+
+    #[test]
+    fn marks_failed_custom_tool_call_outputs() {
+        let transcript = indoc! {r#"
+            {"type":"response_item","payload":{"type":"custom_tool_call","call_id":"fixture-call-id","name":"exec","input":"false"}}
+            {"type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"fixture-call-id","output":"fixture failure","is_error":true}}
+        "#};
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None).unwrap(),
+            vec![ChatItem::ToolSummary {
+                summary: "exec ×1 · 1 failed".to_string(),
+                operations: vec![operation_with_failure("exec", Some("false"), true)],
             }]
         );
     }
@@ -277,7 +316,7 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action · 2 files edited".to_string(),
+                summary: "Edit fixture-one.rs, fixture-two.rs  exec ×1".to_string(),
                 operations: vec![operation("exec", Some("printf 'fictional command output'"))],
             }]
         );
@@ -292,16 +331,19 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action · 1 file edited".to_string(),
+                summary: "Edit fixture.rs".to_string(),
                 operations: vec![operation("FileChange", Some("src/fixture.rs"))],
             }]
         );
     }
 
     #[rstest]
-    #[case::aborted("turn_aborted")]
-    #[case::completed("task_complete")]
-    fn terminal_turn_events_clear_unanswered_tool_calls(#[case] event_type: &str) {
+    #[case::aborted("turn_aborted", true)]
+    #[case::completed("task_complete", false)]
+    fn terminal_turn_events_clear_unanswered_tool_calls(
+        #[case] event_type: &str,
+        #[case] tool_failed: bool,
+    ) {
         let transcript = [
             json!({
                 "type": "response_item",
@@ -353,9 +395,17 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "3 actions · 1 file edited".to_string(),
+                summary: if tool_failed {
+                    "Edit fixture.rs  exec ×1  CommandExecution ×1 · 1 failed".to_string()
+                } else {
+                    "Edit fixture.rs  exec ×1  CommandExecution ×1".to_string()
+                },
                 operations: vec![
-                    operation("exec", Some("printf 'fictional command output'")),
+                    operation_with_failure(
+                        "exec",
+                        Some("printf 'fictional command output'"),
+                        tool_failed,
+                    ),
                     operation("CommandExecution", Some("printf fixture")),
                     operation("FileChange", Some("src/fixture.rs")),
                 ],
@@ -394,7 +444,7 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "exec ×1".to_string(),
                 operations: vec![operation("exec", Some(command))],
             }]
         );
@@ -413,7 +463,7 @@ mod tests {
             parse(Cursor::new(transcript), None).unwrap(),
             vec![
                 ChatItem::ToolSummary {
-                    summary: "1 action".to_string(),
+                    summary: "exec ×1".to_string(),
                     operations: vec![operation("exec", Some("printf done"))],
                 },
                 ChatItem::ToolInProgress {
@@ -433,16 +483,25 @@ mod tests {
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "1 action".to_string(),
+                summary: "read_resource ×1".to_string(),
                 operations: vec![operation("read_resource", Some("fixture/resource.json"))],
             }]
         );
     }
 
     fn operation(tool: &str, target: Option<&str>) -> super::super::super::ToolOperation {
+        operation_with_failure(tool, target, false)
+    }
+
+    fn operation_with_failure(
+        tool: &str,
+        target: Option<&str>,
+        failed: bool,
+    ) -> super::super::super::ToolOperation {
         super::super::super::ToolOperation {
             tool: tool.to_string(),
             target: target.map(str::to_owned),
+            failed,
         }
     }
 }

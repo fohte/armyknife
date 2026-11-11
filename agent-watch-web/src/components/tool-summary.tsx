@@ -31,14 +31,26 @@ export function ToolSummary({
   return (
     <details
       className="chat-tool-summary"
+      data-has-operations={operations.length > 0 ? 'true' : 'false'}
       open={isOpen}
       onToggle={(event) => {
         setIsOpen(event.currentTarget.open)
       }}
     >
       <summary>
-        {failedSuffix === undefined ? (
-          summary
+        {operations.length > 0 && isOpen ? (
+          <>
+            <span>
+              {operations.length} tool call{operations.length === 1 ? '' : 's'}
+            </span>
+            <span className="chat-tool-summary-collapse">‹ Collapse</span>
+          </>
+        ) : failedSuffix === undefined ? (
+          operations.length > 0 ? (
+            <span className="chat-tool-summary-text">{summary}</span>
+          ) : (
+            summary
+          )
         ) : (
           <>
             <span className="chat-tool-summary-text">{summaryText}</span>
@@ -58,18 +70,20 @@ export function ToolSummary({
                   ? 'true'
                   : 'false'
               }
-              data-has-status={failedSuffix === undefined ? 'true' : 'false'}
+              data-failed={operation.failed === true ? 'true' : 'false'}
             >
               <span className="chat-tool-name">{operation.tool}</span>
               {typeof operation.target === 'string' &&
               operation.target.length > 0 ? (
                 <code className="chat-tool-target">{operation.target}</code>
               ) : null}
-              {failedSuffix === undefined ? (
-                <span className="chat-tool-operation-status" aria-hidden="true">
-                  ✓
-                </span>
-              ) : null}
+              <span
+                className="chat-tool-operation-status"
+                role="img"
+                aria-label={operation.failed === true ? 'Failed' : 'Succeeded'}
+              >
+                {operation.failed === true ? '✕' : '✓'}
+              </span>
             </li>
           ))}
         </ul>

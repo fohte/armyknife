@@ -5,7 +5,7 @@ import { ToolSummary } from '#components/tool-summary'
 const meta = {
   component: ToolSummary,
   args: {
-    summary: '4 actions · 2 files edited',
+    summary: 'Edit sample.rs  Read ×1  exec ×1  Agent ×1',
     operations: [
       { tool: 'Read', target: 'src/sample.rs' },
       { tool: 'exec', target: "printf '%s\\n' 'hello' | grep hello" },
@@ -35,7 +35,7 @@ export const FailedSummaryHighlightsFailures: Story = {
     operations: [
       { tool: 'Read', target: 'src/sample.rs' },
       { tool: 'Edit', target: 'src/sample.rs' },
-      { tool: 'exec', target: 'cargo test' },
+      { tool: 'exec', target: 'cargo test', failed: true },
     ],
   },
 }

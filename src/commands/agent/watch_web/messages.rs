@@ -640,6 +640,7 @@ struct ToolOperation {
     tool: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     target: Option<String>,
+    failed: bool,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -2241,8 +2242,8 @@ mod tests {
                     {"type": "user", "text": "Watch the fixture build."},
                     {
                         "type": "tool_summary",
-                        "summary": "1 action",
-                        "operations": [{"tool": "Bash", "target": "watch fixture build"}],
+                        "summary": "Bash ×1",
+                        "operations": [{"tool": "Bash", "target": "watch fixture build", "failed": false}],
                     },
                 ],
                 "backgroundTasks": [{
