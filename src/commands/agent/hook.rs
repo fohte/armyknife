@@ -5328,30 +5328,22 @@ mod tests {
                 .expect("user-prompt-submit should succeed");
             });
 
-            let proposals = store::agent_proposals_from(temp_dir.path(), "test-123")
+            let connection = rusqlite::Connection::open(temp_dir.path().join("sessions.db"))
+                .expect("session database should open");
+            let resolved_at: Option<String> = connection
+                .query_row(
+                    "SELECT resolved_at FROM agent_proposal
+                     WHERE session_id = 'test-123' AND seq = 1",
+                    [],
+                    |row| row.get(0),
+                )
                 .expect("proposal should load");
-            let unresolved = store::unanswered_agent_proposal_session_ids_from(temp_dir.path())
-                .expect("unanswered sessions should load");
             let after_revision =
                 store::session_store_revision_from(temp_dir.path()).expect("revision should load");
 
             assert_eq!(
-                (
-                    proposals
-                        .first()
-                        .is_some_and(|proposal| proposal.resolved_at.is_some()),
-                    unresolved,
-                    after_revision - before_revision,
-                ),
-                (
-                    expected_resolved,
-                    if expected_resolved {
-                        Vec::new()
-                    } else {
-                        vec!["test-123".to_string()]
-                    },
-                    expected_revision_delta,
-                ),
+                (resolved_at.is_some(), after_revision - before_revision),
+                (expected_resolved, expected_revision_delta),
             );
         }
 

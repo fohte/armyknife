@@ -379,30 +379,9 @@ pub(crate) fn unanswered_agent_proposal_session_ids() -> Result<Vec<String>> {
     database::unanswered_agent_proposal_session_ids(&sessions_dir()?)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the follow-up watch-web proposal API")
-)]
-pub(crate) fn unanswered_agent_proposal_session_ids_from(
-    sessions_dir: &Path,
-) -> Result<Vec<String>> {
-    database::unanswered_agent_proposal_session_ids(sessions_dir)
-}
-
 #[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
 pub(crate) fn agent_proposals(session_id: &str) -> Result<Vec<AgentProposal>> {
     database::agent_proposals(&sessions_dir()?, session_id)
-}
-
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Used by the follow-up watch-web proposal API")
-)]
-pub(crate) fn agent_proposals_from(
-    sessions_dir: &Path,
-    session_id: &str,
-) -> Result<Vec<AgentProposal>> {
-    database::agent_proposals(sessions_dir, session_id)
 }
 
 #[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]

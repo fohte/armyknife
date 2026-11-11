@@ -85,7 +85,12 @@ static MIGRATION_ENTRIES: [M<'static>; 6] = [
             PRIMARY KEY (session_id, seq)
         );
         CREATE INDEX agent_proposal_unresolved_session_id
-            ON agent_proposal (session_id) WHERE resolved_at IS NULL;",
+            ON agent_proposal (session_id) WHERE resolved_at IS NULL;
+        CREATE TRIGGER agent_proposal_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
+            END;",
     ),
 ];
 
@@ -468,10 +473,6 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
         )?;
         connection.execute(
             "DELETE FROM watch_web_queued_prompt WHERE session_id = ?1",
-            [session_id],
-        )?;
-        connection.execute(
-            "DELETE FROM agent_proposal WHERE session_id = ?1",
             [session_id],
         )?;
         increment_revision(connection)?;

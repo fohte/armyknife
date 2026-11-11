@@ -603,6 +603,8 @@ Run `a agent status set` from a tracked Claude Code or Codex session. Claude Cod
 
 Run `a agent proposal add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required fields are `title` and `options`; each option requires `label`. Optional fields are `summary`, `description`, `pros`, `cons`, and `recommended`. Include 2 to 9 options and mark at most one as recommended. The command prints `Recorded proposal <seq>` after saving the validated proposal.
 
+Sequence numbers start at 1 and increment for each proposal in a session.
+
 ```console
 $ cat <<'JSON' | a agent proposal add
 {

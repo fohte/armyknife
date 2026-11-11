@@ -74,17 +74,18 @@ fn add() -> Result<()> {
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
     let sessions_dir = store::sessions_dir()?;
-    let mut input = String::new();
-    std::io::stdin()
-        .read_to_string(&mut input)
-        .context("reading proposal JSON from stdin")?;
-    let seq = add_from_json(&sessions_dir, &session_id, &input)?;
+    let stdin = std::io::stdin();
+    let seq = record_proposal(&sessions_dir, &session_id, stdin.lock())?;
     println!("Recorded proposal {seq}");
     Ok(())
 }
 
-fn add_from_json(sessions_dir: &Path, session_id: &str, input: &str) -> Result<i64> {
-    let body: ProposalBody = serde_json::from_str(input).context("parsing proposal JSON")?;
+fn record_proposal(sessions_dir: &Path, session_id: &str, mut input: impl Read) -> Result<i64> {
+    let mut raw = String::new();
+    input
+        .read_to_string(&mut raw)
+        .context("reading proposal JSON from stdin")?;
+    let body: ProposalBody = serde_json::from_str(&raw).context("parsing proposal JSON")?;
     validate_body(&body)?;
     let body_json = serde_json::to_string(&body).context("serializing validated proposal")?;
     store::add_agent_proposal_in(sessions_dir, session_id, &body_json)
@@ -118,29 +119,47 @@ fn validate_body(body: &ProposalBody) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use rstest::{fixture, rstest};
     use serde_json::Value;
     use tempfile::TempDir;
 
-    use super::add_from_json;
-    use crate::commands::agent::store::agent_proposals_from;
+    use super::record_proposal;
 
     #[fixture]
     fn sessions_dir() -> TempDir {
         tempfile::tempdir().expect("temporary sessions directory should be created")
     }
 
+    fn stored_proposal_bodies(sessions_dir: &Path) -> Vec<String> {
+        crate::commands::agent::store::session_store_revision_from(sessions_dir)
+            .expect("session store should initialize");
+        let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        let mut statement = connection
+            .prepare("SELECT body FROM agent_proposal WHERE session_id = 'session-a' ORDER BY seq")
+            .expect("proposal query should prepare");
+        statement
+            .query_map([], |row| row.get(0))
+            .expect("proposals should query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("proposal bodies should load")
+    }
+
     #[rstest]
     fn records_a_validated_proposal_with_normalized_optional_fields(sessions_dir: TempDir) {
         let input = r#"{"title":"Pick a format","options":[{"label":"Format A","recommended":true},{"label":"Format B"}]}"#;
 
-        let seq = add_from_json(sessions_dir.path(), "session-a", input)
-            .expect("valid proposal should save");
-        let proposals =
-            agent_proposals_from(sessions_dir.path(), "session-a").expect("proposal should load");
-        let bodies = proposals
+        let seq = record_proposal(
+            sessions_dir.path(),
+            "session-a",
+            std::io::Cursor::new(input),
+        )
+        .expect("valid proposal should save");
+        let bodies = stored_proposal_bodies(sessions_dir.path())
             .iter()
-            .map(|proposal| serde_json::from_str::<Value>(&proposal.body))
+            .map(|body| serde_json::from_str::<Value>(body))
             .collect::<serde_json::Result<Vec<_>>>()
             .expect("stored proposals should remain JSON");
 
@@ -203,9 +222,12 @@ mod tests {
         #[case] input: &str,
         #[case] expected_error: &str,
     ) {
-        let result = add_from_json(sessions_dir.path(), "session-a", input);
-        let proposals = agent_proposals_from(sessions_dir.path(), "session-a")
-            .expect("proposal list should load");
+        let result = record_proposal(
+            sessions_dir.path(),
+            "session-a",
+            std::io::Cursor::new(input),
+        );
+        let proposals = stored_proposal_bodies(sessions_dir.path());
         let error = result.err().map(|error| format!("{error:#}"));
 
         assert_eq!(
