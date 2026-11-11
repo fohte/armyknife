@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.583](https://github.com/fohte/armyknife/compare/v0.1.582...v0.1.583) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align right panel with mock ([#1525](https://github.com/fohte/armyknife/issues/1525)) ([1ff611e](https://github.com/fohte/armyknife/commit/1ff611e45bcc37a74e671225435079b5a60f75c0))
+
 ## [0.1.582](https://github.com/fohte/armyknife/compare/v0.1.581...v0.1.582) (2026-11-11)
 
 
