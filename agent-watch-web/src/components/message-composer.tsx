@@ -1,6 +1,7 @@
 import '#components/message-composer.css'
 
 import { Button } from '@fohte/ui/button'
+import { ArrowUp } from 'lucide-react'
 import type { ClipboardEvent, KeyboardEvent, SubmitEvent } from 'react'
 import { useLayoutEffect, useRef } from 'react'
 
@@ -154,7 +155,7 @@ export function MessageComposer({
             isSending
           }
         >
-          ↑
+          <ArrowUp aria-hidden="true" size={14} />
         </Button>
       </div>
     </form>

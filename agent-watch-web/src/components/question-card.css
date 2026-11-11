@@ -1,15 +1,24 @@
 .chat-question-choices {
-  display: grid;
-  gap: 5px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--aw-border);
 }
 
 .chat-question-choices [data-slot='button'] {
+  width: 100%;
   min-height: 42px;
   justify-content: flex-start;
-  gap: 10px;
-  padding: 0 10px;
-  background: var(--aw-bg-surface);
+  gap: 12px;
+  padding: 0 16px;
+  border: 0;
+  background: transparent;
+  color: var(--aw-text-primary);
+  font-size: 14px;
   text-align: left;
+}
+
+.chat-question-choices [data-slot='button'] + [data-slot='button'] {
+  border-top: 1px solid var(--aw-border);
 }
 
 .chat-question-choices [data-slot='button'].is-selected {
@@ -29,8 +38,9 @@
 }
 
 .chat-question-choices kbd {
-  width: 18px;
-  color: var(--aw-color-warning);
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
 }
 
 .chat-question-choice-check {
@@ -42,6 +52,7 @@
 
 .chat-question-answer {
   margin: 10px 0 0;
+  padding: 0 16px 12px;
   color: var(--aw-text-body);
   font-size: 13px;
   white-space: pre-wrap;
