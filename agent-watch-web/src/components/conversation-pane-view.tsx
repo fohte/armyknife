@@ -19,6 +19,7 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
   ChatItem,
@@ -47,7 +48,11 @@ type ConversationPaneViewProps = {
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
+  decisionsPanelOpen?: boolean
+  selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
+  onToggleDecisionsPanel?: () => void
+  onSelectDecision?: (seq: number) => void
   runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
@@ -106,7 +111,11 @@ export function ConversationPaneView({
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
+  decisionsPanelOpen = false,
+  selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
+  onToggleDecisionsPanel = () => undefined,
+  onSelectDecision = () => undefined,
   runningCount = 0,
   fileDropActive = false,
   onBack,
@@ -148,6 +157,13 @@ export function ConversationPaneView({
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
   )
+  const decisions = conversationMessages.filter(
+    (message) => message.type === 'decision',
+  )
+  const decisionPositions = new Map(
+    decisions.map((decision, index) => [decision.seq, index + 1]),
+  )
+  const decisionLabel = formatSessionDecisionCount(session)
   const hasUnansweredProposal = messages.some(
     (message) =>
       message.type === 'proposal' &&
@@ -340,6 +356,20 @@ export function ConversationPaneView({
                 <span aria-hidden="true">◐</span>
                 {runningCount > 0 ? <span>{runningCount}</span> : null}
               </Button>
+              {decisionLabel !== null ? (
+                <Button
+                  className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                  type="button"
+                  variant="plain"
+                  aria-pressed={decisionsPanelOpen}
+                  aria-controls="session-status-panel"
+                  onClick={() => {
+                    onToggleDecisionsPanel()
+                  }}
+                >
+                  {decisionLabel}
+                </Button>
+              ) : null}
               {session.pullRequest ? (
                 <a
                   className="conversation-pr-link"
@@ -389,6 +419,12 @@ export function ConversationPaneView({
             activeQuestionIndex,
             index,
             isMobile,
+            selectedDecisionSeq,
+            decisionPosition:
+              message.type === 'decision' && decisionPositions.has(message.seq)
+                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
+                : undefined,
+            onSelectDecision,
             message,
             onAction,
             onOpenInTerminal: openInTerminal,
