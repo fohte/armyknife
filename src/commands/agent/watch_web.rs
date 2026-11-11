@@ -386,7 +386,14 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Some("text/plain; charset=utf-8".to_owned()),
+                "Failed to deserialize the JSON body into the target type: skip: invalid type: string \"invalid\", expected a boolean at line 1 column 17".to_owned(),
+            )
+        );
     }
     fn request(method: &str, uri: &str, host: &str, origin: Option<&str>) -> Request<Body> {
         let mut builder = Request::builder()
