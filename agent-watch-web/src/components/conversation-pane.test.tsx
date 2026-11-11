@@ -1227,7 +1227,6 @@ it('renders file attachments returned by the messages endpoint', async () => {
     alert: null,
   })
 })
-
 it('posts a proposal answer to its sequence route and refreshes the conversation', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -1307,6 +1306,57 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
     status: 'Proposal · chose B',
   })
 })
+
+it('accepts a subagent report without a description from the messages endpoint', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse([
+          {
+            type: 'subagent_report',
+            agent_id: 'fixture-agent-id',
+            agent_name: 'general-purpose',
+            text: 'The fictional task is complete.',
+          },
+        ]),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={session}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    summary: container.querySelector('.chat-tool-summary summary')?.textContent,
+    body: container.querySelector('.chat-tool-summary .markdown-message')
+      ?.textContent,
+    open: container.querySelector('.chat-tool-summary')?.hasAttribute('open'),
+    alert: container.querySelector('[role="alert"]')?.textContent ?? null,
+  })
+  expect(snapshot()).toEqual({
+    summary: 'general-purpose',
+    body: 'The fictional task is complete.',
+    open: false,
+    alert: null,
+  })
+})
+
 it('shows elapsed time while the session is working without an active tool', () => {
   renderView(
     vi.fn().mockResolvedValue(true),

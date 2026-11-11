@@ -2,7 +2,7 @@ import '#components/tool-summary.css'
 
 import hljs from 'highlight.js/lib/core'
 import bash from 'highlight.js/lib/languages/bash'
-import { useState } from 'react'
+import { type ReactNode, useState } from 'react'
 
 import type { ToolOperation } from '#types'
 
@@ -16,12 +16,14 @@ function isShellTool(tool: string) {
 type ToolSummaryProps = {
   summary: string
   operations: readonly ToolOperation[]
+  children?: ReactNode
   open?: boolean
 }
 
 export function ToolSummary({
   summary,
   operations,
+  children,
   open = false,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
@@ -35,6 +37,7 @@ export function ToolSummary({
       }}
     >
       <summary>{summary}</summary>
+      {children}
       {operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (

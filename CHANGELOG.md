@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.574](https://github.com/fohte/armyknife/compare/v0.1.573...v0.1.574) (2026-11-11)
+
+
+### Features
+
+* **watch-web:** collapse subagent reports ([#1508](https://github.com/fohte/armyknife/issues/1508)) ([3fe74f2](https://github.com/fohte/armyknife/commit/3fe74f290d601c45751b1e22f9caa1342ddb437a))
+
 ## [0.1.573](https://github.com/fohte/armyknife/compare/v0.1.572...v0.1.573) (2026-11-11)
 
 
