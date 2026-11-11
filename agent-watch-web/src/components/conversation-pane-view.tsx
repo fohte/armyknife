@@ -40,6 +40,7 @@ type ConversationPaneViewProps = {
   activeQuestionIndex?: number | null
   loadingOlder?: boolean
   onLoadOlder?: () => void
+  onPruneOldMessages?: () => void
   backgroundTasks?: readonly BackgroundTask[]
   actions: SessionActions | null
   actionsReady?: boolean
@@ -102,6 +103,7 @@ export function ConversationPaneView({
   activeQuestionIndex,
   loadingOlder = false,
   onLoadOlder = () => undefined,
+  onPruneOldMessages = () => undefined,
   backgroundTasks = [],
   actions,
   actionsReady = true,
@@ -144,10 +146,17 @@ export function ConversationPaneView({
     onAction,
   })
   const {
+    loadOlder,
     onScroll,
-    preserveScrollAnchor,
     scrollRef: conversationScrollRef,
-  } = useConversationScroll({ messages, sessionId: session.id, start })
+  } = useConversationScroll({
+    messages,
+    loadingOlder,
+    onLoadOlder,
+    onPruneOldMessages,
+    sessionId: session.id,
+    start,
+  })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
@@ -414,10 +423,7 @@ export function ConversationPaneView({
             type="button"
             variant="plain"
             disabled={loadingOlder}
-            onClick={() => {
-              preserveScrollAnchor()
-              onLoadOlder()
-            }}
+            onClick={loadOlder}
           >
             {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
           </Button>

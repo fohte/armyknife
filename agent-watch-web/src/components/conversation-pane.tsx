@@ -36,6 +36,8 @@ const EMPTY_CONVERSATION: ConversationResponse = {
   activeQuestionIndex: null,
 }
 const INITIAL_MESSAGE_LIMIT = 100
+const MAX_LOADED_MESSAGES = 300
+const RETAINED_MESSAGE_COUNT = 200
 
 type ConversationPaneProps = {
   session: Session
@@ -71,6 +73,7 @@ export function ConversationPane({
   const conversationRef = useRef(conversation)
   const conversationSessionId = useRef<string | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
   const [actionsReady, setActionsReady] = useState(false)
@@ -89,6 +92,16 @@ export function ConversationPane({
     conversationRef.current = next
     setConversation(next)
   }, [])
+  const pruneOldMessages = useCallback(() => {
+    const current = conversationRef.current
+    if (current.messages.length <= MAX_LOADED_MESSAGES) return
+    const dropCount = current.messages.length - RETAINED_MESSAGE_COUNT
+    updateConversation({
+      ...current,
+      start: current.start + dropCount,
+      messages: current.messages.slice(dropCount),
+    })
+  }, [updateConversation])
   const clearOpenInTerminalTimer = useCallback(() => {
     if (openInTerminalTimer.current !== null) {
       window.clearTimeout(openInTerminalTimer.current)
@@ -207,6 +220,7 @@ export function ConversationPane({
       updateConversation(EMPTY_CONVERSATION)
       setMessagesLoadedAt(null)
       setLoadingOlder(false)
+      loadingOlderRef.current = false
     }
     clearOpenInTerminalTimer()
     return () => {
@@ -220,10 +234,11 @@ export function ConversationPane({
     if (
       conversationSessionId.current !== session.id ||
       current.start <= 0 ||
-      loadingOlder
+      loadingOlderRef.current
     ) {
       return
     }
+    loadingOlderRef.current = true
     const generation = olderRequestGeneration.current + 1
     olderRequestGeneration.current = generation
     setLoadingOlder(true)
@@ -247,11 +262,13 @@ export function ConversationPane({
         })
         setMessagesLoadedAt(Date.now())
         setError(null)
+        loadingOlderRef.current = false
         setLoadingOlder(false)
       },
       (requestError) => {
         if (olderRequestGeneration.current !== generation) return
         setError(requestError.message)
+        loadingOlderRef.current = false
         setLoadingOlder(false)
       },
     )
@@ -365,6 +382,7 @@ export function ConversationPane({
       activeQuestionIndex={conversation.activeQuestionIndex}
       loadingOlder={loadingOlder}
       onLoadOlder={loadOlder}
+      onPruneOldMessages={pruneOldMessages}
       backgroundTasks={displayBackgroundTasks}
       actions={actions}
       actionsReady={actionsReady}
