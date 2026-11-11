@@ -5,6 +5,13 @@ import { SessionPausedBadge } from '#components/session-paused-badge'
 const meta = {
   component: SessionPausedBadge,
   args: { isPaused: true },
+  decorators: [
+    (Story) => (
+      <span className="session-title-line">
+        <Story />
+      </span>
+    ),
+  ],
 } satisfies Meta<typeof SessionPausedBadge>
 
 export default meta

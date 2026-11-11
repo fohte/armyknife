@@ -177,6 +177,12 @@ function dialogSnapshot() {
   return { isOpen: container.querySelector('[role="dialog"]') !== null }
 }
 
+function mobileRowActions() {
+  return Array.from(
+    container.querySelectorAll('.session-row-actions button'),
+  ).map((button) => button.getAttribute('aria-label'))
+}
+
 function clickFilterOption(value: string) {
   const option = Array.from(
     container.querySelectorAll<HTMLLabelElement>('.inbox-filter-option'),
@@ -244,6 +250,12 @@ it('opens the filter dialog from its button', () => {
   })
 
   expect(dialogSnapshot()).toEqual({ isOpen: true })
+})
+
+it('hides row actions from sessions on an iPhone', () => {
+  renderInbox({ isMobile: true })
+
+  expect(mobileRowActions()).toEqual([])
 })
 
 it('opens the filter dialog with slash', () => {

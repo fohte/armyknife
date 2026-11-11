@@ -71,6 +71,7 @@ export const SessionIsStarredForToday: Story = {
     session: { ...session, isToday: true },
     onLater: () => undefined,
     onToggleToday: () => undefined,
+    actionsVisible: true,
   },
 }
 
@@ -178,6 +179,7 @@ export const RepositoryNameIsCompactOnIPhone: Story = {
   name: 'The repository name fits on an iPhone row',
   args: {
     compactRepo: true,
+    showActions: false,
     onLater: () => undefined,
     onToggleToday: () => undefined,
   },

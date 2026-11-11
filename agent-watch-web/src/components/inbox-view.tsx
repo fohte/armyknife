@@ -58,6 +58,7 @@ function renderSessionSection({
   onLater,
   onToggleToday,
   compactRepo,
+  showActions,
   className = '',
 }: {
   title: string
@@ -68,6 +69,7 @@ function renderSessionSection({
   onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
   compactRepo: boolean
+  showActions: boolean
   className?: string
 }) {
   return (
@@ -87,6 +89,7 @@ function renderSessionSection({
               onLater={onLater}
               onToggleToday={onToggleToday}
               compactRepo={compactRepo}
+              showActions={showActions}
             />
           ))}
         </ul>
@@ -323,6 +326,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          showActions: !isMobile,
         })}
         <Button
           type="button"
@@ -357,6 +361,7 @@ export function InboxView({
                 onLater={onLater}
                 onToggleToday={onToggleToday}
                 compactRepo={isMobile}
+                showActions={!isMobile}
               />
             ))}
           </ul>
@@ -384,6 +389,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          showActions: !isMobile,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
@@ -418,6 +424,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          showActions: !isMobile,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
