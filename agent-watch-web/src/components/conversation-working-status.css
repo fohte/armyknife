@@ -1,20 +1,21 @@
 .conversation-working-status {
   display: flex;
-  min-height: 42px;
+  width: 100%;
+  box-sizing: border-box;
   align-items: center;
-  gap: 9px;
-  padding: 0 max(24px, calc((100% - 760px) / 2));
-  border-top: 1px solid var(--aw-border-row);
-  color: var(--aw-text-muted);
-  font-size: 12px;
+  align-self: stretch;
+  gap: 8px;
+  padding: 8px max(24px, calc((100% - 672px) / 2));
+  color: var(--aw-text-secondary);
+  font-size: 13px;
 }
 
 .conversation-working-dot {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
-  border-radius: var(--aw-radius);
-  background: var(--aw-color-neutral);
+  border-radius: 50%;
+  background: var(--aw-color-working);
   animation: conversation-working-pulse 1.4s ease-in-out infinite;
 }
 
@@ -23,13 +24,13 @@
   min-width: 0;
   align-items: baseline;
   gap: 6px;
-  color: var(--aw-text-body);
+  color: var(--aw-text-secondary);
   font-family: var(--font-mono);
 }
 
 .conversation-working-target {
   overflow: hidden;
-  color: var(--aw-text-muted);
+  color: var(--aw-text-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
