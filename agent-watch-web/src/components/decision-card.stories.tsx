@@ -58,6 +58,24 @@ export const SelectedPanelCardIsExpanded: Story = {
   },
 }
 
+export const LongTargetNameFitsPanelActions: Story = {
+  name: 'A long target session name is truncated while the shortcut stays visible',
+  args: {
+    variant: 'panel',
+    expanded: true,
+    selected: true,
+    targetName:
+      'a long target session name for an asynchronous refactoring run',
+  },
+  decorators: [
+    (Story) => (
+      <div style={{ width: '280px', padding: '16px' }}>
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const OtherPanelCardIsCollapsed: Story = {
   name: 'An unselected panel card shows its title and alternatives',
   args: { variant: 'panel', targetName: 'this session' },
