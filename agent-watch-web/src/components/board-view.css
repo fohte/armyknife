@@ -13,9 +13,9 @@
   flex: 0 0 48px;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--aw-border-row);
+  gap: 14px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--aw-border);
 }
 
 .board-header-title {
@@ -32,17 +32,18 @@
   line-height: 1;
 }
 
-.board-header-title span,
-.board-quiet-toggle {
+.board-header-title span {
   color: var(--aw-text-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 
 .board-quiet-toggle {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  color: var(--aw-text-body);
+  font-size: 12.5px;
   cursor: pointer;
 }
 
@@ -50,7 +51,7 @@
   width: 13px;
   height: 13px;
   margin: 0;
-  accent-color: var(--aw-text-muted);
+  accent-color: var(--aw-text-primary);
 }
 
 .board-projects-scroll {
@@ -75,12 +76,13 @@
   right: 0;
   bottom: 0;
   display: flex;
-  width: 58px;
+  width: 120px;
   align-items: center;
-  justify-content: center;
-  background: linear-gradient(90deg, transparent, var(--aw-bg-app) 38%);
+  justify-content: flex-end;
+  padding-right: 16px;
+  background: linear-gradient(90deg, transparent, var(--aw-bg-app) 70%);
   color: var(--aw-text-muted);
-  font-size: 10.5px;
+  font-size: 12px;
   pointer-events: none;
   white-space: nowrap;
 }
@@ -91,22 +93,23 @@
   min-height: 100%;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px;
+  padding: 16px 20px;
 }
 
 .board-project {
+  display: flex;
   width: 280px;
   min-height: 100%;
   flex: 0 0 280px;
+  flex-direction: column;
+  gap: 6px;
   padding: 12px;
-  border: 1px solid var(--aw-border-row);
   background: var(--aw-bg-board);
 }
 
 .board-project-header {
-  min-height: 49px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--aw-border-row);
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--aw-border);
 }
 
 .board-project-title-line {
@@ -128,7 +131,8 @@
 .board-project-need,
 .board-project-quiet {
   flex: 0 0 auto;
-  font-size: 10.5px;
+  font-size: 12px;
+  font-weight: 700;
   white-space: nowrap;
 }
 
@@ -145,23 +149,27 @@
   margin: 3px 0 0;
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .board-group {
-  padding-top: 10px;
+  margin-top: 6px;
 }
 
 .board-group h3 {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   margin: 0 0 6px;
   color: var(--aw-text-secondary);
   font-size: 11.5px;
   font-weight: 700;
+}
+
+.board-group h3 span:last-child {
+  font-family: var(--font-mono);
 }
 
 .board-group.needs-action h3 {
@@ -175,7 +183,7 @@
 .board-card-list {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .board-card {
@@ -191,7 +199,11 @@
 }
 
 .board-card.category-needs_action {
-  background: var(--aw-bg-pressed);
+  background: color-mix(
+    in srgb,
+    var(--aw-bg-popover) 75%,
+    var(--aw-bg-surface)
+  );
 }
 
 .board-card-heading {
@@ -199,7 +211,7 @@
   min-width: 0;
   align-items: baseline;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   color: var(--aw-color-warning);
   font-size: 11.5px;
   font-weight: 700;
@@ -220,7 +232,7 @@
 
 .board-card-heading time {
   flex: 0 0 auto;
-  font-size: 10.5px;
+  font-size: 11.5px;
   font-weight: 400;
 }
 
@@ -233,7 +245,7 @@
 
 .board-card-title {
   color: var(--aw-text-body);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .category-needs_action .board-card-title {
@@ -242,9 +254,25 @@
 }
 
 .board-card-task {
+  display: flex;
+  min-width: 0;
+  gap: 6px;
   margin-top: 3px;
   color: var(--aw-text-secondary);
-  font-size: 10.5px;
+  font-size: 11.5px;
+}
+
+.board-card-task-id {
+  flex: 0 0 auto;
+  color: var(--aw-text-muted);
+  font-family: var(--font-mono);
+}
+
+.board-card-task span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .board-more,
@@ -252,7 +280,7 @@
   overflow: hidden;
   margin: 1px 0 0;
   color: var(--aw-text-secondary);
-  font-size: 11px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

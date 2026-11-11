@@ -92,7 +92,7 @@ fn run_with(
         from.as_deref(),
         from_engine_hint,
     ) {
-        Ok(delivery) => return Ok(delivery_output(&session_id, &delivery)),
+        Ok(delivery) => return Ok(Some(delivery_output(&session_id, &delivery))),
         Err(error) if is_permanent_failure(&error) => return Err(error),
         Err(error) => error,
     };
@@ -162,15 +162,15 @@ fn resolve_target_session_id(
     }
 }
 
-fn delivery_output(session_id: &str, delivery: &Delivery) -> Option<String> {
+fn delivery_output(session_id: &str, delivery: &Delivery) -> String {
     match delivery {
-        Delivery::Sent => None,
-        Delivery::Steered => Some(format!(
-            "Injected into the running turn of Codex session {session_id}."
-        )),
-        Delivery::Started => Some(format!(
-            "Started a new turn in idle Codex session {session_id}."
-        )),
+        Delivery::Sent => format!("Delivered to session {session_id}."),
+        Delivery::Steered => {
+            format!("Injected into the running turn of Codex session {session_id}.")
+        }
+        Delivery::Started => {
+            format!("Started a new turn in idle Codex session {session_id}.")
+        }
     }
 }
 
@@ -717,7 +717,7 @@ mod tests {
         assert_eq!(
             (result.map_err(|error| error.to_string()), deliveries),
             (
-                Ok(None),
+                Ok(Some("Delivered to session parent-session.".to_string())),
                 vec![(
                     "parent-session".to_string(),
                     "hello".to_string(),
@@ -834,7 +834,14 @@ mod tests {
     fn successful_delivery_saves_nothing() {
         let actual = run_with_delivery_result(Ok(Delivery::Sent), Ok(()));
 
-        assert_eq!(actual, (Ok(None), Vec::new(), Vec::new()));
+        assert_eq!(
+            actual,
+            (
+                Ok(Some("Delivered to session fixture-target.".to_string())),
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
     }
 
     #[rstest]
@@ -1078,16 +1085,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case::claude(Delivery::Sent, None)]
+    #[case::claude(Delivery::Sent, "Delivered to session thread-a.")]
     #[case::steered(
         Delivery::Steered,
-        Some("Injected into the running turn of Codex session thread-a.".to_string())
+        "Injected into the running turn of Codex session thread-a."
     )]
     #[case::started(
         Delivery::Started,
-        Some("Started a new turn in idle Codex session thread-a.".to_string())
+        "Started a new turn in idle Codex session thread-a."
     )]
-    fn delivery_output_cases(#[case] delivery: Delivery, #[case] expected: Option<String>) {
+    fn delivery_output_cases(#[case] delivery: Delivery, #[case] expected: &str) {
         assert_eq!(delivery_output("thread-a", &delivery), expected);
     }
 

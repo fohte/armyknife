@@ -31,6 +31,7 @@ pub(crate) mod pane;
 mod pane_options;
 pub(crate) mod peer;
 mod profile;
+mod proposal;
 mod resume;
 mod resurrect;
 pub(crate) mod review_queue;
@@ -83,6 +84,7 @@ pub use new::NewArgs;
 pub use pane::status::HasPausedArgs;
 pub use peer::PeerCommands;
 pub use profile::{ProfileCommands, UseProfileArgs};
+pub use proposal::ProposalCommands;
 pub use resume::ResumeArgs;
 pub use resurrect::ResurrectCommands;
 pub use status::StatusCommands;
@@ -159,6 +161,9 @@ pub enum AgentCommands {
     #[command(subcommand)]
     Decision(decision::DecisionCommands),
 
+    /// Record structured proposals for watch-web
+    #[command(subcommand)]
+    Proposal(ProposalCommands),
     /// Internal: infer a missing stop status from a forked session.
     #[command(name = "status-inference", hide = true)]
     StatusInference(StatusInferenceArgs),
@@ -242,6 +247,7 @@ impl AgentCommands {
             Self::MarkRead(args) => mark_read::run(args)?,
             Self::Status(command) => status::run(command)?,
             Self::Decision(command) => decision::run(command)?,
+            Self::Proposal(command) => proposal::run(command)?,
             Self::StatusInference(args) => status_inference::run(args)?,
             Self::Profile(command) => profile::run(command)?,
             Self::Vibe(command) => vibe::run(command)?,
