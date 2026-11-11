@@ -628,6 +628,7 @@ mod tests {
     use super::{
         ChatItem, QuestionChoice, RouteLoaders, load_messages_with,
         routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
         AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
@@ -821,6 +822,124 @@ mod tests {
                 StatusCode::OK,
                 Some("application/json".to_string()),
                 r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_places_decisions_and_proposals_in_transcript_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the records."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Between the records."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"After the records."}]}}
+            "#},
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let decision = AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 5,
+            title: "Choose the fixture path".to_string(),
+            why: "The fixture remains reversible.".to_string(),
+            considered: vec!["Choose the other fixture path".to_string()],
+            easy_to_change: "Change one fixture value.".to_string(),
+            created_at: "2026-06-01T11:59:00Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        };
+        let proposal = AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 7,
+            body: r#"{"title":"Choose a fixture option","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            answer: None,
+            resolved_at: None,
+        };
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            RouteLoaders::new(
+                move |_| Ok(vec![decision.clone()]),
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_, _| Ok(()),
+                move |_| Ok(vec![proposal.clone()]),
+            ),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, content_type, body) = response_snapshot(response).await;
+
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {"type": "assistant", "text": "Before the records."},
+                        {
+                            "type": "decision",
+                            "seq": 5,
+                            "title": "Choose the fixture path",
+                            "why": "The fixture remains reversible.",
+                            "considered": ["Choose the other fixture path"],
+                            "easyToChange": "Change one fixture value.",
+                            "review": null,
+                            "createdAt": "2026-06-01T11:59:00Z",
+                        },
+                        {"type": "assistant", "text": "Between the records."},
+                        {
+                            "type": "proposal",
+                            "seq": 7,
+                            "title": "Choose a fixture option",
+                            "summary": null,
+                            "options": [
+                                {
+                                    "label": "Option A",
+                                    "description": null,
+                                    "pros": [],
+                                    "cons": [],
+                                    "recommended": false,
+                                },
+                                {
+                                    "label": "Option B",
+                                    "description": null,
+                                    "pros": [],
+                                    "cons": [],
+                                    "recommended": false,
+                                },
+                            ],
+                            "answer": null,
+                            "resolved": false,
+                        },
+                        {"type": "assistant", "text": "After the records."},
+                    ],
+                    "backgroundTasks": [],
+                }),
             ),
         );
     }
