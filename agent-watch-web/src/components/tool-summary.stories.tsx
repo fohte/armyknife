@@ -43,7 +43,7 @@ export const FailedSummaryHighlightsFailures: Story = {
     operations: [
       { tool: 'Read', target: 'src/sample.rs', failed: false },
       { tool: 'Edit', target: 'src/sample.rs', failed: false },
-      { tool: 'exec', target: 'cargo test', failed: true },
+      { tool: 'exec', target: 'fictional failure command', failed: true },
     ],
   },
 }
