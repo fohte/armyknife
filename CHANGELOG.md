@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.587](https://github.com/fohte/armyknife/compare/v0.1.586...v0.1.587) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align chat body to mock ([#1531](https://github.com/fohte/armyknife/issues/1531)) ([f59ee3c](https://github.com/fohte/armyknife/commit/f59ee3cb27cac48c7ff41482500b9670443bb6b6))
+
 ## [0.1.586](https://github.com/fohte/armyknife/compare/v0.1.585...v0.1.586) (2026-11-11)
 
 
