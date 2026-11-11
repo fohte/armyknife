@@ -31,6 +31,25 @@ type SessionLinkTextPart = {
   text: string
 }
 
+function remarkHtmlBreaks() {
+  return (tree: MarkdownRoot) => {
+    function visit(node: MarkdownNode) {
+      if (
+        node.type === 'html' &&
+        /^<br\s*\/?>$/i.test(node.value?.trim() ?? '')
+      ) {
+        node.type = 'break'
+        delete node.value
+        return
+      }
+
+      node.children?.forEach(visit)
+    }
+
+    visit(tree)
+  }
+}
+
 const sessionIdPattern =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
 
@@ -270,6 +289,7 @@ export const MarkdownMessage = memo(function MarkdownMessage({
       components={inline ? components.inline : components.markdown}
       remarkPlugins={[
         remarkGfm,
+        remarkHtmlBreaks,
         () => remarkLinkSessionIds(sessionsById),
         remarkTrimNonAsciiAutolinks,
       ]}
