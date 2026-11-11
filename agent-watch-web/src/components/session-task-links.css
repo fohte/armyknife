@@ -63,8 +63,7 @@
   color: var(--aw-text-muted);
 }
 
-.conversation-task-link,
-.conversation-task-link span {
+.conversation-task-link {
   overflow: hidden;
   color: var(--aw-text-muted);
   text-decoration: none;
