@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.581](https://github.com/fohte/armyknife/compare/v0.1.580...v0.1.581) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match cards and composer ([#1522](https://github.com/fohte/armyknife/issues/1522)) ([c819281](https://github.com/fohte/armyknife/commit/c819281fe6a05ba7bf70f304431aaddd16d183a4))
+
 ## [0.1.580](https://github.com/fohte/armyknife/compare/v0.1.579...v0.1.580) (2026-11-11)
 
 
