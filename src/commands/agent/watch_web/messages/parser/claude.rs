@@ -7,6 +7,7 @@ use serde_json::Value;
 
 mod background_tasks;
 mod decision_position;
+mod proposals;
 mod questions;
 mod transcript_branch;
 mod user_input;
@@ -20,11 +21,13 @@ use super::super::parser::{
     classifier::{self, MessageKind},
     for_each_jsonl_record, tool_target,
 };
+use super::super::proposals::ProposalItem;
 use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use background_tasks::{
     BackgroundTaskTracker, record_timestamp, task_notification_envelope, task_notification_text,
 };
 use decision_position::insert_time_placed_decisions;
+use proposals::ProposalTimeline;
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
 };
@@ -133,7 +136,7 @@ fn parse_with_queued_prompts_and_proposals(
     user_marker: Option<&str>,
     now: DateTime<Utc>,
     queued_prompts: &[WatchWebQueuedPrompt],
-    proposals: &[(i64, ChatItem)],
+    proposals: &[ProposalItem],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
@@ -181,7 +184,7 @@ pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
         &'a [WatchWebQueuedPrompt],
     pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
         &'a [WatchWebPeerOutMessage],
-    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [(i64, ChatItem)],
+    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [ProposalItem],
 }
 
 struct ParseContext<'a> {
@@ -189,7 +192,7 @@ struct ParseContext<'a> {
     queued_prompts: &'a [WatchWebQueuedPrompt],
     peer_out_messages: &'a [WatchWebPeerOutMessage],
     decisions: &'a [AgentDecision],
-    proposals: &'a [(i64, ChatItem)],
+    proposals: &'a [ProposalItem],
 }
 
 fn parse_with_background_tasks_and_image_directory(
@@ -252,6 +255,7 @@ fn parse_with_background_tasks_and_image_directory(
         .cloned()
         .map(|decision| (decision.seq, decision))
         .collect::<BTreeMap<_, _>>();
+    let mut proposal_timeline = ProposalTimeline::new(context.proposals);
 
     for_each_jsonl_record(&mut reader, |record| {
         let task_notification = task_notification_text(&record);
@@ -282,6 +286,7 @@ fn parse_with_background_tasks_and_image_directory(
         if let Some(text) = task_notification.as_deref() {
             background_tasks.finish_notification(text);
         }
+        proposal_timeline.insert_before_record(record_timestamp(&record), &mut items, &mut tools);
         match record.get("type").and_then(Value::as_str) {
             _ if record
                 .get("attachment")
@@ -415,12 +420,16 @@ fn parse_with_background_tasks_and_image_directory(
                                         context
                                             .proposals
                                             .iter()
-                                            .find(|(proposal_seq, _)| *proposal_seq == seq)
-                                            .map(|(_, item)| item)
+                                            .find(|proposal| proposal.seq == seq)
                                     });
                                 if let Some(proposal) = proposal {
                                     tools.flush_into(&mut items);
-                                    items.push(proposal.clone());
+                                    proposal_timeline.move_to_transcript_position(
+                                        proposal.seq,
+                                        &mut items,
+                                        &mut question_uses,
+                                    );
+                                    items.push(proposal.item.clone());
                                 } else {
                                     tools.record(&tool_use.name, tool_use.input.as_ref());
                                 }
@@ -556,6 +565,7 @@ fn parse_with_background_tasks_and_image_directory(
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
     items.extend(queue.pending_items(parent, user_marker, context.image_directory));
     items.extend(unplaced_decisions.into_values().map(Into::into));
+    proposal_timeline.append_remaining(&mut items);
     let background_tasks = background_tasks.into_api_tasks(now);
     Ok((items, background_tasks, resolved_queued_prompt_ids))
 }
@@ -667,13 +677,13 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
 mod tests {
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, TimeZone, Utc};
     use indoc::{formatdoc, indoc};
     use rstest::rstest;
     use serde_json::json;
 
     use super::{
-        parse, parse_with_decisions_and_queued_prompts, parse_with_image_directory,
+        ProposalItem, parse, parse_with_decisions_and_queued_prompts, parse_with_image_directory,
         parse_with_queued_prompts_and_proposals, recorded_proposal_seq,
     };
     use crate::commands::agent::store::AgentDecision;
@@ -753,7 +763,11 @@ mod tests {
                 None,
                 Utc::now(),
                 &[],
-                &[(1, proposal.clone())],
+                &[ProposalItem {
+                    seq: 1,
+                    created_at: Utc.timestamp_opt(1_000, 0).unwrap(),
+                    item: proposal.clone(),
+                }],
             )
             .unwrap();
 
@@ -763,6 +777,216 @@ mod tests {
                 vec![
                     ChatItem::Assistant {
                         text: "before".to_string(),
+                    },
+                    proposal,
+                    ChatItem::Assistant {
+                        text: "after".to_string(),
+                    },
+                ],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
+    fn unplaced_proposals_are_inserted_by_creation_time_before_later_recorded_proposals() {
+        let transcript = [
+            json!({
+                "uuid": "fixture-assistant-before",
+                "parentUuid": null,
+                "timestamp": "2026-06-01T12:00:00Z",
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "before"}]},
+            }),
+            json!({
+                "uuid": "fixture-assistant-middle",
+                "parentUuid": "fixture-assistant-before",
+                "timestamp": "2026-06-01T12:02:00Z",
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "middle"}]},
+            }),
+            json!({
+                "uuid": "fixture-assistant-proposal",
+                "parentUuid": "fixture-assistant-middle",
+                "timestamp": "2026-06-01T12:03:00Z",
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-proposal-call",
+                    "name": "Bash",
+                    "input": {"command": "a agent proposal add"},
+                }]},
+            }),
+            json!({
+                "uuid": "fixture-proposal-result",
+                "parentUuid": "fixture-assistant-proposal",
+                "timestamp": "2026-06-01T12:04:00Z",
+                "type": "user",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-proposal-call",
+                    "content": "Recorded proposal 2",
+                }]},
+            }),
+            json!({
+                "uuid": "fixture-assistant-after",
+                "parentUuid": "fixture-proposal-result",
+                "timestamp": "2026-06-01T12:05:00Z",
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "after"}]},
+            }),
+        ]
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<serde_json::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+        let created_at = |timestamp: &str| {
+            DateTime::parse_from_rfc3339(timestamp)
+                .unwrap()
+                .with_timezone(&Utc)
+        };
+        let unplaced_proposal = ChatItem::Proposal {
+            seq: 1,
+            title: "Earlier proposal".to_string(),
+            summary: None,
+            options: vec![ProposalOption {
+                label: "Option A".to_string(),
+                description: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
+            }],
+            answer: None,
+            resolved: true,
+        };
+        let recorded_proposal = ChatItem::Proposal {
+            seq: 2,
+            title: "Later proposal".to_string(),
+            summary: None,
+            options: vec![ProposalOption {
+                label: "Option B".to_string(),
+                description: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
+            }],
+            answer: None,
+            resolved: false,
+        };
+
+        let (messages, background_tasks, queued_prompt_ids) =
+            parse_with_queued_prompts_and_proposals(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc::now(),
+                &[],
+                &[
+                    ProposalItem {
+                        seq: 1,
+                        created_at: created_at("2026-06-01T12:01:00Z"),
+                        item: unplaced_proposal.clone(),
+                    },
+                    ProposalItem {
+                        seq: 2,
+                        created_at: created_at("2026-06-01T12:03:30Z"),
+                        item: recorded_proposal.clone(),
+                    },
+                ],
+            )
+            .unwrap();
+
+        assert_eq!(
+            (messages, background_tasks, queued_prompt_ids),
+            (
+                vec![
+                    ChatItem::Assistant {
+                        text: "before".to_string(),
+                    },
+                    unplaced_proposal,
+                    ChatItem::Assistant {
+                        text: "middle".to_string(),
+                    },
+                    recorded_proposal,
+                    ChatItem::Assistant {
+                        text: "after".to_string(),
+                    },
+                ],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
+    fn moving_a_timed_proposal_to_its_tool_result_preserves_later_question_answers() {
+        let transcript = indoc! {r#"
+            {"uuid":"fixture-before","parentUuid":null,"timestamp":"2026-06-01T12:00:00Z","type":"assistant","message":{"content":[{"type":"text","text":"before"}]}}
+            {"uuid":"fixture-question","parentUuid":"fixture-before","timestamp":"2026-06-01T12:02:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-question-call","name":"AskUserQuestion","input":{"questions":[{"question":"Which display mode?","header":"Display","multiSelect":false,"options":[{"label":"Option A"},{"label":"Option B"}]}]}}]}}
+            {"uuid":"fixture-proposal-call","parentUuid":"fixture-question","timestamp":"2026-06-01T12:03:00Z","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call-id","name":"Bash","input":{"command":"a agent proposal add"}}]}}
+            {"uuid":"fixture-proposal-result","parentUuid":"fixture-proposal-call","timestamp":"2026-06-01T12:04:00Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call-id","content":"Recorded proposal 1"}]}}
+            {"uuid":"fixture-question-result","parentUuid":"fixture-proposal-result","timestamp":"2026-06-01T12:05:00Z","type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-question-call","content":"Your questions have been answered: \"Which display mode?\"=\"Option A\". You can now continue with these answers in mind."}]}}
+            {"uuid":"fixture-after","parentUuid":"fixture-question-result","timestamp":"2026-06-01T12:06:00Z","type":"assistant","message":{"content":[{"type":"text","text":"after"}]}}
+        "#};
+        let proposal = ChatItem::Proposal {
+            seq: 1,
+            title: "Sample proposal".to_string(),
+            summary: None,
+            options: vec![ProposalOption {
+                label: "Option A".to_string(),
+                description: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
+            }],
+            answer: None,
+            resolved: false,
+        };
+        let proposal_item = ProposalItem {
+            seq: 1,
+            created_at: DateTime::parse_from_rfc3339("2026-06-01T12:01:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            item: proposal.clone(),
+        };
+
+        let (messages, background_tasks, queued_prompt_ids) =
+            parse_with_queued_prompts_and_proposals(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc::now(),
+                &[],
+                &[proposal_item],
+            )
+            .unwrap();
+
+        assert_eq!(
+            (messages, background_tasks, queued_prompt_ids),
+            (
+                vec![
+                    ChatItem::Assistant {
+                        text: "before".to_string(),
+                    },
+                    ChatItem::Question {
+                        header: Some("Display".to_string()),
+                        question: "Which display mode?".to_string(),
+                        choices: vec![
+                            QuestionChoice {
+                                label: "Option A".to_string(),
+                                description: None,
+                            },
+                            QuestionChoice {
+                                label: "Option B".to_string(),
+                                description: None,
+                            },
+                        ],
+                        multi_select: false,
+                        answer: Some("Option A".to_string()),
                     },
                     proposal,
                     ChatItem::Assistant {
