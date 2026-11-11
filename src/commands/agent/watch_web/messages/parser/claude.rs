@@ -297,6 +297,10 @@ fn parse_with_background_tasks_and_image_directory(
                                 {
                                     tools.flush_into(&mut items);
                                     items.push(decision.into());
+                                } else {
+                                    tools.record(&tool_use.name, tool_use.input.as_ref());
+                                    background_tasks
+                                        .complete_tool_use(&tool_use, &record, block, now);
                                 }
                             } else {
                                 tools.record(&tool_use.name, tool_use.input.as_ref());
@@ -411,11 +415,6 @@ fn parse_with_background_tasks_and_image_directory(
         tool_uses.iter().rev().find(|tool_use| {
             matches_pending_tool(tool_use, pending)
                 && !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-                && !classifier::is_agent_add_tool(
-                    &tool_use.name,
-                    tool_use.input.as_ref(),
-                    "decision",
-                )
         })
     }) {
         items.push(ChatItem::Permission {
@@ -424,7 +423,6 @@ fn parse_with_background_tasks_and_image_directory(
         });
     } else if let Some(tool_use) = tool_uses.last().filter(|tool_use| {
         !classifier::is_peer_notify_tool(&tool_use.name, tool_use.input.as_ref())
-            && !classifier::is_agent_add_tool(&tool_use.name, tool_use.input.as_ref(), "decision")
     }) {
         items.push(ChatItem::ToolInProgress {
             tool: tool_use.name.clone(),
@@ -628,7 +626,14 @@ mod tests {
             )
             .unwrap()
             .0,
-            vec![decision_item(1), decision_item(2)],
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("a agent decision add 'Decision 1'"),)],
+                },
+                decision_item(1),
+                decision_item(2),
+            ],
         );
     }
 
@@ -637,6 +642,81 @@ mod tests {
     #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT)]
     fn appends_decisions_without_a_successful_recorded_result(#[case] transcript: &str) {
         assert_unplaced_decisions(transcript);
+    }
+
+    #[rstest]
+    #[case::permission_requested(
+        "a agent decision add 'Decision 1'",
+        Some("Bash(a agent decision add 'Decision 1')"),
+        ChatItem::Permission {
+            tool: "Bash".to_string(),
+            description: "Bash: a agent decision add 'Decision 1'".to_string(),
+        }
+    )]
+    #[case::compound_bash_permission_requested(
+        "cd ./fixture && a agent decision add 'Decision 1'",
+        Some("Bash(cd ./fixture && a agent decision add 'Decision 1')"),
+        ChatItem::Permission {
+            tool: "Bash".to_string(),
+            description: "Bash: cd ./fixture && a agent decision add 'Decision 1'".to_string(),
+        }
+    )]
+    #[case::still_running(
+        "a agent decision add 'Decision 1'",
+        None,
+        ChatItem::ToolInProgress {
+            tool: "Bash".to_string(),
+            target: Some("a agent decision add 'Decision 1'".to_string()),
+        }
+    )]
+    fn pending_decision_add_keeps_normal_bash_status(
+        #[case] decision_command: &str,
+        #[case] pending_tool: Option<&str>,
+        #[case] pending_item: ChatItem,
+    ) {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-completed-bash",
+                    "name": "Bash",
+                    "input": {"command": "echo prior work"},
+                }]},
+            })
+            .to_string(),
+            json!({
+                "type": "user",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-completed-bash",
+                    "content": "prior result",
+                }]},
+            })
+            .to_string(),
+            json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-decision-call",
+                    "name": "Bash",
+                    "input": {"command": decision_command},
+                }]},
+            })
+            .to_string(),
+        ]
+        .join("\n");
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, pending_tool, None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("echo prior work"))],
+                },
+                pending_item,
+            ],
+        );
     }
 
     #[test]
