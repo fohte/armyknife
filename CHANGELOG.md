@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.592](https://github.com/fohte/armyknife/compare/v0.1.591...v0.1.592) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** show running tasks ([#1547](https://github.com/fohte/armyknife/issues/1547)) ([1cd7572](https://github.com/fohte/armyknife/commit/1cd757265150caa1449c33f6782e1ce26c62ac43))
+
 ## [0.1.591](https://github.com/fohte/armyknife/compare/v0.1.590...v0.1.591) (2026-11-11)
 
 
