@@ -4,7 +4,7 @@ use super::ChatItem;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalBody};
 use crate::commands::agent::store::AgentProposal;
 
-pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<(i64, ChatItem, bool)> {
+pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<(i64, ChatItem)> {
     let body: ProposalBody = serde_json::from_str(&proposal.body)
         .with_context(|| format!("parsing proposal {} body", proposal.seq))?;
     let answer: Option<ProposalAnswer> = proposal
@@ -23,6 +23,5 @@ pub(super) fn proposal_chat_item(proposal: &AgentProposal) -> Result<(i64, ChatI
             answer,
             resolved: proposal.resolved_at.is_some(),
         },
-        proposal.resolved_at.is_none(),
     ))
 }
