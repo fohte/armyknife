@@ -3,7 +3,7 @@ import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { useCallback, useLayoutEffect, useRef } from 'react'
+import { useCallback, useRef } from 'react'
 
 import { reuseEqualValue } from '#components/conversation-message-sharing'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
@@ -19,6 +19,7 @@ import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
+import { useConversationScroll } from '#components/use-conversation-scroll'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
@@ -142,13 +143,11 @@ export function ConversationPaneView({
     clearDraftIfUnchanged,
     onAction,
   })
-  const scrollRef = useRef<HTMLDivElement>(null)
-  const pendingScrollAnchorRef = useRef<{
-    scrollHeight: number
-    scrollTop: number
-    start: number
-  } | null>(null)
-  const followLatestRef = useRef(true)
+  const {
+    onScroll,
+    preserveScrollAnchor,
+    scrollRef: conversationScrollRef,
+  } = useConversationScroll({ messages, sessionId: session.id, start })
   const sessionLinkTargets = useSessionLinkTargets(sessions)
   // Keep memoized message props stable while the App selection callback changes.
   const onSelectSessionRef = useRef(onSelectSession)
@@ -226,36 +225,6 @@ export function ConversationPaneView({
     if (event.key === 'Enter' && !isMobile && !event.shiftKey) {
       event.preventDefault()
       sendMessage()
-    }
-  }
-
-  useLayoutEffect(() => {
-    pendingScrollAnchorRef.current = null
-    followLatestRef.current = true
-  }, [session.id])
-
-  useLayoutEffect(() => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer === null) return
-    const anchor = pendingScrollAnchorRef.current
-    if (anchor !== null && start < anchor.start) {
-      scrollContainer.scrollTop =
-        anchor.scrollTop + scrollContainer.scrollHeight - anchor.scrollHeight
-      pendingScrollAnchorRef.current = null
-    } else if (followLatestRef.current) {
-      scrollContainer.scrollTop =
-        scrollContainer.scrollHeight - scrollContainer.clientHeight
-    }
-  }, [messages, start])
-
-  const updateFollowLatest = () => {
-    const scrollContainer = scrollRef.current
-    if (scrollContainer !== null) {
-      followLatestRef.current =
-        scrollContainer.scrollHeight -
-          scrollContainer.scrollTop -
-          scrollContainer.clientHeight <=
-        24
     }
   }
 
@@ -417,10 +386,10 @@ export function ConversationPaneView({
       ) : null}
 
       <div
-        ref={scrollRef}
+        ref={conversationScrollRef}
         className="conversation-scroll"
         aria-live="polite"
-        onScroll={updateFollowLatest}
+        onScroll={onScroll}
       >
         {start > 0 ? (
           <Button
@@ -429,14 +398,7 @@ export function ConversationPaneView({
             variant="plain"
             disabled={loadingOlder}
             onClick={() => {
-              const scrollContainer = scrollRef.current
-              if (scrollContainer !== null) {
-                pendingScrollAnchorRef.current = {
-                  scrollHeight: scrollContainer.scrollHeight,
-                  scrollTop: scrollContainer.scrollTop,
-                  start,
-                }
-              }
+              preserveScrollAnchor()
               onLoadOlder()
             }}
           >

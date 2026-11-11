@@ -84,6 +84,7 @@ export function ConversationPane({
   currentSessionId.current = session.id
   const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const olderRequestGeneration = useRef(0)
   const updateConversation = useCallback((next: ConversationResponse) => {
     conversationRef.current = next
     setConversation(next)
@@ -98,7 +99,6 @@ export function ConversationPane({
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
     requestGeneration.current = generation
-    setLoadingOlder(false)
     const sessionPath = `/api/sessions/${encodeURIComponent(session.id)}`
     const loadedConversation =
       conversationSessionId.current === session.id
@@ -123,20 +123,37 @@ export function ConversationPane({
     void Promise.all([messagesRequest, actionsRequest]).then(
       ([messagesResult, actionsResult]) => {
         if (requestGeneration.current !== generation) return
+        let refreshedConversation: ConversationResponse | null = null
         if (messagesResult.isOk()) {
-          const previous =
-            conversationSessionId.current === session.id
-              ? conversationRef.current
-              : EMPTY_CONVERSATION
-          updateConversation({
+          const alreadyLoaded = conversationSessionId.current === session.id
+          const previous = alreadyLoaded
+            ? conversationRef.current
+            : EMPTY_CONVERSATION
+          const preserveLoadedPrefix =
+            alreadyLoaded && previous.start < messagesResult.value.start
+          const start = preserveLoadedPrefix
+            ? previous.start
+            : messagesResult.value.start
+          const messages = preserveLoadedPrefix
+            ? [
+                ...previous.messages.slice(
+                  0,
+                  messagesResult.value.start - previous.start,
+                ),
+                ...messagesResult.value.messages,
+              ]
+            : messagesResult.value.messages
+          refreshedConversation = {
             ...messagesResult.value,
+            start,
             messages: shareUnchangedMessages(
               previous.messages,
-              messagesResult.value.messages,
+              messages,
               previous.start,
-              messagesResult.value.start,
+              start,
             ),
-          })
+          }
+          updateConversation(refreshedConversation)
           conversationSessionId.current = session.id
           setMessagesLoadedAt(Date.now())
         }
@@ -148,8 +165,8 @@ export function ConversationPane({
         setPendingPermissionAction((pending) => {
           if (pending === null) return null
           const permissionDisappeared =
-            messagesResult.isOk() &&
-            !messagesResult.value.messages.some(
+            refreshedConversation !== null &&
+            !refreshedConversation.messages.some(
               (message) =>
                 message.type === 'permission' &&
                 message.tool === pending.tool &&
@@ -192,7 +209,10 @@ export function ConversationPane({
       setLoadingOlder(false)
     }
     clearOpenInTerminalTimer()
-    return clearOpenInTerminalTimer
+    return () => {
+      olderRequestGeneration.current += 1
+      clearOpenInTerminalTimer()
+    }
   }, [clearOpenInTerminalTimer, session.id, updateConversation])
 
   const loadOlder = useCallback(() => {
@@ -204,15 +224,15 @@ export function ConversationPane({
     ) {
       return
     }
-    const generation = requestGeneration.current + 1
-    requestGeneration.current = generation
+    const generation = olderRequestGeneration.current + 1
+    olderRequestGeneration.current = generation
     setLoadingOlder(true)
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/messages?before=${String(current.start)}&limit=${String(INITIAL_MESSAGE_LIMIT)}`,
       isConversationResponse,
     ).match(
       (response) => {
-        if (requestGeneration.current !== generation) return
+        if (olderRequestGeneration.current !== generation) return
         if (conversationSessionId.current !== session.id) return
         const latest = conversationRef.current
         const messages = [...response.messages, ...latest.messages]
@@ -230,7 +250,7 @@ export function ConversationPane({
         setLoadingOlder(false)
       },
       (requestError) => {
-        if (requestGeneration.current !== generation) return
+        if (olderRequestGeneration.current !== generation) return
         setError(requestError.message)
         setLoadingOlder(false)
       },
