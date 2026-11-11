@@ -54,7 +54,7 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
                         Proposal 1 \"Pick a format\": chose A (Format A).
 
                         Keep the simpler format.
-                    "},
+                    "}.trim_end(),
                 }],
             }),
             Some(r#"{"choice":0,"comment":"Keep the simpler format."}"#),
