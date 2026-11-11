@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.601](https://github.com/fohte/armyknife/compare/v0.1.600...v0.1.601) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** handle Alt+Enter as newline ([#1565](https://github.com/fohte/armyknife/issues/1565)) ([b3da67f](https://github.com/fohte/armyknife/commit/b3da67f61332b9ce3454200f162f16f3f7c8a6c9))
+
 ## [0.1.600](https://github.com/fohte/armyknife/compare/v0.1.599...v0.1.600) (2026-11-11)
 
 
