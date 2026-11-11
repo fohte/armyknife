@@ -20,7 +20,6 @@ import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationScroll } from '#components/use-conversation-scroll'
-import { useSessionLinkTargets } from '#components/use-session-link-targets'
 import { formatSessionDecisionCount } from '#session-decision-count'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {

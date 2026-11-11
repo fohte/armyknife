@@ -7,18 +7,26 @@ export function useSessionLinkTargets(
   sessions: readonly Session[],
 ): readonly SessionLinkTarget[] {
   const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
-  // Link cards only use these fields, so unrelated session updates keep rows stable.
+  // Message rows consume this projection, so elapsed-time ticks stay out of their props.
   const nextTargets = sessions.map(
-    ({ id, category, isPaused, task, repo, title }) => ({
+    ({ id, task, tasks, repo, title, engine, workType, kind, preview }) => ({
       id,
-      category,
-      isPaused,
       task:
         task === null
           ? null
-          : { id: task.id, number: task.number, title: task.title },
+          : {
+              id: task.id,
+              number: task.number,
+              title: task.title,
+              priority: task.priority,
+            },
+      linkedTaskCount: tasks?.length ?? (task === null ? 0 : 1),
       repo,
       title,
+      engine,
+      workType,
+      kind,
+      preview,
     }),
   )
   targetsRef.current = reuseEqualValue(targetsRef.current, nextTargets)
