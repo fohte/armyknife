@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.585](https://github.com/fohte/armyknife/compare/v0.1.584...v0.1.585) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** support freeform answers ([#1530](https://github.com/fohte/armyknife/issues/1530)) ([31c3849](https://github.com/fohte/armyknife/commit/31c3849ed49b3ce2b751e73036207ccc94d98788))
+
 ## [0.1.584](https://github.com/fohte/armyknife/compare/v0.1.583...v0.1.584) (2026-11-11)
 
 
