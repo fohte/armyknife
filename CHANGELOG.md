@@ -1,5 +1,33 @@
 # Changelog
 
+## [0.1.574](https://github.com/fohte/armyknife/compare/v0.1.573...v0.1.574) (2026-11-11)
+
+
+### Features
+
+* **watch-web:** collapse subagent reports ([#1508](https://github.com/fohte/armyknife/issues/1508)) ([3fe74f2](https://github.com/fohte/armyknife/commit/3fe74f290d601c45751b1e22f9caa1342ddb437a))
+
+## [0.1.573](https://github.com/fohte/armyknife/compare/v0.1.572...v0.1.573) (2026-11-11)
+
+
+### Features
+
+* **agent/proposal:** allow proposal recording ([#1505](https://github.com/fohte/armyknife/issues/1505)) ([30b219a](https://github.com/fohte/armyknife/commit/30b219afb3ead46c9e42bf87f931d7ae7c03ed51))
+
+## [0.1.572](https://github.com/fohte/armyknife/compare/v0.1.571...v0.1.572) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match Board to design mock ([#1501](https://github.com/fohte/armyknife/issues/1501)) ([4f90367](https://github.com/fohte/armyknife/commit/4f903677f5123ddf5208a084ee49192a9efc5478))
+
+## [0.1.571](https://github.com/fohte/armyknife/compare/v0.1.570...v0.1.571) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** display peer destination IDs ([#1498](https://github.com/fohte/armyknife/issues/1498)) ([5194105](https://github.com/fohte/armyknife/commit/51941054704aae5077eedcc19782cb576c7ed402))
+
 ## [0.1.570](https://github.com/fohte/armyknife/compare/v0.1.569...v0.1.570) (2026-11-11)
 
 

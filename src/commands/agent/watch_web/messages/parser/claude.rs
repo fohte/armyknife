@@ -256,6 +256,7 @@ fn parse_with_background_tasks_and_image_directory(
                                     &tool_use.name,
                                     tool_use.input.as_ref(),
                                     parent.map(|parent| parent.session_id.as_str()),
+                                    Some(&text),
                                 ) {
                                     let completed_at = record_timestamp(&record);
                                     if let Some(delivered) =
@@ -679,8 +680,8 @@ mod tests {
             {"type":"user","message":{"content":"<future-notice>Unknown wrapped notice.</future-notice>"}}
             {"type":"user","message":{"content":"<system-reminder>Internal-only context.</system-reminder>"}}
             {"type":"system","subtype":"compact_boundary"}
-            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify --message 'Please verify the fictional result.' fixture-target-session"}}]}}
-            {"type":"user","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify --message 'Please verify the fictional result.' $sid"}}]}}
+            {"type":"user","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"Delivered to session fixture-resolved-session."}]}}
         "#};
         let parent = ParentSession {
             session_id: "fixture-parent-session".to_string(),
@@ -725,7 +726,7 @@ mod tests {
                 },
                 ChatItem::Peer {
                     direction: PeerDirection::To,
-                    session_id: "fixture-target-session".to_string(),
+                    session_id: "fixture-resolved-session".to_string(),
                     session_title: None,
                     content: vec![UserContentPart::Text {
                         text: "Please verify the fictional result.".to_string(),

@@ -1,6 +1,7 @@
 import { act, type ComponentProps } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { AgentWatchNav } from '#components/agent-watch-nav'
 
@@ -9,36 +10,34 @@ let root: Root | null = null
 
 function renderNav(
   workTypeNavGroups: ComponentProps<typeof AgentWatchNav>['workTypeNavGroups'],
-  onSelectSession: (id: string) => void = () => undefined,
-  savedViews: ComponentProps<typeof AgentWatchNav>['savedViews'] = [],
-  selectedSavedViewId: string | null = null,
-  onSelectSavedView: (id: string) => void = () => undefined,
-  onDeleteSavedView: (id: string) => void = () => undefined,
-  paletteShortcut: ComponentProps<typeof AgentWatchNav>['paletteShortcut'] = {
-    modifier: 'ctrlKey',
-    label: 'Ctrl K',
-    ariaLabel: 'Control K',
-  },
+  overrides: Partial<
+    Omit<ComponentProps<typeof AgentWatchNav>, 'workTypeNavGroups'>
+  > = {},
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <AgentWatchNav
         activeView="inbox"
-        paletteShortcut={paletteShortcut}
+        paletteShortcut={{
+          modifier: 'ctrlKey',
+          label: 'Ctrl K',
+          ariaLabel: 'Control K',
+        }}
         needsActionCount={0}
-        savedViews={savedViews}
-        selectedSavedViewId={selectedSavedViewId}
+        savedViews={[]}
+        selectedSavedViewId={null}
         workTypeNavGroups={workTypeNavGroups}
         onViewChange={() => undefined}
-        onSelectSavedView={onSelectSavedView}
-        onDeleteSavedView={onDeleteSavedView}
+        onSelectSavedView={() => undefined}
+        onDeleteSavedView={() => undefined}
         todaySessions={[]}
         onSelectToday={() => undefined}
-        onSelectSession={onSelectSession}
+        onSelectSession={() => undefined}
         onOpenPalette={() => undefined}
         inboxCollapsed={false}
         onToggleInbox={() => undefined}
+        {...overrides}
       />,
     )
   })
@@ -74,7 +73,7 @@ it('renders the configured label and opens the selected session', () => {
         ],
       },
     ],
-    onSelectSession,
+    { onSelectSession },
   )
 
   const button = container.querySelector<HTMLButtonElement>(
@@ -136,15 +135,7 @@ it.each([
 ] as const)(
   'shows the $label shortcut on $platform',
   ({ paletteShortcut, label, ariaLabel }) => {
-    renderNav(
-      [],
-      () => undefined,
-      [],
-      null,
-      () => undefined,
-      () => undefined,
-      paletteShortcut,
-    )
+    renderNav([], { paletteShortcut })
 
     const shortcut = container.querySelector<HTMLButtonElement>(
       '.agent-watch-command-key',
@@ -157,12 +148,26 @@ it.each([
   },
 )
 
+it('opens the command palette when its search icon is clicked', () => {
+  let paletteOpened = false
+  renderNav([], {
+    onOpenPalette: () => {
+      paletteOpened = true
+    },
+  })
+
+  const searchIcon = container.querySelector('.agent-watch-command-key svg')
+  act(() => {
+    searchIcon?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(paletteOpened).toBe(true)
+})
+
 it('selects the active saved view and shows its needs-action count color', () => {
   const onSelectSavedView = vi.fn<(id: string) => void>()
-  renderNav(
-    [],
-    () => undefined,
-    [
+  renderNav([], {
+    savedViews: [
       {
         id: 'reviews',
         name: 'Sample reviews',
@@ -171,9 +176,9 @@ it('selects the active saved view and shows its needs-action count color', () =>
         countTone: 'needs-action',
       },
     ],
-    'reviews',
+    selectedSavedViewId: 'reviews',
     onSelectSavedView,
-  )
+  })
 
   act(() => {
     container.querySelector<HTMLButtonElement>('.saved-view-link')?.click()
@@ -198,10 +203,8 @@ it('selects the active saved view and shows its needs-action count color', () =>
 
 it('deletes a saved view from the navigation', () => {
   const onDeleteSavedView = vi.fn<(id: string) => void>()
-  renderNav(
-    [],
-    () => undefined,
-    [
+  renderNav([], {
+    savedViews: [
       {
         id: 'reviews',
         name: 'Sample reviews',
@@ -210,10 +213,8 @@ it('deletes a saved view from the navigation', () => {
         countTone: 'needs-action',
       },
     ],
-    null,
-    () => undefined,
     onDeleteSavedView,
-  )
+  })
   act(() => {
     container
       .querySelector<HTMLButtonElement>(
@@ -225,6 +226,79 @@ it('deletes a saved view from the navigation', () => {
   const snapshot = () => onDeleteSavedView.mock.calls
 
   expect(snapshot()).toEqual([['reviews']])
+})
+
+it('deletes a saved view through its hover-visible control', async () => {
+  const onDeleteSavedView = vi.fn<(id: string) => void>()
+  renderNav([], {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+    onDeleteSavedView,
+  })
+
+  const item = container.querySelector<HTMLElement>('.saved-view-item')
+  const deleteButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete Sample reviews view"]',
+  )
+  if (item === null || deleteButton === null) {
+    throw new Error('Saved view controls were not rendered')
+  }
+
+  await userEvent.hover(item)
+  await userEvent.click(deleteButton)
+
+  expect(onDeleteSavedView.mock.calls).toEqual([['reviews']])
+})
+
+it('keeps the hidden delete button available to keyboard focus', () => {
+  renderNav([], {
+    savedViews: [
+      {
+        id: 'reviews',
+        name: 'Sample reviews',
+        query: 'project:sample-project kind:review',
+        count: 3,
+        countTone: 'needs-action',
+      },
+    ],
+  })
+
+  const deleteButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Delete Sample reviews view"]',
+  )
+  const count = container.querySelector('.saved-view-count')
+  if (deleteButton === null || count === null) {
+    throw new Error('Saved view controls were not rendered')
+  }
+  const hidden = {
+    opacity: window.getComputedStyle(deleteButton).opacity,
+    pointerEvents: window.getComputedStyle(deleteButton).pointerEvents,
+    tabIndex: deleteButton.tabIndex,
+  }
+
+  act(() => {
+    deleteButton.focus()
+  })
+
+  const focused = {
+    opacity: window.getComputedStyle(deleteButton).opacity,
+    pointerEvents: window.getComputedStyle(deleteButton).pointerEvents,
+    countOpacity: window.getComputedStyle(count).opacity,
+  }
+
+  const snapshot = () => ({ hidden, focused })
+
+  expect(snapshot()).toEqual({
+    hidden: { opacity: '0', pointerEvents: 'none', tabIndex: 0 },
+    focused: { opacity: '1', pointerEvents: 'auto', countOpacity: '0' },
+  })
 })
 
 it('hides the saved views section when no views are saved', () => {

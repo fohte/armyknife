@@ -24,8 +24,8 @@ mod queued_prompts;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
-    WatchWebSessionState, serialize_session,
+    AgentProposal, SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage,
+    WatchWebQueuedPrompt, WatchWebSessionState, serialize_session,
 };
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
@@ -361,6 +361,40 @@ pub(crate) fn session_store_revision() -> Result<i64> {
 
 pub(crate) fn session_store_revision_from(sessions_dir: &Path) -> Result<i64> {
     database::session_store_revision(sessions_dir)
+}
+
+pub(crate) fn add_agent_proposal_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    body: &str,
+) -> Result<i64> {
+    database::add_agent_proposal(sessions_dir, session_id, body)
+}
+
+pub(crate) fn close_unanswered_agent_proposals(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<bool> {
+    database::close_unanswered_agent_proposals(sessions_dir, session_id)
+}
+
+#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
+pub(crate) fn unanswered_agent_proposal_session_ids() -> Result<Vec<String>> {
+    database::unanswered_agent_proposal_session_ids(&sessions_dir()?)
+}
+
+#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
+pub(crate) fn agent_proposals(session_id: &str) -> Result<Vec<AgentProposal>> {
+    database::agent_proposals(&sessions_dir()?, session_id)
+}
+
+#[expect(dead_code, reason = "Used by the follow-up watch-web proposal API")]
+pub(crate) fn write_agent_proposal_answer(
+    session_id: &str,
+    seq: i64,
+    answer: &str,
+) -> Result<bool> {
+    database::write_agent_proposal_answer(&sessions_dir()?, session_id, seq, answer)
 }
 
 pub(crate) fn watch_web_session_states_from(

@@ -21,6 +21,7 @@ use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod parser;
+mod subagent_reports;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -256,7 +257,7 @@ fn parse_session_transcript(
                 None => None,
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
+            let (mut messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
                 let (messages, background_tasks) =
                     parser::claude::parse_with_background_tasks_and_peer_out_messages(
                         reader,
@@ -278,6 +279,9 @@ fn parse_session_transcript(
                     peer_out_messages,
                 )?
             };
+            if let Some(path) = path {
+                subagent_reports::add_descriptions(path, &mut messages);
+            }
             Ok((
                 ConversationResponse {
                     messages,
@@ -391,6 +395,13 @@ enum ChatItem {
         #[serde(skip_serializing_if = "Option::is_none")]
         session_title: Option<String>,
         content: Vec<UserContentPart>,
+    },
+    SubagentReport {
+        agent_id: String,
+        agent_name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+        text: String,
     },
     Event {
         kind: EventKind,
@@ -552,6 +563,75 @@ mod tests {
         assert_eq!(
             load_messages_with("fixture-unregistered-session", |_| Ok(None)).unwrap(),
             None
+        );
+    }
+
+    #[rstest]
+    #[case::description(
+        ".jsonl",
+        false,
+        Some("Review the fictional feature"),
+        Some("Review the fictional feature")
+    )]
+    #[case::compressed_description(
+        ".jsonl.zst",
+        true,
+        Some("Review the fictional feature"),
+        Some("Review the fictional feature")
+    )]
+    #[case::missing_metadata(".jsonl", false, None, None)]
+    fn subagent_report_uses_its_description_when_metadata_is_available(
+        #[case] transcript_suffix: &str,
+        #[case] is_compressed: bool,
+        #[case] saved_description: Option<&str>,
+        #[case] expected_description: Option<&str>,
+    ) {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory
+            .path()
+            .join(format!("fixture-session{transcript_suffix}"));
+        let transcript = json!({
+            "type": "user",
+            "isMeta": true,
+            "origin": {
+                "kind": "peer",
+                "from": "fixture-agent-id",
+                "name": "general-purpose",
+                "handback": true,
+                "handbackReportText": "The fictional task is complete.",
+            },
+            "message": {"content": "[Subagent hand-back] boilerplate"},
+        });
+        let transcript = serde_json::to_vec(&transcript).unwrap();
+        let transcript = if is_compressed {
+            zstd::stream::encode_all(transcript.as_slice(), 0).unwrap()
+        } else {
+            transcript
+        };
+        std::fs::write(&transcript_path, transcript).unwrap();
+        if let Some(description) = saved_description {
+            let metadata_dir = directory.path().join("fixture-session").join("subagents");
+            std::fs::create_dir_all(&metadata_dir).unwrap();
+            std::fs::write(
+                metadata_dir.join("agent-fixture-agent-id.meta.json"),
+                serde_json::to_vec(&json!({"description": description})).unwrap(),
+            )
+            .unwrap();
+        }
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        assert_eq!(
+            load_messages_with("fixture-session", |id| {
+                Ok((id == "fixture-session").then(|| session.clone()))
+            })
+            .unwrap(),
+            Some(vec![ChatItem::SubagentReport {
+                agent_id: "fixture-agent-id".to_string(),
+                agent_name: "general-purpose".to_string(),
+                description: expected_description.map(str::to_string),
+                text: "The fictional task is complete.".to_string(),
+            }])
         );
     }
 

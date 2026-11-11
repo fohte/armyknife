@@ -1,0 +1,9 @@
+.conversation-header-copy h1 {
+  overflow: hidden;
+  margin: 0;
+  color: var(--aw-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

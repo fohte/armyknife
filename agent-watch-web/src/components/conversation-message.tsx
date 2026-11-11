@@ -1,3 +1,5 @@
+import '#components/conversation-message.css'
+
 import type { ReactNode } from 'react'
 
 import { MarkdownMessage } from '#components/markdown-message'
@@ -8,6 +10,7 @@ import {
   type PermissionRequestIdentity,
 } from '#components/permission-card'
 import { QuestionCard } from '#components/question-card'
+import { SubagentReport } from '#components/subagent-report'
 import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
@@ -68,6 +71,16 @@ export function renderConversationMessage({
     return (
       <PeerMessage
         key={`peer-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
+    )
+  }
+  if (message.type === 'subagent_report') {
+    return (
+      <SubagentReport
+        key={`subagent-report-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}

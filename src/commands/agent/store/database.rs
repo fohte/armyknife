@@ -14,6 +14,7 @@ use crate::commands::agent::types::Session;
 
 mod migration;
 mod peer_out_messages;
+mod proposals;
 mod queued_prompts;
 mod wake;
 mod web_state;
@@ -21,6 +22,11 @@ mod web_state;
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+};
+pub(crate) use proposals::AgentProposal;
+pub(crate) use proposals::{
+    add_agent_proposal, agent_proposals, close_unanswered_agent_proposals,
+    unanswered_agent_proposal_session_ids, write_agent_proposal_answer,
 };
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
@@ -36,7 +42,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 6] = [
+static MIGRATION_ENTRIES: [M<'static>; 7] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -74,14 +80,48 @@ static MIGRATION_ENTRIES: [M<'static>; 6] = [
             ON watch_web_queued_prompt (session_id, id);",
     ),
     M::up(
-        "CREATE TABLE watch_web_peer_out_message (
+        "CREATE TABLE agent_proposal (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            answer TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX agent_proposal_unresolved_session_id
+            ON agent_proposal (session_id) WHERE resolved_at IS NULL;
+        CREATE TRIGGER agent_proposal_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
+            END;",
+    ),
+    M::up(
+        "CREATE TABLE IF NOT EXISTS agent_proposal (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            answer TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX IF NOT EXISTS agent_proposal_unresolved_session_id
+            ON agent_proposal (session_id) WHERE resolved_at IS NULL;
+        CREATE TRIGGER IF NOT EXISTS agent_proposal_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
+            END;
+        CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
             id INTEGER PRIMARY KEY,
             from_session_id TEXT NOT NULL,
             to_session_id TEXT NOT NULL,
             content TEXT NOT NULL,
             sent_at TEXT NOT NULL
         );
-        CREATE INDEX watch_web_peer_out_message_sender_target_time
+        CREATE INDEX IF NOT EXISTS watch_web_peer_out_message_sender_target_time
             ON watch_web_peer_out_message (from_session_id, to_session_id, sent_at, id);",
     ),
 ];
@@ -564,6 +604,57 @@ mod tests {
             (preserved, state_table_exists, queued_prompt_table_exists),
             (("preserved-data".to_string(), 7, 7), true, true),
         );
+    }
+
+    #[rstest]
+    #[case::peer_message_schema(
+        "CREATE TABLE watch_web_peer_out_message (
+            id INTEGER PRIMARY KEY,
+            from_session_id TEXT NOT NULL,
+            to_session_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sent_at TEXT NOT NULL
+        );"
+    )]
+    #[case::proposal_schema(
+        "CREATE TABLE agent_proposal (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            answer TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );"
+    )]
+    fn upgrades_either_previous_version_six_schema(#[case] previous_schema: &str) {
+        let temp_dir = tempfile::tempdir().expect("temporary sessions directory should be created");
+        let database_path = temp_dir.path().join("sessions.db");
+        let mut connection =
+            Connection::open(database_path).expect("temporary session database should open");
+        Migrations::from_slice(&MIGRATION_ENTRIES[..5])
+            .to_latest(&mut connection)
+            .expect("common schema should be created");
+        connection
+            .execute_batch(previous_schema)
+            .expect("previous version six table should be created");
+        connection
+            .pragma_update(None, "user_version", 6)
+            .expect("previous schema version should be stored");
+        drop(connection);
+
+        let connection = open_connection(temp_dir.path()).unwrap();
+        let (peer_messages_exist, proposals_exist): (bool, bool) = connection
+            .query_row(
+                "SELECT
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watch_web_peer_out_message'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_proposal')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+
+        assert_eq!((peer_messages_exist, proposals_exist), (true, true));
     }
 
     #[rstest]

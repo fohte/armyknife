@@ -4,7 +4,6 @@
 @import '@fohte/ui/tokens.css';
 @import './design-tokens.css';
 @import '@fontsource-variable/jetbrains-mono';
-@import './components/conversation-pane.css';
 @import './components/mobile-layout.css';
 @import '@fontsource-variable/noto-sans-jp/wght.css';
 
@@ -45,6 +44,7 @@
   flex: 1 1 auto;
   padding: 0 8px;
   background: var(--aw-bg-nav);
+  font-size: 13px;
 }
 
 .brand-row {
@@ -53,8 +53,8 @@
   height: 48px;
   padding: 0 8px;
   font-family: var(--font-mono);
-  font-size: var(--aw-font-size-body);
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .brand-mark {
@@ -71,8 +71,11 @@
 .view-switch {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2px;
+  gap: 0;
   height: 28px;
+  margin: 0 4px 12px;
+  padding: 2px;
+  background: var(--aw-border-row);
 }
 
 .view-switch-button,
@@ -85,11 +88,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 0;
   min-width: 0;
   padding: 0 8px;
   color: var(--aw-text-muted);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .view-switch-button:hover,
@@ -109,7 +112,7 @@
   padding: 0;
   color: var(--aw-color-warning);
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 12.5px;
 }
 
 .agent-watch-main {
@@ -254,7 +257,7 @@
   left: -1px;
   color: var(--aw-text-muted);
   content: '✓';
-  font-size: 10px;
+  font-size: 8px;
 }
 
 .session-content,
