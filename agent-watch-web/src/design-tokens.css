@@ -63,7 +63,7 @@
   --muted-foreground: var(--aw-text-disabled);
   --accent: var(--aw-bg-popover);
   --accent-foreground: var(--aw-text-primary);
-  --destructive: var(--aw-text-muted);
+  --destructive: var(--aw-color-error);
   --border: var(--aw-border);
   --input: var(--aw-border-control);
   --ring: var(--aw-border-emphasis);
@@ -106,6 +106,10 @@
   box-shadow: var(--aw-shadow);
   font-family: var(--font-sans);
   font-size: 12px;
+}
+
+.agent-watch-shell [data-slot='button'][class~='text-muted-foreground']:hover {
+  color: var(--aw-text-body);
 }
 
 .aw-button--outline {
