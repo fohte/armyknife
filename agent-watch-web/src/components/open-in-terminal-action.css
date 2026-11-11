@@ -1,0 +1,40 @@
+.conversation-open-in-terminal {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 1 auto;
+  align-items: center;
+}
+
+.conversation-terminal-action-status {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  box-sizing: border-box;
+  width: min(280px, calc(100vw - 32px));
+  max-height: 40vh;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-popover);
+  color: var(--aw-text-body);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  box-shadow: var(--aw-shadow);
+}
+
+.conversation-terminal-action-status[data-state='idle'] {
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: transparent;
+  clip-path: inset(50%);
+  box-shadow: none;
+  white-space: nowrap;
+}

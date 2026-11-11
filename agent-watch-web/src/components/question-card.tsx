@@ -13,8 +13,9 @@ import {
 
 import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { MarkdownMessage } from '#components/markdown-message'
+import { OpenInTerminalAction } from '#components/open-in-terminal-action'
 import { QuestionSendError } from '#components/question-send-error'
-import type { QuestionChoice } from '#types'
+import type { OpenInTerminalStatus, QuestionChoice } from '#types'
 
 type QuestionCardProps = {
   header?: string
@@ -26,6 +27,7 @@ type QuestionCardProps = {
   isMobile: boolean
   showTerminalFallback: boolean
   canOpenInTerminal: boolean
+  openInTerminalStatus?: OpenInTerminalStatus
   onAnswer: (choice: number) => Promise<boolean>
   onSkip: () => Promise<boolean>
   onFreeformAnswer: (answer: string) => Promise<boolean>
@@ -42,6 +44,7 @@ export function QuestionCard({
   isMobile,
   showTerminalFallback,
   canOpenInTerminal,
+  openInTerminalStatus = null,
   onAnswer,
   onSkip,
   onFreeformAnswer,
@@ -211,9 +214,11 @@ export function QuestionCard({
         <div className="conversation-terminal-fallback">
           <span>Answer in terminal to continue.</span>
           {canOpenInTerminal ? (
-            <Button type="button" variant="plain" onClick={onOpenInTerminal}>
-              Open in terminal
-            </Button>
+            <OpenInTerminalAction
+              status={openInTerminalStatus}
+              onClick={onOpenInTerminal}
+              announce={false}
+            />
           ) : null}
         </div>
       ) : null}
