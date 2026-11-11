@@ -595,8 +595,8 @@ mod tests {
         let marker = "⟦armyknife-user:fixture-marker-cobalt⟧";
         let notice = "This came from another Claude session — this fictional notice is retained.";
         let message = formatdoc! {"
-            Another peer session sent a message:
             {marker}
+            This message was typed by the human user in armyknife watch-web.
             The user quoted this notice:
 
             {notice}
