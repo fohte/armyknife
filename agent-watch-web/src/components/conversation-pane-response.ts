@@ -3,6 +3,7 @@ import type {
   ChatItem,
   ConversationResponse,
   SessionActions,
+  SessionTreeNode,
 } from '#types'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -207,5 +208,47 @@ export function isSessionActions(value: unknown): value is SessionActions {
       (isRecord(value['permission']) &&
         typeof value['permission']['approve'] === 'boolean' &&
         typeof value['permission']['reject'] === 'boolean'))
+  )
+}
+
+export function isSessionTreeResponse(
+  value: unknown,
+): value is { revision: number; sessions: SessionTreeNode[] } {
+  return (
+    isRecord(value) &&
+    typeof value['revision'] === 'number' &&
+    Number.isInteger(value['revision']) &&
+    Array.isArray(value['sessions']) &&
+    value['sessions'].every(
+      (session) =>
+        isRecord(session) &&
+        typeof session['id'] === 'string' &&
+        (session['parentId'] === null ||
+          typeof session['parentId'] === 'string') &&
+        typeof session['category'] === 'string' &&
+        typeof session['isActive'] === 'boolean' &&
+        (session['kind'] === null || typeof session['kind'] === 'string') &&
+        typeof session['title'] === 'string' &&
+        (session['preview'] === null ||
+          typeof session['preview'] === 'string') &&
+        typeof session['elapsedSeconds'] === 'number' &&
+        Number.isInteger(session['elapsedSeconds']) &&
+        (session['task'] === null ||
+          (isRecord(session['task']) &&
+            typeof session['task']['id'] === 'string' &&
+            typeof session['task']['number'] === 'number' &&
+            typeof session['task']['title'] === 'string' &&
+            (session['task']['priority'] === null ||
+              typeof session['task']['priority'] === 'number') &&
+            (session['task']['isClosed'] === undefined ||
+              typeof session['task']['isClosed'] === 'boolean'))) &&
+        typeof session['repo'] === 'string' &&
+        typeof session['decisionCount'] === 'number' &&
+        Number.isInteger(session['decisionCount']) &&
+        (session['pullRequest'] === null ||
+          (isRecord(session['pullRequest']) &&
+            typeof session['pullRequest']['number'] === 'number' &&
+            typeof session['pullRequest']['state'] === 'string')),
+    )
   )
 }

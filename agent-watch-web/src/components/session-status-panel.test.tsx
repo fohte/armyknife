@@ -84,6 +84,43 @@ it('shows the count for a single running item', () => {
   expect(snapshot).toEqual(['Running1', 'crit'])
 })
 
+it('keeps a related tree tab visible and colors pending descendants', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <SessionStatusPanel
+        tabs={[
+          {
+            id: 'tree',
+            label: 'Tree',
+            count: 1,
+            visible: true,
+            showCount: true,
+            countTone: 'warning',
+            content: 'Tree content',
+          },
+        ]}
+        activeTabId="tree"
+        onTabChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    )
+  })
+
+  const snapshot = () => ({
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    countClass: container.querySelector('.session-status-panel-count')
+      ?.className,
+    content: container.querySelector('[role="tabpanel"]')?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    tab: 'Tree1',
+    countClass:
+      'session-status-panel-count session-status-panel-count--warning',
+    content: 'Tree content',
+  })
+})
+
 it('closes the status panel from its tab bar', () => {
   const onClose = vi.fn()
   renderPanel('crit', undefined, onClose)

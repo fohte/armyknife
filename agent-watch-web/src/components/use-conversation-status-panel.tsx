@@ -5,13 +5,17 @@ import type { Decision } from '#components/decision-card'
 import { DecisionsPanel } from '#components/decisions-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
-import type { BackgroundTask, ChatItem, Session } from '#types'
+import { SessionTreePanel } from '#components/session-tree-panel'
+import { needsActionDescendantCount } from '#session-tree-model'
+import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
   session: Session
   messages: readonly ChatItem[]
   allDecisions?: readonly Decision[]
   backgroundTasks: readonly BackgroundTask[]
+  sessionTree?: readonly SessionTreeNode[] | null
+  onSelectSession?: (id: string) => void
   statusPanelOpen: boolean
   onAction: (
     action: string,
@@ -26,6 +30,8 @@ export function useConversationStatusPanel({
   messages,
   allDecisions,
   backgroundTasks,
+  sessionTree = null,
+  onSelectSession = () => undefined,
   statusPanelOpen,
   onAction,
   onCloseStatusPanel,
@@ -52,6 +58,10 @@ export function useConversationStatusPanel({
     session.critUrl !== ''
       ? session.critUrl
       : null
+  const treeCount =
+    sessionTree === null
+      ? 0
+      : needsActionDescendantCount(sessionTree, session.id)
   const tabs: readonly SessionStatusPanelTab[] = [
     ...(backgroundTasks.length > 0
       ? [
@@ -63,6 +73,25 @@ export function useConversationStatusPanel({
           },
         ]
       : []),
+    ...(sessionTree === null || sessionTree.length < 2
+      ? []
+      : [
+          {
+            id: 'tree',
+            label: 'Tree',
+            count: treeCount,
+            visible: true,
+            showCount: treeCount > 0,
+            countTone: 'warning' as const,
+            content: (
+              <SessionTreePanel
+                sessions={sessionTree}
+                selectedSessionId={session.id}
+                onSelectSession={onSelectSession}
+              />
+            ),
+          },
+        ]),
     ...(decisionCount > 0
       ? [
           {
