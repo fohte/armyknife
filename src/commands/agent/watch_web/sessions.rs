@@ -98,6 +98,8 @@ struct SessionView {
     later_until: Option<DateTime<Utc>>,
     is_today: bool,
     is_compacting: bool,
+    decision_count: i64,
+    unreviewed_decision_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -114,6 +116,7 @@ struct SessionSnapshot {
     web_states: Vec<store::WatchWebSessionState>,
     title_by_id: HashMap<String, String>,
     repo_by_id: HashMap<String, String>,
+    decision_counts: HashMap<String, store::AgentDecisionCounts>,
     unanswered_proposal_titles: HashMap<String, String>,
     agent_config: AgentConfig,
 }
@@ -172,10 +175,13 @@ fn router_with_source<S: SessionSource>(source: S) -> Router {
 async fn list_sessions<S: SessionSource>(
     State(source): State<S>,
 ) -> Result<Json<SessionsResponse>, StatusCode> {
-    let snapshot = source
-        .load_snapshot()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snapshot = match source.load_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load agent session list");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     let sessions_to_check = snapshot
         .sessions
@@ -310,6 +316,14 @@ async fn list_sessions<S: SessionSource>(
                 later_until: state.and_then(|state| state.later_until),
                 is_today: state.is_some_and(|state| state.is_today),
                 is_compacting: state.is_some_and(|state| state.is_compacting),
+                decision_count: snapshot
+                    .decision_counts
+                    .get(&session.session_id)
+                    .map_or(0, |counts| counts.total),
+                unreviewed_decision_count: snapshot
+                    .decision_counts
+                    .get(&session.session_id)
+                    .map_or(0, |counts| counts.unreviewed),
             }
         })
         .collect::<Vec<_>>();
@@ -344,6 +358,8 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .map(|session| (session.session_id.clone(), title_display_name(session)))
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
+    let sessions_dir = store::sessions_dir()?;
+    let decision_counts = store::agent_decision_counts_by_session_from(&sessions_dir)?;
     let mut unanswered_proposal_titles = HashMap::new();
     let visible_session_ids = sessions
         .iter()
@@ -362,6 +378,7 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         web_states: store::watch_web_session_states_from(&store::sessions_dir()?)?,
         title_by_id,
         repo_by_id,
+        decision_counts,
         unanswered_proposal_titles,
         agent_config: config::load_config_or_default().agent,
     })
@@ -583,6 +600,19 @@ fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategor
     }
 }
 
+pub(super) fn decision_category_is_done(
+    session: &Session,
+    agent_config: &AgentConfig,
+    state: Option<&store::WatchWebSessionState>,
+    now: DateTime<Utc>,
+) -> bool {
+    let turn = user_turns(std::iter::once(session), agent_config)
+        .into_iter()
+        .next()
+        .map(|turn| turn.kind);
+    category_for_with_later(session, turn, false, state, now) == SessionCategory::Done
+}
+
 fn category_for_with_later(
     session: &Session,
     turn: Option<UserTurnKind>,
@@ -794,6 +824,8 @@ mod tests {
             later_until: None,
             is_today: false,
             is_compacting: false,
+            decision_count: 0,
+            unreviewed_decision_count: 0,
         }
     }
 
@@ -810,6 +842,7 @@ mod tests {
         task_priority_order: HashMap<String, usize>,
         task_projects: HashMap<String, String>,
         pull_requests: HashMap<String, Option<PrInfo>>,
+        decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
         now: DateTime<Utc>,
     }
@@ -822,6 +855,7 @@ mod tests {
                 web_states: self.web_states.clone(),
                 title_by_id: self.title_by_id.clone(),
                 repo_by_id: self.repo_by_id.clone(),
+                decision_counts: self.decision_counts.clone(),
                 unanswered_proposal_titles: self.unanswered_proposal_titles.clone(),
                 agent_config: AgentConfig {
                     work_types: self
@@ -947,6 +981,13 @@ mod tests {
                     state: PrState::Open,
                     url: "https://example.com/pull/42".to_string(),
                 }),
+            )]),
+            decision_counts: HashMap::from([(
+                "child-session".to_string(),
+                store::AgentDecisionCounts {
+                    total: 4,
+                    unreviewed: 2,
+                },
             )]),
             work_type_nav_labels: HashMap::new(),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
@@ -1079,6 +1120,8 @@ mod tests {
                 "laterUntil": later_until,
                 "isToday": is_today,
                 "isCompacting": false,
+                "decisionCount": 4,
+                "unreviewedDecisionCount": 2,
                 "critUrl": details.crit_url
             }]
         })

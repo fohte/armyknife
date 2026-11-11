@@ -16,6 +16,7 @@ use super::super::store;
 use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 
+mod decisions;
 mod messages;
 mod proposal_answer_locks;
 mod proposals;
@@ -38,6 +39,14 @@ fn router_with_state(state: ActionState) -> Router {
             "/sessions/{id}/messages",
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
+        )
+        .route(
+            "/sessions/{id}/decisions/{seq}/ok",
+            post(decisions::mark_ok),
+        )
+        .route(
+            "/sessions/{id}/decisions/{seq}/change",
+            post(decisions::request_change),
         )
         .route(
             "/sessions/{id}/proposals/{seq}/answer",
@@ -154,6 +163,13 @@ impl ApiError {
         Self {
             status: StatusCode::NOT_FOUND,
             message: "session not found".to_string(),
+        }
+    }
+
+    fn decision_not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: "decision not found".to_string(),
         }
     }
 
@@ -484,6 +500,9 @@ mod tests {
 
     #[path = "send_message.rs"]
     mod send_message;
+
+    #[path = "decisions.rs"]
+    mod decisions;
 
     #[path = "proposals.rs"]
     mod proposals;

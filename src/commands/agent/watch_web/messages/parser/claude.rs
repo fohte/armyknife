@@ -19,7 +19,7 @@ use super::super::parser::{
     classifier::{self, MessageKind},
     for_each_jsonl_record, tool_target,
 };
-use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use background_tasks::{
     BackgroundTaskTracker, record_timestamp, task_notification_envelope, task_notification_text,
 };
@@ -66,6 +66,7 @@ fn parse_with_image_directory(
             image_directory,
             queued_prompts: &[],
             peer_out_messages: &[],
+            decisions: &[],
             proposals: &[],
         },
     )
@@ -73,7 +74,32 @@ fn parse_with_image_directory(
 }
 
 #[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks_and_peer_out_messages(
+fn parse_with_decisions_and_queued_prompts(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    decisions: &[AgentDecision],
+    queued_prompts: &[WatchWebQueuedPrompt],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        ParserAdditions {
+            decisions,
+            queued_prompts,
+            peer_out_messages: &[],
+            proposals: &[],
+        },
+    )
+}
+
+#[cfg(test)]
+fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -88,6 +114,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
         user_marker,
         now,
         ParserAdditions {
+            decisions: &[],
             queued_prompts: &[],
             peer_out_messages,
             proposals: &[],
@@ -97,31 +124,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
 }
 
 #[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages(
-    reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
-    now: DateTime<Utc>,
-    queued_prompts: &[WatchWebQueuedPrompt],
-    peer_out_messages: &[WatchWebPeerOutMessage],
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
-    parse_with_queued_prompts_and_peer_out_messages_and_proposals(
-        reader,
-        parent,
-        pending_tool,
-        user_marker,
-        now,
-        ParserAdditions {
-            queued_prompts,
-            peer_out_messages,
-            proposals: &[],
-        },
-    )
-}
-
-#[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_proposals(
+fn parse_with_queued_prompts_and_proposals(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -137,6 +140,7 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
         user_marker,
         now,
         ParserAdditions {
+            decisions: &[],
             queued_prompts,
             peer_out_messages: &[],
             proposals,
@@ -163,12 +167,14 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
             image_directory: image_directory.as_deref(),
             queued_prompts: additions.queued_prompts,
             peer_out_messages: additions.peer_out_messages,
+            decisions: additions.decisions,
             proposals: additions.proposals,
         },
     )
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
+    pub(in crate::commands::agent::watch_web::messages) decisions: &'a [AgentDecision],
     pub(in crate::commands::agent::watch_web::messages) queued_prompts:
         &'a [WatchWebQueuedPrompt],
     pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
@@ -180,6 +186,7 @@ struct ParseContext<'a> {
     image_directory: Option<&'a Path>,
     queued_prompts: &'a [WatchWebQueuedPrompt],
     peer_out_messages: &'a [WatchWebPeerOutMessage],
+    decisions: &'a [AgentDecision],
     proposals: &'a [(i64, ChatItem, bool)],
 }
 
@@ -225,6 +232,12 @@ fn parse_with_background_tasks_and_image_directory(
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
     let mut matched_peer_out_message_ids = HashSet::new();
     let mut background_tasks = BackgroundTaskTracker::default();
+    let mut unplaced_decisions = context
+        .decisions
+        .iter()
+        .cloned()
+        .map(|decision| (decision.seq, decision))
+        .collect::<BTreeMap<_, _>>();
 
     for_each_jsonl_record(&mut reader, |record| {
         let task_notification = task_notification_text(&record);
@@ -347,6 +360,27 @@ fn parse_with_background_tasks_and_image_directory(
                                     }
                                     super::append_peer_out(&mut items, peer);
                                 }
+                            } else if classifier::is_agent_add_tool(
+                                &tool_use.name,
+                                tool_use.input.as_ref(),
+                                "decision",
+                            ) {
+                                let text = block
+                                    .get("content")
+                                    .and_then(tool_result_text)
+                                    .unwrap_or_default();
+                                if !tool_result_failed(&record, block)
+                                    && let Some(seq) =
+                                        classifier::recorded_agent_add_seq(&text, "decision")
+                                    && let Some(decision) = unplaced_decisions.remove(&seq)
+                                {
+                                    tools.flush_into(&mut items);
+                                    items.push(decision.into());
+                                } else {
+                                    tools.record(&tool_use.name, tool_use.input.as_ref());
+                                    background_tasks
+                                        .complete_tool_use(&tool_use, &record, block, now);
+                                }
                             } else {
                                 let proposal = (tool_use.name == "Bash")
                                     .then(|| {
@@ -439,7 +473,9 @@ fn parse_with_background_tasks_and_image_directory(
                                     .and_then(Value::as_str)
                                     .unwrap_or_default();
                                 let input = block.get("input");
-                                if classifier::is_peer_notify_tool(name, input) {
+                                if classifier::is_peer_notify_tool(name, input)
+                                    || classifier::is_agent_add_tool(name, input, "decision")
+                                {
                                     tools.flush_into(&mut items);
                                     if let Some(id) = block.get("id").and_then(Value::as_str) {
                                         tool_uses.push(ToolUse {
@@ -498,6 +534,7 @@ fn parse_with_background_tasks_and_image_directory(
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
     items.extend(queue.pending_items(parent, user_marker, context.image_directory));
+    items.extend(unplaced_decisions.into_values().map(Into::into));
     let background_tasks = background_tasks.into_api_tasks(now);
     Ok((items, background_tasks, resolved_queued_prompt_ids))
 }
@@ -607,17 +644,18 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
+    use chrono::{TimeZone, Utc};
     use indoc::{formatdoc, indoc};
     use rstest::rstest;
     use serde_json::json;
 
     use super::{
-        parse, parse_with_image_directory, parse_with_queued_prompts_and_proposals,
-        recorded_proposal_seq,
+        parse, parse_with_decisions_and_queued_prompts, parse_with_image_directory,
+        parse_with_queued_prompts_and_proposals, recorded_proposal_seq,
     };
+    use crate::commands::agent::store::AgentDecision;
     use crate::commands::agent::watch_web::messages::{
         ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, UserContentPart,
     };
@@ -713,6 +751,197 @@ mod tests {
                 Vec::new(),
                 Vec::new(),
             ),
+        );
+    }
+
+    const FAILED_ADD_TRANSCRIPT: &str = indoc! {r#"
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+        {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","is_error":true,"content":"could not record the decision"}]}}
+    "#};
+    const UNRECOGNIZED_ADD_TRANSCRIPT: &str = indoc! {r#"
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+        {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded proposal 1"}]}}
+    "#};
+
+    fn decision(seq: i64) -> AgentDecision {
+        AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq,
+            title: format!("Decision {seq}"),
+            why: "The fixture keeps the example reversible.".to_string(),
+            considered: vec!["The other fixture option".to_string()],
+            easy_to_change: "Change one fixture value.".to_string(),
+            created_at: "2026-11-11T00:00:00Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        }
+    }
+
+    fn decision_item(seq: i64) -> ChatItem {
+        ChatItem::Decision {
+            seq,
+            title: format!("Decision {seq}"),
+            why: "The fixture keeps the example reversible.".to_string(),
+            considered: vec!["The other fixture option".to_string()],
+            easy_to_change: "Change one fixture value.".to_string(),
+            review: None,
+            created_at: "2026-11-11T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn places_a_recorded_decision_at_its_successful_add_call() {
+        let transcript = indoc! {r#"
+            {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 1"}]}}
+            {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+        "#};
+
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &[decision(1)],
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::Assistant {
+                    text: "Before the decision.".to_string(),
+                },
+                decision_item(1),
+                ChatItem::Assistant {
+                    text: "After the decision.".to_string(),
+                },
+            ],
+        );
+    }
+
+    fn assert_unplaced_decisions(transcript: &str) {
+        assert_eq!(
+            parse_with_decisions_and_queued_prompts(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc.timestamp_opt(1_000, 0).unwrap(),
+                &[decision(1), decision(2)],
+                &[],
+            )
+            .unwrap()
+            .0,
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("a agent decision add 'Decision 1'"),)],
+                },
+                decision_item(1),
+                decision_item(2),
+            ],
+        );
+    }
+
+    #[rstest]
+    #[case::failed_add(FAILED_ADD_TRANSCRIPT)]
+    #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT)]
+    fn appends_decisions_without_a_successful_recorded_result(#[case] transcript: &str) {
+        assert_unplaced_decisions(transcript);
+    }
+
+    #[rstest]
+    #[case::permission_requested(
+        "a agent decision add 'Decision 1'",
+        Some("Bash(a agent decision add 'Decision 1')"),
+        ChatItem::Permission {
+            tool: "Bash".to_string(),
+            description: "Bash: a agent decision add 'Decision 1'".to_string(),
+        }
+    )]
+    #[case::compound_bash_permission_requested(
+        "cd ./fixture && a agent decision add 'Decision 1'",
+        Some("Bash(cd ./fixture && a agent decision add 'Decision 1')"),
+        ChatItem::Permission {
+            tool: "Bash".to_string(),
+            description: "Bash: cd ./fixture && a agent decision add 'Decision 1'".to_string(),
+        }
+    )]
+    #[case::still_running(
+        "a agent decision add 'Decision 1'",
+        None,
+        ChatItem::ToolInProgress {
+            tool: "Bash".to_string(),
+            target: Some("a agent decision add 'Decision 1'".to_string()),
+        }
+    )]
+    fn pending_decision_add_keeps_normal_bash_status(
+        #[case] decision_command: &str,
+        #[case] pending_tool: Option<&str>,
+        #[case] pending_item: ChatItem,
+    ) {
+        let transcript = [
+            json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-completed-bash",
+                    "name": "Bash",
+                    "input": {"command": "echo prior work"},
+                }]},
+            })
+            .to_string(),
+            json!({
+                "type": "user",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-completed-bash",
+                    "content": "prior result",
+                }]},
+            })
+            .to_string(),
+            json!({
+                "type": "assistant",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-decision-call",
+                    "name": "Bash",
+                    "input": {"command": decision_command},
+                }]},
+            })
+            .to_string(),
+        ]
+        .join("\n");
+
+        assert_eq!(
+            parse(Cursor::new(transcript), None, pending_tool, None).unwrap(),
+            vec![
+                ChatItem::ToolSummary {
+                    summary: "1 action".to_string(),
+                    operations: vec![operation("Bash", Some("echo prior work"))],
+                },
+                pending_item,
+            ],
+        );
+    }
+
+    #[test]
+    fn serializes_decision_fields_using_the_api_contract_names() {
+        assert_eq!(
+            serde_json::to_value(decision_item(1)).unwrap(),
+            json!({
+                "type": "decision",
+                "seq": 1,
+                "title": "Decision 1",
+                "why": "The fixture keeps the example reversible.",
+                "considered": ["The other fixture option"],
+                "easyToChange": "Change one fixture value.",
+                "review": null,
+                "createdAt": "2026-11-11T00:00:00Z",
+            }),
         );
     }
 

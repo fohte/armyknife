@@ -115,6 +115,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         store::load_session,
         store::watch_web_user_marker,
         messages::RouteLoaders::new(
+            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
             |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
             |session_id| {
                 store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id)
@@ -157,6 +158,7 @@ fn app_with_assets_and_loader_and_restart_signal(
         load_session,
         load_user_marker,
         messages::RouteLoaders::new(
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),

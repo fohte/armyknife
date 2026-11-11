@@ -17,7 +17,9 @@ use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
 use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
-use crate::commands::agent::store::{AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
+use crate::commands::agent::store::{
+    AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -42,12 +44,15 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
 
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
+type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type PeerOutMessageLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 type ProposalLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync>;
 
+#[derive(Clone)]
 pub(super) struct RouteLoaders {
+    decisions: DecisionLoader,
     queued_prompts: QueuedPromptLoader,
     peer_out_messages: PeerOutMessageLoader,
     delete_queued_prompts: QueuedPromptDeleter,
@@ -56,6 +61,7 @@ pub(super) struct RouteLoaders {
 
 impl RouteLoaders {
     pub(super) fn new(
+        load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
         load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
         load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>>
         + Send
@@ -65,6 +71,7 @@ impl RouteLoaders {
         load_proposals: impl Fn(&str) -> Result<Vec<AgentProposal>> + Send + Sync + 'static,
     ) -> Self {
         Self {
+            decisions: Arc::new(load_decisions),
             queued_prompts: Arc::new(load_queued_prompts),
             peer_out_messages: Arc::new(load_peer_out_messages),
             delete_queued_prompts: Arc::new(delete_queued_prompts),
@@ -74,9 +81,10 @@ impl RouteLoaders {
 }
 
 #[cfg(test)]
-pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
+fn routes_with_decisions_and_queued_prompts_and_peer_out_messages(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     load_peer_out_messages: impl Fn(&str) -> Result<Vec<WatchWebPeerOutMessage>> + Send + Sync + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
@@ -85,6 +93,7 @@ pub(super) fn routes_with_queued_prompts_and_peer_out_messages(
         load_session,
         load_user_marker,
         RouteLoaders::new(
+            load_decisions,
             load_queued_prompts,
             load_peer_out_messages,
             delete_queued_prompts,
@@ -103,28 +112,15 @@ pub(super) fn routes_with_proposals_and_peer_out_messages(
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_user_marker) as UserMarkerLoader,
-            loaders.queued_prompts,
-            loaders.peer_out_messages,
-            loaders.delete_queued_prompts,
-            loaders.proposals,
+            loaders,
         ))
 }
 
 async fn get_messages(
-    State((
-        load_session,
-        load_user_marker,
-        load_queued_prompts,
-        load_peer_out_messages,
-        delete_queued_prompts,
-        load_proposals,
-    )): State<(
+    State((load_session, load_user_marker, loaders)): State<(
         SessionLoader,
         UserMarkerLoader,
-        QueuedPromptLoader,
-        PeerOutMessageLoader,
-        QueuedPromptDeleter,
-        ProposalLoader,
+        RouteLoaders,
     )>,
     AxumPath(session_id): AxumPath<String>,
 ) -> Response {
@@ -133,10 +129,7 @@ async fn get_messages(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
-            |id| load_queued_prompts(id),
-            |id| load_peer_out_messages(id),
-            |id, ids| delete_queued_prompts(id, ids),
-            |id| load_proposals(id),
+            &loaders,
         )
     })
     .await
@@ -170,26 +163,24 @@ fn load_messages_with(
     session_id: &str,
     load_session: impl FnMut(&str) -> Result<Option<Session>>,
 ) -> Result<Option<Vec<ChatItem>>> {
-    Ok(load_conversation_with_queued_prompts(
-        session_id,
-        load_session,
-        |_| Ok(None),
+    let loaders = RouteLoaders::new(
+        |_| Ok(Vec::new()),
         |_| Ok(Vec::new()),
         |_| Ok(Vec::new()),
         |_, _| Ok(()),
         |_| Ok(Vec::new()),
-    )?
-    .map(|conversation| conversation.messages))
+    );
+    Ok(
+        load_conversation_with_queued_prompts(session_id, load_session, |_| Ok(None), &loaders)?
+            .map(|conversation| conversation.messages),
+    )
 }
 
 fn load_conversation_with_queued_prompts(
     session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
-    load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
-    load_peer_out_messages: impl FnOnce(&str) -> Result<Vec<WatchWebPeerOutMessage>>,
-    delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
-    load_proposals: impl FnOnce(&str) -> Result<Vec<AgentProposal>>,
+    loaders: &RouteLoaders,
 ) -> Result<Option<ConversationResponse>> {
     let Some(session) = load_session(session_id)? else {
         return Ok(None);
@@ -199,17 +190,18 @@ fn load_conversation_with_queued_prompts(
     } else {
         None
     };
+    let decisions = (loaders.decisions)(session_id)?;
     let queued_prompts = if session.engine == Engine::Claude {
-        load_queued_prompts(session_id)?
+        (loaders.queued_prompts)(session_id)?
     } else {
         Vec::new()
     };
     let peer_out_messages = if session.engine == Engine::Claude {
-        load_peer_out_messages(session_id)?
+        (loaders.peer_out_messages)(session_id)?
     } else {
         Vec::new()
     };
-    let proposals = load_proposals(session_id)?;
+    let proposals = (loaders.proposals)(session_id)?;
     let proposal_items = proposals
         .iter()
         .map(proposal_chat_item)
@@ -230,6 +222,7 @@ fn load_conversation_with_queued_prompts(
             pending_tool,
             watch_web_user_marker: user_marker.as_deref(),
             additions: parser::claude::ParserAdditions {
+                decisions: &decisions,
                 queued_prompts: &queued_prompts,
                 peer_out_messages: &peer_out_messages,
                 proposals: &proposal_items,
@@ -277,7 +270,7 @@ fn load_conversation_with_queued_prompts(
     }
 
     if !resolved_queued_prompt_ids.is_empty()
-        && let Err(error) = delete_queued_prompts(session_id, &resolved_queued_prompt_ids)
+        && let Err(error) = (loaders.delete_queued_prompts)(session_id, &resolved_queued_prompt_ids)
     {
         tracing::warn!(
             session_id,
@@ -363,14 +356,38 @@ fn parse_session_transcript(
         }
         Engine::Codex => {
             let Some(path) = path else {
-                return Ok((ConversationResponse::default(), Vec::new()));
+                return Ok((
+                    ConversationResponse {
+                        messages: additions
+                            .decisions
+                            .iter()
+                            .cloned()
+                            .map(ChatItem::from)
+                            .collect(),
+                        background_tasks: Vec::new(),
+                    },
+                    Vec::new(),
+                ));
             };
             let Some(reader) = open_transcript(path, true)? else {
-                return Ok((ConversationResponse::default(), Vec::new()));
+                return Ok((
+                    ConversationResponse {
+                        messages: additions
+                            .decisions
+                            .iter()
+                            .cloned()
+                            .map(ChatItem::from)
+                            .collect(),
+                        background_tasks: Vec::new(),
+                    },
+                    Vec::new(),
+                ));
             };
+            let mut messages = parser::codex::parse(reader, parent)?;
+            messages.extend(additions.decisions.iter().cloned().map(ChatItem::from));
             Ok((
                 ConversationResponse {
-                    messages: parser::codex::parse(reader, parent)?,
+                    messages,
                     background_tasks: Vec::new(),
                 },
                 Vec::new(),
@@ -511,6 +528,31 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+    Decision {
+        seq: i64,
+        title: String,
+        why: String,
+        considered: Vec<String>,
+        #[serde(rename = "easyToChange")]
+        easy_to_change: String,
+        review: Option<String>,
+        #[serde(rename = "createdAt")]
+        created_at: String,
+    },
+}
+
+impl From<AgentDecision> for ChatItem {
+    fn from(decision: AgentDecision) -> Self {
+        Self::Decision {
+            seq: decision.seq,
+            title: decision.title,
+            why: decision.why,
+            considered: decision.considered,
+            easy_to_change: decision.easy_to_change,
+            review: decision.review,
+            created_at: decision.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -584,11 +626,12 @@ mod tests {
     use tower::ServiceExt;
 
     use super::{
-        ChatItem, QuestionChoice, load_messages_with,
-        routes_with_queued_prompts_and_peer_out_messages,
+        ChatItem, QuestionChoice, RouteLoaders, load_messages_with,
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages,
+        routes_with_proposals_and_peer_out_messages,
     };
     use crate::commands::agent::store::{
-        AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+        AgentDecision, AgentProposal, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
     };
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -626,14 +669,19 @@ mod tests {
             resolved_at: resolved.then_some(created_at),
         };
 
+        let proposals = vec![proposal];
+        let loaders = RouteLoaders::new(
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+            move |_| Ok(proposals.clone()),
+        );
         let conversation = super::load_conversation_with_queued_prompts(
             "fixture-session",
             |id| Ok((id == "fixture-session").then_some(session.clone())),
             |_| Ok(None),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-            |_| Ok(vec![proposal]),
+            &loaders,
         )
         .unwrap()
         .unwrap();
@@ -720,6 +768,325 @@ mod tests {
         )
         .unwrap();
         (status, content_type, body)
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_places_database_decisions_in_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+            "#},
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 5,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    review: Some("ok".to_string()),
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_places_decisions_and_proposals_in_transcript_order() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the records."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Between the records."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-proposal-call","name":"Bash","input":{"command":"a agent proposal add '<fixture-json>'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-proposal-call","content":"Recorded proposal 7"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"After the records."}]}}
+            "#},
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let decision = AgentDecision {
+            session_id: "fixture-session".to_string(),
+            seq: 5,
+            title: "Choose the fixture path".to_string(),
+            why: "The fixture remains reversible.".to_string(),
+            considered: vec!["Choose the other fixture path".to_string()],
+            easy_to_change: "Change one fixture value.".to_string(),
+            created_at: "2026-06-01T11:59:00Z".to_string(),
+            review: None,
+            reviewed_at: None,
+        };
+        let proposal = AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 7,
+            body: r#"{"title":"Choose a fixture option","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+            answer: None,
+            resolved_at: None,
+        };
+        let router = routes_with_proposals_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            RouteLoaders::new(
+                move |_| Ok(vec![decision.clone()]),
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_, _| Ok(()),
+                move |_| Ok(vec![proposal.clone()]),
+            ),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, content_type, body) = response_snapshot(response).await;
+
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {"type": "assistant", "text": "Before the records."},
+                        {
+                            "type": "decision",
+                            "seq": 5,
+                            "title": "Choose the fixture path",
+                            "why": "The fixture remains reversible.",
+                            "considered": ["Choose the other fixture path"],
+                            "easyToChange": "Change one fixture value.",
+                            "review": null,
+                            "createdAt": "2026-06-01T11:59:00Z",
+                        },
+                        {"type": "assistant", "text": "Between the records."},
+                        {
+                            "type": "proposal",
+                            "seq": 7,
+                            "title": "Choose a fixture option",
+                            "summary": null,
+                            "options": [
+                                {
+                                    "label": "Option A",
+                                    "description": null,
+                                    "pros": [],
+                                    "cons": [],
+                                    "recommended": false,
+                                },
+                                {
+                                    "label": "Option B",
+                                    "description": null,
+                                    "pros": [],
+                                    "cons": [],
+                                    "recommended": false,
+                                },
+                            ],
+                            "answer": null,
+                            "resolved": false,
+                        },
+                        {"type": "assistant", "text": "After the records."},
+                    ],
+                    "backgroundTasks": [],
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_combines_decisions_with_peer_out_messages() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let transcript = indoc::indoc! {r#"
+            {"type":"assistant","timestamp":"2026-06-01T12:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+            {"type":"user","timestamp":"2026-06-01T12:00:01Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+            {"type":"assistant","timestamp":"2026-06-01T12:00:02Z","message":{"content":[{"type":"tool_use","id":"fixture-peer-notify-call","name":"Bash","input":{"command":"a agent peer notify -m \"Requested fixture body.\" fixture-target-id"}}]}}
+            {"type":"user","timestamp":"2026-06-01T12:00:04Z","sourceToolAssistantUUID":"fixture-assistant-call","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-peer-notify-call","content":"delivered"}]}}
+        "#};
+        std::fs::write(&transcript_path, transcript).unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:00:03Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 5,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-06-01T11:59:00Z".to_string(),
+                    review: None,
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            move |_| {
+                Ok(vec![WatchWebPeerOutMessage {
+                    id: 1,
+                    from_session_id: "fixture-session".to_string(),
+                    to_session_id: "fixture-target-id".to_string(),
+                    content: "Expanded fixture body.".to_string(),
+                    sent_at,
+                }])
+            },
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let (status, content_type, body) = response_snapshot(response).await;
+
+        assert_eq!(
+            (
+                status,
+                content_type,
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+            ),
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": [
+                        {
+                            "type": "decision",
+                            "seq": 5,
+                            "title": "Choose the fixture path",
+                            "why": "The fixture remains reversible.",
+                            "considered": ["Choose the other fixture path"],
+                            "easyToChange": "Change one fixture value.",
+                            "review": null,
+                            "createdAt": "2026-06-01T11:59:00Z",
+                        },
+                        {
+                            "type": "peer",
+                            "direction": "to",
+                            "session_id": "fixture-target-id",
+                            "content": [{
+                                "type": "text",
+                                "text": "Expanded fixture body.",
+                            }],
+                        },
+                    ],
+                    "backgroundTasks": [],
+                }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_message_route_appends_database_decisions_after_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Existing Codex message."}]}}"#,
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 1,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    review: None,
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
     }
 
     fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {
@@ -922,7 +1289,7 @@ mod tests {
         parent.session_id = "fixture-parent-id".to_string();
         parent.label = Some("Fixture parent".to_string());
 
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
@@ -931,6 +1298,7 @@ mod tests {
                 })
             },
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -977,9 +1345,10 @@ mod tests {
         let sent_at = chrono::DateTime::parse_from_rfc3339(sent_at)
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             move |from| {
                 Ok(if from == "fixture-session" {
@@ -1035,9 +1404,10 @@ mod tests {
         let mut session = stored_session();
         session.current_tool = Some("AskUserQuestion".to_string());
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| Ok((id == "fixture-session").then(|| session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1075,9 +1445,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1108,9 +1479,10 @@ mod tests {
         let queued = saved_prompt(7, "Continue the fixture build.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -1158,9 +1530,10 @@ mod tests {
         let queued = saved_prompt(7, "Delivered fixture request.");
         let deleted_ids = Arc::new(Mutex::new(Vec::new()));
         let delete_log = Arc::clone(&deleted_ids);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(Some("⟦armyknife-user:fixture-marker-cobalt⟧".to_string())),
+            |_| Ok(Vec::new()),
             move |_| Ok(vec![queued.clone()]),
             |_| Ok(Vec::new()),
             move |_, ids| {
@@ -1198,9 +1571,10 @@ mod tests {
     async fn codex_message_route_does_not_load_saved_claude_prompts() {
         let mut session = stored_session();
         session.engine = Engine::Codex;
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Err(anyhow::anyhow!("Codex must not load Claude prompts")),
             |_| Ok(Vec::new()),
             |_, _| Err(anyhow::anyhow!("Codex must not delete Claude prompts")),
@@ -1278,9 +1652,10 @@ mod tests {
 
         let mut session = stored_session();
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -1336,9 +1711,10 @@ mod tests {
         let mut session = stored_session();
         session.engine = Engine::Codex;
         session.transcript_path = Some(transcript_path);
-        let router = routes_with_queued_prompts_and_peer_out_messages(
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |_| Ok(Some(session.clone())),
             |_| Ok(None),
+            |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
