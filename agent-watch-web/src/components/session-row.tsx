@@ -17,6 +17,7 @@ type SessionRowProps = {
   onToggleToday?: (id: string, isToday: boolean) => void
   compactRepo?: boolean
   actionsVisible?: boolean
+  isMobile?: boolean
 }
 
 function formatElapsedTime(totalSeconds: number) {
@@ -82,6 +83,7 @@ export function SessionRow({
   onToggleToday,
   compactRepo = false,
   actionsVisible = false,
+  isMobile = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
   const taskLabel = sessionTaskLabel(session)
@@ -140,10 +142,18 @@ export function SessionRow({
                     <span className="session-task-reference">
                       {taskLabel.reference}
                     </span>
-                    {` · ${taskLabel.title}${taskLabel.linkedTaskCount}`}
+                    {`${isMobile ? ' ' : ' · '}${taskLabel.title}${taskLabel.linkedTaskCount}`}
                   </>
                 )}
               </span>
+              {isMobile ? (
+                <span
+                  className="mobile-session-meta-separator"
+                  aria-hidden="true"
+                >
+                  ·
+                </span>
+              ) : null}
               <span className="session-repo">
                 {compactRepo
                   ? session.repo.split('/').at(-1)
@@ -155,37 +165,41 @@ export function SessionRow({
             </span>
           </span>
         </Button>
-        <div className="session-row-actions">
-          {onToggleToday ? (
-            <Button
-              type="button"
-              variant="plain"
-              aria-label={
-                session.isToday === true ? 'Remove from TODAY' : 'Add to TODAY'
-              }
-              aria-pressed={session.isToday ?? false}
-              className="session-action-button cursor-pointer"
-              onClick={() => {
-                onToggleToday(session.id, session.isToday !== true)
-              }}
-            >
-              {session.isToday === true ? '★' : '☆'}
-            </Button>
-          ) : null}
-          {onLater ? (
-            <Button
-              type="button"
-              variant="plain"
-              aria-label={`Later: ${session.title}`}
-              className="session-action-button cursor-pointer"
-              onClick={() => {
-                onLater(session.id)
-              }}
-            >
-              ◷
-            </Button>
-          ) : null}
-        </div>
+        {!isMobile ? (
+          <div className="session-row-actions">
+            {onToggleToday ? (
+              <Button
+                type="button"
+                variant="plain"
+                aria-label={
+                  session.isToday === true
+                    ? 'Remove from TODAY'
+                    : 'Add to TODAY'
+                }
+                aria-pressed={session.isToday ?? false}
+                className="session-action-button cursor-pointer"
+                onClick={() => {
+                  onToggleToday(session.id, session.isToday !== true)
+                }}
+              >
+                {session.isToday === true ? '★' : '☆'}
+              </Button>
+            ) : null}
+            {onLater ? (
+              <Button
+                type="button"
+                variant="plain"
+                aria-label={`Later: ${session.title}`}
+                className="session-action-button cursor-pointer"
+                onClick={() => {
+                  onLater(session.id)
+                }}
+              >
+                ◷
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </li>
   )

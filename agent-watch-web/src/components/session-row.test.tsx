@@ -26,7 +26,7 @@ const session: Session = {
   pullRequest: null,
 }
 
-function renderRow(viewSession: Session) {
+function renderRow(viewSession: Session, isMobile = false) {
   root = createRoot(container)
   act(() => {
     root?.render(
@@ -35,6 +35,8 @@ function renderRow(viewSession: Session) {
           session={viewSession}
           selected={false}
           onSelect={() => undefined}
+          compactRepo={isMobile}
+          isMobile={isMobile}
         />
       </ul>,
     )
@@ -46,6 +48,15 @@ function snapshot() {
     badge: container.querySelector('[data-slot="chip"]')?.textContent,
     age: container.querySelector('.session-age')?.textContent,
     task: container.querySelector('.session-task')?.textContent,
+  }
+}
+
+function mobileMetaSnapshot() {
+  return {
+    task: container.querySelector('.session-task')?.textContent,
+    separator: container.querySelector('.mobile-session-meta-separator')
+      ?.textContent,
+    repo: container.querySelector('.session-repo')?.textContent,
   }
 }
 
@@ -116,6 +127,27 @@ it('shows the primary tq task and the number of other linked tasks', () => {
   expect(container.querySelector('.session-task')?.textContent).toBe(
     'P1 #2048 · Improve request reliability +1',
   )
+})
+
+it('keeps the task, separator, and repository together on an iPhone row', () => {
+  renderRow(
+    {
+      ...session,
+      task: {
+        id: 'open-task',
+        number: 2048,
+        title: 'Improve request reliability',
+        priority: 1,
+      },
+    },
+    true,
+  )
+
+  expect(mobileMetaSnapshot()).toEqual({
+    task: 'P1 #2048 Improve request reliability',
+    separator: '·',
+    repo: 'service',
+  })
 })
 
 it.each([

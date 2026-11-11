@@ -140,6 +140,10 @@ function renderView(
   } | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
+  today: {
+    isToday: boolean
+    onToggleToday: (isToday: boolean) => void
+  } = { isToday: false, onToggleToday: () => undefined },
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -156,6 +160,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        isToday={today.isToday}
+        onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
         decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
@@ -166,6 +172,50 @@ function renderView(
     )
   })
 }
+
+function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  return {
+    label: toggle?.getAttribute('aria-label'),
+    pressed: toggle?.getAttribute('aria-pressed'),
+    calls: onToggleToday.mock.calls,
+  }
+}
+
+it('toggles TODAY from the iPhone conversation header', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: false, onToggleToday },
+  )
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  act(() => {
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Add to TODAY',
+    pressed: 'false',
+    calls: [[true]],
+  })
+})
 
 function dispatchKey(
   target: EventTarget,
