@@ -44,6 +44,14 @@ const actions: SessionActions = {
   openInTerminal: true,
 }
 
+const codexTerminalActions: SessionActions = {
+  message: true,
+  answerQuestion: false,
+  permission: { approve: false, reject: false },
+  interrupt: true,
+  openInTerminal: true,
+}
+
 const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
@@ -78,6 +86,13 @@ const proposal: ChatItem = {
 
 function messagesResponse(messages: unknown, backgroundTasks: unknown = []) {
   return { messages, backgroundTasks }
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
 }
 
 const permission: ChatItem = {
@@ -119,6 +134,13 @@ async function waitForState(condition: () => boolean) {
     }
   })
   return condition()
+}
+
+function terminalFeedback() {
+  return Array.from(
+    container.querySelectorAll('.conversation-terminal-action-status'),
+    (element) => element.textContent,
+  ).filter((text) => text !== '')
 }
 
 function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
@@ -306,6 +328,7 @@ afterEach(() => {
   if (root !== null) act(() => root?.unmount())
   root = null
   container.remove()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   if (originalExecCommand === undefined) {
@@ -353,7 +376,8 @@ it('shows pending and sent permission action feedback', () => {
       disabled: Array.from(
         card.querySelectorAll<HTMLButtonElement>('button'),
       ).map((button) => button.disabled),
-      status: card.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        card.querySelector('.permission-action-status')?.textContent ?? null,
     })),
   }
 
@@ -369,7 +393,8 @@ it('shows pending and sent permission action feedback', () => {
         disabled: Array.from(
           card.querySelectorAll<HTMLButtonElement>('button'),
         ).map((button) => button.disabled),
-        status: card.querySelector('[role="status"]')?.textContent ?? null,
+        status:
+          card.querySelector('.permission-action-status')?.textContent ?? null,
       })),
     },
   })
@@ -590,7 +615,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
   const snapshot = () => ({
     buttonText: copyButton.textContent,
     accessibleName: copyButton.getAttribute('aria-label'),
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     buttonText: 'Copy failed',
@@ -634,7 +659,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     copyCalls: copyCommand.mock.calls,
     temporaryTextareaCount: document.body.querySelectorAll('textarea').length,
     buttonText: copyButton.textContent,
-    liveStatus: container.querySelector('[role="status"]')?.textContent,
+    liveStatus: container.querySelector('.sr-only[role="status"]')?.textContent,
   })
   expect(snapshot()).toEqual({
     copyCalls: [['copy']],
@@ -3317,7 +3342,8 @@ it('keeps the composer usable when browser storage is unavailable', () => {
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
-    storageNotice: container.querySelector('[role="status"]')?.textContent,
+    storageNotice: container.querySelector('.conversation-error[role="status"]')
+      ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
@@ -3340,7 +3366,8 @@ it('reports when a draft cannot be saved after loading storage succeeds', () => 
   const snapshot = () => ({
     draft: textarea.value,
     composerVisible: textarea.isConnected,
-    storageNotice: container.querySelector('[role="status"]')?.textContent,
+    storageNotice: container.querySelector('.conversation-error[role="status"]')
+      ?.textContent,
   })
   expect(snapshot()).toEqual({
     draft: 'Keep editing in memory',
@@ -3416,7 +3443,9 @@ it('blocks duplicate sends and shows their pending status', async () => {
     buttonDisabled: sendButton.disabled,
     defaultPrevented: events.map((event) => event.defaultPrevented),
     draft: textarea.value,
-    status: container.querySelector('[role="status"]')?.textContent ?? null,
+    status:
+      container.querySelector('.composer-footer [role="status"]')
+        ?.textContent ?? null,
   })
   const pendingSnapshot = duringSend()
 
@@ -3430,7 +3459,9 @@ it('blocks duplicate sends and shows their pending status', async () => {
     afterSend: {
       buttonDisabled: sendButton.disabled,
       draft: textarea.value,
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.composer-footer [role="status"]')
+          ?.textContent ?? null,
     },
   })
   const expected = {
@@ -3694,7 +3725,9 @@ it.each([
           '.permission-actions button',
         ),
       ).map((button) => button.disabled),
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.permission-action-status')?.textContent ??
+        null,
     }
     const actionRequest = fetcher.mock.calls[2]?.[0]
     const actionRequestUrl =
@@ -3721,7 +3754,9 @@ it.each([
       permissionButtons: container.querySelectorAll(
         '.permission-actions button',
       ).length,
-      status: container.querySelector('[role="status"]')?.textContent ?? null,
+      status:
+        container.querySelector('.permission-action-status')?.textContent ??
+        null,
     }
 
     act(() => {
@@ -3744,7 +3779,9 @@ it.each([
       afterCapabilityDisappears,
       afterCardDisappears: {
         permissionCard: container.querySelector('.chat-permission-card'),
-        status: container.querySelector('[role="status"]')?.textContent ?? null,
+        status:
+          container.querySelector('.permission-action-status')?.textContent ??
+          null,
       },
     })
     expect(snapshot()).toEqual({
@@ -4077,6 +4114,398 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
   })
 })
 
+it('shows terminal switch progress and success without reloading messages', async () => {
+  let resolveFocus: ((response: Response) => void) | undefined
+  const focusResponse = new Promise<Response>((resolve) => {
+    resolveFocus = resolve
+  })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockReturnValueOnce(focusResponse)
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const initialLiveRegions = Array.from(
+    container.querySelectorAll('.conversation-terminal-action-status'),
+  )
+
+  const terminalButtons = () =>
+    Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '.conversation-open-in-terminal button',
+      ),
+    )
+  act(() => {
+    terminalButtons()[0]?.click()
+  })
+  const pendingSnapshot = () => ({
+    feedback: terminalFeedback(),
+    disabled: terminalButtons().map((button) => button.disabled),
+  })
+  const pending = pendingSnapshot()
+
+  await act(async () => {
+    resolveFocus?.(new Response(null, { status: 204 }))
+    await focusResponse
+  })
+  const successSnapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+    liveRegions: initialLiveRegions.map((element, index) => ({
+      sameElement:
+        element ===
+        container.querySelectorAll('.conversation-terminal-action-status')[
+          index
+        ],
+      role: element.getAttribute('role'),
+      ariaLive: element.getAttribute('aria-live'),
+      ariaAtomic: element.getAttribute('aria-atomic'),
+      ariaHidden: element.getAttribute('aria-hidden'),
+    })),
+    announcementCount: container.querySelectorAll(
+      '.conversation-terminal-action-status[role="status"][aria-live="polite"]',
+    ).length,
+  })
+  const success = successSnapshot()
+  const snapshot = () => ({ pending, success })
+  const expected = {
+    pending: {
+      feedback: ['Switching tmux…', 'Switching tmux…', 'Switching tmux…'],
+      disabled: [true, true, true],
+    },
+    success: {
+      feedback: [
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+        'Tmux switched to this session.',
+      ],
+      requests: [
+        '/api/sessions/sample-session/messages',
+        '/api/sessions/sample-session/actions',
+        '/api/sessions/sample-session/focus',
+      ],
+      liveRegions: [
+        {
+          sameElement: true,
+          role: 'status',
+          ariaLive: 'polite',
+          ariaAtomic: 'true',
+          ariaHidden: null,
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+        {
+          sameElement: true,
+          role: null,
+          ariaLive: null,
+          ariaAtomic: null,
+          ariaHidden: 'true',
+        },
+      ],
+      announcementCount: 1,
+    },
+  }
+  expect(snapshot()).toEqual(expected)
+})
+
+it('shows the server reason beside every terminal action when switching fails', async () => {
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockResolvedValueOnce(
+      jsonResponse({ error: 'The terminal session is unavailable.' }, 503),
+    )
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    feedback: [
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+      'Could not switch tmux: The terminal session is unavailable.',
+    ],
+    requests: [
+      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
+  })
+})
+
+it('ignores a terminal result after the conversation switches sessions', async () => {
+  let resolveFocus: ((response: Response) => void) | undefined
+  const focusResponse = new Promise<Response>((resolve) => {
+    resolveFocus = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+    if (url.endsWith('/messages')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([question, permission])),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(codexTerminalActions))
+    }
+    return focusResponse
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          id: 'next-session',
+          title: 'A later session',
+          engine: 'Codex',
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await act(async () => {
+    resolveFocus?.(new Response(null, { status: 204 }))
+    await focusResponse
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    feedback: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    feedback: [],
+    requests: [
+      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+      '/api/sessions/next-session/messages',
+      '/api/sessions/next-session/actions',
+    ],
+  })
+})
+
+it('hides successful terminal feedback after three seconds', async () => {
+  vi.useFakeTimers()
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(messagesResponse([question, permission])),
+    )
+    .mockResolvedValueOnce(jsonResponse(codexTerminalActions))
+    .mockResolvedValueOnce(new Response(null, { status: 204 }))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const visibleFeedback = terminalFeedback()
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(3_000)
+  })
+
+  const snapshot = () => ({
+    visibleFeedback,
+    feedbackAfterTimeout: terminalFeedback(),
+    requests: fetcher.mock.calls.map(([url]) => url),
+  })
+  expect(snapshot()).toEqual({
+    visibleFeedback: [
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+      'Tmux switched to this session.',
+    ],
+    feedbackAfterTimeout: [],
+    requests: [
+      '/api/sessions/sample-session/messages',
+      '/api/sessions/sample-session/actions',
+      '/api/sessions/sample-session/focus',
+    ],
+  })
+})
+
+it('clears terminal feedback timers when the session changes or unmounts', async () => {
+  vi.useFakeTimers()
+  const fetcher = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url
+    if (url.endsWith('/messages')) {
+      return Promise.resolve(
+        jsonResponse(messagesResponse([question, permission])),
+      )
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(codexTerminalActions))
+    }
+    return Promise.resolve(new Response(null, { status: 204 }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, engine: 'Codex' }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const baselineTimers = vi.getTimerCount()
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersAfterFirstSuccess = vi.getTimerCount() - baselineTimers
+
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{
+          ...session,
+          id: 'next-session',
+          title: 'A later session',
+          engine: 'Codex',
+        }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersAfterSessionSwitch = vi.getTimerCount() - baselineTimers
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('.conversation-open-in-terminal button')
+      ?.click()
+  })
+  await act(async () => {
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  const timersBeforeUnmount = vi.getTimerCount() - baselineTimers
+  act(() => {
+    root?.unmount()
+  })
+  root = null
+
+  const snapshot = () => ({
+    timersAfterFirstSuccess,
+    timersAfterSessionSwitch,
+    timersBeforeUnmount,
+    timersAfterUnmount: vi.getTimerCount() - baselineTimers,
+  })
+  expect(snapshot()).toEqual({
+    timersAfterFirstSuccess: 1,
+    timersAfterSessionSwitch: 0,
+    timersBeforeUnmount: 1,
+    timersAfterUnmount: 0,
+  })
+})
+
 it('keeps question and permission actions active after a refresh error', async () => {
   const jsonResponse = (body: unknown) =>
     new Response(JSON.stringify(body), {
@@ -4256,6 +4685,7 @@ it('skips committing an unchanged memoized conversation row', () => {
     decisionPosition: undefined,
     message,
     pendingAction: null,
+    openInTerminalStatus: null,
     sessionEngine: 'Claude' as const,
     sessions,
     onAction,

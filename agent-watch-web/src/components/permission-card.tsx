@@ -3,7 +3,8 @@ import '#components/permission-card.css'
 
 import { Button } from '@fohte/ui/button'
 
-import type { ChatItem, SessionActions } from '#types'
+import { OpenInTerminalAction } from '#components/open-in-terminal-action'
+import type { ChatItem, OpenInTerminalStatus, SessionActions } from '#types'
 
 export type PendingPermissionAction = {
   action: 'approve' | 'reject'
@@ -22,6 +23,7 @@ type PermissionCardProps = {
   actions: SessionActions | null
   actionsReady: boolean
   pendingAction: PendingPermissionAction
+  openInTerminalStatus?: OpenInTerminalStatus
   isCodex: boolean
   onAction: (
     action: 'permission/approve' | 'permission/reject',
@@ -35,6 +37,7 @@ export function PermissionCard({
   actions,
   actionsReady,
   pendingAction,
+  openInTerminalStatus = null,
   isCodex,
   onAction,
   onOpenInTerminal,
@@ -100,9 +103,11 @@ export function PermissionCard({
         <div className="conversation-terminal-fallback">
           <span>Review this permission in terminal.</span>
           {actions.openInTerminal ? (
-            <Button type="button" variant="plain" onClick={onOpenInTerminal}>
-              Open in terminal
-            </Button>
+            <OpenInTerminalAction
+              status={openInTerminalStatus}
+              onClick={onOpenInTerminal}
+              announce={false}
+            />
           ) : null}
         </div>
       ) : null}

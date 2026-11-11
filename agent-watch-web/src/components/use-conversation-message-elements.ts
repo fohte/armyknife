@@ -4,6 +4,7 @@ import { ConversationMessageRow } from '#components/conversation-message-row'
 import type { PendingPermissionAction } from '#components/permission-card'
 import type {
   ChatItem,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -24,6 +25,7 @@ type UseConversationMessageElementsOptions = {
     payload?: Record<string, unknown>,
   ) => Promise<boolean>
   onOpenInTerminal: () => void
+  openInTerminalStatus: OpenInTerminalStatus
   onSelectSession: (id: string) => void
   pendingAction: PendingPermissionAction
   sessions: readonly SessionLinkTarget[]
@@ -41,6 +43,7 @@ export function useConversationMessageElements({
   onSelectDecision,
   onAction,
   onOpenInTerminal,
+  openInTerminalStatus,
   onSelectSession,
   pendingAction,
   sessions,
@@ -105,6 +108,7 @@ export function useConversationMessageElements({
         onOpenInTerminal,
         onSelectSession,
         pendingAction: messagePendingAction,
+        openInTerminalStatus,
         sessionEngine,
         sessions,
       })
@@ -126,6 +130,7 @@ export function useConversationMessageElements({
     onOpenInTerminal,
     onSelectDecision,
     onSelectSession,
+    openInTerminalStatus,
     pendingAction,
     selectedDecisionSeq,
     sessionCategory,

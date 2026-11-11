@@ -35,6 +35,7 @@ function areConversationMessagePropsEqual(
         previous.actionsReady === next.actionsReady &&
         previous.onAction === next.onAction &&
         previous.onOpenInTerminal === next.onOpenInTerminal &&
+        previous.openInTerminalStatus === next.openInTerminalStatus &&
         previous.sessionEngine === next.sessionEngine
       )
     case 'decision':
@@ -53,6 +54,7 @@ function areConversationMessagePropsEqual(
         previous.pendingAction === next.pendingAction &&
         previous.onAction === next.onAction &&
         previous.onOpenInTerminal === next.onOpenInTerminal &&
+        previous.openInTerminalStatus === next.openInTerminalStatus &&
         previous.sessionEngine === next.sessionEngine
       )
     case 'event':

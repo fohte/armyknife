@@ -34,6 +34,7 @@ const meta = {
       text: 'The retry flow is ready for review.',
     } satisfies ChatItem,
     pendingAction: null,
+    openInTerminalStatus: null,
     sessionEngine: 'Claude',
     sessions,
     ...callbacks,

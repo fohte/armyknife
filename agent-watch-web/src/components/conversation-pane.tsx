@@ -8,10 +8,9 @@ import {
 import {
   isConversationResponse,
   isSessionActions,
-  requestAction,
-  requestJson,
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { requestAction, requestJson } from '#components/conversation-requests'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
@@ -19,7 +18,13 @@ import type {
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
-import type { BackgroundTask, ChatItem, Session, SessionActions } from '#types'
+import type {
+  BackgroundTask,
+  ChatItem,
+  OpenInTerminalStatus,
+  Session,
+  SessionActions,
+} from '#types'
 
 const EMPTY_SESSIONS: readonly Session[] = []
 
@@ -61,7 +66,18 @@ export function ConversationPane({
   const [error, setError] = useState<string | null>(null)
   const [pendingPermissionAction, setPendingPermissionAction] =
     useState<PendingPermissionAction>(null)
+  const [openInTerminalStatus, setOpenInTerminalStatus] =
+    useState<OpenInTerminalStatus>(null)
+  const currentSessionId = useRef(session.id)
+  currentSessionId.current = session.id
+  const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const clearOpenInTerminalTimer = useCallback(() => {
+    if (openInTerminalTimer.current !== null) {
+      window.clearTimeout(openInTerminalTimer.current)
+      openInTerminalTimer.current = null
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
@@ -136,7 +152,35 @@ export function ConversationPane({
 
   useEffect(() => {
     setPendingPermissionAction(null)
-  }, [session.id])
+    setOpenInTerminalStatus(null)
+    clearOpenInTerminalTimer()
+    return clearOpenInTerminalTimer
+  }, [clearOpenInTerminalTimer, session.id])
+
+  const onOpenInTerminal = useCallback(() => {
+    const requestedSessionId = session.id
+    clearOpenInTerminalTimer()
+    setOpenInTerminalStatus({ state: 'sending' })
+    void requestAction(requestedSessionId, 'focus').match(
+      () => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({ state: 'success' })
+        openInTerminalTimer.current = window.setTimeout(() => {
+          if (currentSessionId.current === requestedSessionId) {
+            setOpenInTerminalStatus(null)
+          }
+          openInTerminalTimer.current = null
+        }, 3_000)
+      },
+      (requestError) => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({
+          state: 'error',
+          message: requestError.message,
+        })
+      },
+    )
+  }, [clearOpenInTerminalTimer, session.id])
 
   const onAction = useCallback(
     (
@@ -217,12 +261,14 @@ export function ConversationPane({
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}
+      openInTerminalStatus={openInTerminalStatus}
       loading={loading}
       error={error}
       onClearError={() => {
         setError(null)
       }}
       onAction={onAction}
+      onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
