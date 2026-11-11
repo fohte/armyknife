@@ -71,19 +71,28 @@ export function ToolSummary({
                   : 'false'
               }
               data-failed={operation.failed === true ? 'true' : 'false'}
+              data-has-status={
+                operation.failed === undefined && failedSuffix !== undefined
+                  ? 'false'
+                  : undefined
+              }
             >
               <span className="chat-tool-name">{operation.tool}</span>
               {typeof operation.target === 'string' &&
               operation.target.length > 0 ? (
                 <code className="chat-tool-target">{operation.target}</code>
               ) : null}
-              <span
-                className="chat-tool-operation-status"
-                role="img"
-                aria-label={operation.failed === true ? 'Failed' : 'Succeeded'}
-              >
-                {operation.failed === true ? '✕' : '✓'}
-              </span>
+              {operation.failed !== undefined || failedSuffix === undefined ? (
+                <span
+                  className="chat-tool-operation-status"
+                  role="img"
+                  aria-label={
+                    operation.failed === true ? 'Failed' : 'Succeeded'
+                  }
+                >
+                  {operation.failed === true ? '✕' : '✓'}
+                </span>
+              ) : null}
             </li>
           ))}
         </ul>

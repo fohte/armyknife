@@ -179,9 +179,6 @@ impl ToolSummary {
                 .into_iter()
                 .map(|(tool, count)| format!("{tool} ×{count}")),
         );
-        if summary_parts.is_empty() {
-            summary_parts.push(format!("{} tool calls", self.actions));
-        }
         let failed_count = self
             .operations
             .iter()

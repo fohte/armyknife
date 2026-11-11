@@ -257,17 +257,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_command_execution_items_with_the_rollout_type_name() {
-        let transcript = indoc! {r#"
-            {"type":"event_msg","payload":{"type":"item_completed","item":{"type":"CommandExecution","id":"fixture-command","command":"echo fixture","cwd":"/fixture/project","duration":1,"exit_code":0,"status":"completed"}}}
-        "#};
+    #[rstest]
+    #[case::successful_exit(0, false)]
+    #[case::nonzero_exit(1, true)]
+    fn parses_command_execution_exit_codes(#[case] exit_code: i32, #[case] failed: bool) {
+        let transcript = serde_json::json!({
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "item": {
+                    "type": "CommandExecution",
+                    "id": "fixture-command",
+                    "command": "echo fixture",
+                    "cwd": "/fixture/project",
+                    "duration": 1,
+                    "exit_code": exit_code,
+                },
+            },
+        })
+        .to_string();
 
         assert_eq!(
             parse(Cursor::new(transcript), None).unwrap(),
             vec![ChatItem::ToolSummary {
-                summary: "CommandExecution ×1".to_string(),
-                operations: vec![operation("CommandExecution", Some("echo fixture"))],
+                summary: if failed {
+                    "CommandExecution ×1 · 1 failed".to_string()
+                } else {
+                    "CommandExecution ×1".to_string()
+                },
+                operations: vec![operation_with_failure(
+                    "CommandExecution",
+                    Some("echo fixture"),
+                    failed,
+                )],
             }]
         );
     }

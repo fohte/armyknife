@@ -80,6 +80,14 @@
   grid-template-columns: 44px 16px;
 }
 
+.chat-tool-operations li[data-has-target='true'][data-has-status='false'] {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.chat-tool-operations li[data-has-target='false'][data-has-status='false'] {
+  grid-template-columns: 44px;
+}
+
 .chat-tool-name {
   min-width: 0;
   overflow: hidden;

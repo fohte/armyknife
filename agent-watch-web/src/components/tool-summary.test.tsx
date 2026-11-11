@@ -29,12 +29,12 @@ it('renders grouped tool activity as the collapsed row', () => {
       <ToolSummary
         summary="Edit artifact-one.rs, artifact-two.rs  Read ×3  Grep ×1  Bash ×1 · 1 failed"
         operations={[
-          { tool: 'Edit', target: 'artifact-one.rs' },
-          { tool: 'Edit', target: 'artifact-two.rs' },
-          { tool: 'Read', target: 'one.rs' },
-          { tool: 'Read', target: 'two.rs' },
-          { tool: 'Read', target: 'three.rs' },
-          { tool: 'Grep', target: 'TODO' },
+          { tool: 'Edit', target: 'artifact-one.rs', failed: false },
+          { tool: 'Edit', target: 'artifact-two.rs', failed: false },
+          { tool: 'Read', target: 'one.rs', failed: false },
+          { tool: 'Read', target: 'two.rs', failed: false },
+          { tool: 'Read', target: 'three.rs', failed: false },
+          { tool: 'Grep', target: 'TODO', failed: false },
           { tool: 'Bash', target: 'cargo test', failed: true },
         ]}
       />,
@@ -50,8 +50,8 @@ it('renders expanded operations as tool, target, and status rows', () => {
       <ToolSummary
         summary="2 actions · 1 file edited"
         operations={[
-          { tool: 'Read', target: 'src/feature.rs' },
-          { tool: 'exec', target: 'printf hello' },
+          { tool: 'Read', target: 'src/feature.rs', failed: false },
+          { tool: 'exec', target: 'printf hello', failed: false },
         ]}
         open
       />,
@@ -63,8 +63,8 @@ it('renders expanded operations as tool, target, and status rows', () => {
 
 it('omits empty targets from expanded operation rows', () => {
   const operations = [
-    { tool: 'Read', target: null },
-    { tool: 'Edit', target: '' },
+    { tool: 'Read', target: null, failed: false },
+    { tool: 'Edit', target: '', failed: false },
   ]
 
   expect(
@@ -100,11 +100,28 @@ it('keeps long targets as plain text for CSS ellipsis', () => {
     renderToStaticMarkup(
       <ToolSummary
         summary="1 action"
-        operations={[{ tool: 'Bash', target }]}
+        operations={[{ tool: 'Bash', target, failed: false }]}
         open
       />,
     ),
   ).toBe(
     `<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>1 tool call</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li data-has-target="true" data-failed="false"><span class="chat-tool-name">Bash</span><code class="chat-tool-target">${target}</code><span class="chat-tool-operation-status" role="img" aria-label="Succeeded">✓</span></li></ul></details>`,
+  )
+})
+
+it('omits unknown status when the summary only has an aggregate failure count', () => {
+  expect(
+    renderToStaticMarkup(
+      <ToolSummary
+        summary="2 actions · 1 failed"
+        operations={[
+          { tool: 'Read', target: 'artifact-one.rs' },
+          { tool: 'Bash', target: 'fixture command', failed: true },
+        ]}
+        open
+      />,
+    ),
+  ).toBe(
+    '<details class="chat-tool-summary" data-has-operations="true" open=""><summary><span>2 tool calls</span><span class="chat-tool-summary-collapse">‹ Collapse</span></summary><ul class="chat-tool-operations"><li data-has-target="true" data-failed="false" data-has-status="false"><span class="chat-tool-name">Read</span><code class="chat-tool-target">artifact-one.rs</code></li><li data-has-target="true" data-failed="true"><span class="chat-tool-name">Bash</span><code class="chat-tool-target">fixture command</code><span class="chat-tool-operation-status" role="img" aria-label="Failed">✕</span></li></ul></details>',
   )
 })
