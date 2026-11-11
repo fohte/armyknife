@@ -17,6 +17,7 @@ type InboxViewProps = {
   selectedId: string | null
   loaded: boolean
   error: string | null
+  connectionError: string | null
   lastUpdatedAt: number
   showAllInProgress: boolean
   onShowMore: () => void
@@ -104,6 +105,7 @@ export function InboxView({
   selectedId,
   loaded,
   error,
+  connectionError,
   lastUpdatedAt,
   showAllInProgress,
   onShowMore,
@@ -154,7 +156,7 @@ export function InboxView({
     (count, session) => count + (session.unreviewedDecisionCount ?? 0),
     0,
   )
-  const connected = error === null
+  const connected = connectionError === null
   const lastUpdatedTime = formatMobileConnectionTime(lastUpdatedAt)
   const later = filteredSessions.filter(
     (session) => session.category === 'later',
@@ -431,7 +433,7 @@ export function InboxView({
             <span className="mobile-done-review-count">
               ◇ {String(unreviewedDoneCount)} to review
               <span className="mobile-collapse-chevron" aria-hidden="true">
-                ›
+                {doneExpanded ? '⌄' : '›'}
               </span>
             </span>
           ) : (

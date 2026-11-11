@@ -100,6 +100,7 @@ function renderInbox(props: Partial<ComponentProps<typeof InboxView>> = {}) {
         selectedId={null}
         loaded
         error={null}
+        connectionError={null}
         lastUpdatedAt={new Date(2026, 0, 1, 22, 0).getTime()}
         showAllInProgress
         onShowMore={() => undefined}
@@ -271,11 +272,27 @@ it('shows the connection time while the iPhone inbox is connected', () => {
 })
 
 it('shows the last update time and error dot while the iPhone inbox is disconnected', () => {
-  renderInbox({ isMobile: true, error: 'The session feed disconnected.' })
+  renderInbox({
+    isMobile: true,
+    error: 'The session feed disconnected.',
+    connectionError: 'The session feed disconnected.',
+  })
 
   expect(connectionSnapshot()).toEqual({
     label: 'Disconnected · Last updated 22:00',
     dotClassName: 'mobile-inbox-connection-dot is-disconnected',
+  })
+})
+
+it('keeps a connected status when saved view storage fails', () => {
+  renderInbox({
+    isMobile: true,
+    error: 'Unable to load saved inbox views.',
+  })
+
+  expect(connectionSnapshot()).toEqual({
+    label: 'Connected · 22:00',
+    dotClassName: 'mobile-inbox-connection-dot',
   })
 })
 
@@ -314,6 +331,24 @@ it('shows the combined review count in the collapsed iPhone Done row', () => {
   expect(doneRowSnapshot()).toEqual({
     text: 'Done2◇ 2 to review›',
     expanded: 'false',
+    chevronHidden: 'true',
+  })
+})
+
+it('shows the downward chevron for expanded iPhone Done rows with pending reviews', () => {
+  renderInbox({
+    isMobile: true,
+    doneExpanded: true,
+    sessions: sessions.map((session) =>
+      session.id === 'sample-done'
+        ? { ...session, unreviewedDecisionCount: 1 }
+        : session,
+    ),
+  })
+
+  expect(doneRowSnapshot()).toEqual({
+    text: 'Done1◇ 1 to review⌄',
+    expanded: 'true',
     chevronHidden: 'true',
   })
 })

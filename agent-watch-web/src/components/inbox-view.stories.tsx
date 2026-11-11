@@ -197,6 +197,7 @@ const meta = {
     selectedId: 'sample-question',
     loaded: true,
     error: null,
+    connectionError: null,
     lastUpdatedAt: new Date(2026, 0, 1, 22, 0).getTime(),
     showAllInProgress: false,
     onShowMore: () => undefined,
@@ -327,6 +328,7 @@ export const IPhoneInboxShowsItsLastUpdateWhenDisconnected: Story = {
   args: {
     isMobile: true,
     error: 'The session feed disconnected.',
+    connectionError: 'The session feed disconnected.',
     selectedId: null,
   },
   decorators: [
