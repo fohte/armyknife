@@ -41,7 +41,7 @@ export function setSessionBackNow(sessionId: string) {
   return postSessionAction(sessionId, 'later', { preset: 'back_now' })
 }
 
-export function archiveSession(sessionId: string) {
+function archiveSession(sessionId: string) {
   return postSessionAction(sessionId, 'archive', {})
 }
 
