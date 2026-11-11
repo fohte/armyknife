@@ -54,6 +54,8 @@ export type Session = {
   critUrl?: string | null
   laterUntil?: string | null
   isToday?: boolean
+  decisionCount?: number
+  unreviewedDecisionCount?: number
 }
 
 export type SessionLinkTarget = Pick<
@@ -113,6 +115,16 @@ export type ChatItem =
       resolved: boolean
     }
   | { type: 'permission'; tool: string; description: string }
+  | {
+      type: 'decision'
+      seq: number
+      title: string
+      why: string
+      considered: string[]
+      easyToChange: string
+      review: 'ok' | 'change' | null
+      createdAt: string
+    }
 
 export type ProposalOption = {
   label: string
