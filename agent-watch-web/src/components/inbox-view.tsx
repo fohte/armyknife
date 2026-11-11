@@ -1,7 +1,6 @@
 import '#components/later-today.css'
 
 import { Button } from '@fohte/ui/button'
-import { Chip } from '@fohte/ui/chip'
 import { Filter, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 
@@ -9,6 +8,7 @@ import { InboxFilterBar } from '#components/inbox-filter-bar'
 import { InboxFilterDialog } from '#components/inbox-filter-dialog'
 import { SessionRow } from '#components/session-row'
 import { filterInboxSessions, parseInboxFilterQuery } from '#inbox-filter'
+import { nextReturnLabel } from '#inbox-view-utils'
 import type { SavedInboxView } from '#saved-inbox-views'
 import type { Session } from '#types'
 
@@ -58,6 +58,7 @@ function renderSessionSection({
   onLater,
   onToggleToday,
   compactRepo,
+  isMobile,
   className = '',
 }: {
   title: string
@@ -68,6 +69,7 @@ function renderSessionSection({
   onLater: (id: string) => void
   onToggleToday: (id: string, isToday: boolean) => void
   compactRepo: boolean
+  isMobile: boolean
   className?: string
 }) {
   return (
@@ -87,6 +89,7 @@ function renderSessionSection({
               onLater={onLater}
               onToggleToday={onToggleToday}
               compactRepo={compactRepo}
+              isMobile={isMobile}
             />
           ))}
         </ul>
@@ -145,6 +148,10 @@ export function InboxView({
     (session) => session.category === 'in_progress',
   )
   const done = filteredSessions.filter((session) => session.category === 'done')
+  const unreviewedDoneCount = done.reduce(
+    (count, session) => count + (session.unreviewedDecisionCount ?? 0),
+    0,
+  )
   const later = filteredSessions.filter(
     (session) => session.category === 'later',
   )
@@ -209,9 +216,15 @@ export function InboxView({
 
   return (
     <section className="inbox-view" aria-labelledby="inbox-title">
-      <div className="mobile-inbox-brand" aria-hidden="true">
-        <span className="brand-mark">&gt;</span>
+      <div className="mobile-inbox-brand">
+        <span className="brand-mark" aria-hidden="true">
+          &gt;
+        </span>
         <span>agent watch</span>
+        <span className="mobile-inbox-connection">
+          <span className="mobile-inbox-connection-dot" aria-hidden="true" />
+          {error === null ? 'Connected' : 'Reconnecting…'}
+        </span>
       </div>
       <header className="view-header">
         <h1 id="inbox-title">Inbox</h1>
@@ -274,7 +287,6 @@ export function InboxView({
         </section>
       ) : null}
       <div className="mobile-today-strip" aria-label="TODAY sessions">
-        <span className="mobile-today-label">TODAY</span>
         {filterInboxSessions(todaySessions, filters).map((session) => (
           <Button
             key={session.id}
@@ -289,11 +301,6 @@ export function InboxView({
               ★
             </span>
             <span>{session.title}</span>
-            {session.category === 'needs_action' ? (
-              <Chip size="sm" tone="strong">
-                Needs action
-              </Chip>
-            ) : null}
           </Button>
         ))}
       </div>
@@ -323,6 +330,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          isMobile,
         })}
         <Button
           type="button"
@@ -331,7 +339,7 @@ export function InboxView({
           aria-expanded={laterExpanded}
           onClick={onToggleLater}
         >
-          <span>◷ Later</span>
+          <span>{isMobile ? 'Later' : '◷ Later'}</span>
           <span className="later-section-count">{later.length}</span>
           {later.length > 0 || isMobile ? (
             <span className="later-next-return">
@@ -357,6 +365,7 @@ export function InboxView({
                 onLater={onLater}
                 onToggleToday={onToggleToday}
                 compactRepo={isMobile}
+                isMobile={isMobile}
               />
             ))}
           </ul>
@@ -384,6 +393,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          isMobile,
         })}
         {hiddenInProgressCount > 0 && !isMobile ? (
           <Button
@@ -405,9 +415,16 @@ export function InboxView({
         >
           <span>Done</span>
           <span className="mobile-collapse-count">{done.length}</span>
-          <span className="mobile-collapse-chevron" aria-hidden="true">
-            {doneExpanded ? '⌄' : '›'}
-          </span>
+          {unreviewedDoneCount > 0 ? (
+            <span className="mobile-done-review-count">
+              ◇ {String(unreviewedDoneCount)} to review ›
+            </span>
+          ) : null}
+          {unreviewedDoneCount === 0 ? (
+            <span className="mobile-collapse-chevron" aria-hidden="true">
+              {doneExpanded ? '⌄' : '›'}
+            </span>
+          ) : null}
         </Button>
         {renderSessionSection({
           title: 'Done',
@@ -418,6 +435,7 @@ export function InboxView({
           onLater,
           onToggleToday,
           compactRepo: isMobile,
+          isMobile,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
@@ -453,34 +471,4 @@ export function InboxView({
       ) : null}
     </section>
   )
-}
-
-function nextReturnLabel(sessions: readonly Session[]) {
-  const timed = sessions
-    .map((session) => session.laterUntil)
-    .filter((value): value is string => value !== null && value !== undefined)
-    .sort((left, right) => Date.parse(left) - Date.parse(right))[0]
-  if (timed === undefined) {
-    return 'Next activity'
-  }
-  const deadline = new Date(timed)
-  const time = new Intl.DateTimeFormat('en', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(deadline)
-  const tomorrow = new Date()
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  if (deadline.toDateString() === tomorrow.toDateString()) {
-    return `Next back tomorrow ${time}`
-  }
-  if (deadline.getTime() - Date.now() > 86_400_000) {
-    const date = new Intl.DateTimeFormat('en', {
-      weekday: 'short',
-      month: 'numeric',
-      day: 'numeric',
-    }).format(deadline)
-    return `Next back ${date} ${time}`
-  }
-  return `Next back ${time}`
 }

@@ -223,6 +223,7 @@ export const RepositoryNameIsCompactOnIPhone: Story = {
     compactRepo: true,
     onLater: () => undefined,
     onToggleToday: () => undefined,
+    isMobile: true,
   },
   decorators: [
     (Story) => (

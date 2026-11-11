@@ -174,6 +174,8 @@ const sessions: Session[] = [
     ancestorSessionIds: [],
     parent: null,
     pullRequest: { number: 2049, state: 'Merged' },
+    decisionCount: 2,
+    unreviewedDecisionCount: 2,
   },
   ...Array.from({ length: 3 }, (_, index) =>
     sampleSession(
@@ -296,6 +298,7 @@ export const InboxFitsAnIPhone: Story = {
   name: 'The inbox uses its narrow layout on an iPhone',
   args: {
     isMobile: true,
+    selectedId: null,
     laterExpanded: false,
     todaySessions: sessions.filter(
       (session) => session.id === 'sample-question',

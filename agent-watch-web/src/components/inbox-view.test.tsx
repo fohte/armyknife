@@ -234,6 +234,27 @@ it('filters each inbox section and updates the visible counts', () => {
   })
 })
 
+it('omits quick actions from iPhone inbox rows', () => {
+  renderInbox({ isMobile: true })
+
+  expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
+})
+
+it('shows unreviewed decisions in the collapsed iPhone Done row', () => {
+  renderInbox({
+    isMobile: true,
+    sessions: sessions.map((session) =>
+      session.id === 'sample-done'
+        ? { ...session, unreviewedDecisionCount: 2 }
+        : session,
+    ),
+  })
+
+  expect(container.querySelector('.mobile-done-row')?.textContent).toBe(
+    'Done1◇ 2 to review ›',
+  )
+})
+
 it('opens the filter dialog from its button', () => {
   renderInbox()
 
