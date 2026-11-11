@@ -1,3 +1,5 @@
+import '#index.css'
+
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -114,6 +116,43 @@ it('sends the OK action from the expanded card', () => {
   })
 
   expect(onOk.mock.calls).toEqual([[]])
+})
+
+it('keeps panel actions within the card when the target name is long', () => {
+  container.style.width = '280px'
+  renderCard({
+    variant: 'panel',
+    expanded: true,
+    targetName:
+      'a long target session name for an asynchronous refactoring run',
+  })
+
+  const card = requireElement(container.querySelector('.decision-card'))
+  const changeButton = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.decision-card-buttons [data-slot="button"]:last-child',
+    ),
+  )
+  const targetName = requireElement(
+    changeButton.querySelector('.decision-card-target-name'),
+  )
+  const shortcut = requireElement(changeButton.querySelector('kbd'))
+  const cardBounds = card.getBoundingClientRect()
+  const changeButtonBounds = changeButton.getBoundingClientRect()
+  const shortcutBounds = shortcut.getBoundingClientRect()
+  expect(
+    JSON.stringify({
+      changeButtonFitsCard: changeButtonBounds.right <= cardBounds.right,
+      targetNameIsEllipsized:
+        getComputedStyle(targetName).textOverflow === 'ellipsis' &&
+        targetName.scrollWidth > targetName.clientWidth,
+      shortcutFitsButton:
+        shortcutBounds.width > 0 &&
+        shortcutBounds.right <= changeButtonBounds.right,
+    }),
+  ).toBe(
+    '{"changeButtonFitsCard":true,"targetNameIsEllipsized":true,"shortcutFitsButton":true}',
+  )
 })
 
 it.each([
