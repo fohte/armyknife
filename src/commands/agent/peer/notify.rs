@@ -66,6 +66,9 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
         notify,
         bg::save_undelivered,
         alert_user,
+        |from, to, message| {
+            store::insert_watch_web_peer_out_message(from, to, message, chrono::Utc::now())
+        },
     )?;
     if let Some(output) = output {
         println!("{output}");
@@ -79,6 +82,7 @@ fn run_with(
     deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
     save: impl FnOnce(&str, &str) -> Result<()>,
     alert_user: impl FnOnce(&str, &str),
+    record_delivery: impl FnOnce(&str, &str, &str) -> Result<()>,
 ) -> Result<Option<String>> {
     let session_id =
         resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
@@ -92,7 +96,19 @@ fn run_with(
         from.as_deref(),
         from_engine_hint,
     ) {
-        Ok(delivery) => return Ok(delivery_output(&session_id, &delivery)),
+        Ok(delivery) => {
+            if let Some(from) = from.as_deref()
+                && let Err(error) = record_delivery(from, &session_id, &args.message)
+            {
+                tracing::warn!(
+                    event = "agent.peer.notify.record_failed",
+                    from_session = %from,
+                    to_session = %session_id,
+                    error = %error,
+                );
+            }
+            return Ok(delivery_output(&session_id, &delivery));
+        }
         Err(error) if is_permanent_failure(&error) => return Err(error),
         Err(error) => error,
     };
@@ -687,6 +703,9 @@ mod tests {
             panic!("CLI should parse a peer notify command");
         };
         let mut deliveries = Vec::new();
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:30:00Z")
+            .expect("fixture timestamp should parse")
+            .with_timezone(&chrono::Utc);
 
         let result = temp_env::with_vars(
             [
@@ -710,12 +729,27 @@ mod tests {
                     },
                     |_, _| Ok(()),
                     |_, _| {},
+                    |from, to, message| {
+                        store::insert_watch_web_peer_out_message_from(
+                            &sessions_dir,
+                            from,
+                            to,
+                            message,
+                            sent_at,
+                        )
+                    },
                 )
             },
         );
+        let records = store::watch_web_peer_out_messages_from(&sessions_dir, "child-session")
+            .expect("delivered peer message should be saved");
 
         assert_eq!(
-            (result.map_err(|error| error.to_string()), deliveries),
+            (
+                result.map_err(|error| error.to_string()),
+                deliveries,
+                records,
+            ),
             (
                 Ok(None),
                 vec![(
@@ -724,6 +758,13 @@ mod tests {
                     Some("child-session".to_string()),
                     None,
                 )],
+                vec![store::WatchWebPeerOutMessage {
+                    id: 1,
+                    from_session_id: "child-session".to_string(),
+                    to_session_id: "parent-session".to_string(),
+                    content: "hello".to_string(),
+                    sent_at,
+                }],
             ),
         );
     }
@@ -773,6 +814,7 @@ mod tests {
                         save_result
                     },
                     |target, failure| alerts.push((target.to_string(), failure.to_string())),
+                    |_, _, _| Ok(()),
                 )
             },
         );

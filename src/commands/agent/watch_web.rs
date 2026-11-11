@@ -27,7 +27,7 @@ use tokio::net::TcpListener;
 use super::browser;
 use super::error::CcError;
 use crate::commands::agent::store;
-use crate::commands::agent::store::WatchWebQueuedPrompt;
+use crate::commands::agent::store::{WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use crate::commands::agent::types::Session;
 
 #[derive(Args, Clone, PartialEq, Eq)]
@@ -116,6 +116,7 @@ fn app(restart_signal: watch::Receiver<bool>) -> Router {
         store::load_session,
         store::watch_web_user_marker,
         |session_id| store::watch_web_queued_prompts_from(&store::sessions_dir()?, session_id),
+        |session_id| store::watch_web_peer_out_messages_from(&store::sessions_dir()?, session_id),
         store::delete_watch_web_queued_prompts,
         restart_signal,
     )
@@ -152,6 +153,7 @@ fn app_with_assets_and_loader_and_restart_signal(
         load_session,
         load_user_marker,
         |_| Ok(Vec::new()),
+        |_| Ok(Vec::new()),
         |_, _| Ok(()),
         restart_signal,
     )
@@ -165,6 +167,10 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     + Send
     + Sync
     + 'static,
+    load_peer_out_messages: impl Fn(&str) -> anyhow::Result<Vec<WatchWebPeerOutMessage>>
+    + Send
+    + Sync
+    + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> anyhow::Result<()> + Send + Sync + 'static,
     restart_signal: watch::Receiver<bool>,
 ) -> Router {
@@ -174,10 +180,11 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(messages::routes_with_queued_prompts(
+        .merge(messages::routes_with_queued_prompts_and_peer_out_messages(
             load_session,
             load_user_marker,
             load_queued_prompts,
+            load_peer_out_messages,
             delete_queued_prompts,
         ))
         .merge(image_attachments::routes())

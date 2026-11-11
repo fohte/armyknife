@@ -18,13 +18,19 @@ use crate::shared::cache;
 
 mod archive;
 mod database;
+mod peer_out_messages;
 mod queued_prompts;
 
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    SessionLock, SessionStoreChanges, WakeLock, WatchWebQueuedPrompt, WatchWebSessionState,
-    serialize_session,
+    SessionLock, SessionStoreChanges, WakeLock, WatchWebPeerOutMessage, WatchWebQueuedPrompt,
+    WatchWebSessionState, serialize_session,
+};
+#[cfg(test)]
+pub(crate) use peer_out_messages::insert_watch_web_peer_out_message_from;
+pub(crate) use peer_out_messages::{
+    insert_watch_web_peer_out_message, watch_web_peer_out_messages_from,
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,

@@ -13,10 +13,15 @@ use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
 mod migration;
+mod peer_out_messages;
 mod queued_prompts;
 mod wake;
 mod web_state;
 
+pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
+pub(crate) use peer_out_messages::{
+    insert_watch_web_peer_out_message, watch_web_peer_out_messages,
+};
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
@@ -31,7 +36,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 5] = [
+static MIGRATION_ENTRIES: [M<'static>; 6] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -67,6 +72,17 @@ static MIGRATION_ENTRIES: [M<'static>; 5] = [
         );
         CREATE INDEX watch_web_queued_prompt_session_id_id
             ON watch_web_queued_prompt (session_id, id);",
+    ),
+    M::up(
+        "CREATE TABLE watch_web_peer_out_message (
+            id INTEGER PRIMARY KEY,
+            from_session_id TEXT NOT NULL,
+            to_session_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sent_at TEXT NOT NULL
+        );
+        CREATE INDEX watch_web_peer_out_message_sender_target_time
+            ON watch_web_peer_out_message (from_session_id, to_session_id, sent_at, id);",
     ),
 ];
 
