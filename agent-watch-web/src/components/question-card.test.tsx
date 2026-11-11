@@ -25,7 +25,7 @@ function props(overrides: Partial<Props> = {}): Props {
     showTerminalFallback: false,
     canOpenInTerminal: true,
     onAnswer: vi.fn(),
-    onSkip: vi.fn(),
+    onSkip: vi.fn(() => Promise.resolve(true)),
     onFreeformAnswer: vi.fn(() => Promise.resolve(true)),
     onOpenInTerminal: vi.fn(),
     ...overrides,
@@ -154,32 +154,111 @@ it('shows a link destination as text and answers only the selected choice', () =
   })
 })
 
-it('shows question metadata and sends skip and freeform actions', async () => {
-  const onSkip = vi.fn()
-  const onFreeformAnswer = vi.fn(() => Promise.resolve(true))
+it('shows question metadata', () => {
   renderQuestion(
     props({
       header: 'Output format',
       question: 'Which format should be used?',
       choices: [{ label: 'Compact', description: 'Fits in a short report.' }],
       multiSelect: true,
-      onSkip,
-      onFreeformAnswer,
     }),
   )
+
+  const snapshot = () => ({
+    heading: container.querySelector('.chat-question-card h2')?.textContent,
+    multiSelect: container.querySelector('.chat-question-card p')?.textContent,
+    description: container.querySelector('.chat-question-choice-description')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    heading: 'Output format',
+    multiSelect: 'Multiple select question.',
+    description: 'Fits in a short report.',
+  })
+})
+
+it('skips a question from the no-answer button', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip }))
 
   const skipButton = requireElement(
     Array.from(container.querySelectorAll('button')).find((button) =>
       button.textContent.includes('No answer'),
     ) ?? null,
   )
+  act(() => {
+    skipButton.click()
+  })
+  await act(async () => Promise.resolve())
+
+  expect(onSkip.mock.calls).toEqual([[]])
+})
+
+it('skips a question when Escape is pressed inside the card', async () => {
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip }))
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const event = new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    textarea.dispatchEvent(event)
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    skipCalls: onSkip.mock.calls,
+    defaultPrevented: event.defaultPrevented,
+  })
+  expect(snapshot()).toEqual({ skipCalls: [[]], defaultPrevented: true })
+})
+
+it('keeps a freeform answer available to retry after the question closes', async () => {
+  const events: string[] = []
+  const onSkip = vi.fn(() => {
+    events.push('skip')
+    return Promise.resolve(true)
+  })
+  let messageAttempts = 0
+  const onFreeformAnswer = vi.fn(() => {
+    events.push('message')
+    messageAttempts += 1
+    return Promise.resolve(messageAttempts > 1)
+  })
+  const cardProps = props({ onSkip, onFreeformAnswer })
+  renderQuestion(cardProps)
+
   const textarea = requireElement(
     container.querySelector<HTMLTextAreaElement>('textarea'),
   )
   act(() => {
-    skipButton.click()
     setTextareaValue(textarea, 'Use a fictional format')
   })
+  await act(async () => {
+    requireElement(container.querySelector('form')).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  renderQuestion(props({ ...cardProps, canAnswer: false }))
+  const retryTextarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  const retryButton = requireElement(
+    container.querySelector<HTMLButtonElement>('button[type="submit"]'),
+  )
+  const failedSendSnapshot = {
+    draft: retryTextarea.value,
+    retryDisabled: retryButton.disabled,
+    events: [...events],
+  }
+
   await act(async () => {
     requireElement(container.querySelector('form')).dispatchEvent(
       new Event('submit', { bubbles: true, cancelable: true }),
@@ -188,18 +267,19 @@ it('shows question metadata and sends skip and freeform actions', async () => {
   })
 
   const snapshot = () => ({
-    heading: container.querySelector('.chat-question-card h2')?.textContent,
-    multiSelect: container.querySelector('.chat-question-card p')?.textContent,
-    description: container.querySelector('.chat-question-choice-description')
-      ?.textContent,
+    failedSendSnapshot,
+    events,
     skipCalls: onSkip.mock.calls,
     answerCalls: onFreeformAnswer.mock.calls,
   })
   expect(snapshot()).toEqual({
-    heading: 'Output format',
-    multiSelect: 'Select all that apply.',
-    description: 'Fits in a short report.',
+    failedSendSnapshot: {
+      draft: 'Use a fictional format',
+      retryDisabled: false,
+      events: ['skip', 'message'],
+    },
+    events: ['skip', 'message', 'message'],
     skipCalls: [[]],
-    answerCalls: [['Use a fictional format']],
+    answerCalls: [['Use a fictional format'], ['Use a fictional format']],
   })
 })

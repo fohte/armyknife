@@ -142,12 +142,8 @@ export function renderConversationMessage({
         onAnswer={(choice) => {
           void onAction('answer', { choice })
         }}
-        onSkip={() => {
-          void onAction('answer', { skip: true })
-        }}
-        onFreeformAnswer={async (answer) => {
-          const skipped = await onAction('answer', { skip: true })
-          if (!skipped) return false
+        onSkip={() => onAction('answer', { skip: true })}
+        onFreeformAnswer={(answer) => {
           const questionContext =
             message.header !== undefined && message.header.length > 0
               ? `${message.header}: ${message.question}`

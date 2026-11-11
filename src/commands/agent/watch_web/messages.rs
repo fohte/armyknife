@@ -700,6 +700,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn question_message_route_serializes_question_metadata() {
+        let (_directory, transcript_path) = pending_question_transcript();
+        let mut session = stored_session();
+        session.current_tool = Some("AskUserQuestion".to_string());
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_queued_prompts(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"question","header":"Summary","question":"Should the summary be brief?","choices":[{"label":"Yes","description":"Keep it concise."},{"label":"No"}],"multi_select":true,"answer":null}],"backgroundTasks":[]}"#
+                    .to_string(),
+            )
+        );
+    }
+
+    #[tokio::test]
     async fn claude_message_route_returns_contentful_transcript_queue_items() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");

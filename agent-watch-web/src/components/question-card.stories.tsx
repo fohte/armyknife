@@ -4,7 +4,7 @@ import { QuestionCard } from '#components/question-card'
 
 const callbacks = {
   onAnswer: () => undefined,
-  onSkip: () => undefined,
+  onSkip: () => Promise.resolve(true),
   onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
 }
@@ -36,6 +36,13 @@ type Story = StoryObj<typeof meta>
 
 export const QuestionWaitsForAnAnswer: Story = {
   name: 'A question offers choices while it waits for an answer',
+}
+
+export const QuestionShowsItsMultipleSelectType: Story = {
+  name: 'A question is marked as a multiple select question',
+  args: {
+    multiSelect: true,
+  },
 }
 
 export const QuestionShowsSelectedAnswer: Story = {

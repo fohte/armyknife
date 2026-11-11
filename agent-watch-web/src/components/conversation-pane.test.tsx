@@ -571,6 +571,28 @@ it('closes a question before sending a contextual freeform answer', async () => 
   ])
 })
 
+it('does not send a freeform answer when skipping the question fails', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  onAction.mockResolvedValueOnce(false)
+  renderView(onAction, session, undefined, [question])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([['answer', { skip: true }]])
+})
+
 it('shows a selected answer, dims other choices, and renders Markdown', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [
