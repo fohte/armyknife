@@ -114,13 +114,50 @@ it('shows the primary task and the count of other linked tasks for a session', (
   )
 })
 
-it('uses the error icon for an error session', () => {
-  renderPalette({ sessions: [{ ...session, kind: 'Error' }] })
+it.each([
+  ['needs action', 'needs_action', 'Question', '◆'],
+  ['error', 'needs_action', 'Error', '×'],
+  ['in progress', 'in_progress', null, '●'],
+  ['later', 'later', null, '◷'],
+  ['done', 'done', null, '✓'],
+] as const)(
+  'uses the %s icon for a session result',
+  (_name, category, kind, icon) => {
+    renderPalette({
+      sessions: [{ ...session, category, kind }],
+      initialQuery: 'Review notification settings',
+    })
 
-  expect(
-    container.querySelector('.command-palette-status')?.textContent,
-  ).toEqual('×')
-})
+    const item = container.querySelector('.command-palette-item')
+    const actualIcon =
+      item?.querySelector('.command-palette-status')?.textContent ?? ''
+    const actualTitle =
+      item?.querySelector('.command-palette-item-heading strong')
+        ?.textContent ?? ''
+    const actual = `${actualIcon}${actualTitle}`
+    expect(actual).toEqual(`${icon}Review notification settings`)
+  },
+)
+
+it.each([
+  ['task', '#notification', '#', '#42 Improve notifications'],
+  ['project', '@notification', '▤', 'notification refresh'],
+  ['command', '>Switch to Board', '›', 'Switch to Board'],
+] as const)(
+  'renders a %s result with its marker and title',
+  (_type, query, icon, title) => {
+    renderPalette({ initialQuery: query })
+
+    const item = container.querySelector('.command-palette-item')
+    const actualIcon =
+      item?.querySelector('.command-palette-status')?.textContent ?? ''
+    const actualTitle =
+      item?.querySelector('.command-palette-item-heading strong')
+        ?.textContent ?? ''
+    const actual = `${actualIcon}${actualTitle}`
+    expect(actual).toEqual(`${icon}${title}`)
+  },
+)
 
 it('opens a matching project from the project scope with Enter', async () => {
   const onOpenProject = vi.fn<(name: string) => void>()
