@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.612](https://github.com/fohte/armyknife/compare/v0.1.611...v0.1.612) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** add a session tree tab ([#1591](https://github.com/fohte/armyknife/issues/1591)) ([cb7410c](https://github.com/fohte/armyknife/commit/cb7410c643e6abd252e1c34a39e7cedad0d44272))
+
 ## [0.1.611](https://github.com/fohte/armyknife/compare/v0.1.610...v0.1.611) (2026-11-11)
 
 
