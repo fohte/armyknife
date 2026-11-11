@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.579](https://github.com/fohte/armyknife/compare/v0.1.578...v0.1.579) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match palette to mock ([#1517](https://github.com/fohte/armyknife/issues/1517)) ([a54dfcf](https://github.com/fohte/armyknife/commit/a54dfcf2ea3a34c57291bd06bd8bc0a1cc270c9b))
+
 ## [0.1.578](https://github.com/fohte/armyknife/compare/v0.1.577...v0.1.578) (2026-11-11)
 
 
