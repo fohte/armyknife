@@ -12,6 +12,7 @@ use rusqlite_migration::{Error as MigrationError, M, MigrationDefinitionError, M
 use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
+mod decisions;
 mod migration;
 mod peer_out_messages;
 mod proposals;
@@ -19,6 +20,10 @@ mod queued_prompts;
 mod wake;
 mod web_state;
 
+pub(crate) use decisions::{
+    AgentDecision, AgentDecisionCounts, agent_decision_counts, agent_decisions,
+    insert_agent_decision, set_agent_decision_review,
+};
 pub(crate) use peer_out_messages::WatchWebPeerOutMessage;
 pub(crate) use peer_out_messages::{
     insert_watch_web_peer_out_message, watch_web_peer_out_messages,
@@ -42,7 +47,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 7] = [
+static MIGRATION_ENTRIES: [M<'static>; 8] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -114,6 +119,45 @@ static MIGRATION_ENTRIES: [M<'static>; 7] = [
             BEGIN
                 DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
             END;
+        CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
+            id INTEGER PRIMARY KEY,
+            from_session_id TEXT NOT NULL,
+            to_session_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            sent_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS watch_web_peer_out_message_sender_target_time
+            ON watch_web_peer_out_message (from_session_id, to_session_id, sent_at, id);",
+    ),
+    M::up(
+        "CREATE TABLE IF NOT EXISTS agent_proposal (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            answer TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX IF NOT EXISTS agent_proposal_unresolved_session_id
+            ON agent_proposal (session_id) WHERE resolved_at IS NULL;
+        CREATE TRIGGER IF NOT EXISTS agent_proposal_delete_session
+            AFTER DELETE ON sessions
+            BEGIN
+                DELETE FROM agent_proposal WHERE session_id = OLD.session_id;
+            END;
+        CREATE TABLE IF NOT EXISTS agent_decision (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            why TEXT NOT NULL,
+            considered TEXT NOT NULL,
+            easy_to_change TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            review TEXT,
+            reviewed_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
         CREATE TABLE IF NOT EXISTS watch_web_peer_out_message (
             id INTEGER PRIMARY KEY,
             from_session_id TEXT NOT NULL,
@@ -511,6 +555,10 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
             "DELETE FROM watch_web_peer_out_message WHERE from_session_id = ?1",
             [session_id],
         )?;
+        connection.execute(
+            "DELETE FROM agent_decision WHERE session_id = ?1",
+            [session_id],
+        )?;
         increment_revision(connection)?;
     }
     Ok(changed > 0)
@@ -644,17 +692,108 @@ mod tests {
         drop(connection);
 
         let connection = open_connection(temp_dir.path()).unwrap();
-        let (peer_messages_exist, proposals_exist): (bool, bool) = connection
+        let (peer_messages_exist, proposals_exist, decisions_exist): (bool, bool, bool) = connection
             .query_row(
                 "SELECT
                     EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'watch_web_peer_out_message'),
-                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_proposal')",
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_proposal'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_decision')",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
 
-        assert_eq!((peer_messages_exist, proposals_exist), (true, true));
+        assert_eq!(
+            (peer_messages_exist, proposals_exist, decisions_exist),
+            (true, true, true),
+        );
+    }
+
+    #[rstest]
+    #[case::decision_only_v6(true, 1, 0)]
+    #[case::proposal_only_v6(false, 0, 1)]
+    fn upgrades_either_version_six_feature_layout(
+        #[case] has_decision_table: bool,
+        #[case] expected_decisions: i64,
+        #[case] expected_proposals: i64,
+    ) {
+        let temp_dir = tempfile::tempdir().expect("temporary directory should be created");
+        let sessions_dir = temp_dir.path().join("sessions");
+        open_connection(&sessions_dir).expect("current migrations should create the database");
+
+        let database_path = sessions_dir.join("sessions.db");
+        let connection =
+            Connection::open(&database_path).expect("temporary session database should open");
+        if has_decision_table {
+            connection
+                .execute(
+                    "INSERT INTO agent_decision
+                     (session_id, seq, title, why, considered, easy_to_change, created_at)
+                     VALUES ('sample-session', 1, 'sample choice', 'sample reason',
+                             '[\"sample alternative\"]', 'sample change',
+                             '2026-01-01T00:00:00Z')",
+                    [],
+                )
+                .expect("decision from the earlier layout should be inserted");
+            connection
+                .execute_batch("DROP TABLE agent_proposal; PRAGMA user_version = 6;")
+                .expect("proposal table should be removed to model the earlier layout");
+        } else {
+            connection
+                .execute(
+                    "INSERT INTO agent_proposal (session_id, seq, body, created_at)
+                     VALUES ('sample-session', 1, 'sample proposal', '2026-01-01T00:00:00Z')",
+                    [],
+                )
+                .expect("proposal from the merged layout should be inserted");
+            connection
+                .execute_batch("DROP TABLE agent_decision; PRAGMA user_version = 6;")
+                .expect("decision table should be removed to model the merged layout");
+        }
+        drop(connection);
+
+        let connection = open_connection(&sessions_dir)
+            .expect("version six database should migrate to the combined schema");
+        let schema_and_rows: (bool, bool, bool, bool, i64, i64) = connection
+            .query_row(
+                "SELECT
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_decision'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'agent_proposal'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = 'agent_proposal_unresolved_session_id'),
+                    EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'trigger' AND name = 'agent_proposal_delete_session'),
+                    (SELECT COUNT(*) FROM agent_decision),
+                    (SELECT COUNT(*) FROM agent_proposal)",
+                [],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )
+            .expect("combined schema and retained rows should be queryable");
+        let user_version: i64 = connection
+            .pragma_query_value(None, "user_version", |row| row.get(0))
+            .expect("database migration version should be readable");
+
+        assert_eq!(
+            (schema_and_rows, user_version),
+            (
+                (
+                    true,
+                    true,
+                    true,
+                    true,
+                    expected_decisions,
+                    expected_proposals,
+                ),
+                MIGRATION_ENTRIES.len() as i64,
+            ),
+        );
     }
 
     #[rstest]

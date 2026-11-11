@@ -3,6 +3,7 @@ import '#components/session-link.css'
 import { Tooltip } from '@base-ui/react/tooltip'
 import type { ReactNode } from 'react'
 
+import { getCommandPaletteShortcut } from '#command-palette-shortcut'
 import type { SessionLinkTarget } from '#types'
 
 const categoryLabels: Record<string, string> = {
@@ -30,6 +31,12 @@ export function SessionLink({
   open,
   session,
 }: SessionLinkProps) {
+  const title = session.title ?? children
+  const openBesideModifier =
+    getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
+      ? '⌘'
+      : 'Ctrl'
+
   return (
     <Tooltip.Root open={open}>
       <Tooltip.Trigger
@@ -60,7 +67,11 @@ export function SessionLink({
       <Tooltip.Portal>
         <Tooltip.Positioner className="session-link-positioner" sideOffset={8}>
           <Tooltip.Popup className="session-link-card">
-            <span className="session-link-card-state">
+            <span className="session-link-card-title">{title}</span>
+            <span
+              className="session-link-card-state"
+              data-category={session.category}
+            >
               {sessionStatus(session)}
             </span>
             <span className="session-link-card-task">
@@ -69,6 +80,9 @@ export function SessionLink({
                 : `tq #${String(session.task.number)} ${session.task.title}`}
             </span>
             <span className="session-link-card-repo">repo {session.repo}</span>
+            <span className="session-link-card-hint">
+              Click to open · {openBesideModifier}-click to open beside
+            </span>
           </Tooltip.Popup>
         </Tooltip.Positioner>
       </Tooltip.Portal>
