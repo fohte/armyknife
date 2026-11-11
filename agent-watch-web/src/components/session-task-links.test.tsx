@@ -86,26 +86,13 @@ function snapshot() {
 }
 
 function makeSession(
-  id: string,
   category: Session['category'],
   tasks: SessionTask[],
-): Session {
+): Pick<Session, 'category'> & Pick<Session, 'task' | 'tasks'> {
   return {
-    id,
     category,
-    isPaused: false,
-    kind: null,
-    title: id,
-    preview: null,
-    elapsedSeconds: 0,
-    unread: false,
     task: tasks[0] ?? null,
     tasks,
-    repo: 'example/project',
-    project: 'example-project',
-    parent: null,
-    ancestorSessionIds: [],
-    pullRequest: null,
   }
 }
 
@@ -155,11 +142,11 @@ it('lists all linked tasks and marks completed tasks', async () => {
         task={task}
         tasks={[task, secondaryTask, completedTask]}
         sessions={[
-          makeSession('needs-action-one', 'needs_action', [task]),
-          makeSession('needs-action-two', 'needs_action', [task]),
-          makeSession('in-progress', 'in_progress', [task, secondaryTask]),
-          makeSession('done', 'done', [task, secondaryTask]),
-          makeSession('later', 'later', [completedTask]),
+          makeSession('needs_action', [task]),
+          makeSession('needs_action', [task]),
+          makeSession('in_progress', [task, secondaryTask]),
+          makeSession('done', [task, secondaryTask]),
+          makeSession('later', [completedTask]),
         ]}
       />,
     )

@@ -11,6 +11,11 @@ type MenuPosition = {
   width: number
 }
 
+type SessionTaskLinkSession = Pick<Session, 'category'> & {
+  task: Pick<SessionTask, 'id'> | null
+  tasks?: readonly Pick<SessionTask, 'id'>[]
+}
+
 function SessionTaskId({
   priority,
   number,
@@ -51,7 +56,7 @@ export function SessionTaskLinks({
 }: {
   task: SessionTask | null
   tasks: SessionTask[]
-  sessions?: readonly Session[]
+  sessions?: readonly SessionTaskLinkSession[]
   onMakePrimary?: (taskId: string) => Promise<boolean>
   taskListOpen?: boolean
 }) {

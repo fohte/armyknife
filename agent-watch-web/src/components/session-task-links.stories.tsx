@@ -3,7 +3,7 @@ import '#components/conversation-pane-view.css'
 import type { Meta, StoryObj } from '@storybook/react-vite'
 
 import { SessionTaskLinks } from '#components/session-task-links'
-import type { Session } from '#types'
+import type { Session, SessionTask } from '#types'
 
 const openTask = {
   id: 'example-open-task',
@@ -27,39 +27,16 @@ const completedTask = {
   isClosed: true,
 }
 const linkedTasks = [openTask, secondaryTask, completedTask]
-const linkedSessions: Session[] = [
-  ...['needs-action-one', 'needs-action-two'].map((id) => ({
-    id,
-    category: 'needs_action',
-    tasks: [openTask],
-  })),
-  ...['in-progress', 'done'].map((id) => ({
-    id,
-    category: id === 'done' ? 'done' : 'in_progress',
-    tasks: [openTask, secondaryTask],
-  })),
-  {
-    id: 'later',
-    category: 'later',
-    tasks: [completedTask],
-  },
-].map(({ id, category, tasks }) => ({
-  id,
-  category,
-  isPaused: false,
-  kind: null,
-  title: id,
-  preview: null,
-  elapsedSeconds: 0,
-  unread: false,
-  task: tasks[0] ?? null,
-  tasks,
-  repo: 'example/project',
-  project: 'example-project',
-  parent: null,
-  ancestorSessionIds: [],
-  pullRequest: null,
-}))
+function session(category: Session['category'], tasks: SessionTask[]) {
+  return { category, task: tasks[0] ?? null, tasks }
+}
+const linkedSessions = [
+  session('needs_action', [openTask]),
+  session('needs_action', [openTask]),
+  session('in_progress', [openTask, secondaryTask]),
+  session('done', [openTask, secondaryTask]),
+  session('later', [completedTask]),
+]
 
 const meta = {
   component: SessionTaskLinks,
