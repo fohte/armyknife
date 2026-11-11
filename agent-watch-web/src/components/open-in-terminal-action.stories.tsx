@@ -32,3 +32,14 @@ export const Failed: Story = {
   name: 'The terminal switch shows its error',
   args: { status: { state: 'error', message: 'The session is unavailable.' } },
 }
+
+export const LongFailure: Story = {
+  name: 'A long terminal error wraps inside the available width',
+  args: {
+    status: {
+      state: 'error',
+      message:
+        'The terminal session could not be focused because its client is no longer available. Reopen the session in a terminal and try again.',
+    },
+  },
+}

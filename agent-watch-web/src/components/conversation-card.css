@@ -42,12 +42,22 @@
 
 .conversation-terminal-fallback {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 0 16px 12px;
   color: var(--aw-text-muted);
   font-size: 12px;
+}
+
+.conversation-terminal-fallback > span {
+  min-width: 0;
+  flex: 1;
+}
+
+.conversation-terminal-fallback .conversation-open-in-terminal {
+  flex: 0 0 auto;
 }
 
 .conversation-terminal-fallback [data-slot='button'] {

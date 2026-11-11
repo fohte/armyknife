@@ -24,19 +24,21 @@ export function OpenInTerminalAction({
       >
         Open in terminal
       </Button>
-      {status === null ? null : (
-        <p
-          className="conversation-terminal-action-status"
-          data-state={status.state}
-          role={status.state === 'error' ? 'alert' : 'status'}
-        >
-          {status.state === 'sending'
-            ? 'Switching tmux…'
-            : status.state === 'success'
-              ? 'Tmux switched to this session.'
-              : `Could not switch tmux: ${status.message}`}
-        </p>
-      )}
+      <p
+        className="conversation-terminal-action-status"
+        data-state={status?.state ?? 'idle'}
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {status?.state === 'sending'
+          ? 'Switching tmux…'
+          : status?.state === 'success'
+            ? 'Tmux switched to this session.'
+            : status?.state === 'error'
+              ? `Could not switch tmux: ${status.message}`
+              : ''}
+      </p>
     </div>
   )
 }
