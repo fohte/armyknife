@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.580](https://github.com/fohte/armyknife/compare/v0.1.579...v0.1.580) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** add decision review UI ([#1519](https://github.com/fohte/armyknife/issues/1519)) ([5d1d66c](https://github.com/fohte/armyknife/commit/5d1d66cbd952d467d6f615719b54a3d7a0ffd775))
+
 ## [0.1.579](https://github.com/fohte/armyknife/compare/v0.1.578...v0.1.579) (2026-11-11)
 
 
