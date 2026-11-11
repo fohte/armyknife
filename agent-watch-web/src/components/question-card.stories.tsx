@@ -4,17 +4,24 @@ import { QuestionCard } from '#components/question-card'
 
 const callbacks = {
   onAnswer: () => undefined,
+  onSkip: () => undefined,
+  onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,
 }
 
 const meta = {
   component: QuestionCard,
   args: {
+    header: 'Retry policy',
     question: 'Which **retry policy** should be used?',
     choices: [
-      'Retry **three times** with exponential backoff',
-      'Retry once without delay',
+      {
+        label: 'Retry **three times** with exponential backoff',
+        description: 'Wait briefly before each retry.',
+      },
+      { label: 'Retry once without delay' },
     ],
+    multiSelect: false,
     answer: null,
     canAnswer: true,
     isMobile: false,
@@ -51,8 +58,8 @@ export const QuestionOffersALinkedChoice: Story = {
   name: 'A choice shows its link destination as plain text',
   args: {
     choices: [
-      'Follow the [setup guide](https://example.org/guide)',
-      'Use the default settings',
+      { label: 'Follow the [setup guide](https://example.org/guide)' },
+      { label: 'Use the default settings' },
     ],
   },
 }

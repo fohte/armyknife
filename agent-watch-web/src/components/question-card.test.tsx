@@ -12,14 +12,21 @@ let root: Root | null = null
 
 function props(overrides: Partial<Props> = {}): Props {
   return {
+    header: 'Retry policy',
     question: 'Which **retry policy** should be used?',
-    choices: ['Retry *a few* times', 'Retry once'],
+    choices: [
+      { label: 'Retry *a few* times', description: 'Use a short delay.' },
+      { label: 'Retry once' },
+    ],
+    multiSelect: false,
     answer: null,
     canAnswer: true,
     isMobile: false,
     showTerminalFallback: false,
     canOpenInTerminal: true,
     onAnswer: vi.fn(),
+    onSkip: vi.fn(),
+    onFreeformAnswer: vi.fn(() => Promise.resolve(true)),
     onOpenInTerminal: vi.fn(),
     ...overrides,
   }
@@ -35,6 +42,17 @@ function renderQuestion(cardProps: Props) {
 function requireElement<T extends Element>(element: T | null): T {
   if (element === null) throw new Error('Expected element was not rendered')
   return element
+}
+
+function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
+  const valueSetter = Reflect.getOwnPropertyDescriptor(
+    textarea.constructor.prototype,
+    'value',
+  )?.set
+  if (valueSetter !== undefined) {
+    Reflect.apply(valueSetter, textarea, [value])
+  }
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
 beforeEach(() => {
@@ -67,6 +85,8 @@ it('renders answered choice Markdown as inline spans without paragraphs', () => 
         textMarkup: button.querySelector('.chat-question-choice-text')
           ?.innerHTML,
         paragraphCount: button.querySelectorAll('p').length,
+        description: button.querySelector('.chat-question-choice-description')
+          ?.textContent,
         check: button.querySelector('.chat-question-choice-check')?.textContent,
       }),
     ),
@@ -83,6 +103,7 @@ it('renders answered choice Markdown as inline spans without paragraphs', () => 
         textTag: 'SPAN',
         textMarkup: '<span>Retry <em>a few</em> times</span>',
         paragraphCount: 0,
+        description: 'Use a short delay.',
         check: '✓',
       },
       {
@@ -92,6 +113,7 @@ it('renders answered choice Markdown as inline spans without paragraphs', () => 
         textTag: 'SPAN',
         textMarkup: '<span>Retry once</span>',
         paragraphCount: 0,
+        description: undefined,
         check: undefined,
       },
     ],
@@ -103,8 +125,8 @@ it('shows a link destination as text and answers only the selected choice', () =
   const onAnswer = vi.fn()
   const cardProps = props({
     choices: [
-      'Follow the [setup guide](https://example.org/guide)',
-      'Use the default settings',
+      { label: 'Follow the [setup guide](https://example.org/guide)' },
+      { label: 'Use the default settings' },
     ],
     onAnswer,
   })
@@ -129,5 +151,55 @@ it('shows a link destination as text and answers only the selected choice', () =
     destinationTag: 'SPAN',
     anchorCount: 0,
     actionCalls: [[1]],
+  })
+})
+
+it('shows question metadata and sends skip and freeform actions', async () => {
+  const onSkip = vi.fn()
+  const onFreeformAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(
+    props({
+      header: 'Output format',
+      question: 'Which format should be used?',
+      choices: [{ label: 'Compact', description: 'Fits in a short report.' }],
+      multiSelect: true,
+      onSkip,
+      onFreeformAnswer,
+    }),
+  )
+
+  const skipButton = requireElement(
+    Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent.includes('No answer'),
+    ) ?? null,
+  )
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  act(() => {
+    skipButton.click()
+    setTextareaValue(textarea, 'Use a fictional format')
+  })
+  await act(async () => {
+    requireElement(container.querySelector('form')).dispatchEvent(
+      new Event('submit', { bubbles: true, cancelable: true }),
+    )
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    heading: container.querySelector('.chat-question-card h2')?.textContent,
+    multiSelect: container.querySelector('.chat-question-card p')?.textContent,
+    description: container.querySelector('.chat-question-choice-description')
+      ?.textContent,
+    skipCalls: onSkip.mock.calls,
+    answerCalls: onFreeformAnswer.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    heading: 'Output format',
+    multiSelect: 'Select all that apply.',
+    description: 'Fits in a short report.',
+    skipCalls: [[]],
+    answerCalls: [['Use a fictional format']],
   })
 })

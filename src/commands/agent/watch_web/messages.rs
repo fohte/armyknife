@@ -387,14 +387,25 @@ enum ChatItem {
         target: Option<String>,
     },
     Question {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        header: Option<String>,
         question: String,
-        choices: Vec<String>,
+        choices: Vec<QuestionChoice>,
+        multi_select: bool,
         answer: Option<String>,
     },
     Permission {
         tool: String,
         description: String,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct QuestionChoice {
+    label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -458,7 +469,7 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::{ChatItem, load_messages_with, routes_with_queued_prompts};
+    use super::{ChatItem, QuestionChoice, load_messages_with, routes_with_queued_prompts};
     use crate::commands::agent::store::WatchWebQueuedPrompt;
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
@@ -474,6 +485,13 @@ mod tests {
         .unwrap()
     }
 
+    fn question_choice(label: &str) -> QuestionChoice {
+        QuestionChoice {
+            label: label.to_string(),
+            description: None,
+        }
+    }
+
     fn pending_question_transcript() -> (tempfile::TempDir, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
@@ -487,7 +505,12 @@ mod tests {
                     "input": {
                         "questions": [{
                             "question": "Should the summary be brief?",
-                            "options": [{"label": "Yes"}, {"label": "No"}],
+                            "header": "Summary",
+                            "multiSelect": true,
+                            "options": [
+                                {"label": "Yes", "description": "Keep it concise."},
+                                {"label": "No"},
+                            ],
                         }],
                     },
                 }],
@@ -565,8 +588,16 @@ mod tests {
             })
             .unwrap(),
             Some(vec![ChatItem::Question {
+                header: Some("Summary".to_string()),
                 question: "Should the summary be brief?".to_string(),
-                choices: vec!["Yes".to_string(), "No".to_string()],
+                choices: vec![
+                    QuestionChoice {
+                        label: "Yes".to_string(),
+                        description: Some("Keep it concise.".to_string()),
+                    },
+                    question_choice("No"),
+                ],
+                multi_select: true,
                 answer: None,
             }])
         );
@@ -591,8 +622,16 @@ mod tests {
             .unwrap(),
             Some(vec![
                 ChatItem::Question {
+                    header: Some("Summary".to_string()),
                     question: "Should the summary be brief?".to_string(),
-                    choices: vec!["Yes".to_string(), "No".to_string()],
+                    choices: vec![
+                        QuestionChoice {
+                            label: "Yes".to_string(),
+                            description: Some("Keep it concise.".to_string()),
+                        },
+                        question_choice("No"),
+                    ],
+                    multi_select: true,
                     answer: None,
                 },
                 ChatItem::Permission {

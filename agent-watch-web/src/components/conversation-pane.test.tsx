@@ -34,7 +34,7 @@ const actions: SessionActions = {
 const question: ChatItem = {
   type: 'question',
   question: 'Which retry policy should be used?',
-  choices: ['Retry a few times', 'Retry once'],
+  choices: [{ label: 'Retry a few times' }, { label: 'Retry once' }],
   answer: null,
 }
 
@@ -90,7 +90,7 @@ function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
   onSelectSession: (id: string) => void = () => undefined,
-  viewMessages: readonly ChatItem[] = [question],
+  viewMessages: readonly ChatItem[] = [],
   viewActions: SessionActions | null = actions,
   isMobile = false,
   viewBackgroundTasks: readonly BackgroundTask[] = [],
@@ -292,7 +292,7 @@ it('copies the session ID from desktop and mobile headers', async () => {
   })
   const desktopButtonText = desktopButton.textContent
 
-  renderView(onAction, session, undefined, [question], actions, true)
+  renderView(onAction, session, undefined, [], actions, true)
   const mobileButton = requireElement(
     container.querySelector<HTMLButtonElement>(
       ".conversation-pane[data-mobile='true'] .conversation-copy-session-id",
@@ -338,7 +338,7 @@ it('copies the session ID through the HTTP-compatible clipboard fallback', async
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -393,7 +393,7 @@ it('falls back when the Clipboard API rejects the copy request', async () => {
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -435,7 +435,7 @@ it('announces when neither clipboard method can copy the session ID', async () =
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -478,7 +478,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
     vi.fn(() => Promise.resolve(true)),
     session,
     undefined,
-    [question],
+    [],
     actions,
     true,
   )
@@ -509,7 +509,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
 
 it('answers a question from a number key or a choice click', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
-  renderView(onAction)
+  renderView(onAction, session, undefined, [question])
 
   const keyEvent = dispatchKeyInAct(
     requireElement(container.querySelector('.conversation-pane')),
@@ -535,13 +535,49 @@ it('answers a question from a number key or a choice click', () => {
   expect(actual).toBe(expected)
 })
 
+it('closes a question before sending a contextual freeform answer', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction, session, undefined, [
+    {
+      ...question,
+      header: 'Output format',
+      question: 'Which format should be used?',
+    },
+  ])
+
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-card textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use a fictional format')
+  await act(async () => {
+    requireElement(
+      container.querySelector('.chat-question-card form'),
+    ).dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  expect(onAction.mock.calls).toEqual([
+    ['answer', { skip: true }],
+    [
+      'messages',
+      {
+        content:
+          'My answer to "Output format: Which format should be used?" is:\nUse a fictional format',
+      },
+    ],
+  ])
+})
+
 it('shows a selected answer, dims other choices, and renders Markdown', () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [
     {
       ...question,
       question: 'Which **retry** policy should be used?',
-      choices: ['Retry *a few* times', 'Retry once'],
+      choices: [{ label: 'Retry *a few* times' }, { label: 'Retry once' }],
       answer: 'Retry once',
     },
   ])

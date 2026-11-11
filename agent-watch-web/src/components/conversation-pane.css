@@ -469,6 +469,33 @@
   text-align: left;
 }
 
+.chat-question-choice-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-question-choice-description {
+  color: var(--aw-text-muted);
+}
+
+.chat-question-composer {
+  width: auto;
+  margin: 12px 0 0;
+}
+
+.chat-question-composer label {
+  display: block;
+  padding: 8px 12px 0;
+  color: var(--aw-text-muted);
+}
+
+.chat-question-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
 .chat-question-choices kbd {
   width: 18px;
   color: var(--aw-color-warning);

@@ -91,11 +91,18 @@ export type ChatItem =
   | { type: 'tool_in_progress'; tool: string; target?: string }
   | {
       type: 'question'
+      header?: string
       question: string
-      choices: string[]
+      choices: QuestionChoice[]
+      multi_select?: boolean
       answer: string | null
     }
   | { type: 'permission'; tool: string; description: string }
+
+export type QuestionChoice = {
+  label: string
+  description?: string
+}
 
 export type UserContentPart =
   | { type: 'text'; text: string }

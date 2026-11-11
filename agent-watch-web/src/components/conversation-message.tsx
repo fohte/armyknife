@@ -126,8 +126,10 @@ export function renderConversationMessage({
     return (
       <QuestionCard
         key={`question-${String(index)}`}
+        {...(message.header === undefined ? {} : { header: message.header })}
         question={message.question}
         choices={message.choices}
+        multiSelect={message.multi_select === true}
         answer={message.answer}
         canAnswer={canAnswer}
         isMobile={isMobile}
@@ -139,6 +141,20 @@ export function renderConversationMessage({
         canOpenInTerminal={actions?.openInTerminal === true}
         onAnswer={(choice) => {
           void onAction('answer', { choice })
+        }}
+        onSkip={() => {
+          void onAction('answer', { skip: true })
+        }}
+        onFreeformAnswer={async (answer) => {
+          const skipped = await onAction('answer', { skip: true })
+          if (!skipped) return false
+          const questionContext =
+            message.header !== undefined && message.header.length > 0
+              ? `${message.header}: ${message.question}`
+              : message.question
+          return onAction('messages', {
+            content: `My answer to "${questionContext}" is:\n${answer}`,
+          })
         }}
         onOpenInTerminal={onOpenInTerminal}
       />

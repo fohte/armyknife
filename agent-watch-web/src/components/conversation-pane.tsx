@@ -84,8 +84,18 @@ function isChatItem(value: unknown): value is ChatItem {
     case 'question':
       return (
         typeof value['question'] === 'string' &&
+        (value['header'] === undefined ||
+          typeof value['header'] === 'string') &&
         Array.isArray(value['choices']) &&
-        value['choices'].every((choice) => typeof choice === 'string') &&
+        value['choices'].every(
+          (choice) =>
+            isRecord(choice) &&
+            typeof choice['label'] === 'string' &&
+            (choice['description'] === undefined ||
+              typeof choice['description'] === 'string'),
+        ) &&
+        (value['multi_select'] === undefined ||
+          typeof value['multi_select'] === 'boolean') &&
         (value['answer'] === null || typeof value['answer'] === 'string')
       )
     case 'permission':

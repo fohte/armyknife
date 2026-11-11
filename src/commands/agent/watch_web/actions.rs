@@ -217,7 +217,9 @@ async fn actions(
 
 #[derive(Deserialize)]
 struct AnswerRequest {
-    choice: u8,
+    choice: Option<u8>,
+    #[serde(default)]
+    skip: bool,
 }
 
 async fn answer_question(
@@ -232,12 +234,26 @@ async fn answer_question(
         ));
     }
     let tmux_info = require_tmux(&session)?;
-    if !(1..=9).contains(&request.choice) {
-        return Err(ApiError::bad_request("choice must be between 1 and 9"));
+    if request.skip {
+        if request.choice.is_some() {
+            return Err(ApiError::bad_request(
+                "choice cannot be provided when skipping a question",
+            ));
+        }
+        send_keys(state.runtime, &session, tmux_info, vec!["Escape"]).await?;
+    } else {
+        let Some(choice) = request.choice else {
+            return Err(ApiError::bad_request(
+                "choice is required unless skipping a question",
+            ));
+        };
+        if !(1..=9).contains(&choice) {
+            return Err(ApiError::bad_request("choice must be between 1 and 9"));
+        }
+        let mut keys = vec!["Down"; usize::from(choice - 1)];
+        keys.push("Enter");
+        send_keys(state.runtime, &session, tmux_info, keys).await?;
     }
-    let mut keys = vec!["Down"; usize::from(request.choice - 1)];
-    keys.push("Enter");
-    send_keys(state.runtime, &session, tmux_info, keys).await?;
     Ok(Json(Success::new()))
 }
 
@@ -756,6 +772,49 @@ mod tests {
                     "paneId": "%4",
                     "socketPath": "/tmp/example-tmux.sock",
                     "keys": &expected_keys,
+                }],
+            }),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn answer_question_skips_by_sending_escape(action_context: ActionContext) {
+        let mut session = session("sample-session");
+        session.current_tool = Some("AskUserQuestion".to_string());
+        action_context.save_session(&session);
+
+        let response = action_context
+            .router()
+            .oneshot(post(
+                "/sessions/sample-session/answer",
+                json!({ "skip": true }),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "pane-command",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                }, {
+                    "kind": "guarded-keys",
+                    "paneId": "%4",
+                    "engine": "claude",
+                    "currentCommand": "claude",
+                    "keys": ["Escape"],
+                    "paneHasAgentProcess": true,
+                    "paneCommandMatches": true,
+                }, {
+                    "kind": "keys",
+                    "paneId": "%4",
+                    "socketPath": "/tmp/example-tmux.sock",
+                    "keys": ["Escape"],
                 }],
             }),
         );
