@@ -567,11 +567,9 @@ export function App() {
             openSessionInInbox(id)
           }}
           onOpenSessionBeside={(id) => {
-            window.open(
-              `?session=${encodeURIComponent(id)}`,
-              '_blank',
-              'noopener,noreferrer',
-            )
+            const query = new URLSearchParams({ session: id })
+            if (isMobile) query.set('screen', 'conversation')
+            window.open(`?${query.toString()}`, '_blank', 'noopener,noreferrer')
             setCommandPaletteOpen(false)
           }}
           onRunCommand={(command) => {

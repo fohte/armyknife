@@ -3,7 +3,10 @@ import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { userEvent } from 'vitest/browser'
 
-import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import {
+  getCommandPaletteModifierLabel,
+  getCommandPaletteShortcut,
+} from '#command-palette-shortcut'
 import { CommandPalette } from '#components/command-palette'
 import type { Session } from '#types'
 
@@ -56,10 +59,9 @@ function renderPalette(
   })
 }
 
-const openBesideModifier =
-  getCommandPaletteShortcut(navigator.platform).modifier === 'metaKey'
-    ? '⌘'
-    : 'Ctrl'
+const openBesideModifier = getCommandPaletteModifierLabel(
+  getCommandPaletteShortcut(navigator.platform),
+)
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
@@ -91,37 +93,43 @@ it('opens the project for the active result with a prefix and Enter', async () =
   expect(onOpenProject.mock.calls).toEqual([['notification refresh']])
 })
 
-it('opens the selected session beside with the platform modifier and Enter', () => {
-  vi.spyOn(navigator, 'platform', 'get').mockReturnValue('MacIntel')
-  const onOpenSession = vi.fn<(id: string) => void>()
-  const onOpenSessionBeside = vi.fn<(id: string) => void>()
-  renderPalette({ onOpenSession, onOpenSessionBeside })
-  const input = container.querySelector<HTMLInputElement>(
-    '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
-  )
-  if (input === null) throw new Error('Palette input was not rendered')
-  const event = new KeyboardEvent('keydown', {
-    key: 'Enter',
-    metaKey: true,
-    bubbles: true,
-    cancelable: true,
-  })
+it.each([
+  ['macOS', 'MacIntel', { metaKey: true }],
+  ['other platforms', 'Linux x86_64', { ctrlKey: true }],
+] as const)(
+  'opens the selected session beside with Enter on %s',
+  (_name, platform, modifiers) => {
+    vi.spyOn(navigator, 'platform', 'get').mockReturnValue(platform)
+    const onOpenSession = vi.fn<(id: string) => void>()
+    const onOpenSessionBeside = vi.fn<(id: string) => void>()
+    renderPalette({ onOpenSession, onOpenSessionBeside })
+    const input = container.querySelector<HTMLInputElement>(
+      '[aria-label="Jump to a session, tq task or project, or type > for commands"]',
+    )
+    if (input === null) throw new Error('Palette input was not rendered')
+    const event = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      bubbles: true,
+      cancelable: true,
+      ...modifiers,
+    })
 
-  act(() => {
-    input.dispatchEvent(event)
-  })
+    act(() => {
+      input.dispatchEvent(event)
+    })
 
-  const getActual = () => ({
-    defaultPrevented: event.defaultPrevented,
-    besideCalls: onOpenSessionBeside.mock.calls,
-    openCalls: onOpenSession.mock.calls,
-  })
-  expect(getActual()).toEqual({
-    defaultPrevented: true,
-    besideCalls: [['session-alerts']],
-    openCalls: [],
-  })
-})
+    const getActual = () => ({
+      defaultPrevented: event.defaultPrevented,
+      besideCalls: onOpenSessionBeside.mock.calls,
+      openCalls: onOpenSession.mock.calls,
+    })
+    expect(getActual()).toEqual({
+      defaultPrevented: true,
+      besideCalls: [['session-alerts']],
+      openCalls: [],
+    })
+  },
+)
 
 it('shows the primary task and the count of other linked tasks for a session', () => {
   renderPalette({

@@ -7,7 +7,10 @@ import {
   type PaletteItem,
   type PaletteScope,
 } from '#command-palette-model'
-import { getCommandPaletteShortcut } from '#command-palette-shortcut'
+import {
+  getCommandPaletteModifierLabel,
+  getCommandPaletteShortcut,
+} from '#command-palette-shortcut'
 import {
   itemColor,
   itemDetail,
@@ -78,8 +81,7 @@ export function CommandPalette({
   )
   const items = groups.flatMap((group) => group.items)
   const openBesideShortcut = getCommandPaletteShortcut(navigator.platform)
-  const openBesideModifier =
-    openBesideShortcut.modifier === 'metaKey' ? '⌘' : 'Ctrl'
+  const openBesideModifier = getCommandPaletteModifierLabel(openBesideShortcut)
   const actions =
     actionsFor?.type === 'session'
       ? [
