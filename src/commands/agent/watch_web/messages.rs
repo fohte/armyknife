@@ -289,12 +289,12 @@ fn load_conversation_with_queued_prompts(
         });
     }
 
-    for (seq, _, item) in &proposal_items {
+    for proposal in &proposal_items {
         if !messages
             .iter()
-            .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
+            .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == &proposal.seq))
         {
-            messages.push(item.clone());
+            messages.push(proposal.item.clone());
         }
     }
 
