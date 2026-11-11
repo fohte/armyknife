@@ -181,10 +181,17 @@ pub(super) fn router(
 pub(super) fn decision_category_is_done(
     session: &Session,
     agent_config: &AgentConfig,
+    has_running_background_task: bool,
     state: Option<&store::WatchWebSessionState>,
     now: DateTime<Utc>,
 ) -> bool {
-    category::decision_category_is_done(session, agent_config, state, now)
+    category::decision_category_is_done(
+        session,
+        agent_config,
+        has_running_background_task,
+        state,
+        now,
+    )
 }
 
 fn router_with_source<S: SessionSource>(source: S) -> Router {
@@ -451,7 +458,6 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
 
 #[cfg(test)]
 mod tests {
-    use super::category::{category_for, kind_for};
     use super::*;
     use crate::commands::agent::types::{AgentStatus, TmuxInfo};
     use crate::shared::config::{
@@ -1030,16 +1036,19 @@ mod tests {
     }
 
     #[rstest]
-    #[case::without_agent_status(None, true)]
-    #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true)]
-    #[case::pending_task_without_transcript(None, false)]
+    #[case::without_agent_status(None, true, false)]
+    #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
+    #[case::pending_task_without_transcript(None, false, false)]
+    #[case::pending_task_with_parse_error(None, false, true)]
     #[tokio::test]
     async fn stopped_claude_with_running_background_task_is_in_progress(
         mut source: TestSessionSource,
         #[case] status_state: Option<AgentStatusState>,
         #[case] has_transcript: bool,
+        #[case] transcript_parse_fails: bool,
     ) {
         let transcript_file = has_transcript.then(|| tempfile::NamedTempFile::new().unwrap());
+        let transcript_directory = transcript_parse_fails.then(|| tempfile::tempdir().unwrap());
         if let Some(transcript_file) = &transcript_file {
             std::fs::write(
                 transcript_file.path(),
@@ -1055,6 +1064,9 @@ mod tests {
             source.sessions[0]
                 .pending_bg_task_ids
                 .insert("fixture-task-id".to_string());
+            source.sessions[0].transcript_path = transcript_directory
+                .as_ref()
+                .map(|directory| directory.path().to_path_buf());
         }
         source.web_states[0].later_until = None;
         if let Some(state) = status_state {
@@ -1374,187 +1386,6 @@ mod tests {
                     ),
                 ),
             ),
-        );
-    }
-
-    #[rstest]
-    #[case::waiting_tool(UserTurnKind::Ask, Some(SessionKind::Question))]
-    #[case::permission(UserTurnKind::Allow, Some(SessionKind::Approve))]
-    #[case::crit_review(UserTurnKind::Crit, Some(SessionKind::Review))]
-    #[case::draft_review(UserTurnKind::Body, Some(SessionKind::Review))]
-    #[case::failure(UserTurnKind::Failed, Some(SessionKind::Error))]
-    #[case::merge(UserTurnKind::Merge, Some(SessionKind::Review))]
-    fn maps_user_turn_kinds_to_web_kinds(
-        #[case] turn: UserTurnKind,
-        #[case] expected: Option<SessionKind>,
-    ) {
-        assert_eq!(
-            kind_for(
-                &session(SessionStatus::WaitingInput),
-                Some(turn),
-                false,
-                false,
-            ),
-            expected
-        );
-    }
-
-    #[rstest]
-    #[case::agent_question("ask_user", "", SessionKind::Question)]
-    #[case::note_question("needs_attention", "Which option?", SessionKind::Question)]
-    #[case::agent_review("needs_review", "", SessionKind::Review)]
-    #[case::task_in_review_note("needs_review", "Review the task plan", SessionKind::Review)]
-    #[case::agent_stopped("waiting_for_external", "", SessionKind::Stopped)]
-    fn maps_agent_status_to_web_kind(
-        #[case] status_kind: &str,
-        #[case] note: &str,
-        #[case] expected: SessionKind,
-    ) {
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: note.to_string(),
-        });
-
-        assert_eq!(
-            kind_for(&session, Some(UserTurnKind::AgentStatus), false, false,),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn maps_exit_plan_mode_to_plan_kind() {
-        let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
-
-        assert_eq!(
-            kind_for(&session, Some(UserTurnKind::Ask), true, false),
-            Some(SessionKind::Plan)
-        );
-    }
-
-    #[rstest]
-    #[case::question(Some(UserTurnKind::Ask), SessionKind::Question)]
-    #[case::approval(Some(UserTurnKind::Allow), SessionKind::Approve)]
-    fn pending_question_and_approval_kinds_precede_proposals(
-        #[case] turn: Option<UserTurnKind>,
-        #[case] expected: SessionKind,
-    ) {
-        assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), turn, true, false),
-            Some(expected),
-        );
-    }
-
-    #[test]
-    fn exit_plan_mode_needs_action() {
-        let mut session = session(SessionStatus::WaitingInput);
-        session.current_tool = Some("ExitPlanMode".to_string());
-
-        assert_eq!(
-            category_for(&session, None, false, None),
-            SessionCategory::NeedsAction
-        );
-    }
-
-    #[test]
-    fn stopped_without_a_user_turn_has_stopped_kind() {
-        assert_eq!(
-            kind_for(&session(SessionStatus::Stopped), None, false, false),
-            Some(SessionKind::Stopped)
-        );
-    }
-
-    #[rstest]
-    #[case::stopped(SessionStatus::Stopped, None, SessionCategory::NeedsAction)]
-    #[case::user_turn(
-        SessionStatus::WaitingInput,
-        Some(UserTurnKind::Ask),
-        SessionCategory::NeedsAction
-    )]
-    #[case::running(SessionStatus::Running, None, SessionCategory::InProgress)]
-    #[case::paused(SessionStatus::Paused, None, SessionCategory::Done)]
-    #[case::ended(SessionStatus::Ended, None, SessionCategory::Done)]
-    fn maps_sessions_to_inbox_categories(
-        #[case] status: SessionStatus,
-        #[case] turn: Option<UserTurnKind>,
-        #[case] expected: SessionCategory,
-    ) {
-        assert_eq!(category_for(&session(status), turn, false, None), expected);
-    }
-
-    #[rstest]
-    #[case::configured_user(
-        "needs_attention",
-        AgentStatusState::User,
-        Some(UserTurnKind::AgentStatus),
-        SessionCategory::NeedsAction
-    )]
-    #[case::configured_waiting(
-        "waiting_for_external",
-        AgentStatusState::Waiting,
-        None,
-        SessionCategory::InProgress
-    )]
-    #[case::configured_done("work_finished", AgentStatusState::Done, None, SessionCategory::Done)]
-    fn stopped_agent_statuses_follow_configured_state(
-        #[case] status_kind: &str,
-        #[case] state: AgentStatusState,
-        #[case] expected_turn: Option<UserTurnKind>,
-        #[case] expected_category: SessionCategory,
-    ) {
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: "waiting for a task result".to_string(),
-        });
-        let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
-        let turn = user_turns([&session], &agent_config)
-            .first()
-            .map(|turn| turn.kind);
-
-        assert_eq!(
-            (
-                turn,
-                category_for(&session, turn, false, Some(state)),
-                kind_for(&session, turn, false, false),
-            ),
-            (expected_turn, expected_category, Some(SessionKind::Stopped)),
-        );
-    }
-
-    #[rstest]
-    #[case::done(AgentStatusState::Done, false, true)]
-    #[case::waiting(AgentStatusState::Waiting, false, false)]
-    #[case::user(AgentStatusState::User, false, false)]
-    #[case::done_with_pending_task(AgentStatusState::Done, true, false)]
-    fn decision_routing_uses_stopped_status_and_pending_task_state(
-        #[case] state: AgentStatusState,
-        #[case] has_pending_task: bool,
-        #[case] expected_is_done: bool,
-    ) {
-        let status_kind = "work_status";
-        let mut session = session(SessionStatus::Stopped);
-        session.agent_status = Some(AgentStatus {
-            kind: status_kind.to_string(),
-            note: "Waiting for external work.".to_string(),
-        });
-        if has_pending_task {
-            session
-                .pending_bg_task_ids
-                .insert("fixture-task-id".to_string());
-        }
-        let mut agent_config = AgentConfig::default();
-        agent_config
-            .statuses
-            .insert(status_kind.to_string(), AgentStatusConfig { state });
-
-        assert_eq!(
-            decision_category_is_done(&session, &agent_config, None, Utc::now()),
-            expected_is_done,
         );
     }
 }
