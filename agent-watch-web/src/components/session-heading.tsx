@@ -1,3 +1,5 @@
+import '#components/session-heading.css'
+
 import { SessionPausedBadge } from '#components/session-paused-badge'
 
 export function SessionHeading({
