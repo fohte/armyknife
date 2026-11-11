@@ -4726,14 +4726,34 @@ it('skips committing an unchanged memoized conversation row', () => {
   expect(renderMessage).toHaveBeenCalledTimes(1)
 })
 
-it('keeps message rows memoized when linked sessions only change elapsed time', () => {
+it('keeps message rows memoized when linked session details stay unchanged', () => {
   const message: ChatItem = {
     type: 'assistant',
     text: 'The conversation is unchanged.',
   }
   const messages = [message]
-  const initialSession = { ...session, elapsedSeconds: 1 }
-  const refreshedSession = { ...session, elapsedSeconds: 2 }
+  const initialSession = {
+    ...session,
+    elapsedSeconds: 1,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 1,
+      isClosed: false,
+    },
+  }
+  const refreshedSession = {
+    ...initialSession,
+    elapsedSeconds: 2,
+    task: {
+      id: 'fixture-linked-task',
+      number: 17,
+      title: 'Refresh linked sessions',
+      priority: 2,
+      isClosed: true,
+    },
+  }
   const initialSessions = [initialSession]
   const refreshedSessions = [refreshedSession]
   const onAction = () => Promise.resolve(true)

@@ -66,14 +66,17 @@ type ConversationPaneViewProps = {
 function useSessionLinkTargets(
   sessions: readonly Session[],
 ): readonly SessionLinkTarget[] {
-  // Elapsed-time updates replace session objects even when link details are unchanged.
+  // Link cards only use these fields, so unrelated session updates keep rows stable.
   const targetsRef = useRef<readonly SessionLinkTarget[] | null>(null)
   const nextTargets = sessions.map(
     ({ id, category, isPaused, task, repo, title }) => ({
       id,
       category,
       isPaused,
-      task,
+      task:
+        task === null
+          ? null
+          : { id: task.id, number: task.number, title: task.title },
       repo,
       title,
     }),
