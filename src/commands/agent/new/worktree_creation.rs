@@ -185,6 +185,10 @@ pub(super) fn run_worktree_creation(
             let branch = format!("{branch_prefix}{name_no_prefix}");
 
             let branch_rollback = if repo.local_branch_exists(&branch) {
+                // ForceNewBranch resets a pre-existing local branch's tip; capture
+                // it so rollback can restore the user's branch to its previous
+                // commit on hook failure. Without the prior tip we cannot undo the
+                // reset safely, so refuse rather than risk silent branch loss.
                 let tip = run_git(repo.workdir(), ["rev-parse", &branch]).with_context(|| {
                     format!("Failed to capture tip of '{branch}' before force reset")
                 })?;
