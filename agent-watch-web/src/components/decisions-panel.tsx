@@ -21,11 +21,14 @@ function changeTargetName(session: Session) {
   return session.title
 }
 
-function isEditableTarget(target: EventTarget | null) {
+function isInteractiveTarget(target: EventTarget | null) {
   return (
     target instanceof HTMLElement &&
     (target.isContentEditable ||
-      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+      target.closest(
+        'button, a[href], input, textarea, select, [role="button"], [role="tab"]',
+      ) !== null)
   )
 }
 
@@ -64,7 +67,7 @@ export function DecisionsPanel({
         event.ctrlKey ||
         event.metaKey ||
         event.shiftKey ||
-        isEditableTarget(event.target) ||
+        isInteractiveTarget(event.target) ||
         selectedDecision === undefined
       ) {
         return

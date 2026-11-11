@@ -15,6 +15,7 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
   ChatItem,
@@ -158,6 +159,7 @@ export function ConversationPaneView({
   const decisionPositions = new Map(
     decisions.map((decision, index) => [decision.seq, index + 1]),
   )
+  const decisionLabel = formatSessionDecisionCount(session)
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
   const isReview = session.kind === 'Review'
@@ -359,7 +361,7 @@ export function ConversationPaneView({
                 <span aria-hidden="true">◐</span>
                 {runningCount > 0 ? <span>{runningCount}</span> : null}
               </Button>
-              {(session.decisionCount ?? 0) > 0 ? (
+              {decisionLabel !== null ? (
                 <Button
                   className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
                   type="button"
@@ -370,11 +372,7 @@ export function ConversationPaneView({
                     onToggleDecisionsPanel()
                   }}
                 >
-                  ◇{' '}
-                  {session.category === 'done' &&
-                  (session.unreviewedDecisionCount ?? 0) > 0
-                    ? `${String(session.unreviewedDecisionCount)} decisions to review`
-                    : `${String(session.decisionCount)} ${session.decisionCount === 1 ? 'decision' : 'decisions'}`}
+                  {decisionLabel}
                 </Button>
               ) : null}
               {session.pullRequest ? (

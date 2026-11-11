@@ -109,6 +109,77 @@ it('uses Y to approve the selected decision and select the next pending one', as
   })
 })
 
+it('keeps the selected decision when the Y action fails', async () => {
+  const onOk = vi.fn(() => Promise.resolve(false))
+  const onSelect = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={decisions}
+        session={session}
+        selectedSeq={1}
+        onSelect={onSelect}
+        onOk={onOk}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  await act(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y' }))
+    return Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    ok: onOk.mock.calls,
+    selection: onSelect.mock.calls,
+  })
+  expect(snapshot()).toEqual({ ok: [[1]], selection: [] })
+})
+
+it('skips reviewed decisions when Y selects the next pending decision', async () => {
+  const firstDecision = decisions.find(({ seq }) => seq === 1)
+  const secondDecision = decisions.find(({ seq }) => seq === 2)
+  if (firstDecision === undefined || secondDecision === undefined) {
+    throw new Error('Expected the test decisions to be present')
+  }
+  const reviewedDecision: Decision = {
+    ...secondDecision,
+    review: 'ok',
+  }
+  const lastDecision: Decision = {
+    ...secondDecision,
+    seq: 3,
+  }
+  const onOk = vi.fn(() => Promise.resolve(true))
+  const onSelect = vi.fn()
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <DecisionsPanel
+        decisions={[firstDecision, reviewedDecision, lastDecision]}
+        session={session}
+        selectedSeq={1}
+        onSelect={onSelect}
+        onOk={onOk}
+        onChange={vi.fn(() => Promise.resolve(true))}
+      />,
+    )
+  })
+
+  await act(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'y' }))
+    return Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    ok: onOk.mock.calls,
+    selection: onSelect.mock.calls,
+  })
+  expect(snapshot()).toEqual({ ok: [[1]], selection: [[3]] })
+})
+
 it('does not use Y while a text field is focused', () => {
   const onOk = renderPanel()
   const textarea = document.createElement('textarea')
@@ -157,4 +228,31 @@ it('uses Enter to jump to the selected conversation row', () => {
     [{ behavior: 'smooth', block: 'center' }],
   ])
   row.remove()
+})
+
+it('leaves Enter on a focused button to the browser', () => {
+  renderPanel()
+  const row = document.createElement('div')
+  row.id = 'decision-row-1'
+  const scrollIntoView = vi.fn()
+  row.scrollIntoView = scrollIntoView
+  const button = document.createElement('button')
+  document.body.append(row, button)
+  const event = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+  })
+
+  act(() => {
+    button.dispatchEvent(event)
+  })
+
+  const snapshot = () => ({
+    prevented: event.defaultPrevented,
+    scroll: scrollIntoView.mock.calls,
+  })
+  expect(snapshot()).toEqual({ prevented: false, scroll: [] })
+  row.remove()
+  button.remove()
 })

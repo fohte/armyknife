@@ -5,6 +5,7 @@ import { Chip } from '@fohte/ui/chip'
 
 import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -69,18 +70,6 @@ function sessionKind(session: Session) {
   return session.kind ?? 'Stopped'
 }
 
-function sessionDecisionLabel(session: Session) {
-  const decisionCount = session.decisionCount ?? 0
-  const unreviewedDecisionCount = session.unreviewedDecisionCount ?? 0
-
-  if (session.category === 'done' && unreviewedDecisionCount > 0) {
-    return `◇ ${String(unreviewedDecisionCount)} decisions to review`
-  }
-  if (decisionCount === 0) return null
-  const label = decisionCount === 1 ? 'decision' : 'decisions'
-  return `◇ ${String(decisionCount)} ${label}`
-}
-
 export function SessionRow({
   session,
   selected,
@@ -90,7 +79,7 @@ export function SessionRow({
   compactRepo = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
-  const decisionLabel = sessionDecisionLabel(session)
+  const decisionLabel = formatSessionDecisionCount(session)
 
   return (
     <li className="session-list-item">
