@@ -542,7 +542,7 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('answers a question from a number key or a choice click', async () => {
+it('prevents a choice click from duplicating a number-key answer', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question])
 
@@ -562,18 +562,18 @@ it('answers a question from a number key or a choice click', async () => {
     await Promise.resolve()
   })
 
-  const actual = JSON.stringify([
-    onAction.mock.calls,
-    keyEvent.defaultPrevented,
-  ])
-  const expected = JSON.stringify([
-    [
-      ['answer', { choice: 2 }],
-      ['answer', { choice: 1 }],
-    ],
-    true,
-  ])
-  expect(actual).toBe(expected)
+  const snapshot = () => ({
+    actionCalls: onAction.mock.calls,
+    keyDefaultPrevented: keyEvent.defaultPrevented,
+    choiceDisabled: container.querySelector<HTMLButtonElement>(
+      '.chat-question-choices button',
+    )?.disabled,
+  })
+  expect(snapshot()).toEqual({
+    actionCalls: [['answer', { choice: 2 }]],
+    keyDefaultPrevented: true,
+    choiceDisabled: true,
+  })
 })
 
 it('closes a question before sending a contextual freeform answer', async () => {

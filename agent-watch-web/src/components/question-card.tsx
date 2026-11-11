@@ -7,6 +7,7 @@ import {
   type SubmitEvent,
   useEffect,
   useId,
+  useRef,
   useState,
 } from 'react'
 
@@ -50,26 +51,51 @@ export function QuestionCard({
   const [draft, setDraft] = useState('')
   const [isSending, setIsSending] = useState(false)
   const [questionSkipped, setQuestionSkipped] = useState(false)
+  const [choiceAnswerAccepted, setChoiceAnswerAccepted] = useState(false)
   const [sendFailed, setSendFailed] = useState(false)
+  const isSendingRef = useRef(false)
+  const questionSkippedRef = useRef(false)
+  const choiceAnswerAcceptedRef = useRef(false)
   const selectedChoice =
     answer !== null && choices.some((choice) => choice.label === answer)
       ? answer
       : null
   const showFreeformForm =
-    (canAnswer && !questionSkipped) || (questionSkipped && draft.trim() !== '')
+    (canAnswer && !questionSkipped && !choiceAnswerAccepted) ||
+    (questionSkipped && draft.trim() !== '')
+
+  const setSending = (sending: boolean) => {
+    isSendingRef.current = sending
+    setIsSending(sending)
+  }
+
+  const markQuestionSkipped = () => {
+    questionSkippedRef.current = true
+    setQuestionSkipped(true)
+  }
+
+  const markChoiceAnswerAccepted = () => {
+    choiceAnswerAcceptedRef.current = true
+    setChoiceAnswerAccepted(true)
+  }
 
   const submitFreeformAnswer = (event: SubmitEvent<HTMLFormElement>) => {
     event.preventDefault()
     const answerText = draft.trim()
-    if ((!canAnswer && !questionSkipped) || isSending || answerText === '') {
+    if (
+      (!canAnswer && !questionSkippedRef.current) ||
+      choiceAnswerAcceptedRef.current ||
+      isSendingRef.current ||
+      answerText === ''
+    ) {
       return
     }
-    setIsSending(true)
+    setSending(true)
     void (async () => {
-      if (!questionSkipped) {
+      if (!questionSkippedRef.current) {
         const skipped = await onSkip()
         if (!skipped) return null
-        setQuestionSkipped(true)
+        markQuestionSkipped()
       }
       return onFreeformAnswer(answerText)
     })()
@@ -82,38 +108,60 @@ export function QuestionCard({
         }
       })
       .finally(() => {
-        setIsSending(false)
+        setSending(false)
       })
   }
 
   const skipQuestion = () => {
-    if (!canAnswer || questionSkipped || isSending) return
-    setIsSending(true)
+    if (
+      !canAnswer ||
+      questionSkippedRef.current ||
+      choiceAnswerAcceptedRef.current ||
+      isSendingRef.current
+    ) {
+      return
+    }
+    setSending(true)
     void onSkip()
       .then((skipped) => {
-        if (skipped) setQuestionSkipped(true)
+        if (skipped) markQuestionSkipped()
       })
       .finally(() => {
-        setIsSending(false)
+        setSending(false)
       })
   }
 
   const answerChoice = (choice: number) => {
-    if (!canAnswer || questionSkipped || answer !== null || isSending) {
+    if (
+      !canAnswer ||
+      questionSkippedRef.current ||
+      choiceAnswerAcceptedRef.current ||
+      answer !== null ||
+      isSendingRef.current
+    ) {
       return false
     }
-    setIsSending(true)
-    void onAnswer(choice).finally(() => {
-      setIsSending(false)
-    })
+    setSending(true)
+    void onAnswer(choice)
+      .then((sent) => {
+        if (sent) markChoiceAnswerAccepted()
+      })
+      .finally(() => {
+        setSending(false)
+      })
     return true
   }
 
+  const answerChoiceRef = useRef(answerChoice)
+  answerChoiceRef.current = answerChoice
+
   useEffect(() => {
+    if (!canAnswer || isMobile || questionSkipped || choiceAnswerAccepted) {
+      return
+    }
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      if (isMobile) return
       const choice = numberShortcutChoice(event, choices.length)
-      if (choice === null || !answerChoice(choice + 1)) return
+      if (choice === null || !answerChoiceRef.current(choice + 1)) return
       event.preventDefault()
     }
 
@@ -121,15 +169,22 @@ export function QuestionCard({
     return () => {
       window.removeEventListener('keydown', onQuestionKeyDown)
     }
-  }, [answerChoice, choices.length, isMobile])
+  }, [
+    canAnswer,
+    choiceAnswerAccepted,
+    choices.length,
+    isMobile,
+    questionSkipped,
+  ])
 
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
     if (
       event.key !== 'Escape' ||
       event.target instanceof HTMLTextAreaElement ||
       !canAnswer ||
-      questionSkipped ||
-      isSending
+      questionSkippedRef.current ||
+      choiceAnswerAcceptedRef.current ||
+      isSendingRef.current
     ) {
       return
     }
@@ -175,7 +230,11 @@ export function QuestionCard({
             aria-pressed={selectedChoice === choice.label}
             key={`${String(choiceIndex)}-${choice.label}`}
             disabled={
-              !canAnswer || questionSkipped || answer !== null || isSending
+              !canAnswer ||
+              questionSkipped ||
+              choiceAnswerAccepted ||
+              answer !== null ||
+              isSending
             }
             onClick={() => {
               answerChoice(choiceIndex + 1)
@@ -231,7 +290,7 @@ export function QuestionCard({
           </div>
         </form>
       ) : null}
-      {canAnswer && !questionSkipped ? (
+      {canAnswer && !questionSkipped && !choiceAnswerAccepted ? (
         <div className="chat-question-actions">
           <Button
             type="button"

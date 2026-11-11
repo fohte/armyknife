@@ -307,7 +307,7 @@ it('skips a question when Escape is pressed elsewhere in the card', async () => 
   expect(snapshot()).toEqual({ skipCalls: [[]], defaultPrevented: true })
 })
 
-it('prevents skip while a choice answer is being sent', async () => {
+it('prevents skip and repeat shortcuts while a choice answer is being sent', async () => {
   let resolveAnswer: (sent: boolean) => void = () => undefined
   const answerPromise = new Promise<boolean>((resolve) => {
     resolveAnswer = resolve
@@ -336,22 +336,32 @@ it('prevents skip while a choice answer is being sent', async () => {
   act(() => {
     card.dispatchEvent(escapeEvent)
   })
+  const shortcutEvent = new KeyboardEvent('keydown', {
+    key: '2',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(shortcutEvent)
+  })
   const whileSending = {
     choiceDisabled: choice.disabled,
     skipDisabled: skipButton.disabled,
     skipCalls: onSkip.mock.calls,
     escapeDefaultPrevented: escapeEvent.defaultPrevented,
+    shortcutDefaultPrevented: shortcutEvent.defaultPrevented,
+    answerCalls: onAnswer.mock.calls,
   }
 
   await act(async () => {
-    resolveAnswer(true)
+    resolveAnswer(false)
     await answerPromise
     await Promise.resolve()
   })
 
   const snapshot = () => ({
     whileSending,
-    afterSending: {
+    afterFailure: {
       choiceDisabled: choice.disabled,
       skipDisabled: skipButton.disabled,
       skipCalls: onSkip.mock.calls,
@@ -364,12 +374,54 @@ it('prevents skip while a choice answer is being sent', async () => {
       skipDisabled: true,
       skipCalls: [],
       escapeDefaultPrevented: false,
+      shortcutDefaultPrevented: false,
+      answerCalls: [[1]],
     },
-    afterSending: {
+    afterFailure: {
       choiceDisabled: false,
       skipDisabled: false,
       skipCalls: [],
     },
+    answerCalls: [[1]],
+  })
+})
+
+it('keeps the question closed after a choice answer succeeds', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onAnswer }))
+
+  const choice = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-question-choices button'),
+  )
+  await act(async () => {
+    choice.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const shortcutEvent = new KeyboardEvent('keydown', {
+    key: '1',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    document.body.dispatchEvent(shortcutEvent)
+  })
+
+  const snapshot = () => ({
+    choiceDisabled: choice.disabled,
+    freeformFormPresent: container.querySelector('form') !== null,
+    skipButtonPresent: Array.from(container.querySelectorAll('button')).some(
+      (button) => button.textContent.includes('No answer'),
+    ),
+    shortcutDefaultPrevented: shortcutEvent.defaultPrevented,
+    answerCalls: onAnswer.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    choiceDisabled: true,
+    freeformFormPresent: false,
+    skipButtonPresent: false,
+    shortcutDefaultPrevented: false,
     answerCalls: [[1]],
   })
 })
