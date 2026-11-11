@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.573](https://github.com/fohte/armyknife/compare/v0.1.572...v0.1.573) (2026-11-11)
+
+
+### Features
+
+* **agent/proposal:** allow proposal recording ([#1505](https://github.com/fohte/armyknife/issues/1505)) ([30b219a](https://github.com/fohte/armyknife/commit/30b219afb3ead46c9e42bf87f931d7ae7c03ed51))
+
 ## [0.1.572](https://github.com/fohte/armyknife/compare/v0.1.571...v0.1.572) (2026-11-11)
 
 
