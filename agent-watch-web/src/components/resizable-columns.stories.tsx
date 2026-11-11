@@ -106,7 +106,7 @@ export const FirstPaneIsCollapsed: Story = {
 }
 
 export const NavigationHasAnAdjustableBoundary: Story = {
-  name: 'The navigation and main content meet at 240px',
+  name: 'The Inbox view shows the navigation beside its content',
   args: {
     first: navigation('inbox'),
     second: (
@@ -122,7 +122,7 @@ export const NavigationHasAnAdjustableBoundary: Story = {
 }
 
 export const BoardHasTheSameNavigationBoundary: Story = {
-  name: 'The Board view keeps the navigation at 240px',
+  name: 'The Board view shows the navigation beside its content',
   args: {
     first: navigation('board'),
     second: (
