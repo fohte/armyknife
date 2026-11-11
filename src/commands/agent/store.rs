@@ -23,8 +23,8 @@ mod queued_prompts;
 pub(crate) use archive::{ArchiveLogContext, archive_codex_thread_before_delete_with};
 pub(crate) use database::set_watch_web_compacting;
 pub(crate) use database::{
-    AgentProposal, SessionLock, SessionStoreChanges, WakeLock, WatchWebQueuedPrompt,
-    WatchWebSessionState, serialize_session,
+    AgentDecision, AgentDecisionCounts, AgentProposal, SessionLock, SessionStoreChanges, WakeLock,
+    WatchWebQueuedPrompt, WatchWebSessionState, serialize_session,
 };
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, ensure_watch_web_user_marker_from,
@@ -133,6 +133,59 @@ pub(crate) fn watch_web_user_marker_from(
     session_id: &str,
 ) -> Result<Option<String>> {
     database::watch_web_user_marker(sessions_dir, session_id)
+}
+
+pub(crate) fn insert_agent_decision(
+    sessions_dir: &Path,
+    session_id: &str,
+    title: &str,
+    why: &str,
+    considered: &[String],
+    easy_to_change: &str,
+) -> Result<i64> {
+    database::insert_agent_decision(
+        sessions_dir,
+        session_id,
+        title,
+        why,
+        considered,
+        easy_to_change,
+    )
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
+pub(crate) fn agent_decisions_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<Vec<AgentDecision>> {
+    database::agent_decisions(sessions_dir, session_id)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
+pub(crate) fn agent_decision_counts_from(
+    sessions_dir: &Path,
+    session_id: &str,
+) -> Result<AgentDecisionCounts> {
+    database::agent_decision_counts(sessions_dir, session_id)
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
+pub(crate) fn set_agent_decision_review_from(
+    sessions_dir: &Path,
+    session_id: &str,
+    seq: i64,
+    review: &str,
+) -> Result<()> {
+    database::set_agent_decision_review(sessions_dir, session_id, seq, review)
 }
 
 /// Acquires the exclusive session lock ahead of a load-mutate-save round

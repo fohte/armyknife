@@ -5,6 +5,7 @@ import { Button } from '@fohte/ui/button'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 
+import { numberShortcutChoice } from '#components/conversation-keyboard'
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
 import { CopySessionIdControl } from '#components/copy-session-id-control'
@@ -18,6 +19,7 @@ import { SessionTaskLinks } from '#components/session-task-links'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import type {
   BackgroundTask,
   ChatItem,
@@ -46,7 +48,11 @@ type ConversationPaneViewProps = {
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
+  decisionsPanelOpen?: boolean
+  selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
+  onToggleDecisionsPanel?: () => void
+  onSelectDecision?: (seq: number) => void
   runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
@@ -105,7 +111,11 @@ export function ConversationPaneView({
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
+  decisionsPanelOpen = false,
+  selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
+  onToggleDecisionsPanel = () => undefined,
+  onSelectDecision = () => undefined,
   runningCount = 0,
   fileDropActive = false,
   onBack,
@@ -146,6 +156,19 @@ export function ConversationPaneView({
     (message) =>
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
+  )
+  const decisions = conversationMessages.filter(
+    (message) => message.type === 'decision',
+  )
+  const decisionPositions = new Map(
+    decisions.map((decision, index) => [decision.seq, index + 1]),
+  )
+  const decisionLabel = formatSessionDecisionCount(session)
+  const hasUnansweredProposal = messages.some(
+    (message) =>
+      message.type === 'proposal' &&
+      message.answer === null &&
+      !message.resolved,
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
@@ -191,22 +214,8 @@ export function ConversationPaneView({
 
   useEffect(() => {
     const onQuestionKeyDown = (event: WindowEventMap['keydown']) => {
-      const target = event.target
       if (
         isMobile ||
-        event.defaultPrevented ||
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        (target instanceof HTMLElement &&
-          (target.isContentEditable ||
-            ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)))
-      ) {
-        return
-      }
-      if (
-        !/^[1-9]$/.test(event.key) ||
         waitingQuestion?.type !== 'question' ||
         waitingQuestion.answer !== null ||
         activeQuestionIndex < 0 ||
@@ -215,11 +224,10 @@ export function ConversationPaneView({
       ) {
         return
       }
-      const choice = Number(event.key)
-      if (choice <= waitingQuestion.choices.length) {
-        event.preventDefault()
-        void onAction('answer', { choice })
-      }
+      const choice = numberShortcutChoice(event, waitingQuestion.choices.length)
+      if (choice === null) return
+      event.preventDefault()
+      void onAction('answer', { choice: choice + 1 })
     }
 
     window.addEventListener('keydown', onQuestionKeyDown)
@@ -342,6 +350,20 @@ export function ConversationPaneView({
                     <span aria-hidden="true">◐</span>
                     {runningCount > 0 ? <span>{runningCount}</span> : null}
                   </Button>
+                  {decisionLabel !== null ? (
+                    <Button
+                      className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                      type="button"
+                      variant="plain"
+                      aria-pressed={decisionsPanelOpen}
+                      aria-controls="session-status-panel"
+                      onClick={() => {
+                        onToggleDecisionsPanel()
+                      }}
+                    >
+                      {decisionLabel}
+                    </Button>
+                  ) : null}
                   {session.pullRequest ? (
                     <a
                       className="conversation-pr-link"
@@ -401,6 +423,12 @@ export function ConversationPaneView({
             activeQuestionIndex,
             index,
             isMobile,
+            selectedDecisionSeq,
+            decisionPosition:
+              message.type === 'decision' && decisionPositions.has(message.seq)
+                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
+                : undefined,
+            onSelectDecision,
             message,
             onAction,
             onOpenInTerminal: openInTerminal,
@@ -438,9 +466,11 @@ export function ConversationPaneView({
       <MessageComposer
         draft={draft}
         placeholder={
-          session.pullRequest
-            ? `Message PR ${String(session.pullRequest.number)}`
-            : 'Message session'
+          hasUnansweredProposal
+            ? 'Choose an option above, or message the session'
+            : session.pullRequest
+              ? `Message PR ${String(session.pullRequest.number)}`
+              : 'Message session'
         }
         disabled={actions?.message !== true}
         isSending={isSending}

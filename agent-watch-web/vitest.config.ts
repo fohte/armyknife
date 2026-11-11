@@ -31,6 +31,7 @@ const appTestFiles = [
   'src/components/conversation-pane.test.tsx',
   'src/components/user-with-content.browser.test.tsx',
   'src/components/question-card.test.tsx',
+  'src/components/proposal-card.test.tsx',
   'src/components/message-composer.test.tsx',
   'src/components/crit-pane.test.tsx',
   'src/components/resizable-columns.test.tsx',
@@ -42,6 +43,8 @@ const appTestFiles = [
   'src/components/session-task-links.test.tsx',
   'src/components/inbox-view.test.tsx',
   'src/components/session-status-panel.test.tsx',
+  'src/components/decision-card.test.tsx',
+  'src/components/decisions-panel.test.tsx',
 ]
 
 export default mergeConfig(

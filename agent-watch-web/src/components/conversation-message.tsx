@@ -2,6 +2,7 @@ import '#components/conversation-message.css'
 
 import type { ReactNode } from 'react'
 
+import { DecisionCard } from '#components/decision-card'
 import { MarkdownMessage } from '#components/markdown-message'
 import { PeerMessage } from '#components/peer-message'
 import {
@@ -9,7 +10,9 @@ import {
   PermissionCard,
   type PermissionRequestIdentity,
 } from '#components/permission-card'
+import { ProposalCard } from '#components/proposal-card'
 import { QuestionCard } from '#components/question-card'
+import { SubagentReport } from '#components/subagent-report'
 import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
@@ -25,6 +28,9 @@ type RenderConversationMessageOptions = {
   activeQuestionIndex: number
   index: number
   isMobile: boolean
+  selectedDecisionSeq: number | null
+  decisionPosition: string | undefined
+  onSelectDecision: (seq: number) => void
   message: ChatItem
   pendingAction: PendingPermissionAction
   onAction: (
@@ -44,6 +50,9 @@ export function renderConversationMessage({
   activeQuestionIndex,
   index,
   isMobile,
+  selectedDecisionSeq,
+  decisionPosition,
+  onSelectDecision,
   message,
   pendingAction,
   onAction,
@@ -70,6 +79,16 @@ export function renderConversationMessage({
     return (
       <PeerMessage
         key={`peer-${String(index)}`}
+        message={message}
+        onSelectSession={onSelectSession}
+        sessions={sessions}
+      />
+    )
+  }
+  if (message.type === 'subagent_report') {
+    return (
+      <SubagentReport
+        key={`subagent-report-${String(index)}`}
         message={message}
         onSelectSession={onSelectSession}
         sessions={sessions}
@@ -143,6 +162,46 @@ export function renderConversationMessage({
           void onAction('answer', { choice })
         }}
         onOpenInTerminal={onOpenInTerminal}
+      />
+    )
+  }
+  if (message.type === 'decision') {
+    return (
+      <DecisionCard
+        key={`decision-${String(message.seq)}-${String(index)}`}
+        decision={message}
+        variant="conversation"
+        selected={message.seq === selectedDecisionSeq}
+        {...(decisionPosition === undefined
+          ? {}
+          : { position: decisionPosition })}
+        onSelect={() => {
+          onSelectDecision(message.seq)
+        }}
+        onOk={() => onAction(`decisions/${String(message.seq)}/ok`)}
+        onRequestChange={(comment) =>
+          onAction(`decisions/${String(message.seq)}/change`, { comment })
+        }
+      />
+    )
+  }
+  if (message.type === 'proposal') {
+    return (
+      <ProposalCard
+        key={`proposal-${String(message.seq)}`}
+        seq={message.seq}
+        title={message.title}
+        summary={message.summary}
+        options={message.options}
+        answer={message.answer}
+        resolved={message.resolved}
+        isMobile={isMobile}
+        onAnswer={(answer) =>
+          onAction(`proposals/${String(message.seq)}/answer`, {
+            choice: answer.choice,
+            comment: answer.comment,
+          })
+        }
       />
     )
   }

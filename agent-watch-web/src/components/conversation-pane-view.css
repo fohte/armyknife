@@ -130,7 +130,8 @@
   margin-left: auto;
 }
 
-.conversation-header-actions [data-slot='button'] {
+.conversation-header-actions
+  [data-slot='button']:not(.aw-button):not(.conversation-status-panel-toggle) {
   height: 26px;
   min-height: 26px;
   padding: 0 10px;
