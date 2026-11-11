@@ -12,6 +12,7 @@ use serde::Serialize;
 use super::EnrichmentUpdates;
 use super::interrupted::interrupted_session_ids;
 use super::session_enrichment::{SessionEnrichmentCache, SessionTaskMetadata};
+use crate::commands::agent::proposal::ProposalBody;
 use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
@@ -344,17 +345,15 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
         .collect();
     let repo_by_id = resolve_repos_for_sessions(&sessions, &all_sessions, resolve_repo);
     let mut unanswered_proposal_titles = HashMap::new();
-    for session_id in store::unanswered_agent_proposal_session_ids()? {
-        let Some(proposal) = store::agent_proposals(&session_id)?
-            .into_iter()
-            .find(|proposal| proposal.resolved_at.is_none())
-        else {
-            continue;
-        };
-        let body: serde_json::Value = serde_json::from_str(&proposal.body)?;
-        if let Some(title) = body.get("title").and_then(serde_json::Value::as_str) {
-            unanswered_proposal_titles.insert(session_id, title.to_string());
-        }
+    let visible_session_ids = sessions
+        .iter()
+        .map(|session| session.session_id.clone())
+        .collect::<Vec<_>>();
+    for (session_id, body) in store::unanswered_agent_proposal_bodies(&visible_session_ids)? {
+        let proposal: ProposalBody = serde_json::from_str(&body)?;
+        unanswered_proposal_titles
+            .entry(session_id)
+            .or_insert(proposal.title);
     }
 
     Ok(SessionSnapshot {

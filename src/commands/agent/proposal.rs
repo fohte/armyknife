@@ -44,23 +44,30 @@ pub struct AddArgs {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalBody {
-    title: String,
-    summary: Option<String>,
-    options: Vec<ProposalOption>,
+pub(crate) struct ProposalBody {
+    pub(crate) title: String,
+    pub(crate) summary: Option<String>,
+    pub(crate) options: Vec<ProposalOption>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ProposalOption {
-    label: String,
-    description: Option<String>,
+pub(crate) struct ProposalOption {
+    pub(crate) label: String,
+    pub(crate) description: Option<String>,
     #[serde(default)]
-    pros: Vec<String>,
+    pub(crate) pros: Vec<String>,
     #[serde(default)]
-    cons: Vec<String>,
+    pub(crate) cons: Vec<String>,
     #[serde(default)]
-    recommended: bool,
+    pub(crate) recommended: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProposalAnswer {
+    pub(crate) choice: Option<usize>,
+    pub(crate) comment: Option<String>,
 }
 
 pub fn run(command: &ProposalCommands) -> Result<()> {

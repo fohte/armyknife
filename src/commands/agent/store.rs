@@ -427,8 +427,10 @@ pub(crate) fn close_unanswered_agent_proposals(
     database::close_unanswered_agent_proposals(sessions_dir, session_id)
 }
 
-pub(crate) fn unanswered_agent_proposal_session_ids() -> Result<Vec<String>> {
-    database::unanswered_agent_proposal_session_ids(&sessions_dir()?)
+pub(crate) fn unanswered_agent_proposal_bodies(
+    session_ids: &[String],
+) -> Result<Vec<(String, String)>> {
+    database::unanswered_agent_proposal_bodies(&sessions_dir()?, session_ids)
 }
 
 pub(crate) fn agent_proposals(session_id: &str) -> Result<Vec<AgentProposal>> {

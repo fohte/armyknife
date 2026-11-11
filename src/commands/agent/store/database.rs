@@ -26,7 +26,7 @@ pub(crate) use decisions::{
 pub(crate) use proposals::AgentProposal;
 pub(crate) use proposals::{
     add_agent_proposal, agent_proposals, close_unanswered_agent_proposals,
-    unanswered_agent_proposal_session_ids, write_agent_proposal_answer,
+    unanswered_agent_proposal_bodies, write_agent_proposal_answer,
 };
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{

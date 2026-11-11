@@ -24,6 +24,7 @@ pub(super) fn router() -> Router {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
+        proposal_answer_lock: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 
@@ -57,6 +58,8 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
+    // Delivery precedes persistence, so concurrent answers must share a gate.
+    proposal_answer_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 trait ActionRuntime: Send + Sync {
@@ -559,6 +562,7 @@ mod tests {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
+                proposal_answer_lock: Arc::new(tokio::sync::Mutex::new(())),
             })
         }
 

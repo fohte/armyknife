@@ -1,9 +1,10 @@
 use anyhow::Context;
 use axum::Json;
 use axum::extract::{Path as RoutePath, State};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::super::super::{
+    proposal::{ProposalAnswer, ProposalBody},
     store,
     types::{Engine, SessionStatus},
 };
@@ -19,28 +20,13 @@ pub(super) struct AnswerRequest {
     comment: Option<String>,
 }
 
-#[derive(Serialize)]
-struct StoredAnswer {
-    choice: Option<usize>,
-    comment: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ProposalBody {
-    title: String,
-    options: Vec<ProposalOption>,
-}
-
-#[derive(Deserialize)]
-struct ProposalOption {
-    label: String,
-}
-
 pub(super) async fn answer_proposal(
     State(state): State<ActionState>,
     RoutePath((id, seq)): RoutePath<(String, i64)>,
     Json(request): Json<AnswerRequest>,
 ) -> Result<Json<Success>, ApiError> {
+    let proposal_answer_lock = state.proposal_answer_lock.clone();
+    let _answer_guard = proposal_answer_lock.lock().await;
     let session = load_session(state.clone(), id.clone()).await?;
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
@@ -111,22 +97,43 @@ pub(super) async fn answer_proposal(
     let send_session = session.clone();
     run_blocking(move || runtime.send_message(&send_session, &content)).await?;
 
-    let answer = serde_json::to_string(&StoredAnswer {
+    let answer = serde_json::to_string(&ProposalAnswer {
         choice,
         comment: request.comment,
     })
     .map_err(ApiError::internal)?;
-    let session_id = session.session_id;
+    let session_id = session.session_id.clone();
+    let persisted_session_id = session_id.clone();
     let configured_sessions_dir = state.sessions_dir;
     let updated = run_blocking(move || match configured_sessions_dir {
-        Some(sessions_dir) => {
-            store::write_agent_proposal_answer_from(&sessions_dir, &session_id, seq, &answer)
-        }
-        None => store::write_agent_proposal_answer(&session_id, seq, &answer),
+        Some(sessions_dir) => store::write_agent_proposal_answer_from(
+            &sessions_dir,
+            &persisted_session_id,
+            seq,
+            &answer,
+        ),
+        None => store::write_agent_proposal_answer(&persisted_session_id, seq, &answer),
     })
-    .await?;
-    if !updated {
-        return Err(ApiError::conflict("proposal is no longer available"));
+    .await;
+    match updated {
+        Ok(true) => {}
+        Ok(false) => {
+            tracing::warn!(
+                session_id,
+                proposal_seq = seq,
+                "delivered watch-web proposal answer could not be attached to its proposal"
+            );
+        }
+        Err(error) => {
+            // Reporting failure after delivery would invite the client to send it again.
+            tracing::warn!(
+                session_id,
+                proposal_seq = seq,
+                error = %error.message,
+                "failed to save delivered watch-web proposal answer"
+            );
+            return Ok(Json(Success::new()));
+        }
     }
     Ok(Json(Success::new()))
 }

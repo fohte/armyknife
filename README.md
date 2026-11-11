@@ -1129,6 +1129,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `GET /api/sessions/later-options` for server-calculated return times
 - `POST /api/sessions/{id}/messages` with `{"content":"..."}`
 - `POST /api/sessions/{id}/answer` with `{"choice":1}`
+- `POST /api/sessions/{id}/proposals/{seq}/answer` with `{"choice":0,"comment":"..."}`; `choice` is a zero-based option index or `null` to request another proposal, and `comment` may be `null`
 - `POST /api/sessions/{id}/permission/approve`
 - `POST /api/sessions/{id}/permission/reject`
 - `POST /api/sessions/{id}/interrupt`

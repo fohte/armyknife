@@ -12,16 +12,20 @@ use axum::http::StatusCode;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
+use crate::commands::agent::proposal::{ProposalAnswer, ProposalOption};
 use crate::commands::agent::store::{AgentProposal, WatchWebQueuedPrompt};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
 mod parser;
+mod proposals;
 mod subagent_reports;
+
+use self::proposals::proposal_chat_item;
 
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
@@ -208,7 +212,7 @@ fn load_conversation_with_queued_prompts(
     }
 
     for (seq, item, unresolved) in &proposal_items {
-        if *unresolved
+        if (session.engine == Engine::Codex || *unresolved)
             && !messages
                 .iter()
                 .any(|message| matches!(message, ChatItem::Proposal { seq: existing, .. } if existing == seq))
@@ -320,29 +324,6 @@ fn parse_session_transcript(
             ))
         }
     }
-}
-
-fn proposal_chat_item(proposal: &AgentProposal) -> Result<(i64, ChatItem, bool)> {
-    let body: ProposalBody = serde_json::from_str(&proposal.body)
-        .with_context(|| format!("parsing proposal {} body", proposal.seq))?;
-    let answer = proposal
-        .answer
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()
-        .with_context(|| format!("parsing proposal {} answer", proposal.seq))?;
-    Ok((
-        proposal.seq,
-        ChatItem::Proposal {
-            seq: proposal.seq,
-            title: body.title,
-            summary: body.summary,
-            options: body.options,
-            answer,
-            resolved: proposal.resolved_at.is_some(),
-        },
-        proposal.resolved_at.is_none(),
-    ))
 }
 
 trait SeekableBufRead: BufRead + Seek {}
@@ -476,34 +457,6 @@ enum ChatItem {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProposalOption {
-    label: String,
-    description: Option<String>,
-    #[serde(default)]
-    pros: Vec<String>,
-    #[serde(default)]
-    cons: Vec<String>,
-    #[serde(default)]
-    recommended: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProposalAnswer {
-    choice: Option<usize>,
-    comment: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProposalBody {
-    title: String,
-    summary: Option<String>,
-    options: Vec<ProposalOption>,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum PeerDirection {
@@ -582,23 +535,31 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn unanswered_proposal_without_a_transcript_position_is_appended_to_conversation() {
+    #[rstest]
+    #[case::claude_unanswered(Engine::Claude, false)]
+    #[case::codex_unanswered(Engine::Codex, false)]
+    #[case::codex_answered(Engine::Codex, true)]
+    fn proposals_without_a_transcript_position_are_appended_to_conversation(
+        #[case] engine: Engine,
+        #[case] resolved: bool,
+    ) {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
+        let mut session = stored_session();
+        session.engine = engine;
         let proposal = AgentProposal {
             session_id: "fixture-session".to_string(),
             seq: 1,
             body: r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
             created_at,
-            answer: None,
-            resolved_at: None,
+            answer: resolved.then(|| r#"{"choice":0,"comment":"Keep option A."}"#.to_string()),
+            resolved_at: resolved.then_some(created_at),
         };
 
         let conversation = super::load_conversation_with_queued_prompts(
             "fixture-session",
-            |id| Ok((id == "fixture-session").then(stored_session)),
+            |id| Ok((id == "fixture-session").then_some(session.clone())),
             |_| Ok(None),
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
@@ -630,8 +591,12 @@ mod tests {
                         "recommended": false,
                     },
                 ],
-                "answer": null,
-                "resolved": false,
+                "answer": if resolved {
+                    json!({"choice": 0, "comment": "Keep option A."})
+                } else {
+                    serde_json::Value::Null
+                },
+                "resolved": resolved,
             }]),
         );
     }

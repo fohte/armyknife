@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{TransactionBehavior, params, params_from_iter};
 
 use super::{increment_revision, open_connection, validate_session_id};
 
@@ -64,17 +64,28 @@ pub(crate) fn close_unanswered_agent_proposals(
     Ok(changed > 0)
 }
 
-pub(crate) fn unanswered_agent_proposal_session_ids(sessions_dir: &Path) -> Result<Vec<String>> {
-    if !sessions_dir.exists() {
+pub(crate) fn unanswered_agent_proposal_bodies(
+    sessions_dir: &Path,
+    session_ids: &[String],
+) -> Result<Vec<(String, String)>> {
+    if !sessions_dir.exists() || session_ids.is_empty() {
         return Ok(Vec::new());
     }
 
     let connection = open_connection(sessions_dir)?;
-    let mut statement = connection.prepare(
-        "SELECT DISTINCT session_id FROM agent_proposal
-         WHERE resolved_at IS NULL ORDER BY session_id",
-    )?;
-    let rows = statement.query_map([], |row| row.get(0))?;
+    let placeholders = (1..=session_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = format!(
+        "SELECT session_id, body FROM agent_proposal
+         WHERE resolved_at IS NULL AND session_id IN ({placeholders})
+         ORDER BY session_id, seq"
+    );
+    let mut statement = connection.prepare(&query)?;
+    let rows = statement.query_map(params_from_iter(session_ids.iter()), |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -150,7 +161,7 @@ mod tests {
 
     use super::{
         AgentProposal, add_agent_proposal, agent_proposals, close_unanswered_agent_proposals,
-        unanswered_agent_proposal_session_ids, write_agent_proposal_answer,
+        unanswered_agent_proposal_bodies, write_agent_proposal_answer,
     };
     use crate::commands::agent::store::session_store_revision_from;
 
@@ -185,15 +196,18 @@ mod tests {
         let proposals = normalize_timestamps(
             agent_proposals(sessions_dir.path(), "session-a").expect("proposals should load"),
         );
-        let unresolved = unanswered_agent_proposal_session_ids(sessions_dir.path())
-            .expect("unanswered sessions should load");
+        let unanswered_bodies = unanswered_agent_proposal_bodies(
+            sessions_dir.path(),
+            &["session-a".to_string(), "session-b".to_string()],
+        )
+        .expect("unanswered proposal bodies should load");
         let epoch = Utc
             .timestamp_opt(0, 0)
             .single()
             .expect("epoch should be valid");
 
         assert_eq!(
-            ((first, second, other_session), proposals, unresolved),
+            ((first, second, other_session), proposals, unanswered_bodies),
             (
                 (1, 2, 1),
                 vec![
@@ -214,7 +228,10 @@ mod tests {
                         resolved_at: None,
                     },
                 ],
-                vec!["session-a".to_string(), "session-b".to_string()],
+                vec![
+                    ("session-a".to_string(), "second body".to_string()),
+                    ("session-b".to_string(), "other body".to_string()),
+                ],
             ),
         );
     }
@@ -297,8 +314,8 @@ mod tests {
         assert_eq!(
             (
                 agent_proposals(sessions_dir.path(), "session-a").expect("proposals should load"),
-                unanswered_agent_proposal_session_ids(sessions_dir.path())
-                    .expect("unanswered sessions should load"),
+                unanswered_agent_proposal_bodies(sessions_dir.path(), &["session-a".to_string()],)
+                    .expect("unanswered proposal bodies should load"),
             ),
             (Vec::new(), Vec::new()),
         );
