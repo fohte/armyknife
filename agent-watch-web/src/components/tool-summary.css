@@ -56,7 +56,10 @@
 }
 
 .chat-tool-name {
+  min-width: 0;
+  overflow: hidden;
   color: var(--aw-text-secondary);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

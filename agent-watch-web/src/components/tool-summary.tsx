@@ -33,9 +33,13 @@ export function ToolSummary({
       }}
     >
       <summary>
-        <span className="chat-tool-summary-text">{summaryText}</span>
-        {failedSuffix === undefined ? null : (
-          <span className="chat-tool-summary-failed">{failedSuffix}</span>
+        {failedSuffix === undefined ? (
+          summary
+        ) : (
+          <>
+            <span className="chat-tool-summary-text">{summaryText}</span>
+            <span className="chat-tool-summary-failed">{failedSuffix}</span>
+          </>
         )}
       </summary>
       {children}
