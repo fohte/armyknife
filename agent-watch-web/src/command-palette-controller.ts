@@ -20,6 +20,11 @@ type Navigate = (
   mode?: HistoryMode,
 ) => void
 
+type ArchiveBatch = {
+  sessions: readonly Session[]
+  resolve: () => void
+}
+
 type CommandPaletteControllerOptions = {
   sessions: readonly Session[]
   navigate: Navigate
@@ -49,13 +54,65 @@ export function useCommandPaletteController({
   const [recentSessionIds, setRecentSessionIds] = useState(() =>
     readRecentSessionIds(getRecentSessionStorage()),
   )
+  const archiveQueue = useRef<ArchiveBatch[]>([])
+  const pendingArchiveSessionIds = useRef(new Set<string>())
   const archiveBatchInFlight = useRef(false)
   const archiveDoneSessions = useCallback(
-    async (doneSessions: readonly Session[]) => {
-      if (archiveBatchInFlight.current) return
-      archiveBatchInFlight.current = true
-      setError(await archiveDoneSessionsRequest(doneSessions))
-      archiveBatchInFlight.current = false
+    async (sessionsToArchive: readonly Session[]) => {
+      const seenSessionIds = new Set<string>()
+      const newDoneSessions = sessionsToArchive.filter((session) => {
+        if (
+          session.category !== 'done' ||
+          pendingArchiveSessionIds.current.has(session.id) ||
+          seenSessionIds.has(session.id)
+        ) {
+          return false
+        }
+        seenSessionIds.add(session.id)
+        return true
+      })
+      if (newDoneSessions.length === 0) return
+
+      for (const session of newDoneSessions) {
+        pendingArchiveSessionIds.current.add(session.id)
+      }
+
+      let resolveBatch: () => void = () => undefined
+      const batchComplete = new Promise<void>((resolve) => {
+        resolveBatch = resolve
+      })
+      archiveQueue.current.push({
+        sessions: newDoneSessions,
+        resolve: resolveBatch,
+      })
+
+      if (!archiveBatchInFlight.current) {
+        archiveBatchInFlight.current = true
+        let lastFailure: string | null = null
+        while (archiveQueue.current.length > 0) {
+          const batch = archiveQueue.current.shift()
+          if (batch === undefined) continue
+
+          const failure = await archiveDoneSessionsRequest(batch.sessions)
+          for (const session of batch.sessions) {
+            pendingArchiveSessionIds.current.delete(session.id)
+          }
+          if (failure !== null) {
+            lastFailure = failure
+            setError(failure)
+          } else if (
+            archiveQueue.current.length === 0 &&
+            lastFailure === null
+          ) {
+            setError(null)
+          }
+          batch.resolve()
+        }
+        archiveBatchInFlight.current = false
+        if (lastFailure !== null) setError(lastFailure)
+      }
+
+      await batchComplete
     },
     [setError],
   )

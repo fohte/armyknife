@@ -434,7 +434,7 @@ export function InboxView({
           <kbd>L</kbd> Later
         </span>
         <span>
-          <kbd>E</kbd> Done
+          <kbd>E</kbd> Archive
         </span>
         <span>
           <kbd>⇧B</kbd> Board

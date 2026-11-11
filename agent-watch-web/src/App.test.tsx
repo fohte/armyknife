@@ -2192,6 +2192,7 @@ it('archives each done session from the palette command', async () => {
   publishSessions({
     revision: 1,
     sessions: [
+      session('session-active', 'Active session', 'needs_action'),
       session('session-done-a', 'First finished session', 'done'),
       session('session-done-b', 'Second finished session', 'done'),
     ],
@@ -2437,6 +2438,82 @@ it('does not start a second archive batch while the first is pending', async () 
   expect(urlsBeforeCompletion).toEqual([
     '/api/sessions/session-pending-archive/archive',
   ])
+})
+
+it('queues an Archive action for another Done session while one is pending', async () => {
+  const archiveResolvers = new Map<string, (response: Response) => void>()
+  const fetchMock = vi.fn<typeof fetch>().mockImplementation((input) => {
+    const url = requestUrl(input)
+    return url.endsWith('/archive')
+      ? new Promise<Response>((resolve) => {
+          archiveResolvers.set(url, resolve)
+        })
+      : mockSessionActionFetch(input)
+  })
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [
+      session('session-done-a', 'First finished session', 'done'),
+      session('session-done-b', 'Second finished session', 'done'),
+    ],
+  })
+
+  async function selectDoneSession(index: number) {
+    act(() => {
+      container
+        .querySelectorAll<HTMLButtonElement>('[data-session-row]')
+        [index]?.click()
+    })
+    await act(async () => {
+      await flushAsyncState()
+    })
+  }
+
+  async function archiveSelectedSession() {
+    await act(async () => {
+      container
+        .querySelector<HTMLButtonElement>('.conversation-archive')
+        ?.click()
+      await flushAsyncState()
+    })
+  }
+
+  await selectDoneSession(0)
+  await archiveSelectedSession()
+  await selectDoneSession(1)
+  await archiveSelectedSession()
+
+  const archiveUrls = () =>
+    fetchMock.mock.calls
+      .map(([request]) => requestUrl(request))
+      .filter((url) => url.endsWith('/archive'))
+  expect(archiveUrls()).toEqual(['/api/sessions/session-done-a/archive'])
+
+  const resolveFirstArchive = archiveResolvers.get(
+    '/api/sessions/session-done-a/archive',
+  )
+  if (resolveFirstArchive === undefined)
+    throw new Error('First archive request was not started')
+  await act(async () => {
+    resolveFirstArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
+  expect(archiveUrls()).toEqual([
+    '/api/sessions/session-done-a/archive',
+    '/api/sessions/session-done-b/archive',
+  ])
+
+  const resolveSecondArchive = archiveResolvers.get(
+    '/api/sessions/session-done-b/archive',
+  )
+  if (resolveSecondArchive === undefined)
+    throw new Error('Second archive request was not started')
+  await act(async () => {
+    resolveSecondArchive(new Response(null, { status: 204 }))
+    await flushAsyncState()
+  })
 })
 
 it('opens Later with L and selects a preset with its number key', async () => {
