@@ -160,6 +160,8 @@ export type BackgroundTask = {
   id: string
   description: string
   elapsedSeconds: number
+  kind: 'subagent' | 'background_task'
+  agentType?: string
 }
 
 export type ConversationResponse = {

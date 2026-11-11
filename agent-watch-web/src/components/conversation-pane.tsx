@@ -2,16 +2,13 @@ import { err, ok, Result, ResultAsync } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
-import { CritPane } from '#components/crit-pane'
-import type { Decision } from '#components/decision-card'
-import { DecisionsPanel } from '#components/decisions-panel'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
 } from '#components/permission-card'
 import { ResizableColumns } from '#components/resizable-columns'
-import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionStatusPanel } from '#components/session-status-panel'
+import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
   BackgroundTask,
   ChatItem,
@@ -177,7 +174,9 @@ function isBackgroundTask(value: unknown): value is BackgroundTask {
     isRecord(value) &&
     typeof value['id'] === 'string' &&
     typeof value['description'] === 'string' &&
-    typeof value['elapsedSeconds'] === 'number'
+    typeof value['elapsedSeconds'] === 'number' &&
+    (value['kind'] === 'subagent' || value['kind'] === 'background_task') &&
+    (value['agentType'] === undefined || typeof value['agentType'] === 'string')
   )
 }
 
@@ -274,7 +273,6 @@ type ConversationPaneProps = {
   statusPanelOpen?: boolean
   onToggleStatusPanel?: () => void
   onCloseStatusPanel?: () => void
-  runningCount?: number
   onBack?: () => void
   onLater?: () => void
 }
@@ -288,15 +286,10 @@ export function ConversationPane({
   statusPanelOpen = false,
   onToggleStatusPanel = () => undefined,
   onCloseStatusPanel = () => undefined,
-  runningCount = 0,
   onBack = () => undefined,
   onLater = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
-  const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
-  const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
-    null,
-  )
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
@@ -421,81 +414,34 @@ export function ConversationPane({
     messagesLoadedAt === null
       ? 0
       : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
-  const decisions = messages.filter(
-    (message): message is Decision => message.type === 'decision',
-  )
-  const decisionCount = session.decisionCount ?? decisions.length
-  const selectedDecision =
-    decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
-    decisions.find((decision) => decision.review === null) ??
-    decisions[0]
-  const critUrl =
-    session.kind === 'Review' &&
-    session.category === 'needs_action' &&
-    session.critUrl != null &&
-    session.critUrl !== ''
-      ? session.critUrl
-      : null
-  const panelTabs: readonly SessionStatusPanelTab[] = [
-    ...(decisionCount > 0
-      ? [
-          {
-            id: 'decisions',
-            label: '◇ Decisions',
-            count: decisionCount,
-            content: (
-              <DecisionsPanel
-                decisions={decisions}
-                session={session}
-                selectedSeq={selectedDecision?.seq ?? null}
-                onSelect={setSelectedDecisionSeq}
-                onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
-                onChange={(seq, comment) =>
-                  onAction(`decisions/${String(seq)}/change`, { comment })
-                }
-              />
-            ),
-          },
-        ]
-      : []),
-    ...(critUrl === null
-      ? []
-      : [
-          {
-            id: 'crit',
-            label: 'crit',
-            count: 1,
-            content: <CritPane url={critUrl} onClose={onCloseStatusPanel} />,
-          },
-        ]),
-  ]
-  const defaultPanelTabId =
-    panelTabs.find((tab) => tab.id === 'crit')?.id ?? panelTabs[0]?.id ?? null
-  const effectivePanelTabId = panelTabs.some(
-    (tab) => tab.id === activePanelTabId,
-  )
-    ? activePanelTabId
-    : defaultPanelTabId
-  const decisionsPanelOpen =
-    statusPanelOpen && effectivePanelTabId === 'decisions'
-  const toggleDecisionsPanel = () => {
-    if (decisionsPanelOpen) {
-      onToggleStatusPanel()
-      return
-    }
-    setActivePanelTabId('decisions')
-    if (!statusPanelOpen) onToggleStatusPanel()
-  }
+  const displayBackgroundTasks = backgroundTasks.map((task) => ({
+    ...task,
+    elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
+  }))
+  const {
+    activeTabId,
+    decisionsPanelOpen,
+    onSelectDecision,
+    onTabChange,
+    onToggleDecisionsPanel,
+    selectedDecisionSeq,
+    tabs: panelTabs,
+  } = useConversationStatusPanel({
+    session,
+    messages,
+    backgroundTasks: displayBackgroundTasks,
+    statusPanelOpen,
+    onAction,
+    onCloseStatusPanel,
+    onToggleStatusPanel,
+  })
 
   const conversationView = (
     <ConversationPaneView
       session={session}
       sessions={sessions}
       messages={messages}
-      backgroundTasks={backgroundTasks.map((task) => ({
-        ...task,
-        elapsedSeconds: task.elapsedSeconds + backgroundTaskElapsedOffset,
-      }))}
+      backgroundTasks={displayBackgroundTasks}
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}
@@ -509,11 +455,10 @@ export function ConversationPane({
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
       decisionsPanelOpen={decisionsPanelOpen}
-      selectedDecisionSeq={selectedDecision?.seq ?? null}
+      selectedDecisionSeq={selectedDecisionSeq}
       onToggleStatusPanel={onToggleStatusPanel}
-      onToggleDecisionsPanel={toggleDecisionsPanel}
-      onSelectDecision={setSelectedDecisionSeq}
-      runningCount={runningCount}
+      onToggleDecisionsPanel={onToggleDecisionsPanel}
+      onSelectDecision={onSelectDecision}
       onBack={onBack}
       onLater={onLater}
     />
@@ -529,8 +474,8 @@ export function ConversationPane({
         second={
           <SessionStatusPanel
             tabs={panelTabs}
-            activeTabId={effectivePanelTabId}
-            onTabChange={setActivePanelTabId}
+            activeTabId={activeTabId}
+            onTabChange={onTabChange}
             onClose={onCloseStatusPanel}
           />
         }

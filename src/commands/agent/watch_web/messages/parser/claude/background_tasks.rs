@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use super::super::super::BackgroundTask;
+use super::super::super::{BackgroundTask, BackgroundTaskKind};
 use super::user_input::user_text;
 use super::{ToolUse, tool_result_text};
 
@@ -25,10 +25,22 @@ impl BackgroundTaskTracker {
             return;
         };
         self.tasks.retain(|task| task.id != task_id);
+        let kind = background_task_kind(&tool_use.name, record);
         self.tasks.push(RunningBackgroundTask {
             id: task_id,
             description: tool_use_description(tool_use),
             started_at: tool_use.started_at.unwrap_or(now),
+            kind,
+            agent_type: if kind == BackgroundTaskKind::Subagent {
+                tool_use
+                    .input
+                    .as_ref()
+                    .and_then(|input| input.get("subagent_type"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            } else {
+                None
+            },
         });
     }
 
@@ -79,6 +91,8 @@ impl BackgroundTaskTracker {
                         .max(0),
                 )
                 .unwrap_or_default(),
+                kind: task.kind,
+                agent_type: task.agent_type,
             })
             .collect()
     }
@@ -111,6 +125,16 @@ struct RunningBackgroundTask {
     id: String,
     description: String,
     started_at: DateTime<Utc>,
+    kind: BackgroundTaskKind,
+    agent_type: Option<String>,
+}
+
+fn background_task_kind(name: &str, record: &Value) -> BackgroundTaskKind {
+    if name == "Agent" && is_async_agent_result(record.get("toolUseResult")) {
+        BackgroundTaskKind::Subagent
+    } else {
+        BackgroundTaskKind::BackgroundTask
+    }
 }
 
 fn is_background_tool(name: &str, input: Option<&Value>, record: &Value) -> bool {
@@ -206,7 +230,9 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::super::parse_with_background_tasks_and_peer_out_messages;
-    use crate::commands::agent::watch_web::messages::{BackgroundTask, ChatItem, ToolOperation};
+    use crate::commands::agent::watch_web::messages::{
+        BackgroundTask, BackgroundTaskKind, ChatItem, ToolOperation,
+    };
 
     #[rstest]
     fn reports_a_running_background_bash_task_with_elapsed_time(
@@ -228,6 +254,8 @@ mod tests {
                     id: "fixture-task-id".to_string(),
                     description: "Watch the synthetic build".to_string(),
                     elapsed_seconds: 90,
+                    kind: BackgroundTaskKind::BackgroundTask,
+                    agent_type: None,
                 }],
             ),
         );
@@ -241,6 +269,8 @@ mod tests {
         id: "fixture-task-id".to_string(),
         description: "Watch the synthetic build".to_string(),
         elapsed_seconds: 90,
+        kind: BackgroundTaskKind::BackgroundTask,
+        agent_type: None,
     }], true, false)]
     #[case::legacy_notification("completed", Vec::new(), false, false)]
     fn task_notifications_only_remove_finished_tasks(
@@ -332,6 +362,8 @@ mod tests {
                     id: "fixture-task-id".to_string(),
                     description: "Watch the synthetic build".to_string(),
                     elapsed_seconds: 90,
+                    kind: BackgroundTaskKind::BackgroundTask,
+                    agent_type: None,
                 }],
             ),
         );
@@ -454,6 +486,8 @@ mod tests {
                     id: "fixture-task-id".to_string(),
                     description: "Review the synthetic task".to_string(),
                     elapsed_seconds: 30,
+                    kind: BackgroundTaskKind::BackgroundTask,
+                    agent_type: None,
                 }],
             ),
         );
@@ -463,7 +497,7 @@ mod tests {
     fn reports_an_async_agent_from_its_structured_tool_result() {
         let transcript = indoc! {r#"
             {"uuid":"fixture-agent-prompt-row","parentUuid":null,"type":"user","message":{"content":"Review the synthetic change."}}
-            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
+            {"uuid":"fixture-agent-call-row","parentUuid":"fixture-agent-prompt-row","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"tool_use","id":"fixture-agent-tool-use-id","name":"Agent","input":{"subagent_type":"FixtureExplorer","description":"Review the synthetic change","prompt":"Review a fictional change."}}]}}
             {"uuid":"fixture-agent-result-row","parentUuid":"fixture-agent-call-row","type":"user","sourceToolAssistantUUID":"fixture-agent-call-row","toolUseResult":{"agentId":"fixture-agent-id","isAsync":true,"status":"async_launched"},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-agent-tool-use-id","content":"agentId: fixture-agent-id (internal ID)"}]}}
         "#};
 
@@ -487,7 +521,9 @@ mod tests {
                         summary: "1 action".to_string(),
                         operations: vec![ToolOperation {
                             tool: "Agent".to_string(),
-                            target: Some("Review the synthetic change".to_string()),
+                            target: Some(
+                                "FixtureExplorer · Review the synthetic change".to_string(),
+                            ),
                         }],
                     },
                 ],
@@ -495,6 +531,8 @@ mod tests {
                     id: "fixture-agent-id".to_string(),
                     description: "Review the synthetic change".to_string(),
                     elapsed_seconds: 45,
+                    kind: BackgroundTaskKind::Subagent,
+                    agent_type: Some("FixtureExplorer".to_string()),
                 }],
             ),
         );

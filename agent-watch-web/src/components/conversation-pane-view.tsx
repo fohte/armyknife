@@ -52,7 +52,6 @@ type ConversationPaneViewProps = {
   onToggleStatusPanel?: () => void
   onToggleDecisionsPanel?: () => void
   onSelectDecision?: (seq: number) => void
-  runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
@@ -115,7 +114,6 @@ export function ConversationPaneView({
   onToggleStatusPanel = () => undefined,
   onToggleDecisionsPanel = () => undefined,
   onSelectDecision = () => undefined,
-  runningCount = 0,
   fileDropActive = false,
   onBack,
   onLater,
@@ -314,8 +312,17 @@ export function ConversationPaneView({
                       onToggleStatusPanel()
                     }}
                   >
-                    <span aria-hidden="true">◐</span>
-                    {runningCount > 0 ? <span>{runningCount}</span> : null}
+                    <span
+                      className="conversation-status-panel-icon"
+                      aria-hidden="true"
+                    >
+                      ◐
+                    </span>
+                    {backgroundTasks.length > 0 ? (
+                      <span className="conversation-status-panel-count">
+                        {backgroundTasks.length}
+                      </span>
+                    ) : null}
                   </Button>
                   {decisionLabel !== null ? (
                     <Button
@@ -409,12 +416,13 @@ export function ConversationPaneView({
 
       {session.isCompacting === true ||
       session.category === 'in_progress' ||
-      backgroundTasks.length > 0 ? (
+      (isMobile && backgroundTasks.length > 0) ? (
         <ConversationWorkingStatus
           showWorking={session.category === 'in_progress'}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
           backgroundTasks={backgroundTasks}
+          showBackgroundTasks={isMobile}
           isCompacting={session.isCompacting === true}
         />
       ) : null}

@@ -11,13 +11,19 @@ function renderPanel(
   activeTabId: string | null,
   onTabChange = vi.fn(),
   onClose = vi.fn(),
+  runningCount = 0,
 ) {
   root = createRoot(container)
   act(() => {
     root?.render(
       <SessionStatusPanel
         tabs={[
-          { id: 'running', label: 'Running', count: 0, content: 'Running' },
+          {
+            id: 'running',
+            label: 'Running',
+            count: runningCount,
+            content: 'Running',
+          },
           { id: 'crit', label: 'crit', count: 1, content: 'Crit content' },
         ]}
         activeTabId={activeTabId}
@@ -66,6 +72,16 @@ it('reports the selected tab when a visible tab is clicked', () => {
   })
 
   expect(onTabChange.mock.calls).toEqual([['crit']])
+})
+
+it('shows the count for a single running item', () => {
+  renderPanel('running', undefined, undefined, 1)
+
+  const snapshot = Array.from(
+    container.querySelectorAll('[role="tab"]'),
+    (tab) => tab.textContent,
+  )
+  expect(snapshot).toEqual(['Running1', 'crit'])
 })
 
 it('closes the status panel from its tab bar', () => {

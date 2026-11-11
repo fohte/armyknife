@@ -1,0 +1,84 @@
+.running-tasks-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 20px;
+  overflow-y: auto;
+  padding: 14px 18px 24px;
+}
+
+.running-tasks-group h2 {
+  margin: 0 0 12px;
+  color: var(--aw-text-muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.running-tasks-group + .running-tasks-group {
+  border-top: 1px solid var(--aw-border);
+  padding-top: 16px;
+}
+
+.running-tasks-group ul {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.running-task {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.running-task-icon {
+  color: var(--aw-color-working);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.running-task-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.running-task-agent-type {
+  overflow-wrap: anywhere;
+  color: var(--aw-text-body);
+  font-size: 12.5px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.running-task-subagent-description {
+  overflow-wrap: anywhere;
+  color: var(--aw-text-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.running-task-description {
+  overflow-wrap: anywhere;
+  color: var(--aw-text-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.running-task-description--command {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.running-task-elapsed {
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}

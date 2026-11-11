@@ -475,11 +475,13 @@ export const AnActionFailureIsVisible: Story = {
 export const BackgroundTaskContinuesWhileTheSessionWaits: Story = {
   name: 'A background task remains visible while the session waits',
   args: {
+    isMobile: true,
     backgroundTasks: [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
       },
     ],
   },

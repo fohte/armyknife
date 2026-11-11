@@ -51,8 +51,12 @@ export function SessionStatusPanel({
             }}
           >
             <span>{tab.label}</span>
-            {tab.count > 1 ? (
-              <span className="session-status-panel-count">{tab.count}</span>
+            {tab.id === 'running' || tab.count > 1 ? (
+              <span
+                className={`session-status-panel-count${tab.id === 'running' ? ' session-status-panel-count--running' : ''}`}
+              >
+                {tab.count}
+              </span>
             ) : null}
           </button>
         ))}

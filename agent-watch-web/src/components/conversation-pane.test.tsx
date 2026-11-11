@@ -1513,24 +1513,26 @@ it('shows elapsed time while the session is working without an active tool', () 
   })
 })
 
-it('expands the background task count into descriptions and elapsed times', () => {
+it('shows background task descriptions and elapsed times on mobile', () => {
   renderView(
     vi.fn().mockResolvedValue(true),
     { ...session, category: 'in_progress', elapsedSeconds: 92 },
     undefined,
     [],
     actions,
-    false,
+    true,
     [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
       },
       {
         id: 'fixture-task-two',
         description: 'Review the generated report',
         elapsedSeconds: 43,
+        kind: 'background_task',
       },
     ],
   )
@@ -1664,12 +1666,13 @@ it('keeps background tasks visible while the session waits for input', () => {
     undefined,
     [],
     actions,
-    false,
+    true,
     [
       {
         id: 'fixture-task-one',
         description: 'Watch the build pipeline',
         elapsedSeconds: 128,
+        kind: 'background_task',
       },
     ],
   )
@@ -1734,6 +1737,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
               id: 'fixture-task-one',
               description: 'Watch the build pipeline',
               elapsedSeconds: 128,
+              kind: 'background_task',
             },
           ],
         ),
@@ -1783,6 +1787,9 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     backgroundTasks: container.querySelector(
       '.conversation-background-tasks summary',
     )?.textContent,
+    headerRunningCount: container.querySelector(
+      '.conversation-status-panel-count',
+    )?.textContent,
   })
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 30s',
@@ -1793,6 +1800,85 @@ it('accepts classified messages and the active tool from messages endpoint', asy
     peerFile: 'fixture-peer-layout.html',
     event: [{ text: 'A fictional event was blocked.', failed: 'true' }],
     backgroundTasks: 'Background tasks (1)',
+    headerRunningCount: undefined,
+  })
+})
+
+it('shows running tasks in the desktop status panel and counts them in the header', async () => {
+  const jsonResponse = (body: unknown) =>
+    new Response(JSON.stringify(body), {
+      headers: { 'Content-Type': 'application/json' },
+    })
+  const fetcher = vi
+    .fn<typeof fetch>()
+    .mockResolvedValueOnce(
+      jsonResponse(
+        messagesResponse(
+          [],
+          [
+            {
+              id: 'fixture-agent-task',
+              description: 'Inspect the fictional module',
+              elapsedSeconds: 7_200,
+              kind: 'subagent',
+              agentType: 'FixtureExplorer',
+            },
+            {
+              id: 'fixture-shell-task',
+              description: 'cargo test -p fictional-crate',
+              elapsedSeconds: 7_200,
+              kind: 'background_task',
+            },
+          ],
+        ),
+      ),
+    )
+    .mockResolvedValueOnce(jsonResponse(actions))
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={{ ...session, category: 'needs_action', elapsedSeconds: 30 }}
+        refreshKey={0}
+        onSelectSession={() => undefined}
+        statusPanelOpen
+      />,
+    )
+  })
+  await act(async () => {
+    for (let index = 0; index < 6; index += 1) await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    tabs: Array.from(container.querySelectorAll('[role="tab"]'), (tab) => ({
+      label: tab.textContent,
+      selected: tab.getAttribute('aria-selected'),
+    })),
+    sections: Array.from(
+      container.querySelectorAll('.running-tasks-group h2'),
+      (heading) => heading.textContent,
+    ),
+    tasks: Array.from(
+      container.querySelectorAll('.running-task'),
+      (task) => task.textContent,
+    ),
+    panelToggle: container.querySelector('.conversation-status-panel-toggle')
+      ?.textContent,
+    workingStatus: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    legacyTaskList: container.querySelector('.conversation-background-tasks'),
+  })
+  expect(snapshot()).toEqual({
+    tabs: [{ label: 'Running2', selected: 'true' }],
+    sections: ['SUBAGENTS', 'BACKGROUND TASKS'],
+    tasks: [
+      '◐FixtureExplorerInspect the fictional module2h 0m',
+      '▶cargo test -p fictional-crate2h 0m',
+    ],
+    panelToggle: '◐2',
+    workingStatus: undefined,
+    legacyTaskList: null,
   })
 })
 
@@ -3290,6 +3376,7 @@ it('reloads the selected conversation when the session feed changes', async () =
               id: 'fixture-task-one',
               description: 'Watch the build pipeline',
               elapsedSeconds: 18,
+              kind: 'background_task',
             },
           ],
         ),

@@ -7,10 +7,11 @@ type ConversationWorkingStatusProps = {
   elapsedSeconds: number
   activeTool: ToolOperation | undefined
   backgroundTasks?: readonly BackgroundTask[]
+  showBackgroundTasks?: boolean
   isCompacting?: boolean
 }
 
-function formatElapsedTime(totalSeconds: number) {
+export function formatElapsedTime(totalSeconds: number) {
   if (totalSeconds < 60) return `${String(totalSeconds)}s`
   const minutes = Math.floor(totalSeconds / 60)
   if (minutes < 60) {
@@ -28,6 +29,7 @@ export function ConversationWorkingStatus({
   elapsedSeconds,
   activeTool,
   backgroundTasks = [],
+  showBackgroundTasks = true,
   isCompacting = false,
 }: ConversationWorkingStatusProps) {
   return (
@@ -52,7 +54,7 @@ export function ConversationWorkingStatus({
           ) : null}
         </>
       ) : null}
-      {backgroundTasks.length > 0 ? (
+      {showBackgroundTasks && backgroundTasks.length > 0 ? (
         <details className="conversation-background-tasks">
           <summary>Background tasks ({String(backgroundTasks.length)})</summary>
           <ul>
