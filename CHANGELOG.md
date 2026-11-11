@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.604](https://github.com/fohte/armyknife/compare/v0.1.603...v0.1.604) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** sort proposals by time ([#1572](https://github.com/fohte/armyknife/issues/1572)) ([2516e3d](https://github.com/fohte/armyknife/commit/2516e3decc629e636d9f85b27b589828174ff522))
+
 ## [0.1.603](https://github.com/fohte/armyknife/compare/v0.1.602...v0.1.603) (2026-11-11)
 
 
