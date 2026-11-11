@@ -591,6 +591,16 @@ pub(super) struct BackgroundTask {
     pub(super) id: String,
     pub(super) description: String,
     pub(super) elapsed_seconds: u64,
+    pub(super) kind: BackgroundTaskKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) agent_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum BackgroundTaskKind {
+    Subagent,
+    BackgroundTask,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -1688,6 +1698,7 @@ mod tests {
                     "id": "fixture-task-id",
                     "description": "Watch the synthetic build",
                     "elapsedSeconds": 0,
+                    "kind": "background_task",
                 }],
             }),
         );

@@ -1,0 +1,101 @@
+.running-tasks-panel {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  padding: 0 0 24px;
+}
+
+.running-tasks-group h2 {
+  display: flex;
+  height: 30px;
+  align-items: center;
+  margin: 0;
+  padding: 0 18px;
+  color: var(--aw-text-secondary);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.running-tasks-group + .running-tasks-group h2 {
+  border-top: 1px solid var(--aw-border);
+  margin-top: 8px;
+}
+
+.running-tasks-group ul {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin: 0;
+  padding: 0 18px;
+  list-style: none;
+}
+
+.running-task {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.running-task-icon {
+  color: var(--aw-color-working);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.running-task-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.running-task-agent-type {
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--aw-text-body);
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-task-subagent-heading {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.running-task-subagent-description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aw-text-body);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-task-description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--aw-text-body);
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.running-task-description--command {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 400;
+}
+
+.running-task-elapsed {
+  color: var(--aw-text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}

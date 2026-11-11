@@ -58,6 +58,10 @@
   font-size: 11.5px;
 }
 
+.session-status-panel-count--running {
+  color: var(--aw-color-working);
+}
+
 .session-status-panel-content {
   display: flex;
   min-height: 0;

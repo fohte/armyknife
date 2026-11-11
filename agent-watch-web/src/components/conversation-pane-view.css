@@ -156,7 +156,12 @@
   font-size: 12px;
 }
 
-.conversation-status-panel-toggle > span[aria-hidden='true'] {
+.conversation-status-panel-icon,
+.conversation-status-panel-count {
+  color: var(--aw-color-working);
+}
+
+.conversation-status-panel-icon {
   font-size: 13px;
 }
 
