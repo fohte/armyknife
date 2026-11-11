@@ -18,6 +18,7 @@ const meta = {
   args: {
     decision,
     variant: 'conversation',
+    relativeTimeReference: Date.parse('2026-11-11T04:00:00Z'),
     onOk: () => Promise.resolve(true),
     onRequestChange: () => Promise.resolve(true),
   },

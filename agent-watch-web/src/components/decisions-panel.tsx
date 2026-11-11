@@ -9,6 +9,7 @@ type DecisionsPanelProps = {
   decisions: readonly Decision[]
   session: Session
   selectedSeq: number | null
+  relativeTimeReference?: number
   onSelect: (seq: number) => void
   onOk: (seq: number) => Promise<boolean>
   onChange: (seq: number, comment: string) => Promise<boolean>
@@ -26,6 +27,7 @@ function isEditableTarget(target: EventTarget | null) {
     target instanceof HTMLElement &&
     (target.isContentEditable ||
       ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName) ||
+      target.closest('[role="textbox"]') !== null ||
       target.closest('[contenteditable="true"]') !== null)
   )
 }
@@ -41,6 +43,7 @@ export function DecisionsPanel({
   decisions,
   session,
   selectedSeq,
+  relativeTimeReference = Date.now(),
   onSelect,
   onOk,
   onChange,
@@ -81,6 +84,14 @@ export function DecisionsPanel({
       if (
         (event.key === 'Enter' || event.key === ' ') &&
         isButtonTarget(event.target)
+      ) {
+        return
+      }
+
+      if (
+        event.key === 'Enter' &&
+        event.target instanceof HTMLElement &&
+        event.target.closest('a[href], [role="link"]') !== null
       ) {
         return
       }
@@ -139,6 +150,7 @@ export function DecisionsPanel({
               key={decision.seq}
               decision={decision}
               variant="panel"
+              relativeTimeReference={relativeTimeReference}
               expanded={selected}
               selected={selected}
               editing={editingSeq === decision.seq}

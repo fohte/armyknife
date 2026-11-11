@@ -50,6 +50,7 @@ const meta = {
     decisions,
     session,
     selectedSeq: 1,
+    relativeTimeReference: Date.parse('2026-11-11T04:00:00Z'),
     onSelect: () => undefined,
     onOk: () => Promise.resolve(true),
     onChange: () => Promise.resolve(true),

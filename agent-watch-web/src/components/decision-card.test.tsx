@@ -116,17 +116,34 @@ it('sends the OK action from the expanded card', () => {
   expect(onOk.mock.calls).toEqual([[]])
 })
 
-it('shows the decision creation time in the panel heading', () => {
-  renderCard({
-    decision: {
-      ...decision,
-      createdAt: new Date(Date.now() - 5 * 60_000).toISOString(),
-    },
-    variant: 'panel',
-    expanded: true,
-  })
+it.each([
+  {
+    name: 'minutes',
+    createdAt: '2026-11-11T06:55:00Z',
+    expected: '◇ Decided · 5m ago',
+  },
+  {
+    name: 'hours',
+    createdAt: '2026-11-11T05:00:00Z',
+    expected: '◇ Decided · 2h ago',
+  },
+  {
+    name: 'days',
+    createdAt: '2026-11-08T07:00:00Z',
+    expected: '◇ Decided · 3d ago',
+  },
+])(
+  'shows the decision creation time in minutes, hours, or days: $name',
+  ({ createdAt, expected }) => {
+    renderCard({
+      decision: { ...decision, createdAt },
+      variant: 'panel',
+      expanded: true,
+      relativeTimeReference: Date.parse('2026-11-11T07:00:00Z'),
+    })
 
-  expect(
-    container.querySelector('.decision-panel-card-kicker')?.textContent,
-  ).toBe('◇ Decided · 5m ago')
-})
+    expect(
+      container.querySelector('.decision-panel-card-kicker')?.textContent,
+    ).toBe(expected)
+  },
+)

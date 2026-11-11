@@ -242,16 +242,20 @@ it('uses Enter to jump to the selected conversation row', () => {
   row.remove()
 })
 
-it('leaves Enter and Space on a focused button to the browser', () => {
+it('preserves native Enter and Space activation on buttons and links', () => {
   renderPanel()
   const row = document.createElement('div')
   row.id = 'decision-row-1'
   const scrollIntoView = vi.fn()
   row.scrollIntoView = scrollIntoView
   const button = document.createElement('button')
-  document.body.append(row, button)
+  const link = document.createElement('a')
+  link.href = '#decision-row-1'
+  const roleLink = document.createElement('div')
+  roleLink.setAttribute('role', 'link')
+  document.body.append(row, button, link, roleLink)
   button.focus()
-  const events = ['Enter', ' '].map(
+  const buttonEvents = ['Enter', ' '].map(
     (key) =>
       new KeyboardEvent('keydown', {
         key,
@@ -259,16 +263,37 @@ it('leaves Enter and Space on a focused button to the browser', () => {
         cancelable: true,
       }),
   )
+  const linkEvent = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+  })
+  const roleLinkEvent = new KeyboardEvent('keydown', {
+    key: 'Enter',
+    bubbles: true,
+    cancelable: true,
+  })
 
   act(() => {
-    for (const event of events) button.dispatchEvent(event)
+    for (const event of buttonEvents) button.dispatchEvent(event)
+    link.dispatchEvent(linkEvent)
+    roleLink.dispatchEvent(roleLinkEvent)
   })
 
   const snapshot = () => ({
-    prevented: events.map((event) => event.defaultPrevented),
+    prevented: [
+      ...buttonEvents.map((event) => event.defaultPrevented),
+      linkEvent.defaultPrevented,
+      roleLinkEvent.defaultPrevented,
+    ],
     scroll: scrollIntoView.mock.calls,
   })
-  expect(snapshot()).toEqual({ prevented: [false, false], scroll: [] })
+  expect(snapshot()).toEqual({
+    prevented: [false, false, false, false],
+    scroll: [],
+  })
   row.remove()
   button.remove()
+  link.remove()
+  roleLink.remove()
 })

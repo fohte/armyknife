@@ -7,12 +7,12 @@ import type { ChatItem } from '#types'
 
 export type Decision = Extract<ChatItem, { type: 'decision' }>
 
-function formatRelativeTime(createdAt: string) {
+function formatRelativeTime(createdAt: string, referenceTime: number) {
   const createdAtMilliseconds = Date.parse(createdAt)
   if (!Number.isFinite(createdAtMilliseconds)) return 'unknown time'
 
   const elapsedMinutes = Math.floor(
-    Math.max(0, Date.now() - createdAtMilliseconds) / 60_000,
+    Math.max(0, referenceTime - createdAtMilliseconds) / 60_000,
   )
   if (elapsedMinutes === 0) return 'just now'
   if (elapsedMinutes < 60) return `${String(elapsedMinutes)}m ago`
@@ -28,6 +28,7 @@ type DecisionCardProps = {
   expanded?: boolean
   selected?: boolean
   position?: string
+  relativeTimeReference?: number
   editing?: boolean
   targetName?: string
   onToggleExpanded?: () => void
@@ -43,6 +44,7 @@ export function DecisionCard({
   expanded: controlledExpanded,
   selected = false,
   position,
+  relativeTimeReference = Date.now(),
   editing: controlledEditing,
   targetName,
   onToggleExpanded,
@@ -132,7 +134,7 @@ export function DecisionCard({
           <span className="decision-panel-card-kicker">
             ◇ Decided ·{' '}
             <time dateTime={decision.createdAt}>
-              {formatRelativeTime(decision.createdAt)}
+              {formatRelativeTime(decision.createdAt, relativeTimeReference)}
             </time>
           </span>
           {!expanded ? (
