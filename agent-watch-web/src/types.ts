@@ -77,6 +77,13 @@ export type ChatItem =
       content: UserContentPart[]
     }
   | {
+      type: 'subagent_report'
+      agent_id: string
+      agent_name: string
+      description?: string
+      text: string
+    }
+  | {
       type: 'event'
       kind: 'armyknife' | 'system' | 'hook'
       text: string
