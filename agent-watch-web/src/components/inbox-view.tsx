@@ -223,7 +223,7 @@ export function InboxView({
         <span>agent watch</span>
         <span className="mobile-inbox-connection">
           <span className="mobile-inbox-connection-dot" aria-hidden="true" />
-          {error === null ? 'Connected' : 'Reconnecting…'}
+          Connected
         </span>
       </div>
       <header className="view-header">

@@ -240,18 +240,40 @@ it('omits quick actions from iPhone inbox rows', () => {
   expect(container.querySelectorAll('.session-row-actions').length).toBe(0)
 })
 
-it('shows unreviewed decisions in the collapsed iPhone Done row', () => {
+it('shows the combined review count in the collapsed iPhone Done row', () => {
+  const secondDoneSession: Session = {
+    id: 'sample-done-secondary',
+    category: 'done',
+    isPaused: false,
+    kind: null,
+    title: 'Document another result',
+    preview: null,
+    elapsedSeconds: 60,
+    unread: false,
+    task: null,
+    tasks: [],
+    repo: 'sample-org/service',
+    project: 'web-app',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+    unreviewedDecisionCount: 1,
+  }
   renderInbox({
     isMobile: true,
-    sessions: sessions.map((session) =>
-      session.id === 'sample-done'
-        ? { ...session, unreviewedDecisionCount: 2 }
-        : session,
-    ),
+    doneExpanded: false,
+    sessions: [
+      ...sessions.map((session) =>
+        session.id === 'sample-done'
+          ? { ...session, unreviewedDecisionCount: 1 }
+          : session,
+      ),
+      secondDoneSession,
+    ],
   })
 
   expect(container.querySelector('.mobile-done-row')?.textContent).toBe(
-    'Done1◇ 2 to review ›',
+    'Done2◇ 2 to review ›',
   )
 })
 
