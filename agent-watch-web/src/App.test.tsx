@@ -3313,6 +3313,11 @@ it('reloads the selected conversation when the session feed updates', async () =
             },
           ],
           backgroundTasks: [],
+          start: 0,
+          total: 1,
+          decisions: [],
+          hasUnansweredProposal: false,
+          activeQuestionIndex: null,
         }
       : {
           message: true,
@@ -3375,6 +3380,11 @@ it('opens a known session ID from a conversation message', async () => {
       ? {
           messages: [{ type: 'assistant', text: `Open ${linkedId}` }],
           backgroundTasks: [],
+          start: 0,
+          total: 1,
+          decisions: [],
+          hasUnansweredProposal: false,
+          activeQuestionIndex: null,
         }
       : {
           message: true,
@@ -3456,6 +3466,11 @@ it('answers an Inbox question with a number key when the pane is not focused', a
             },
           ],
           backgroundTasks: [],
+          start: 0,
+          total: 1,
+          decisions: [],
+          hasUnansweredProposal: false,
+          activeQuestionIndex: 0,
         }
       : path.endsWith('/actions')
         ? {

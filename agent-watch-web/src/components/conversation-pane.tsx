@@ -1,7 +1,8 @@
-import { err, ok, Result, ResultAsync } from 'neverthrow'
+import { err, ok } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { requestAction, requestJson } from '#components/conversation-requests'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
@@ -13,6 +14,7 @@ import type {
   BackgroundTask,
   ChatItem,
   ConversationResponse,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
 } from '#types'
@@ -186,7 +188,23 @@ function isConversationResponse(value: unknown): value is ConversationResponse {
     Array.isArray(value['messages']) &&
     value['messages'].every(isChatItem) &&
     Array.isArray(value['backgroundTasks']) &&
-    value['backgroundTasks'].every(isBackgroundTask)
+    value['backgroundTasks'].every(isBackgroundTask) &&
+    typeof value['start'] === 'number' &&
+    Number.isInteger(value['start']) &&
+    value['start'] >= 0 &&
+    typeof value['total'] === 'number' &&
+    Number.isInteger(value['total']) &&
+    value['total'] >= value['start'] + value['messages'].length &&
+    Array.isArray(value['decisions']) &&
+    value['decisions'].every(
+      (decision) => isChatItem(decision) && decision.type === 'decision',
+    ) &&
+    typeof value['hasUnansweredProposal'] === 'boolean' &&
+    (value['activeQuestionIndex'] === null ||
+      (typeof value['activeQuestionIndex'] === 'number' &&
+        Number.isInteger(value['activeQuestionIndex']) &&
+        value['activeQuestionIndex'] >= 0 &&
+        value['activeQuestionIndex'] < value['total']))
   )
 }
 
@@ -202,66 +220,6 @@ function isSessionActions(value: unknown): value is SessionActions {
         typeof value['permission']['approve'] === 'boolean' &&
         typeof value['permission']['reject'] === 'boolean'))
   )
-}
-
-function toError(error: unknown) {
-  return error instanceof Error
-    ? error
-    : new Error('Request failed', { cause: error })
-}
-
-function errorFromResponse(response: Response) {
-  const fallback =
-    response.statusText || `Request failed (${String(response.status)})`
-  return ResultAsync.fromPromise(response.text(), toError).map((body) => {
-    const parsed =
-      body === ''
-        ? null
-        : Result.fromThrowable(() => JSON.parse(body) as unknown, toError)()
-    const message =
-      parsed !== null &&
-      parsed.isOk() &&
-      isRecord(parsed.value) &&
-      typeof parsed.value['error'] === 'string'
-        ? parsed.value['error']
-        : fallback
-    return new Error(message)
-  })
-}
-
-function requestJson<T>(url: string, validate: (value: unknown) => value is T) {
-  return ResultAsync.fromPromise(fetch(url), toError).andThen((response) => {
-    if (!response.ok) {
-      return errorFromResponse(response).andThen((error) => err(error))
-    }
-    return ResultAsync.fromPromise(response.json(), toError).andThen((body) =>
-      validate(body)
-        ? ok(body)
-        : err(new Error('The server returned an invalid response')),
-    )
-  })
-}
-
-function requestAction(
-  sessionId: string,
-  path: string,
-  payload?: Record<string, unknown>,
-) {
-  return ResultAsync.fromPromise(
-    fetch(`/api/sessions/${encodeURIComponent(sessionId)}/${path}`, {
-      method: 'POST',
-      ...(payload === undefined
-        ? {}
-        : {
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-          }),
-    }),
-    toError,
-  ).andThen((response) => {
-    if (response.ok) return ok(undefined)
-    return errorFromResponse(response).andThen((error) => err(error))
-  })
 }
 
 type ConversationPaneProps = {
@@ -302,7 +260,18 @@ export function ConversationPane({
   const [error, setError] = useState<string | null>(null)
   const [pendingPermissionAction, setPendingPermissionAction] =
     useState<PendingPermissionAction>(null)
+  const [openInTerminalStatus, setOpenInTerminalStatus] =
+    useState<OpenInTerminalStatus>(null)
+  const currentSessionId = useRef(session.id)
+  currentSessionId.current = session.id
+  const openInTerminalTimer = useRef<number | null>(null)
   const requestGeneration = useRef(0)
+  const clearOpenInTerminalTimer = useCallback(() => {
+    if (openInTerminalTimer.current !== null) {
+      window.clearTimeout(openInTerminalTimer.current)
+      openInTerminalTimer.current = null
+    }
+  }, [])
 
   const refresh = useCallback(() => {
     const generation = requestGeneration.current + 1
@@ -371,7 +340,35 @@ export function ConversationPane({
 
   useEffect(() => {
     setPendingPermissionAction(null)
-  }, [session.id])
+    setOpenInTerminalStatus(null)
+    clearOpenInTerminalTimer()
+    return clearOpenInTerminalTimer
+  }, [clearOpenInTerminalTimer, session.id])
+
+  const onOpenInTerminal = useCallback(() => {
+    const requestedSessionId = session.id
+    clearOpenInTerminalTimer()
+    setOpenInTerminalStatus({ state: 'sending' })
+    void requestAction(requestedSessionId, 'focus').match(
+      () => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({ state: 'success' })
+        openInTerminalTimer.current = window.setTimeout(() => {
+          if (currentSessionId.current === requestedSessionId) {
+            setOpenInTerminalStatus(null)
+          }
+          openInTerminalTimer.current = null
+        }, 3_000)
+      },
+      (requestError) => {
+        if (currentSessionId.current !== requestedSessionId) return
+        setOpenInTerminalStatus({
+          state: 'error',
+          message: requestError.message,
+        })
+      },
+    )
+  }, [clearOpenInTerminalTimer, session.id])
 
   const onAction = useCallback(
     (
@@ -452,12 +449,14 @@ export function ConversationPane({
       actions={actions}
       actionsReady={actionsReady}
       pendingPermissionAction={pendingPermissionAction}
+      openInTerminalStatus={openInTerminalStatus}
       loading={loading}
       error={error}
       onClearError={() => {
         setError(null)
       }}
       onAction={onAction}
+      onOpenInTerminal={onOpenInTerminal}
       onSelectSession={onSelectSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}

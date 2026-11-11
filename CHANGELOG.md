@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.1.596](https://github.com/fohte/armyknife/compare/v0.1.595...v0.1.596) (2026-11-11)
+
+
+### Features
+
+* **agent-watch-web:** support ranged messages API ([#1555](https://github.com/fohte/armyknife/issues/1555)) ([164b561](https://github.com/fohte/armyknife/commit/164b5610bff8ef4ca41c07c781130229f88a0ed7))
+
+## [0.1.595](https://github.com/fohte/armyknife/compare/v0.1.594...v0.1.595) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show terminal focus results ([#1553](https://github.com/fohte/armyknife/issues/1553)) ([eda6aad](https://github.com/fohte/armyknife/commit/eda6aaddfb11cdb317b856e03124b846dfbdc315))
+
 ## [0.1.594](https://github.com/fohte/armyknife/compare/v0.1.593...v0.1.594) (2026-11-11)
 
 

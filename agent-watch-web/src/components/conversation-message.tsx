@@ -17,6 +17,7 @@ import { ToolSummary } from '#components/tool-summary'
 import { UserWithContent } from '#components/user-with-content'
 import type {
   ChatItem,
+  OpenInTerminalStatus,
   Session,
   SessionActions,
   SessionLinkTarget,
@@ -33,6 +34,7 @@ type RenderConversationMessageOptions = {
   onSelectDecision: (seq: number) => void
   message: ChatItem
   pendingAction: PendingPermissionAction
+  openInTerminalStatus: OpenInTerminalStatus
   onAction: (
     action: string,
     payload?: Record<string, unknown>,
@@ -55,6 +57,7 @@ export function renderConversationMessage({
   onSelectDecision,
   message,
   pendingAction,
+  openInTerminalStatus,
   onAction,
   onOpenInTerminal,
   onSelectSession,
@@ -160,6 +163,7 @@ export function renderConversationMessage({
           !actions.answerQuestion
         }
         canOpenInTerminal={actions?.openInTerminal === true}
+        openInTerminalStatus={openInTerminalStatus}
         onAnswer={(choice) => onAction('answer', { choice })}
         onSkip={() => onAction('answer', { skip: true })}
         onFreeformAnswer={(answer) => {
@@ -222,6 +226,7 @@ export function renderConversationMessage({
       actions={actions}
       actionsReady={actionsReady}
       pendingAction={pendingAction}
+      openInTerminalStatus={openInTerminalStatus}
       isCodex={sessionEngine === 'Codex'}
       onAction={(action, permissionIdentity) => {
         void onAction(action, undefined, permissionIdentity)

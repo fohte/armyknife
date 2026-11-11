@@ -167,6 +167,11 @@ export type BackgroundTask = {
 export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
+  start: number
+  total: number
+  decisions: Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal: boolean
+  activeQuestionIndex: number | null
 }
 
 export type SessionActions = {
@@ -176,6 +181,12 @@ export type SessionActions = {
   interrupt: boolean
   openInTerminal: boolean
 }
+
+export type OpenInTerminalStatus =
+  | { state: 'sending' }
+  | { state: 'success' }
+  | { state: 'error'; message: string }
+  | null
 
 export type SessionsResponse = {
   revision: number

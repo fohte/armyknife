@@ -275,6 +275,7 @@ mod tests {
                 from: None,
             }],
             background_tasks: Vec::new(),
+            ..ConversationResponse::default()
         };
 
         refresh_image_availability_with(&mut conversation, |_| false);
@@ -296,6 +297,7 @@ mod tests {
                     from: None,
                 }],
                 background_tasks: Vec::new(),
+                ..ConversationResponse::default()
             },
         );
     }
