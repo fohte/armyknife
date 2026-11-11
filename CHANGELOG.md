@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.586](https://github.com/fohte/armyknife/compare/v0.1.585...v0.1.586) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show delivered message body ([#1532](https://github.com/fohte/armyknife/issues/1532)) ([276c0bf](https://github.com/fohte/armyknife/commit/276c0bfd8066582aedbdac6c750d049cba97c4bf))
+
 ## [0.1.585](https://github.com/fohte/armyknife/compare/v0.1.584...v0.1.585) (2026-11-11)
 
 
