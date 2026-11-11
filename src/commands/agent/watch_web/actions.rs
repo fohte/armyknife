@@ -17,12 +17,17 @@ use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 
 mod messages;
+mod proposal_answer_locks;
+mod proposals;
+
+use proposal_answer_locks::ProposalAnswerLocks;
 
 pub(super) fn router() -> Router {
     router_with_state(ActionState {
         sessions_dir: None,
         attachment_dir: None,
         runtime: Arc::new(LiveActionRuntime),
+        proposal_answer_locks: ProposalAnswerLocks::default(),
     })
 }
 
@@ -33,6 +38,10 @@ fn router_with_state(state: ActionState) -> Router {
             "/sessions/{id}/messages",
             post(messages::send_message)
                 .layer(DefaultBodyLimit::max(messages::MAX_MESSAGE_BODY_BYTES)),
+        )
+        .route(
+            "/sessions/{id}/proposals/{seq}/answer",
+            post(proposals::answer_proposal),
         )
         .route("/sessions/{id}/answer", post(answer_question))
         .route(
@@ -52,6 +61,8 @@ struct ActionState {
     sessions_dir: Option<PathBuf>,
     attachment_dir: Option<PathBuf>,
     runtime: Arc<dyn ActionRuntime>,
+    // Delivery precedes persistence, so repeated answers for one proposal must serialize.
+    proposal_answer_locks: ProposalAnswerLocks,
 }
 
 trait ActionRuntime: Send + Sync {
@@ -474,9 +485,19 @@ mod tests {
     #[path = "send_message.rs"]
     mod send_message;
 
+    #[path = "proposals.rs"]
+    mod proposals;
+
     struct FakeRuntime {
         calls: Mutex<Vec<Value>>,
         message_error: Mutex<Option<String>>,
+        after_message: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        message_gate: Mutex<
+            Option<(
+                tokio::sync::oneshot::Sender<()>,
+                tokio::sync::oneshot::Receiver<()>,
+            )>,
+        >,
         pane_command: Mutex<Option<String>>,
         pane_has_agent_process: Mutex<bool>,
         pane_command_matches: Mutex<bool>,
@@ -487,6 +508,8 @@ mod tests {
             Self {
                 calls: Mutex::new(Vec::new()),
                 message_error: Mutex::new(None),
+                after_message: Mutex::new(None),
+                message_gate: Mutex::new(None),
                 pane_command: Mutex::new(Some("claude".to_string())),
                 pane_has_agent_process: Mutex::new(true),
                 pane_command_matches: Mutex::new(true),
@@ -501,6 +524,13 @@ mod tests {
                 "sessionId": session.session_id,
                 "content": content,
             }));
+            if let Some(after_message) = self.after_message.lock().unwrap().take() {
+                after_message();
+            }
+            if let Some((started, release)) = self.message_gate.lock().unwrap().take() {
+                let _ = started.send(());
+                let _ = release.blocking_recv();
+            }
             if let Some(message) = self.message_error.lock().unwrap().clone() {
                 return Err(anyhow::anyhow!(message));
             }
@@ -563,11 +593,18 @@ mod tests {
 
     impl ActionContext {
         fn router(&self) -> Router {
-            router_with_state(ActionState {
+            self.router_with_proposal_answer_locks().0
+        }
+
+        fn router_with_proposal_answer_locks(&self) -> (Router, ProposalAnswerLocks) {
+            let proposal_answer_locks = ProposalAnswerLocks::default();
+            let router = router_with_state(ActionState {
                 sessions_dir: Some(self.temp_dir.path().join("sessions")),
                 attachment_dir: Some(self.temp_dir.path().join("attachments")),
                 runtime: self.runtime.clone(),
-            })
+                proposal_answer_locks: proposal_answer_locks.clone(),
+            });
+            (router, proposal_answer_locks)
         }
 
         fn save_session(&self, session: &Session) {
@@ -594,6 +631,22 @@ mod tests {
 
         fn set_message_error(&self, message: &str) {
             *self.runtime.message_error.lock().unwrap() = Some(message.to_string());
+        }
+
+        fn set_after_message(&self, callback: impl FnOnce() + Send + 'static) {
+            *self.runtime.after_message.lock().unwrap() = Some(Box::new(callback));
+        }
+
+        fn block_next_message(
+            &self,
+        ) -> (
+            tokio::sync::oneshot::Receiver<()>,
+            tokio::sync::oneshot::Sender<()>,
+        ) {
+            let (started, started_receiver) = tokio::sync::oneshot::channel();
+            let (release, release_receiver) = tokio::sync::oneshot::channel();
+            *self.runtime.message_gate.lock().unwrap() = Some((started, release_receiver));
+            (started_receiver, release)
         }
     }
 

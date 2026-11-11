@@ -66,11 +66,13 @@ fn parse_with_image_directory(
             image_directory,
             queued_prompts: &[],
             peer_out_messages: &[],
+            proposals: &[],
         },
     )
     .map(|(messages, _, _)| messages)
 }
 
+#[cfg(test)]
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
@@ -79,18 +81,22 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tas
     now: DateTime<Utc>,
     peer_out_messages: &[WatchWebPeerOutMessage],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
-    parse_with_queued_prompts_and_peer_out_messages(
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals(
         reader,
         parent,
         pending_tool,
         user_marker,
         now,
-        &[],
-        peer_out_messages,
+        ParserAdditions {
+            queued_prompts: &[],
+            peer_out_messages,
+            proposals: &[],
+        },
     )
     .map(|(messages, background_tasks, _)| (messages, background_tasks))
 }
 
+#[cfg(test)]
 pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
@@ -99,6 +105,52 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
     now: DateTime<Utc>,
     queued_prompts: &[WatchWebQueuedPrompt],
     peer_out_messages: &[WatchWebPeerOutMessage],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        ParserAdditions {
+            queued_prompts,
+            peer_out_messages,
+            proposals: &[],
+        },
+    )
+}
+
+#[cfg(test)]
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_proposals(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    queued_prompts: &[WatchWebQueuedPrompt],
+    proposals: &[(i64, ChatItem, bool)],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        ParserAdditions {
+            queued_prompts,
+            peer_out_messages: &[],
+            proposals,
+        },
+    )
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts_and_peer_out_messages_and_proposals(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    additions: ParserAdditions<'_>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     let image_directory = super::super::super::image_attachments::storage_directory().ok();
     parse_with_background_tasks_and_image_directory(
@@ -109,16 +161,26 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts
         now,
         ParseContext {
             image_directory: image_directory.as_deref(),
-            queued_prompts,
-            peer_out_messages,
+            queued_prompts: additions.queued_prompts,
+            peer_out_messages: additions.peer_out_messages,
+            proposals: additions.proposals,
         },
     )
+}
+
+pub(in crate::commands::agent::watch_web::messages) struct ParserAdditions<'a> {
+    pub(in crate::commands::agent::watch_web::messages) queued_prompts:
+        &'a [WatchWebQueuedPrompt],
+    pub(in crate::commands::agent::watch_web::messages) peer_out_messages:
+        &'a [WatchWebPeerOutMessage],
+    pub(in crate::commands::agent::watch_web::messages) proposals: &'a [(i64, ChatItem, bool)],
 }
 
 struct ParseContext<'a> {
     image_directory: Option<&'a Path>,
     queued_prompts: &'a [WatchWebQueuedPrompt],
     peer_out_messages: &'a [WatchWebPeerOutMessage],
+    proposals: &'a [(i64, ChatItem, bool)],
 }
 
 fn parse_with_background_tasks_and_image_directory(
@@ -286,7 +348,27 @@ fn parse_with_background_tasks_and_image_directory(
                                     super::append_peer_out(&mut items, peer);
                                 }
                             } else {
-                                tools.record(&tool_use.name, tool_use.input.as_ref());
+                                let proposal = (tool_use.name == "Bash")
+                                    .then(|| {
+                                        block
+                                            .get("content")
+                                            .and_then(tool_result_text)
+                                            .and_then(|text| recorded_proposal_seq(&text))
+                                    })
+                                    .flatten()
+                                    .and_then(|seq| {
+                                        context
+                                            .proposals
+                                            .iter()
+                                            .find(|(proposal_seq, _, _)| *proposal_seq == seq)
+                                            .map(|(_, item, _)| item)
+                                    });
+                                if let Some(proposal) = proposal {
+                                    tools.flush_into(&mut items);
+                                    items.push(proposal.clone());
+                                } else {
+                                    tools.record(&tool_use.name, tool_use.input.as_ref());
+                                }
                                 background_tasks.complete_tool_use(&tool_use, &record, block, now);
                             }
                         }
@@ -420,6 +502,15 @@ fn parse_with_background_tasks_and_image_directory(
     Ok((items, background_tasks, resolved_queued_prompt_ids))
 }
 
+fn recorded_proposal_seq(text: &str) -> Option<i64> {
+    let seq = text
+        .trim()
+        .strip_prefix("Recorded proposal ")?
+        .parse::<i64>()
+        .ok()?;
+    (seq > 0).then_some(seq)
+}
+
 fn queued_prompt_delivery_is_on_active_branch(
     record: &Value,
     transcript_nodes: &mut BTreeMap<String, TranscriptNode>,
@@ -516,16 +607,114 @@ fn tool_detail(name: &str, input: Option<&Value>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use std::io::{self, BufRead, Cursor, Read, Seek, SeekFrom};
 
     use indoc::{formatdoc, indoc};
     use rstest::rstest;
     use serde_json::json;
 
-    use super::{parse, parse_with_image_directory};
-    use crate::commands::agent::watch_web::messages::{
-        ChatItem, ParentSession, PeerDirection, QuestionChoice, UserContentPart,
+    use super::{
+        parse, parse_with_image_directory, parse_with_queued_prompts_and_proposals,
+        recorded_proposal_seq,
     };
+    use crate::commands::agent::watch_web::messages::{
+        ChatItem, ParentSession, PeerDirection, ProposalOption, QuestionChoice, UserContentPart,
+    };
+
+    #[rstest]
+    #[case::exact_output("Recorded proposal 12", Some(12))]
+    #[case::surrounding_whitespace(indoc! {"
+         Recorded proposal 12
+        "}, Some(12))]
+    #[case::prefixed_output("Command output: Recorded proposal 12", None)]
+    #[case::additional_output("Recorded proposal 12\nAdditional output", None)]
+    #[case::trailing_text("Recorded proposal 12 copied", None)]
+    fn recognizes_only_a_complete_recorded_proposal_output(
+        #[case] output: &str,
+        #[case] expected: Option<i64>,
+    ) {
+        assert_eq!(recorded_proposal_seq(output), expected);
+    }
+
+    #[test]
+    fn recorded_proposal_replaces_its_bash_summary_at_the_tool_result_position() {
+        let transcript = [
+            json!({
+                "uuid": "fixture-assistant-before",
+                "parentUuid": null,
+                "type": "assistant",
+                "message": {"content": [
+                    {"type": "text", "text": "before"},
+                    {"type": "tool_use", "id": "fixture-proposal-call", "name": "Bash", "input": {"command": "a agent proposal add"}}
+                ]},
+            }),
+            json!({
+                "uuid": "fixture-proposal-result",
+                "parentUuid": "fixture-assistant-before",
+                "type": "user",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-proposal-call",
+                    "content": "Recorded proposal 1",
+                }]},
+            }),
+            json!({
+                "uuid": "fixture-assistant-after",
+                "parentUuid": "fixture-proposal-result",
+                "type": "assistant",
+                "message": {"content": [{"type": "text", "text": "after"}]},
+            }),
+        ]
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<serde_json::Result<Vec<_>>>()
+        .unwrap()
+        .join("\n");
+        let proposal = ChatItem::Proposal {
+            seq: 1,
+            title: "Sample proposal".to_string(),
+            summary: Some("Context".to_string()),
+            options: vec![ProposalOption {
+                label: "Option A".to_string(),
+                description: None,
+                pros: Vec::new(),
+                cons: Vec::new(),
+                recommended: false,
+            }],
+            answer: None,
+            resolved: false,
+        };
+
+        let (messages, background_tasks, queued_prompt_ids) =
+            parse_with_queued_prompts_and_proposals(
+                Cursor::new(transcript),
+                None,
+                None,
+                None,
+                Utc::now(),
+                &[],
+                &[(1, proposal.clone(), true)],
+            )
+            .unwrap();
+
+        assert_eq!(
+            (messages, background_tasks, queued_prompt_ids),
+            (
+                vec![
+                    ChatItem::Assistant {
+                        text: "before".to_string(),
+                    },
+                    proposal,
+                    ChatItem::Assistant {
+                        text: "after".to_string(),
+                    },
+                ],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
 
     fn question_choice(label: &str) -> QuestionChoice {
         QuestionChoice {
