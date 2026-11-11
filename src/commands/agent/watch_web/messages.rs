@@ -32,6 +32,9 @@ mod subagent_reports;
 use self::proposals::proposal_chat_item;
 use self::range::MessageRange;
 
+mod cache;
+use self::cache::{MessageCache, MessageCacheKey};
+
 pub(super) fn claude_content_text(content: Option<&Value>) -> String {
     match content {
         Some(Value::String(text)) => text.clone(),
@@ -60,6 +63,7 @@ pub(super) struct RouteLoaders {
     peer_out_messages: PeerOutMessageLoader,
     delete_queued_prompts: QueuedPromptDeleter,
     proposals: ProposalLoader,
+    message_cache: MessageCache,
 }
 
 impl RouteLoaders {
@@ -79,6 +83,7 @@ impl RouteLoaders {
             peer_out_messages: Arc::new(load_peer_out_messages),
             delete_queued_prompts: Arc::new(delete_queued_prompts),
             proposals: Arc::new(load_proposals),
+            message_cache: MessageCache::default(),
         }
     }
 }
@@ -225,6 +230,31 @@ fn load_conversation_with_queued_prompts(
     let pending_tool = (main_permission_pending && !main_permission_is_question)
         .then_some(session.current_tool.as_deref())
         .flatten();
+    let cache_key = MessageCacheKey::new(
+        &session,
+        parent.clone(),
+        user_marker.clone(),
+        decisions.clone(),
+        queued_prompts.clone(),
+        peer_out_messages.clone(),
+        proposals.clone(),
+    )?;
+    if let Some(mut cached) = loaders.message_cache.get(session_id, &cache_key) {
+        let elapsed = cached.cached_at.elapsed().as_secs();
+        for task in &mut cached.conversation.background_tasks {
+            task.elapsed_seconds = task.elapsed_seconds.saturating_add(elapsed);
+        }
+        cache::refresh_image_availability(&mut cached.conversation);
+        if let Some(path) = session.transcript_path.as_deref() {
+            subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
+        }
+        cache::delete_resolved_queued_prompts(
+            loaders,
+            session_id,
+            &cached.resolved_queued_prompt_ids,
+        );
+        return Ok(Some(cached.conversation));
+    }
     let (mut conversation, resolved_queued_prompt_ids) =
         parse_session_transcript(TranscriptInput {
             path: session.transcript_path.as_deref(),
@@ -281,15 +311,13 @@ fn load_conversation_with_queued_prompts(
 
     conversation.update_metadata();
 
-    if !resolved_queued_prompt_ids.is_empty()
-        && let Err(error) = (loaders.delete_queued_prompts)(session_id, &resolved_queued_prompt_ids)
-    {
-        tracing::warn!(
-            session_id,
-            %error,
-            "failed to remove resolved watch-web queued prompts"
-        );
-    }
+    cache::delete_resolved_queued_prompts(loaders, session_id, &resolved_queued_prompt_ids);
+    loaders.message_cache.insert(
+        session_id,
+        cache_key,
+        conversation.clone(),
+        resolved_queued_prompt_ids,
+    );
     Ok(Some(conversation))
 }
 
@@ -638,6 +666,7 @@ struct ToolOperation {
     target: Option<String>,
 }
 
+#[derive(Clone, PartialEq, Eq)]
 struct ParentSession {
     session_id: String,
     title: String,
@@ -676,6 +705,216 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    #[tokio::test]
+    async fn messages_route_reuses_unchanged_transcripts_and_refreshes_changed_transcripts() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"assistant","message":{"content":[{"type":"text","text":"First response."}]}}"#,
+        )
+        .unwrap();
+
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path.clone());
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        let first = message_response(&router).await;
+        let unchanged = message_response(&router).await;
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"assistant","message":{"content":[{"type":"text","text":"Other response."}]}}"#,
+        )
+        .unwrap();
+        let changed = message_response(&router).await;
+
+        assert_eq!(
+            (first, unchanged, changed),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_messages_route_invalidates_changed_compressed_fallback_transcripts() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        let compressed_path = super::compressed_path(&transcript_path);
+        let write_compressed_transcript = |text: &str| {
+            let transcript = format!(
+                r#"{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"{text}"}}]}}}}"#,
+            );
+            std::fs::write(
+                &compressed_path,
+                zstd::stream::encode_all(transcript.as_bytes(), 0).unwrap(),
+            )
+            .unwrap();
+        };
+        write_compressed_transcript("First response.");
+
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+
+        let first = message_response(&router).await;
+        let unchanged = message_response(&router).await;
+        write_compressed_transcript("Other response.");
+        let changed = message_response(&router).await;
+
+        assert_eq!(
+            (first, unchanged, changed),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"First response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"assistant","text":"Other response."}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_refreshes_resolved_proposals() {
+        let created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let proposal = Arc::new(Mutex::new(AgentProposal {
+            session_id: "fixture-session".to_string(),
+            seq: 1,
+            body: r#"{"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}]}"#.to_string(),
+            created_at,
+            answer: None,
+            resolved_at: None,
+        }));
+        let proposal_loader = Arc::clone(&proposal);
+        let router = routes_with_proposals_and_peer_out_messages(
+            |_| Ok(Some(stored_session())),
+            |_| Ok(None),
+            RouteLoaders::new(
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_, _| Ok(()),
+                move |_| Ok(vec![proposal_loader.lock().unwrap().clone()]),
+            ),
+        );
+
+        let unanswered = message_response(&router).await;
+        {
+            let mut proposal = proposal.lock().unwrap();
+            proposal.answer = Some(r#"{"choice":0,"comment":"Keep option A."}"#.to_string());
+            proposal.resolved_at = Some(created_at);
+        }
+        let resolved = message_response(&router).await;
+
+        assert_eq!(
+            (unanswered, resolved),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":null,"resolved":false}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":true,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[{"type":"proposal","seq":1,"title":"Sample proposal","summary":null,"options":[{"label":"Option A","description":null,"pros":[],"cons":[],"recommended":false},{"label":"Option B","description":null,"pros":[],"cons":[],"recommended":false}],"answer":{"choice":0,"comment":"Keep option A."},"resolved":true}],"backgroundTasks":[],"start":0,"total":1,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_retries_resolved_queue_deletion_after_a_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("fixture.jsonl");
+        std::fs::write(
+            &transcript_path,
+            br#"{"type":"queue-operation","operation":"popAll","timestamp":"2026-01-02T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let queued = saved_prompt(7, "Continue the fixture build.");
+        let deleted_ids = Arc::new(Mutex::new(Vec::new()));
+        let delete_log = Arc::clone(&deleted_ids);
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            move |_| Ok(vec![queued.clone()]),
+            |_| Ok(Vec::new()),
+            move |_, ids| {
+                let mut attempts = delete_log.lock().unwrap();
+                attempts.push(ids.to_vec());
+                if attempts.len() == 1 {
+                    Err(anyhow::anyhow!("temporary fixture deletion error"))
+                } else {
+                    Ok(())
+                }
+            },
+        );
+        let first = message_response(&router).await;
+        let unchanged = message_response(&router).await;
+
+        assert_eq!(
+            (first, unchanged, deleted_ids.lock().unwrap().clone(),),
+            (
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                (
+                    StatusCode::OK,
+                    Some("application/json".to_string()),
+                    json!({"messages":[],"backgroundTasks":[],"start":0,"total":0,"decisions":[],"hasUnansweredProposal":false,"activeQuestionIndex":null})
+                ),
+                vec![vec![7], vec![7]],
+            ),
+        );
     }
 
     #[rstest]
@@ -800,6 +1039,22 @@ mod tests {
         )
         .unwrap();
         (status, content_type, body)
+    }
+
+    async fn message_response(
+        router: &axum::Router,
+    ) -> (StatusCode, Option<String>, serde_json::Value) {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        response_json_snapshot(response).await
     }
 
     async fn response_json_snapshot(
@@ -936,7 +1191,6 @@ mod tests {
             (StatusCode::BAD_REQUEST, None, String::new()),
         );
     }
-
     #[tokio::test]
     async fn claude_message_route_places_database_decisions_in_the_transcript() {
         let directory = tempfile::tempdir().unwrap();
@@ -1803,6 +2057,7 @@ mod tests {
     async fn claude_message_route_returns_running_background_tasks() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
+        let task_started_at = chrono::Utc::now() - chrono::Duration::seconds(100);
         let records = [
             json!({
                 "uuid": "fixture-prompt-row",
@@ -1814,7 +2069,7 @@ mod tests {
                 "uuid": "fixture-bash-call-row",
                 "parentUuid": "fixture-prompt-row",
                 "type": "assistant",
-                "timestamp": "2026-01-01T00:00:00Z",
+                "timestamp": task_started_at.to_rfc3339(),
                 "message": {"content": [{
                     "type": "tool_use",
                     "id": "fixture-bash-tool-use-id",
@@ -1860,21 +2115,11 @@ mod tests {
             |_| Ok(Vec::new()),
             |_, _| Ok(()),
         );
-        let response = router
-            .oneshot(
-                Request::builder()
-                    .uri("/sessions/fixture-session/messages")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let mut body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        body["backgroundTasks"][0]["elapsedSeconds"] = json!(0);
-
+        let first = message_response(&router).await.2;
+        let mut normalized_first = first.clone();
+        normalized_first["backgroundTasks"][0]["elapsedSeconds"] = json!(0);
         assert_eq!(
-            body,
+            normalized_first,
             json!({
                 "messages": [
                     {"type": "user", "text": "Watch the fixture build."},
@@ -1897,6 +2142,18 @@ mod tests {
                 "activeQuestionIndex": null,
             }),
         );
+
+        tokio::time::sleep(std::time::Duration::from_millis(1_100)).await;
+        let second = message_response(&router).await.2;
+        let mut expected_second = first.clone();
+        expected_second["backgroundTasks"][0]["elapsedSeconds"] = json!(
+            first["backgroundTasks"][0]["elapsedSeconds"]
+                .as_u64()
+                .unwrap()
+                + 1
+        );
+
+        assert_eq!(second, expected_second);
     }
 
     #[tokio::test]
