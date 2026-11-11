@@ -4,7 +4,7 @@
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  background: #0a0a0a;
+  background: var(--aw-bg-app);
 }
 
 .board-header {
@@ -15,7 +15,7 @@
   justify-content: space-between;
   gap: 20px;
   padding: 0 16px;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--aw-border-row);
 }
 
 .board-header-title {
@@ -34,7 +34,7 @@
 
 .board-header-title span,
 .board-quiet-toggle {
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-size: 11.5px;
 }
 
@@ -50,7 +50,7 @@
   width: 13px;
   height: 13px;
   margin: 0;
-  accent-color: #a1a1aa;
+  accent-color: var(--aw-text-muted);
 }
 
 .board-projects-scroll {
@@ -58,7 +58,7 @@
   min-height: 0;
   flex: 1;
   overflow: auto hidden;
-  scrollbar-color: #3f3f46 transparent;
+  scrollbar-color: var(--aw-border-control) transparent;
 }
 
 .board-projects-container {
@@ -78,8 +78,8 @@
   width: 58px;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(90deg, transparent, #0a0a0a 38%);
-  color: #a1a1aa;
+  background: linear-gradient(90deg, transparent, var(--aw-bg-app) 38%);
+  color: var(--aw-text-muted);
   font-size: 10.5px;
   pointer-events: none;
   white-space: nowrap;
@@ -99,14 +99,14 @@
   min-height: 100%;
   flex: 0 0 280px;
   padding: 12px;
-  border: 1px solid #1a1a1a;
-  background: #111111;
+  border: 1px solid var(--aw-border-row);
+  background: var(--aw-bg-board);
 }
 
 .board-project-header {
   min-height: 49px;
   padding-bottom: 10px;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--aw-border-row);
 }
 
 .board-project-title-line {
@@ -133,17 +133,17 @@
 }
 
 .board-project-need {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .board-project-quiet {
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
 }
 
 .board-project-repos {
   overflow: hidden;
   margin: 3px 0 0;
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-family: var(--font-mono);
   font-size: 10.5px;
   text-overflow: ellipsis;
@@ -159,17 +159,17 @@
   align-items: center;
   justify-content: space-between;
   margin: 0 0 6px;
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-size: 11.5px;
   font-weight: 700;
 }
 
 .board-group.needs-action h3 {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .board-group.in-progress h3 {
-  color: #60a5fa;
+  color: var(--aw-color-working);
 }
 
 .board-card-list {
@@ -184,14 +184,14 @@
   min-width: 0;
   padding: 7px 9px;
   border: 0;
-  border-radius: 0;
-  background: #161616;
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-palette);
   font: inherit;
   text-align: left;
 }
 
 .board-card.category-needs_action {
-  background: #1c1c1c;
+  background: var(--aw-bg-pressed);
 }
 
 .board-card-heading {
@@ -200,22 +200,22 @@
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
-  color: #fbbf24;
+  color: var(--aw-color-warning);
   font-size: 11.5px;
   font-weight: 700;
 }
 
 .board-card[data-kind='error'] .board-card-heading {
-  color: #f87171;
+  color: var(--aw-color-error);
 }
 
 .board-card.category-in_progress .board-card-heading {
-  color: #60a5fa;
+  color: var(--aw-color-working);
 }
 
 .board-card.category-done .board-card-heading,
 .board-card-heading time {
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
 }
 
 .board-card-heading time {
@@ -232,18 +232,18 @@
 }
 
 .board-card-title {
-  color: #d4d4d8;
+  color: var(--aw-text-body);
   font-size: 12px;
 }
 
 .category-needs_action .board-card-title {
-  color: #fafafa;
+  color: var(--aw-text-primary);
   font-weight: 700;
 }
 
 .board-card-task {
   margin-top: 3px;
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-size: 10.5px;
 }
 
@@ -251,7 +251,7 @@
 .board-done-summary {
   overflow: hidden;
   margin: 1px 0 0;
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -266,12 +266,12 @@
 
 .board-message {
   margin: 20px 16px;
-  color: #8b8b94;
+  color: var(--aw-text-secondary);
   font-size: 12.5px;
 }
 
 .board-message.is-error {
-  color: #f87171;
+  color: var(--aw-color-error);
 }
 
 @media (max-width: 760px) {

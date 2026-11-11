@@ -1,9 +1,9 @@
 .conversation-composer {
   width: min(712px, calc(100% - 32px));
   margin: 0 auto 20px;
-  border: 1px solid #3f3f46;
-  border-radius: 8px;
-  background: #141414;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
 }
 
 .conversation-composer textarea {
@@ -18,12 +18,12 @@
   border: 0;
   outline: none;
   background: transparent;
-  color: var(--foreground);
+  color: var(--aw-text-primary);
   font: inherit;
 }
 
 .conversation-composer textarea::placeholder {
-  color: var(--muted-foreground-ghost);
+  color: var(--aw-text-muted);
 }
 
 .composer-attachments {
@@ -41,16 +41,16 @@
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
-  border: 1px solid #3f3f46;
-  border-radius: 6px;
-  color: #d4d4d8;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  color: var(--aw-text-body);
   font-size: 12px;
 }
 
 .composer-attachment img {
   width: 44px;
   height: 36px;
-  border-radius: 3px;
+  border-radius: var(--aw-radius);
   object-fit: cover;
 }
 
@@ -62,7 +62,7 @@
 
 .composer-attachment small {
   flex: 0 0 auto;
-  color: var(--muted-foreground-ghost);
+  color: var(--aw-text-muted);
 }
 
 .composer-attachment [data-slot='button'] {
@@ -70,7 +70,7 @@
   height: 24px;
   padding: 0;
   background: transparent;
-  color: #d4d4d8;
+  color: var(--aw-text-body);
   font-size: 16px;
 }
 
@@ -79,7 +79,7 @@
   align-items: center;
   justify-content: space-between;
   padding: 0 8px 7px 12px;
-  color: var(--muted-foreground-ghost);
+  color: var(--aw-text-muted);
   font-size: 10.5px;
 }
 
@@ -87,8 +87,8 @@
   width: 32px;
   height: 32px;
   padding: 0;
-  background: #fafafa;
-  color: #18181b;
+  background: var(--aw-text-primary);
+  color: var(--aw-bg-surface);
   font-size: 20px;
 }
 
@@ -122,6 +122,6 @@
   width: auto;
   min-height: 44px;
   padding: 0 12px;
-  border: 1px solid #3f3f46;
-  color: #d4d4d8;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-body);
 }

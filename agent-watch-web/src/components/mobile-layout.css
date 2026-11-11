@@ -2,6 +2,8 @@
   height: 100vh;
   height: var(--mobile-viewport-height, 100dvh);
   min-height: 0;
+  font-size: var(--aw-font-size-mobile-body);
+  line-height: var(--aw-line-height-body);
 }
 
 .agent-watch-shell[data-layout='mobile'] .agent-watch-nav {
@@ -21,6 +23,10 @@
   min-height: 0;
   flex: 1 1 auto;
   border-right: 0;
+}
+
+.agent-watch-shell[data-layout='mobile'] .session-list-item {
+  border-bottom-color: var(--aw-border-row-mobile);
 }
 
 .story-mobile-layout .story-session-list {
@@ -53,7 +59,7 @@
   flex: 0 0 40px;
   align-items: center;
   padding: 0 16px;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--aw-border-row);
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 600;
@@ -85,7 +91,7 @@
   gap: 8px;
   overflow-x: auto;
   padding: 6px 12px;
-  border-bottom: 1px solid #1a1a1a;
+  border-bottom: 1px solid var(--aw-border-row);
 }
 
 .mobile-today-chip {
@@ -93,14 +99,14 @@
   min-height: 44px;
   gap: 7px;
   padding: 0 12px;
-  border: 1px solid #3f3f46;
-  border-radius: 999px;
-  background: #141414;
+  border: 1px solid var(--aw-border-control);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
   font-size: 14px;
 }
 
 .mobile-today-chip .today-star {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .mobile-today-chip.is-needs-action {
@@ -109,7 +115,7 @@
 
 .mobile-today-label {
   flex: 0 0 auto;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -153,7 +159,7 @@
   .needs-action-section
   .session-row:has([data-session-kind])
   .session-status-dot {
-  background: #fbbf24;
+  background: var(--aw-color-warning);
 }
 
 .agent-watch-shell[data-layout='mobile']
@@ -164,7 +170,7 @@
   .needs-action-section
   .session-row:has([data-session-kind='error'])
   .session-status-dot {
-  background: #f87171;
+  background: var(--aw-color-error);
 }
 
 .agent-watch-shell[data-layout='mobile'] .session-row-layout,
@@ -235,13 +241,13 @@
 
 .agent-watch-shell[data-layout='mobile'] .mobile-collapse-row,
 .story-mobile-layout .mobile-collapse-row {
-  background: #141414;
-  border-bottom: 1px solid #1a1a1a;
+  background: var(--aw-bg-surface);
+  border-bottom: 1px solid var(--aw-border-row);
 }
 
 .mobile-collapse-count,
 .mobile-collapse-chevron {
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -292,8 +298,8 @@
   min-height: 44px;
   flex: 0 0 auto;
   padding: 0 10px;
-  border: 1px solid #3f3f46;
-  color: #d4d4d8;
+  border: 1px solid var(--aw-border-control);
+  color: var(--aw-text-body);
   font-size: 16px;
 }
 
@@ -326,7 +332,7 @@
 
 .mobile-conversation-context {
   overflow: hidden;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 10px;
   text-overflow: ellipsis;
@@ -337,9 +343,9 @@
   flex: 0 0 auto;
   margin: 0;
   padding: 10px 12px;
-  border-bottom: 1px solid #3f3f46;
-  background: #141414;
-  color: #d4d4d8;
+  border-bottom: 1px solid var(--aw-border-control);
+  background: var(--aw-bg-surface);
+  color: var(--aw-text-body);
   font-size: 13px;
 }
 
