@@ -179,7 +179,10 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
     let api = Router::new()
         .merge(actions::router())
         .merge(session_state::router())
-        .merge(sessions::router(enrichment_updates.clone()))
+        .merge(sessions::router(
+            enrichment_updates.clone(),
+            loaders.clone(),
+        ))
         .merge(events::router(enrichment_updates, restart_signal))
         .merge(messages::routes_with_proposals_and_peer_out_messages(
             load_session,

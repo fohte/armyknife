@@ -21,7 +21,7 @@ use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::git::{github_owner_and_repo, open_repo_at};
 use crate::infra::github::{PrInfo, PrState};
-use crate::shared::config::{self, AgentConfig};
+use crate::shared::config::{self, AgentConfig, AgentStatusState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -134,12 +134,20 @@ trait SessionSource: Clone + Send + Sync + 'static {
         sessions: &[Session],
     ) -> impl Future<Output = HashMap<String, Option<PrInfo>>> + Send;
 
+    fn running_background_task_session_ids(
+        &self,
+        _sessions: Vec<Session>,
+    ) -> impl Future<Output = anyhow::Result<HashSet<String>>> + Send {
+        async { Ok(HashSet::new()) }
+    }
+
     fn now(&self) -> DateTime<Utc>;
 }
 
 #[derive(Clone)]
 struct LiveSessionSource {
     enrichment: SessionEnrichmentCache,
+    message_loaders: super::messages::RouteLoaders,
 }
 
 impl SessionSource for LiveSessionSource {
@@ -155,14 +163,29 @@ impl SessionSource for LiveSessionSource {
         self.enrichment.pull_requests(sessions).await
     }
 
+    async fn running_background_task_session_ids(
+        &self,
+        sessions: Vec<Session>,
+    ) -> anyhow::Result<HashSet<String>> {
+        let loaders = self.message_loaders.clone();
+        Ok(tokio::task::spawn_blocking(move || {
+            loaders.running_background_task_session_ids(&sessions)
+        })
+        .await?)
+    }
+
     fn now(&self) -> DateTime<Utc> {
         Utc::now()
     }
 }
 
-pub(super) fn router(updates: EnrichmentUpdates) -> Router {
+pub(super) fn router(
+    updates: EnrichmentUpdates,
+    message_loaders: super::messages::RouteLoaders,
+) -> Router {
     router_with_source(LiveSessionSource {
         enrichment: SessionEnrichmentCache::new(updates),
+        message_loaders,
     })
 }
 
@@ -193,11 +216,24 @@ async fn list_sessions<S: SessionSource>(
         .collect::<Vec<_>>();
     let interrupted_sessions =
         tokio::task::spawn_blocking(move || interrupted_session_ids(sessions_to_check));
+    let stopped_claude_sessions = snapshot
+        .sessions
+        .iter()
+        .filter(|session| {
+            session.engine == Engine::Claude && session.status == SessionStatus::Stopped
+        })
+        .cloned()
+        .collect::<Vec<_>>();
 
-    let (task_metadata, pull_requests) = tokio::join!(
+    let (task_metadata, pull_requests, running_background_task_sessions) = tokio::join!(
         source.fetch_task_metadata(&snapshot.sessions),
         source.fetch_pull_requests(&snapshot.sessions),
+        source.running_background_task_session_ids(stopped_claude_sessions),
     );
+    let running_background_task_sessions = running_background_task_sessions.map_err(|error| {
+        tracing::warn!(%error, "failed to inspect Claude background tasks");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })?;
     let interrupted_session_ids = interrupted_sessions
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -266,12 +302,31 @@ async fn list_sessions<S: SessionSource>(
 
             let turn = turn_kinds.get(session.session_id.as_str()).copied();
             let interrupted = interrupted_session_ids.contains(&session.session_id);
+            let has_running_background_task =
+                running_background_task_sessions.contains(&session.session_id);
+            let agent_status_state = session
+                .agent_status
+                .as_ref()
+                .map(|status| snapshot.agent_config.status_state(&status.kind));
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some();
-            let category_when_not_later =
-                category_for_with_interruption(session, turn, needs_action);
+            let category_when_not_later = category_for_with_interruption(
+                session,
+                turn,
+                needs_action,
+                has_running_background_task,
+                agent_status_state,
+            );
             let state = state_by_id.get(&session.session_id);
-            let category = category_for_with_later(session, turn, needs_action, state, now);
+            let category = category_for_with_later(
+                session,
+                turn,
+                needs_action,
+                has_running_background_task,
+                agent_status_state,
+                state,
+                now,
+            );
             SessionView {
                 id: session.session_id.clone(),
                 engine: session.engine,
@@ -279,7 +334,12 @@ async fn list_sessions<S: SessionSource>(
                 category,
                 is_paused: session.status == SessionStatus::Paused,
                 category_when_not_later,
-                kind: kind_for(session, turn, proposal_title.is_some()),
+                kind: kind_for(
+                    session,
+                    turn,
+                    proposal_title.is_some(),
+                    has_running_background_task,
+                ),
                 title: snapshot
                     .title_by_id
                     .get(&session.session_id)
@@ -584,15 +644,30 @@ mod project_tests {
     }
 }
 
-fn category_for(session: &Session, turn: Option<UserTurnKind>) -> SessionCategory {
-    if turn.is_some()
-        || session.status == SessionStatus::Stopped
+fn category_for(
+    session: &Session,
+    turn: Option<UserTurnKind>,
+    has_running_background_task: bool,
+    agent_status_state: Option<AgentStatusState>,
+) -> SessionCategory {
+    if (turn.is_some()
+        && !(session.status == SessionStatus::Stopped && turn == Some(UserTurnKind::AgentStatus)))
         || session
             .current_tool
             .as_deref()
             .is_some_and(|tool| tool.starts_with("ExitPlanMode"))
     {
         SessionCategory::NeedsAction
+    } else if session.status == SessionStatus::Stopped {
+        match agent_status_state {
+            Some(AgentStatusState::User) => SessionCategory::NeedsAction,
+            Some(AgentStatusState::Waiting) => SessionCategory::InProgress,
+            Some(AgentStatusState::Done) if !has_running_background_task => SessionCategory::Done,
+            Some(AgentStatusState::Done) | None if has_running_background_task => {
+                SessionCategory::InProgress
+            }
+            Some(AgentStatusState::Done) | None => SessionCategory::NeedsAction,
+        }
     } else if session.status == SessionStatus::Running {
         SessionCategory::InProgress
     } else {
@@ -610,13 +685,15 @@ pub(super) fn decision_category_is_done(
         .into_iter()
         .next()
         .map(|turn| turn.kind);
-    category_for_with_later(session, turn, false, state, now) == SessionCategory::Done
+    category_for_with_later(session, turn, false, false, None, state, now) == SessionCategory::Done
 }
 
 fn category_for_with_later(
     session: &Session,
     turn: Option<UserTurnKind>,
     interrupted: bool,
+    has_running_background_task: bool,
+    agent_status_state: Option<AgentStatusState>,
     state: Option<&store::WatchWebSessionState>,
     now: DateTime<Utc>,
 ) -> SessionCategory {
@@ -632,7 +709,13 @@ fn category_for_with_later(
     if later_is_active {
         SessionCategory::Later
     } else {
-        category_for_with_interruption(session, turn, interrupted)
+        category_for_with_interruption(
+            session,
+            turn,
+            interrupted,
+            has_running_background_task,
+            agent_status_state,
+        )
     }
 }
 
@@ -640,11 +723,18 @@ fn category_for_with_interruption(
     session: &Session,
     turn: Option<UserTurnKind>,
     interrupted: bool,
+    has_running_background_task: bool,
+    agent_status_state: Option<AgentStatusState>,
 ) -> SessionCategory {
     if interrupted {
         SessionCategory::NeedsAction
     } else {
-        category_for(session, turn)
+        category_for(
+            session,
+            turn,
+            has_running_background_task,
+            agent_status_state,
+        )
     }
 }
 
@@ -652,6 +742,7 @@ fn kind_for(
     session: &Session,
     turn: Option<UserTurnKind>,
     has_unanswered_proposal: bool,
+    has_running_background_task: bool,
 ) -> Option<SessionKind> {
     if session
         .current_tool
@@ -672,7 +763,8 @@ fn kind_for(
     }
 
     let Some(turn) = turn else {
-        return (session.status == SessionStatus::Stopped).then_some(SessionKind::Stopped);
+        return (session.status == SessionStatus::Stopped && !has_running_background_task)
+            .then_some(SessionKind::Stopped);
     };
 
     match turn {
@@ -702,7 +794,7 @@ fn kind_for(
             ]) {
                 Some(SessionKind::Review)
             } else {
-                Some(SessionKind::Stopped)
+                (!has_running_background_task).then_some(SessionKind::Stopped)
             }
         }
         UserTurnKind::Merge => Some(SessionKind::Review),
@@ -844,6 +936,8 @@ mod tests {
         pull_requests: HashMap<String, Option<PrInfo>>,
         decision_counts: HashMap<String, store::AgentDecisionCounts>,
         work_type_nav_labels: HashMap<String, String>,
+        agent_statuses: HashMap<String, AgentStatusConfig>,
+        message_loaders: super::super::messages::RouteLoaders,
         now: DateTime<Utc>,
     }
 
@@ -872,6 +966,7 @@ mod tests {
                             )
                         })
                         .collect(),
+                    statuses: self.agent_statuses.clone(),
                     ..AgentConfig::default()
                 },
             })
@@ -891,6 +986,18 @@ mod tests {
             _sessions: &[Session],
         ) -> HashMap<String, Option<PrInfo>> {
             self.pull_requests.clone()
+        }
+
+        async fn running_background_task_session_ids(
+            &self,
+            sessions: Vec<Session>,
+        ) -> anyhow::Result<HashSet<String>> {
+            let loaders = self.message_loaders.clone();
+            tokio::task::spawn_blocking(move || {
+                loaders.running_background_task_session_ids(&sessions)
+            })
+            .await
+            .map_err(Into::into)
         }
 
         fn now(&self) -> DateTime<Utc> {
@@ -990,6 +1097,14 @@ mod tests {
                 },
             )]),
             work_type_nav_labels: HashMap::new(),
+            agent_statuses: HashMap::new(),
+            message_loaders: super::super::messages::RouteLoaders::new(
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_| Ok(Vec::new()),
+                |_, _| Ok(()),
+                |_| Ok(Vec::new()),
+            ),
             now: Utc.timestamp_opt(1_100, 0).unwrap(),
         }
     }
@@ -1333,6 +1448,52 @@ mod tests {
 
     #[rstest]
     #[tokio::test]
+    async fn stopped_claude_with_running_background_task_is_in_progress(
+        mut source: TestSessionSource,
+    ) {
+        let transcript_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            transcript_file.path(),
+            indoc::indoc! {r#"
+                {"uuid":"fixture-prompt-row","parentUuid":null,"type":"user","message":{"content":"Watch the fixture build."}}
+                {"uuid":"fixture-bash-call-row","parentUuid":"fixture-prompt-row","type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-bash-tool-use-id","name":"Bash","input":{"command":"watch fixture build","description":"Watch the synthetic build","run_in_background":true}}]}}
+                {"uuid":"fixture-bash-result-row","parentUuid":"fixture-bash-call-row","type":"user","sourceToolAssistantUUID":"fixture-bash-call-row","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"fixture-bash-tool-use-id","content":"Command running in background with ID: fixture-task-id. Output is being written to: /fixture/task-output.log"}]}}
+            "#},
+        )
+        .unwrap();
+        source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
+        source.web_states[0].later_until = None;
+
+        assert_eq!(
+            sessions_response(source).await,
+            (
+                StatusCode::OK,
+                expected_response(
+                    "in_progress",
+                    None,
+                    true,
+                    ExpectedSessionDetails {
+                        kind: None,
+                        category_when_not_later: "in_progress",
+                        is_paused: false,
+                        unread: true,
+                        crit_url: None,
+                    },
+                    ExpectedSessionResponse {
+                        engine: "claude",
+                        work_type: None,
+                        work_type_nav_labels: serde_json::json!({}),
+                        updated_at: "1970-01-01T00:16:40Z",
+                        elapsed_seconds: 100,
+                        can_open_in_terminal: true,
+                    },
+                ),
+            ),
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
     async fn sessions_route_returns_all_tasks_with_the_newest_open_task_as_primary(
         mut source: TestSessionSource,
     ) {
@@ -1582,7 +1743,12 @@ mod tests {
         #[case] expected: Option<SessionKind>,
     ) {
         assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), Some(turn), false),
+            kind_for(
+                &session(SessionStatus::WaitingInput),
+                Some(turn),
+                false,
+                false,
+            ),
             expected
         );
     }
@@ -1605,7 +1771,7 @@ mod tests {
         });
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::AgentStatus), false),
+            kind_for(&session, Some(UserTurnKind::AgentStatus), false, false,),
             Some(expected)
         );
     }
@@ -1616,7 +1782,7 @@ mod tests {
         session.current_tool = Some("ExitPlanMode".to_string());
 
         assert_eq!(
-            kind_for(&session, Some(UserTurnKind::Ask), true),
+            kind_for(&session, Some(UserTurnKind::Ask), true, false),
             Some(SessionKind::Plan)
         );
     }
@@ -1629,7 +1795,7 @@ mod tests {
         #[case] expected: SessionKind,
     ) {
         assert_eq!(
-            kind_for(&session(SessionStatus::WaitingInput), turn, true),
+            kind_for(&session(SessionStatus::WaitingInput), turn, true, false),
             Some(expected),
         );
     }
@@ -1639,13 +1805,16 @@ mod tests {
         let mut session = session(SessionStatus::WaitingInput);
         session.current_tool = Some("ExitPlanMode".to_string());
 
-        assert_eq!(category_for(&session, None), SessionCategory::NeedsAction);
+        assert_eq!(
+            category_for(&session, None, false, None),
+            SessionCategory::NeedsAction
+        );
     }
 
     #[test]
     fn stopped_without_a_user_turn_has_stopped_kind() {
         assert_eq!(
-            kind_for(&session(SessionStatus::Stopped), None, false),
+            kind_for(&session(SessionStatus::Stopped), None, false, false),
             Some(SessionKind::Stopped)
         );
     }
@@ -1665,15 +1834,28 @@ mod tests {
         #[case] turn: Option<UserTurnKind>,
         #[case] expected: SessionCategory,
     ) {
-        assert_eq!(category_for(&session(status), turn), expected);
+        assert_eq!(category_for(&session(status), turn, false, None), expected);
     }
 
     #[rstest]
-    #[case::configured_waiting("waiting_for_external", AgentStatusState::Waiting)]
-    #[case::configured_done("work_finished", AgentStatusState::Done)]
-    fn stopped_agent_statuses_remain_in_needs_action(
+    #[case::configured_user(
+        "needs_attention",
+        AgentStatusState::User,
+        Some(UserTurnKind::AgentStatus),
+        SessionCategory::NeedsAction
+    )]
+    #[case::configured_waiting(
+        "waiting_for_external",
+        AgentStatusState::Waiting,
+        None,
+        SessionCategory::InProgress
+    )]
+    #[case::configured_done("work_finished", AgentStatusState::Done, None, SessionCategory::Done)]
+    fn stopped_agent_statuses_follow_configured_state(
         #[case] status_kind: &str,
         #[case] state: AgentStatusState,
+        #[case] expected_turn: Option<UserTurnKind>,
+        #[case] expected_category: SessionCategory,
     ) {
         let mut session = session(SessionStatus::Stopped);
         session.agent_status = Some(AgentStatus {
@@ -1691,14 +1873,10 @@ mod tests {
         assert_eq!(
             (
                 turn,
-                category_for(&session, turn),
-                kind_for(&session, turn, false),
+                category_for(&session, turn, false, Some(state)),
+                kind_for(&session, turn, false, false),
             ),
-            (
-                None,
-                SessionCategory::NeedsAction,
-                Some(SessionKind::Stopped)
-            ),
+            (expected_turn, expected_category, Some(SessionKind::Stopped)),
         );
     }
 
