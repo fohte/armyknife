@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.600](https://github.com/fohte/armyknife/compare/v0.1.599...v0.1.600) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** treat stopped notifications as terminal ([#1563](https://github.com/fohte/armyknife/issues/1563)) ([198581e](https://github.com/fohte/armyknife/commit/198581e8571248d4c6eb450137e827c043f471e5))
+
 ## [0.1.599](https://github.com/fohte/armyknife/compare/v0.1.598...v0.1.599) (2026-11-11)
 
 
