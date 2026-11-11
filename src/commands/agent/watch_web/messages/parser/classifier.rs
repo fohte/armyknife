@@ -282,21 +282,18 @@ fn is_literal_session_id(value: &str) -> bool {
 }
 
 fn peer_notify_arguments(name: &str, input: Option<&Value>) -> Option<Vec<String>> {
-    if name != "Bash" {
-        return None;
-    }
-    let command = input?
-        .get("command")
-        .and_then(Value::as_str)
-        .or_else(|| input.and_then(Value::as_str))?;
-    let arguments = shlex::split(command)?;
-    let command_start = arguments
-        .windows(4)
-        .position(|parts| parts == ["a", "agent", "peer", "notify"])?;
-    Some(arguments.into_iter().skip(command_start + 4).collect())
+    agent_command_arguments(name, input, &["a", "agent", "peer", "notify"])
 }
 
 fn agent_add_arguments(name: &str, input: Option<&Value>, command: &str) -> Option<Vec<String>> {
+    agent_command_arguments(name, input, &["a", "agent", command, "add"])
+}
+
+fn agent_command_arguments(
+    name: &str,
+    input: Option<&Value>,
+    command_path: &[&str],
+) -> Option<Vec<String>> {
     if name != "Bash" {
         return None;
     }
@@ -305,10 +302,18 @@ fn agent_add_arguments(name: &str, input: Option<&Value>, command: &str) -> Opti
         .and_then(Value::as_str)
         .or_else(|| input.and_then(Value::as_str))?;
     let arguments = shlex::split(command_text)?;
-    let command_start = arguments
-        .windows(4)
-        .position(|parts| parts == ["a", "agent", command, "add"])?;
-    Some(arguments.into_iter().skip(command_start + 4).collect())
+    let command_start = arguments.windows(command_path.len()).position(|parts| {
+        parts
+            .iter()
+            .zip(command_path)
+            .all(|(part, expected)| part == expected)
+    })?;
+    Some(
+        arguments
+            .into_iter()
+            .skip(command_start + command_path.len())
+            .collect(),
+    )
 }
 
 pub(super) fn failed_peer_notification(text: &str) -> MessageKind {

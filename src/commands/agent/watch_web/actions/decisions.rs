@@ -17,8 +17,19 @@ pub(super) async fn mark_ok(
 ) -> Result<Json<Success>, ApiError> {
     let _session = load_session(state.clone(), id.clone()).await?;
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
-    run_blocking(move || store::set_agent_decision_review_from(&sessions_dir, &id, seq, "ok"))
-        .await?;
+    let updated = run_blocking(move || {
+        let exists = store::agent_decisions_from(&sessions_dir, &id)?
+            .iter()
+            .any(|decision| decision.seq == seq);
+        if exists {
+            store::set_agent_decision_review_from(&sessions_dir, &id, seq, "ok")?;
+        }
+        Ok(exists)
+    })
+    .await?;
+    if !updated {
+        return Err(ApiError::decision_not_found());
+    }
     Ok(Json(Success::new()))
 }
 
@@ -38,12 +49,18 @@ pub(super) async fn request_change(
     }
     let sessions_dir = resolve_sessions_dir(state.sessions_dir).map_err(ApiError::internal)?;
     let runtime = state.runtime;
-    run_blocking(move || {
+    enum ChangeOutcome {
+        Sent,
+        DecisionNotFound,
+        ParentArchived,
+    }
+
+    let outcome = run_blocking(move || {
         let Some(decision) = store::agent_decisions_from(&sessions_dir, &id)?
             .into_iter()
             .find(|decision| decision.seq == seq)
         else {
-            return Ok(false);
+            return Ok(ChangeOutcome::DecisionNotFound);
         };
 
         let web_state = store::watch_web_session_states_from(&sessions_dir)?
@@ -60,8 +77,12 @@ pub(super) async fn request_change(
             .then(|| session.ancestor_session_ids.last())
             .flatten();
         let target = if let Some(parent_id) = parent_id {
-            store::load_session_from(&sessions_dir, parent_id)?
-                .ok_or_else(|| anyhow::anyhow!("parent session not found: {parent_id}"))?
+            let parent = store::load_session_from(&sessions_dir, parent_id)?
+                .ok_or_else(|| anyhow::anyhow!("parent session not found: {parent_id}"))?;
+            if parent.archived_at.is_some() {
+                return Ok(ChangeOutcome::ParentArchived);
+            }
+            parent
         } else {
             session.clone()
         };
@@ -71,13 +92,18 @@ pub(super) async fn request_change(
             .transpose()?;
         let content =
             super::messages::watch_web_message_content(&target, marker.as_deref(), &content);
-        runtime.send_message(&target, &content)?;
         store::set_agent_decision_review_from(&sessions_dir, &id, seq, "change")?;
-        Ok(true)
+        runtime.send_message(&target, &content)?;
+        Ok(ChangeOutcome::Sent)
     })
-    .await?
-    .then_some(())
-    .ok_or_else(ApiError::not_found)?;
+    .await?;
+    match outcome {
+        ChangeOutcome::Sent => {}
+        ChangeOutcome::DecisionNotFound => return Err(ApiError::decision_not_found()),
+        ChangeOutcome::ParentArchived => {
+            return Err(ApiError::conflict("parent session is archived"));
+        }
+    }
     Ok(Json(Success::new()))
 }
 

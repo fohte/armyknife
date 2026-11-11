@@ -155,6 +155,13 @@ impl ApiError {
         }
     }
 
+    fn decision_not_found() -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: "decision not found".to_string(),
+        }
+    }
+
     fn conflict(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::CONFLICT,

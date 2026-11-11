@@ -172,10 +172,13 @@ fn router_with_source<S: SessionSource>(source: S) -> Router {
 async fn list_sessions<S: SessionSource>(
     State(source): State<S>,
 ) -> Result<Json<SessionsResponse>, StatusCode> {
-    let snapshot = source
-        .load_snapshot()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let snapshot = match source.load_snapshot().await {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            tracing::warn!(%error, "failed to load agent session list");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
 
     let sessions_to_check = snapshot
         .sessions

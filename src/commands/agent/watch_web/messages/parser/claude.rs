@@ -547,6 +547,15 @@ mod tests {
         ChatItem, ParentSession, PeerDirection, UserContentPart,
     };
 
+    const FAILED_ADD_TRANSCRIPT: &str = indoc! {r#"
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+        {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","is_error":true,"content":"could not record the decision"}]}}
+    "#};
+    const UNRECOGNIZED_ADD_TRANSCRIPT: &str = indoc! {r#"
+        {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
+        {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded proposal 1"}]}}
+    "#};
+
     fn decision(seq: i64) -> AgentDecision {
         AgentDecision {
             session_id: "fixture-session".to_string(),
@@ -623,20 +632,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn appends_decisions_after_a_failed_add_call() {
-        assert_unplaced_decisions(indoc! {r#"
-            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
-            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","is_error":true,"content":"could not record the decision"}]}}
-        "#});
-    }
-
-    #[test]
-    fn appends_decisions_after_an_unrecognized_add_result() {
-        assert_unplaced_decisions(indoc! {r#"
-            {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Decision 1'"}}]}}
-            {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded proposal 1"}]}}
-        "#});
+    #[rstest]
+    #[case::failed_add(FAILED_ADD_TRANSCRIPT)]
+    #[case::unrecognized_result(UNRECOGNIZED_ADD_TRANSCRIPT)]
+    fn appends_decisions_without_a_successful_recorded_result(#[case] transcript: &str) {
+        assert_unplaced_decisions(transcript);
     }
 
     #[test]
