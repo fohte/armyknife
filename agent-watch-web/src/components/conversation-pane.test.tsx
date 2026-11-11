@@ -507,18 +507,24 @@ it('announces copy failure and removes the textarea when execCommand throws', as
   })
 })
 
-it('answers a question from a number key or a choice click', () => {
+it('answers a question from a number key or a choice click', async () => {
   const onAction = vi.fn(() => Promise.resolve(true))
   renderView(onAction, session, undefined, [question])
 
-  const keyEvent = dispatchKeyInAct(
-    requireElement(container.querySelector('.conversation-pane')),
-    '2',
-  )
-  act(() => {
+  const keyEvent = new KeyboardEvent('keydown', {
+    key: '2',
+    bubbles: true,
+    cancelable: true,
+  })
+  await act(async () => {
+    requireElement(container.querySelector('.conversation-pane')).dispatchEvent(
+      keyEvent,
+    )
     container
       .querySelector<HTMLButtonElement>('.chat-question-choices button')
       ?.click()
+    await Promise.resolve()
+    await Promise.resolve()
   })
 
   const actual = JSON.stringify([

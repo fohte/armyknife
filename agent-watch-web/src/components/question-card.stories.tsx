@@ -3,7 +3,7 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { QuestionCard } from '#components/question-card'
 
 const callbacks = {
-  onAnswer: () => undefined,
+  onAnswer: () => Promise.resolve(true),
   onSkip: () => Promise.resolve(true),
   onFreeformAnswer: () => Promise.resolve(true),
   onOpenInTerminal: () => undefined,

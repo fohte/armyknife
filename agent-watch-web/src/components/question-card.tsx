@@ -18,7 +18,7 @@ type QuestionCardProps = {
   isMobile: boolean
   showTerminalFallback: boolean
   canOpenInTerminal: boolean
-  onAnswer: (choice: number) => void
+  onAnswer: (choice: number) => Promise<boolean>
   onSkip: () => Promise<boolean>
   onFreeformAnswer: (answer: string) => Promise<boolean>
   onOpenInTerminal: () => void
@@ -91,6 +91,14 @@ export function QuestionCard({
       })
   }
 
+  const answerChoice = (choice: number) => {
+    if (!canAnswer || questionSkipped || answer !== null || isSending) return
+    setIsSending(true)
+    void onAnswer(choice).finally(() => {
+      setIsSending(false)
+    })
+  }
+
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLElement>) => {
     if (
       event.key !== 'Escape' ||
@@ -148,7 +156,7 @@ export function QuestionCard({
               !canAnswer || questionSkipped || answer !== null || isSending
             }
             onClick={() => {
-              onAnswer(choiceIndex + 1)
+              answerChoice(choiceIndex + 1)
             }}
           >
             {!isMobile ? <kbd>{choiceIndex + 1}</kbd> : null}

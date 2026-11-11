@@ -141,9 +141,7 @@ export function renderConversationMessage({
           !actions.answerQuestion
         }
         canOpenInTerminal={actions?.openInTerminal === true}
-        onAnswer={(choice) => {
-          void onAction('answer', { choice })
-        }}
+        onAnswer={(choice) => onAction('answer', { choice })}
         onSkip={() => onAction('answer', { skip: true })}
         onFreeformAnswer={(answer) => {
           const questionContext =

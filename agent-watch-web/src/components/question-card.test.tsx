@@ -24,7 +24,7 @@ function props(overrides: Partial<Props> = {}): Props {
     isMobile: false,
     showTerminalFallback: false,
     canOpenInTerminal: true,
-    onAnswer: vi.fn(),
+    onAnswer: vi.fn(() => Promise.resolve(true)),
     onSkip: vi.fn(() => Promise.resolve(true)),
     onFreeformAnswer: vi.fn(() => Promise.resolve(true)),
     onOpenInTerminal: vi.fn(),
@@ -121,8 +121,8 @@ it('renders answered choice Markdown as inline spans without paragraphs', () => 
   })
 })
 
-it('shows a link destination as text and answers only the selected choice', () => {
-  const onAnswer = vi.fn()
+it('shows a link destination as text and answers only the selected choice', async () => {
+  const onAnswer = vi.fn(() => Promise.resolve(true))
   const cardProps = props({
     choices: [
       { label: 'Follow the [setup guide](https://example.org/guide)' },
@@ -135,8 +135,10 @@ it('shows a link destination as text and answers only the selected choice', () =
   const destination = requireElement(
     container.querySelector('.chat-question-choice-text .markdown-link-text'),
   )
-  act(() => {
+  await act(async () => {
     destination.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await Promise.resolve()
+    await Promise.resolve()
   })
 
   const snapshot = () => ({
@@ -169,13 +171,14 @@ it('shows question metadata', () => {
     multiSelect: container.querySelector('.chat-question-card p')?.textContent,
     description: container.querySelector('.chat-question-choice-description')
       ?.textContent,
+    answerLabel: container.querySelector('label')?.textContent,
   })
   expect(snapshot()).toEqual({
     heading: 'Output format',
     multiSelect: 'Multiple select question.',
     description: 'Fits in a short report.',
+    answerLabel: 'Type something',
   })
-  expect(container.querySelector('label')?.textContent).toBe('Type something')
 })
 
 it('skips a question from the no-answer button', async () => {
@@ -193,6 +196,71 @@ it('skips a question from the no-answer button', async () => {
   await act(async () => Promise.resolve())
 
   expect(onSkip.mock.calls).toEqual([[]])
+})
+
+it('keeps the question actionable after a no-answer request fails', async () => {
+  const onSkip = vi
+    .fn(() => Promise.resolve(false))
+    .mockImplementationOnce(() => Promise.resolve(false))
+    .mockImplementationOnce(() => Promise.resolve(true))
+  renderQuestion(props({ onSkip }))
+
+  const skipButton = requireElement(
+    Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent.includes('No answer'),
+    ) ?? null,
+  )
+  await act(async () => {
+    skipButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+  const afterFailure = {
+    choiceDisabled: requireElement(
+      container.querySelector<HTMLButtonElement>(
+        '.chat-question-choices button',
+      ),
+    ).disabled,
+    formPresent: container.querySelector('form') !== null,
+    skipDisabled: skipButton.disabled,
+  }
+
+  await act(async () => {
+    skipButton.click()
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    afterFailure,
+    afterRetry: {
+      choiceDisabled: requireElement(
+        container.querySelector<HTMLButtonElement>(
+          '.chat-question-choices button',
+        ),
+      ).disabled,
+      formPresent: container.querySelector('form') !== null,
+      skipButtonPresent: (
+        container.querySelector<HTMLButtonElement>(
+          '.chat-question-actions button',
+        )?.textContent ?? ''
+      ).includes('No answer'),
+    },
+    skipCalls: onSkip.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    afterFailure: {
+      choiceDisabled: false,
+      formPresent: true,
+      skipDisabled: false,
+    },
+    afterRetry: {
+      choiceDisabled: true,
+      formPresent: false,
+      skipButtonPresent: false,
+    },
+    skipCalls: [[], []],
+  })
 })
 
 it('does not skip a question when Escape is pressed in the freeform field', async () => {
@@ -237,6 +305,73 @@ it('skips a question when Escape is pressed elsewhere in the card', async () => 
     defaultPrevented: event.defaultPrevented,
   })
   expect(snapshot()).toEqual({ skipCalls: [[]], defaultPrevented: true })
+})
+
+it('prevents skip while a choice answer is being sent', async () => {
+  let resolveAnswer: (sent: boolean) => void = () => undefined
+  const answerPromise = new Promise<boolean>((resolve) => {
+    resolveAnswer = resolve
+  })
+  const onAnswer = vi.fn(() => answerPromise)
+  const onSkip = vi.fn(() => Promise.resolve(true))
+  renderQuestion(props({ onAnswer, onSkip }))
+
+  const choice = requireElement(
+    container.querySelector<HTMLButtonElement>('.chat-question-choices button'),
+  )
+  const skipButton = requireElement(
+    Array.from(container.querySelectorAll('button')).find((button) =>
+      button.textContent.includes('No answer'),
+    ) ?? null,
+  )
+  const card = requireElement(container.querySelector('.chat-question-card'))
+  act(() => {
+    choice.click()
+  })
+  const escapeEvent = new KeyboardEvent('keydown', {
+    key: 'Escape',
+    bubbles: true,
+    cancelable: true,
+  })
+  act(() => {
+    card.dispatchEvent(escapeEvent)
+  })
+  const whileSending = {
+    choiceDisabled: choice.disabled,
+    skipDisabled: skipButton.disabled,
+    skipCalls: onSkip.mock.calls,
+    escapeDefaultPrevented: escapeEvent.defaultPrevented,
+  }
+
+  await act(async () => {
+    resolveAnswer(true)
+    await answerPromise
+    await Promise.resolve()
+  })
+
+  const snapshot = () => ({
+    whileSending,
+    afterSending: {
+      choiceDisabled: choice.disabled,
+      skipDisabled: skipButton.disabled,
+      skipCalls: onSkip.mock.calls,
+    },
+    answerCalls: onAnswer.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    whileSending: {
+      choiceDisabled: true,
+      skipDisabled: true,
+      skipCalls: [],
+      escapeDefaultPrevented: false,
+    },
+    afterSending: {
+      choiceDisabled: false,
+      skipDisabled: false,
+      skipCalls: [],
+    },
+    answerCalls: [[1]],
+  })
 })
 
 it('keeps a freeform answer available to retry after the question closes', async () => {
