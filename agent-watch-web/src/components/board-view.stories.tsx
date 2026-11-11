@@ -135,7 +135,7 @@ const meta = {
     projects,
     loaded: true,
     error: null,
-    hideQuietProjects: false,
+    hideQuietProjects: true,
     onHideQuietProjectsChange: () => undefined,
     onSelectSession: () => undefined,
   },

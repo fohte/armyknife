@@ -143,6 +143,21 @@ it('shows the primary task and the count of other linked tasks on a card', () =>
   )
 })
 
+it('shows the task placeholder on cards without an assigned task', () => {
+  renderBoard([
+    {
+      ...completedSession,
+      category: 'needs_action',
+      kind: 'Plan',
+      task: null,
+    },
+  ])
+
+  expect(container.querySelector('.board-card-task')?.textContent).toBe(
+    '— No task',
+  )
+})
+
 it('keeps the overflow hint at the visible edge while projects are scrolled', async () => {
   container.style.cssText = 'display: flex; width: 320px; height: 320px'
   renderBoard(
