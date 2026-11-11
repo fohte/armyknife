@@ -73,21 +73,24 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-it('starts mobile composers with one row while desktop composers use two', () => {
-  const desktopRows = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  ).rows
+it.each([
+  { layout: 'desktop', isMobile: false, expectedRows: 2 },
+  { layout: 'iPhone', isMobile: true, expectedRows: 1 },
+])(
+  '$layout composer starts with $expectedRows row(s)',
+  ({ isMobile, expectedRows }) => {
+    act(() => {
+      root?.render(<ComposerHarness isMobile={isMobile} />)
+    })
 
-  act(() => {
-    root?.render(<ComposerHarness isMobile />)
-  })
-  const mobileRows = requireElement(
-    container.querySelector<HTMLTextAreaElement>('textarea'),
-  ).rows
-
-  const snapshot = () => ({ desktopRows, mobileRows })
-  expect(snapshot()).toEqual({ desktopRows: 2, mobileRows: 1 })
-})
+    const snapshot = () => ({
+      rows: requireElement(
+        container.querySelector<HTMLTextAreaElement>('textarea'),
+      ).rows,
+    })
+    expect(snapshot()).toEqual({ rows: expectedRows })
+  },
+)
 
 it('grows with the draft and scrolls after reaching half the viewport', () => {
   const textarea = requireElement(

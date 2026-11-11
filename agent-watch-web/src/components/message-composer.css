@@ -94,14 +94,18 @@
 }
 
 .conversation-composer[data-mobile='true'] {
+  box-sizing: border-box;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 44px;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
-  width: calc(100% - 24px);
-  margin-bottom: calc(30px + env(safe-area-inset-bottom));
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px max(30px, env(safe-area-inset-bottom));
   border: 0;
-  background: transparent;
+  border-top: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-surface);
 }
 
 .conversation-composer[data-mobile='true'] textarea {
