@@ -1,21 +1,16 @@
 import '#components/tool-summary.css'
 
-import hljs from 'highlight.js/lib/core'
-import bash from 'highlight.js/lib/languages/bash'
 import { type ReactNode, useState } from 'react'
 
 import type { ToolOperation } from '#types'
 
-const shellHighlighter = hljs.newInstance()
-shellHighlighter.registerLanguage('bash', bash)
-
-function isShellTool(tool: string) {
-  return ['Bash', 'bash', 'exec', 'shell', 'CommandExecution'].includes(tool)
+type ToolSummaryOperation = Omit<ToolOperation, 'target'> & {
+  target?: string | null
 }
 
 type ToolSummaryProps = {
   summary: string
-  operations: readonly ToolOperation[]
+  operations: readonly ToolSummaryOperation[]
   children?: ReactNode
   open?: boolean
 }
@@ -27,6 +22,11 @@ export function ToolSummary({
   open = false,
 }: ToolSummaryProps) {
   const [isOpen, setIsOpen] = useState(open)
+  const failedSuffix = summary.match(/· \d+ failed$/)?.[0]
+  const summaryText =
+    failedSuffix === undefined
+      ? summary
+      : summary.slice(0, -failedSuffix.length).trimEnd()
 
   return (
     <details
@@ -36,28 +36,39 @@ export function ToolSummary({
         setIsOpen(event.currentTarget.open)
       }}
     >
-      <summary>{summary}</summary>
+      <summary>
+        {failedSuffix === undefined ? (
+          summary
+        ) : (
+          <>
+            <span className="chat-tool-summary-text">{summaryText}</span>
+            <span className="chat-tool-summary-failed">{failedSuffix}</span>
+          </>
+        )}
+      </summary>
       {children}
       {operations.length > 0 ? (
         <ul className="chat-tool-operations">
           {operations.map((operation, index) => (
             <li
               key={`${String(index)}-${operation.tool}-${operation.target ?? ''}`}
+              data-has-target={
+                typeof operation.target === 'string' &&
+                operation.target.length > 0
+                  ? 'true'
+                  : 'false'
+              }
+              data-has-status={failedSuffix === undefined ? 'true' : 'false'}
             >
               <span className="chat-tool-name">{operation.tool}</span>
-              {operation.target != null && operation.target !== '' ? (
-                isShellTool(operation.tool) && isOpen ? (
-                  <code
-                    className="chat-tool-command hljs"
-                    dangerouslySetInnerHTML={{
-                      __html: shellHighlighter.highlight(operation.target, {
-                        language: 'bash',
-                      }).value,
-                    }}
-                  />
-                ) : (
-                  <code>{operation.target}</code>
-                )
+              {typeof operation.target === 'string' &&
+              operation.target.length > 0 ? (
+                <code className="chat-tool-target">{operation.target}</code>
+              ) : null}
+              {failedSuffix === undefined ? (
+                <span className="chat-tool-operation-status" aria-hidden="true">
+                  ✓
+                </span>
               ) : null}
             </li>
           ))}

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.1.588](https://github.com/fohte/armyknife/compare/v0.1.587...v0.1.588) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match iPhone Inbox to mock ([#1537](https://github.com/fohte/armyknife/issues/1537)) ([b76d866](https://github.com/fohte/armyknife/commit/b76d8661087ab570eaf1ddb55d3ae7d0cd1525b5))
+
+## [0.1.587](https://github.com/fohte/armyknife/compare/v0.1.586...v0.1.587) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align chat body to mock ([#1531](https://github.com/fohte/armyknife/issues/1531)) ([f59ee3c](https://github.com/fohte/armyknife/commit/f59ee3cb27cac48c7ff41482500b9670443bb6b6))
+
+## [0.1.586](https://github.com/fohte/armyknife/compare/v0.1.585...v0.1.586) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** show delivered message body ([#1532](https://github.com/fohte/armyknife/issues/1532)) ([276c0bf](https://github.com/fohte/armyknife/commit/276c0bfd8066582aedbdac6c750d049cba97c4bf))
+
 ## [0.1.585](https://github.com/fohte/armyknife/compare/v0.1.584...v0.1.585) (2026-11-11)
 
 

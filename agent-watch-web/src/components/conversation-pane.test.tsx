@@ -140,6 +140,10 @@ function renderView(
   } | null,
   decisionsPanelOpen = false,
   onToggleDecisionsPanel?: () => void,
+  today: {
+    isToday: boolean
+    onToggleToday: (isToday: boolean) => void
+  } = { isToday: false, onToggleToday: () => undefined },
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -156,6 +160,8 @@ function renderView(
         onAction={onAction}
         onSelectSession={onSelectSession}
         isMobile={isMobile}
+        isToday={today.isToday}
+        onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
         decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
@@ -166,6 +172,50 @@ function renderView(
     )
   })
 }
+
+function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  return {
+    label: toggle?.getAttribute('aria-label'),
+    pressed: toggle?.getAttribute('aria-pressed'),
+    calls: onToggleToday.mock.calls,
+  }
+}
+
+it('toggles TODAY from the iPhone conversation header', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: false, onToggleToday },
+  )
+
+  const toggle = container.querySelector<HTMLButtonElement>(
+    '.mobile-conversation-today',
+  )
+  act(() => {
+    toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  })
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Add to TODAY',
+    pressed: 'false',
+    calls: [[true]],
+  })
+})
 
 function dispatchKey(
   target: EventTarget,
@@ -1089,7 +1139,7 @@ it('marks a queued prompt below the delivered conversation', () => {
     ),
   ).map((message) => ({
     className: message.className,
-    label: message.querySelector('.chat-queued-label')?.textContent ?? null,
+    label: message.querySelector('.chat-from')?.textContent ?? null,
     text: message.querySelector('.markdown-message')?.textContent ?? null,
     bubbleClassName:
       message.querySelector('.chat-user-message')?.className ?? null,
@@ -1098,7 +1148,7 @@ it('marks a queued prompt below the delivered conversation', () => {
   expect(actual).toEqual([
     {
       className: 'chat-user-group',
-      label: null,
+      label: 'You',
       text: 'Please summarize the current changes.',
       bubbleClassName: 'markdown-message chat-user-message',
     },
@@ -1109,11 +1159,10 @@ it('marks a queued prompt below the delivered conversation', () => {
       bubbleClassName: null,
     },
     {
-      className: 'chat-user-group chat-user-group-queued',
-      label: 'Queued',
+      className: 'chat-user-group',
+      label: 'You · Queued',
       text: 'Also check the error handling.',
-      bubbleClassName:
-        'markdown-message chat-user-message chat-user-message-queued',
+      bubbleClassName: 'markdown-message chat-user-message',
     },
   ])
 })
@@ -1654,7 +1703,7 @@ it('hides working status when the session is done', () => {
   expect(snapshot()).toEqual({
     workingStatus: null,
     toolSummary: '1 action',
-    operations: ['execcargo test'],
+    operations: ['execcargo test✓'],
   })
 })
 

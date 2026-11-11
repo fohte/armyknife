@@ -205,7 +205,7 @@ mod tests {
     use rstest::{fixture, rstest};
     use serde_json::{Value, json};
 
-    use super::super::parse_with_background_tasks;
+    use super::super::parse_with_background_tasks_and_peer_out_messages;
     use crate::commands::agent::watch_web::messages::{BackgroundTask, ChatItem, ToolOperation};
 
     #[rstest]
@@ -213,12 +213,13 @@ mod tests {
         background_bash_transcript: String,
     ) {
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(background_bash_transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:01:30Z"),
+                &[],
             )
             .unwrap(),
             (
@@ -281,12 +282,13 @@ mod tests {
         });
 
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:01:30Z"),
+                &[],
             )
             .unwrap(),
             (expected_messages, expected_tasks),
@@ -315,12 +317,13 @@ mod tests {
         });
 
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:01:30Z"),
+                &[],
             )
             .unwrap(),
             (
@@ -381,12 +384,13 @@ mod tests {
         transcript.push('\n');
 
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:01:30Z"),
+                &[],
             )
             .unwrap(),
             (
@@ -423,12 +427,13 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:00:30Z"),
+                &[],
             )
             .unwrap(),
             (
@@ -463,12 +468,13 @@ mod tests {
         "#};
 
         assert_eq!(
-            parse_with_background_tasks(
+            parse_with_background_tasks_and_peer_out_messages(
                 Cursor::new(transcript),
                 None,
                 None,
                 None,
                 timestamp("2026-01-01T00:00:45Z"),
+                &[],
             )
             .unwrap(),
             (

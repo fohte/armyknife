@@ -55,8 +55,8 @@ export const TextOnlyMessageIsDisplayed: Story = {
   },
 }
 
-export const QueuedPromptIsDimmed: Story = {
-  name: 'A queued prompt is labeled and dimmed',
+export const QueuedPromptUsesUserMessageStyling: Story = {
+  name: 'A queued prompt uses the You message styling',
   args: {
     message: {
       type: 'queued_user',
@@ -66,7 +66,7 @@ export const QueuedPromptIsDimmed: Story = {
 }
 
 export const QueuedPromptShowsItsImage: Story = {
-  name: 'A queued prompt shows its dimmed image attachment',
+  name: 'A queued prompt shows its image attachment at full brightness',
   args: {
     message: {
       type: 'queued_user',
