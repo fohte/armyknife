@@ -561,6 +561,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                 |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                                 |         | Set the calling session's reason for stopping                                               |
+| `proposal add`                                             |         | Record a structured proposal from JSON read from stdin                                      |
 | `profile use <profile> / show`                             |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`              |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                      | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |
@@ -599,6 +600,24 @@ Existing provider proxies can pass their PreToolUse envelope through `a agent at
 Only provider metadata attribution is performed. Git command permissions, aliases, compound commands, pull, merge, and rebase remain under the existing permission proxy and Git configuration.
 
 Run `a agent status set` from a tracked Claude Code or Codex session. Claude Code gets `ARMYKNIFE_SESSION_ID` from the registered `session-start` hook; Codex provides `CODEX_SESSION_ID`. When `CODEX_THREAD_ID` differs from `CODEX_SESSION_ID`, the command succeeds without saving a status because Codex subagent threads share the root session record. The one-line note is cleared on the next `UserPromptSubmit` or the first main-thread activity hook after `Stop`; `Stop`, `SessionEnd`, notifications, and `SessionStart(resume)` keep it. A set status appears as `agent_status` in `a agent peer` JSON output.
+
+Run `a agent proposal add` from a tracked Claude Code or Codex session and pipe a JSON object to stdin. The required fields are `title` and `options`; each option requires `label`. Optional fields are `summary`, `description`, `pros`, `cons`, and `recommended`. Include 2 to 9 options and mark at most one as recommended. The command prints `Recorded proposal <seq>` after saving the validated proposal.
+
+Sequence numbers start at 1 and increment for each proposal in a session.
+
+```console
+$ cat <<'JSON' | a agent proposal add
+{
+  "title": "Choose a storage strategy",
+  "summary": "Compare the restart behavior",
+  "options": [
+    {"label": "Write to disk", "pros": ["Survives restarts"], "recommended": true},
+    {"label": "Keep in memory", "cons": ["Resets on restart"]}
+  ]
+}
+JSON
+Recorded proposal 1
+```
 
 Vibe mode is an opt-in marker recorded by armyknife. Vibe-gated actions are denied for every repository by default, even when the marker is enabled. Set `orgs.<owner>.vibe` to `true` to allow repositories for an owner; `repos.<owner>/<repo>.vibe` can override that value for one repository. The effective repository value defaults to `false`.
 
