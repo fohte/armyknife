@@ -7,7 +7,6 @@ import { useCallback, useLayoutEffect, useRef } from 'react'
 
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationWorkingStatus } from '#components/conversation-working-status'
-import { CopySessionIdControl } from '#components/copy-session-id-control'
 import { MessageComposer } from '#components/message-composer'
 import type {
   PendingPermissionAction,
@@ -261,17 +260,17 @@ export function ConversationPaneView({
               ‹
             </Button>
             <div className="mobile-conversation-heading">
+              <SessionHeading
+                title={session.title}
+                isPaused={session.isPaused}
+                sessionId={session.id}
+              />
               <div className="mobile-conversation-context">
                 <SessionTaskLinks task={session.task} tasks={linkedTasks} />
                 {session.task ? <span aria-hidden="true">·</span> : null}
                 <span>{session.repo.split('/').at(-1)}</span>
               </div>
-              <SessionHeading
-                title={session.title}
-                isPaused={session.isPaused}
-              />
             </div>
-            <CopySessionIdControl sessionId={session.id} compact />
             <Button
               className="mobile-conversation-later cursor-pointer"
               type="button"

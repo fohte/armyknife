@@ -47,6 +47,24 @@ export const QuestionWaitsForAnAnswer: Story = {
   ],
 }
 
+export const QuestionWaitsForAnAnswerOnIPhone: Story = {
+  name: 'An iPhone question shows numbered choices in full-width rows',
+  args: {
+    isMobile: true,
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="conversation-pane"
+        data-mobile="true"
+        style={{ width: '390px', height: '844px', padding: '0 16px' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const QuestionShowsItsMultipleSelectType: Story = {
   name: 'A question is marked as a multiple select question',
   args: {

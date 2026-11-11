@@ -121,6 +121,24 @@ it('renders answered choice Markdown as inline spans without paragraphs', () => 
   })
 })
 
+it('shows numbered choices on iPhone', () => {
+  renderQuestion(props({ isMobile: true }))
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll('.chat-question-choices button'),
+      (button) => ({
+        number: button.querySelector('kbd')?.textContent,
+        label: button.querySelector('.chat-question-choice-text')?.textContent,
+      }),
+    )
+
+  expect(snapshot()).toEqual([
+    { number: '1', label: 'Retry a few times' },
+    { number: '2', label: 'Retry once' },
+  ])
+})
+
 it('shows a link destination as text and answers only the selected choice', async () => {
   const onAnswer = vi.fn(() => Promise.resolve(true))
   const cardProps = props({

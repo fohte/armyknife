@@ -201,6 +201,88 @@ export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
   ],
 }
 
+export const IPhoneConversationShowsAQuestion: Story = {
+  name: 'The iPhone conversation shows messages and a question card',
+  args: {
+    isMobile: true,
+    actions: { ...actions, interrupt: false },
+    messages: [
+      {
+        type: 'user',
+        from: 'Example project lead',
+        text: 'Please add retry handling to the request client.',
+      },
+      {
+        type: 'assistant',
+        text: 'I added bounded retries. Which policy should I use?',
+      },
+      {
+        type: 'tool_summary',
+        summary: 'Edit client.ts · Read ×3 · Shell ×1',
+      },
+      {
+        type: 'decision',
+        seq: 1,
+        title: 'Retry with exponential delay',
+        why: 'A short delay avoids repeating temporary failures immediately.',
+        considered: ['Retry without a delay'],
+        easyToChange: 'Update the retry delay constant.',
+        review: null,
+        createdAt: '2026-11-01T03:25:59Z',
+      },
+      {
+        type: 'question',
+        header: 'Question',
+        question: 'Should retries use the default limit?',
+        choices: [
+          { label: 'Yes, use the default limit' },
+          { label: 'No, choose a different limit' },
+        ],
+        multi_select: false,
+        answer: null,
+      },
+    ],
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
+export const IPhoneConversationShowsItsWorkingStatus: Story = {
+  name: 'The iPhone conversation keeps the working status within its insets',
+  args: {
+    isMobile: true,
+    session: { ...session, category: 'in_progress', kind: null },
+    messages: [
+      { type: 'assistant', text: 'The request client is being updated.' },
+      {
+        type: 'tool_in_progress',
+        tool: 'Shell',
+        target: 'cargo test --package example-client',
+      },
+    ],
+  },
+  decorators: [
+    (Story) => (
+      <div
+        className="story-mobile-layout"
+        data-layout="mobile"
+        style={{ width: '390px', height: '844px', display: 'flex' }}
+      >
+        <Story />
+      </div>
+    ),
+  ],
+}
+
 export const PermissionWaitsForApproval: Story = {
   name: 'A permission request offers approval and rejection',
   args: {
