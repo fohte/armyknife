@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.590](https://github.com/fohte/armyknife/compare/v0.1.589...v0.1.590) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align iPhone conversation UI ([#1544](https://github.com/fohte/armyknife/issues/1544)) ([6cf8b16](https://github.com/fohte/armyknife/commit/6cf8b16c2bb565a0af33be2fafae385572ffb0a4))
+
 ## [0.1.589](https://github.com/fohte/armyknife/compare/v0.1.588...v0.1.589) (2026-11-11)
 
 
