@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.575](https://github.com/fohte/armyknife/compare/v0.1.574...v0.1.575) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align nav and frame to mock ([#1510](https://github.com/fohte/armyknife/issues/1510)) ([cae09b6](https://github.com/fohte/armyknife/commit/cae09b6d17f351b74d0494c39de0fc0110c105bc))
+* **agent-watch-web:** match inbox filters to mock ([#1507](https://github.com/fohte/armyknife/issues/1507)) ([e8354ae](https://github.com/fohte/armyknife/commit/e8354ae14ac794248fb83d9ef28dcddaa9869668))
+
 ## [0.1.574](https://github.com/fohte/armyknife/compare/v0.1.573...v0.1.574) (2026-11-11)
 
 
