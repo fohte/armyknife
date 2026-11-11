@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from 'react'
 
 import { requestText } from '#components/conversation-requests'
 import { formatElapsedTime } from '#components/format-elapsed-time'
+import { BackgroundTaskOutput } from '#components/running-task-output'
 import type { BackgroundTask } from '#types'
 
 type RunningTasksPanelProps = {
@@ -144,9 +145,7 @@ function BackgroundTaskRow({
         {formatElapsedTime(task.elapsedSeconds)}
       </span>
       {isOpen ? (
-        <pre aria-live="polite" className="running-task-output" id={outputId}>
-          {error ?? output ?? 'Loading output…'}
-        </pre>
+        <BackgroundTaskOutput id={outputId} output={output} error={error} />
       ) : null}
     </div>
   )

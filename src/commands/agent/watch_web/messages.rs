@@ -656,10 +656,11 @@ struct ParentSession {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
 
+    use axum::Router;
     use axum::body::{Body, to_bytes};
     use axum::http::header::CONTENT_TYPE;
     use axum::http::{Request, Response, StatusCode};
@@ -687,6 +688,57 @@ mod tests {
             "last_message": null,
         }))
         .unwrap()
+    }
+
+    fn background_task_output_router(transcript_path: &Path, output_path: &Path) -> Router {
+        let records = [
+            json!({
+                "uuid": "fixture-bash-call-row",
+                "parentUuid": null,
+                "type": "assistant",
+                "timestamp": "2026-01-01T00:00:00Z",
+                "message": {"content": [{
+                    "type": "tool_use",
+                    "id": "fixture-bash-tool-use-id",
+                    "name": "Bash",
+                    "input": {"command": "watch fixture build", "run_in_background": true},
+                }]},
+            }),
+            json!({
+                "uuid": "fixture-bash-result-row",
+                "parentUuid": "fixture-bash-call-row",
+                "type": "user",
+                "sourceToolAssistantUUID": "fixture-bash-call-row",
+                "message": {"content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "fixture-bash-tool-use-id",
+                    "content": format!(
+                        "Command running in background with ID: fixture-task-id. Output is being written to: {}",
+                        output_path.display(),
+                    ),
+                }]},
+            }),
+        ];
+        std::fs::write(
+            transcript_path,
+            records
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap()
+                .join("\n"),
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path.to_path_buf());
+        routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |id| Ok((id == "fixture-session").then(|| session.clone())),
+            |_| Ok(None),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        )
     }
 
     #[tokio::test]
@@ -2283,55 +2335,7 @@ mod tests {
         let transcript_path = directory.path().join("transcript.jsonl");
         let output_path = directory.path().join("task-output.log");
         std::fs::write(&output_path, "fixture output\n").unwrap();
-        let records = [
-            json!({
-                "uuid": "fixture-bash-call-row",
-                "parentUuid": null,
-                "type": "assistant",
-                "timestamp": "2026-01-01T00:00:00Z",
-                "message": {"content": [{
-                    "type": "tool_use",
-                    "id": "fixture-bash-tool-use-id",
-                    "name": "Bash",
-                    "input": {"command": "watch fixture build", "run_in_background": true},
-                }]},
-            }),
-            json!({
-                "uuid": "fixture-bash-result-row",
-                "parentUuid": "fixture-bash-call-row",
-                "type": "user",
-                "sourceToolAssistantUUID": "fixture-bash-call-row",
-                "message": {"content": [{
-                    "type": "tool_result",
-                    "tool_use_id": "fixture-bash-tool-use-id",
-                    "content": format!(
-                        "Command running in background with ID: fixture-task-id. Output is being written to: {}",
-                        output_path.display(),
-                    ),
-                }]},
-            }),
-        ];
-        std::fs::write(
-            &transcript_path,
-            records
-                .iter()
-                .map(serde_json::to_string)
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap()
-                .join("\n"),
-        )
-        .unwrap();
-
-        let mut session = stored_session();
-        session.transcript_path = Some(transcript_path);
-        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
-            move |id| Ok((id == "fixture-session").then(|| session.clone())),
-            |_| Ok(None),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_| Ok(Vec::new()),
-            |_, _| Ok(()),
-        );
+        let router = background_task_output_router(&transcript_path, &output_path);
         let output_response = router
             .clone()
             .oneshot(
@@ -2349,6 +2353,21 @@ mod tests {
             .and_then(|value| value.to_str().ok())
             .map(str::to_owned);
         let output = to_bytes(output_response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+        std::fs::write(&output_path, "updated fixture output\n").unwrap();
+        let updated_output_response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/background-tasks/fixture-task-id/output")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let updated_output = to_bytes(updated_output_response.into_body(), usize::MAX)
             .await
             .unwrap()
             .to_vec();
@@ -2372,6 +2391,7 @@ mod tests {
                 output_status,
                 output_cache_policy,
                 output,
+                updated_output,
                 unknown_task_status,
                 unknown_task,
             ),
@@ -2379,6 +2399,41 @@ mod tests {
                 StatusCode::OK,
                 Some("no-store".to_string()),
                 b"fixture output\n".to_vec(),
+                b"updated fixture output\n".to_vec(),
+                StatusCode::OK,
+                b"Output is unavailable for this task.".to_vec(),
+            ),
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn background_task_output_route_rejects_symlink_targets() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        let output_path = directory.path().join("task-output.log");
+        let target_path = directory.path().join("unrelated.log");
+        std::fs::write(&target_path, "synthetic secret\n").unwrap();
+        std::os::unix::fs::symlink(&target_path, &output_path).unwrap();
+        let router = background_task_output_router(&transcript_path, &output_path);
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/background-tasks/fixture-task-id/output")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let status = response.status();
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec();
+
+        assert_eq!(
+            (status, body),
+            (
                 StatusCode::OK,
                 b"Output is unavailable for this task.".to_vec(),
             ),

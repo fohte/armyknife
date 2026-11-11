@@ -1,6 +1,9 @@
+use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::SystemTime;
 
 use anyhow::Result;
 use axum::body::Body;
@@ -14,7 +17,20 @@ use crate::commands::agent::types::{Engine, Session};
 
 const MAX_OUTPUT_BYTES: u64 = 64 * 1024;
 const MAX_OUTPUT_LINES: usize = 20;
+const MAX_CACHED_TRANSCRIPTS: usize = 128;
 const OUTPUT_UNAVAILABLE: &str = "Output is unavailable for this task.";
+static OUTPUT_PATH_CACHE: OnceLock<Mutex<HashMap<PathBuf, CachedOutputPaths>>> = OnceLock::new();
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct TranscriptFingerprint {
+    length: u64,
+    modified: SystemTime,
+}
+
+struct CachedOutputPaths {
+    fingerprint: TranscriptFingerprint,
+    paths: HashMap<String, PathBuf>,
+}
 
 pub(super) async fn get_background_task_output(
     State((load_session, _, _)): State<MessagesRouteState>,
@@ -61,6 +77,28 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
     let Some(transcript_path) = session.transcript_path.as_deref() else {
         return Ok(None);
     };
+    let fingerprint = match fs::metadata(transcript_path) {
+        Ok(metadata) if metadata.is_file() => {
+            metadata
+                .modified()
+                .ok()
+                .map(|modified| TranscriptFingerprint {
+                    length: metadata.len(),
+                    modified,
+                })
+        }
+        Ok(_) => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if let Some(fingerprint) = fingerprint
+        && let Ok(cache) = output_path_cache().lock()
+        && let Some(cached) = cache.get(transcript_path)
+        && cached.fingerprint == fingerprint
+    {
+        return Ok(cached.paths.get(task_id).cloned());
+    }
+
     let Some(reader) = super::open_seekable_transcript(transcript_path)? else {
         return Ok(None);
     };
@@ -82,10 +120,30 @@ fn output_path_for_task(session: &Session, task_id: &str) -> Result<Option<PathB
                 proposals: &proposals,
             },
         )?;
-    Ok(tasks
+    let paths = tasks
         .into_iter()
-        .find(|task| task.id == task_id && task.kind == BackgroundTaskKind::BackgroundTask)
-        .and_then(|task| task.output_path))
+        .filter(|task| task.kind == BackgroundTaskKind::BackgroundTask)
+        .filter_map(|task| task.output_path.map(|path| (task.id, path)))
+        .collect::<HashMap<_, _>>();
+    let output_path = paths.get(task_id).cloned();
+    if let Some(fingerprint) = fingerprint
+        && let Ok(mut cache) = output_path_cache().lock()
+    {
+        if cache.len() >= MAX_CACHED_TRANSCRIPTS
+            && let Some(path) = cache.keys().next().cloned()
+        {
+            cache.remove(&path);
+        }
+        cache.insert(
+            transcript_path.to_path_buf(),
+            CachedOutputPaths { fingerprint, paths },
+        );
+    }
+    Ok(output_path)
+}
+
+fn output_path_cache() -> &'static Mutex<HashMap<PathBuf, CachedOutputPaths>> {
+    OUTPUT_PATH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn read_output_tail(path: &Path) -> std::io::Result<Option<String>> {
