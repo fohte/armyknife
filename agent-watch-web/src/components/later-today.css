@@ -6,7 +6,7 @@
   height: 26px;
   margin: 0;
   padding: 5px 8px 0;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 11.5px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -26,12 +26,12 @@
   align-items: center;
   gap: 7px;
   padding: 3px 8px;
-  color: var(--foreground);
+  color: var(--aw-text-primary);
   text-align: left;
 }
 
 .today-star {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .today-session-title {
@@ -49,7 +49,7 @@
   display: block;
   overflow: hidden;
   padding: 0 8px 5px 25px;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 10px;
   text-overflow: ellipsis;
@@ -57,7 +57,7 @@
 }
 
 .today-start {
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 10px;
 }
 
@@ -71,11 +71,11 @@
 .today-indicator.kind-approve,
 .today-indicator.kind-review,
 .today-indicator.kind-plan {
-  background: #fbbf24;
+  background: var(--aw-color-warning);
 }
 
 .today-indicator.kind-error {
-  background: #f87171;
+  background: var(--aw-color-error);
 }
 
 .session-row-layout {
@@ -97,13 +97,13 @@
   width: 26px;
   height: 26px;
   padding: 0;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 15px;
 }
 
 .session-action-button:hover,
 .session-action-button[aria-pressed='true'] {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .later-collapsed-row {
@@ -113,9 +113,9 @@
   align-items: center;
   gap: 7px;
   padding: 0 16px;
-  background: #141414;
-  border-bottom: 1px solid #1a1a1a;
-  color: var(--foreground);
+  background: var(--aw-bg-surface);
+  border-bottom: 1px solid var(--aw-border-row);
+  color: var(--aw-text-primary);
   font-size: 12px;
   font-weight: 700;
   text-align: left;
@@ -123,7 +123,7 @@
 
 .later-section-count,
 .later-next-return {
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
 }
@@ -138,23 +138,23 @@
   z-index: 20;
   display: grid;
   place-items: center;
-  background: rgb(0 0 0 / 35%);
+  background: var(--aw-bg-scrim-subtle);
   inset: 0;
 }
 
 .later-menu {
   width: min(280px, calc(100vw - 32px));
   padding: 8px;
-  background: #1f1f1f;
-  border: 1px solid var(--muted-foreground-ghost);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  background: var(--aw-bg-popover);
+  border: 1px solid var(--aw-border-control);
+  box-shadow: var(--aw-shadow);
 }
 
 .later-menu-title {
   overflow: hidden;
   margin: 0;
   padding: 4px 8px 8px;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -168,37 +168,37 @@
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  color: var(--foreground);
+  color: var(--aw-text-primary);
   text-align: left;
 }
 
 .later-menu-option:hover,
 .later-menu-option:focus-visible {
-  background: var(--muted-foreground-ghost);
+  background: var(--aw-bg-pressed);
 }
 
 .later-menu-reset {
   grid-template-columns: minmax(0, 1fr);
   margin-top: 4px;
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--aw-border);
 }
 
 .later-menu-when,
 .later-menu-option kbd {
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 11px;
 }
 
 .later-menu-note {
   margin: 8px 0 0;
   padding: 8px 8px 2px;
-  border-top: 1px solid var(--border);
-  color: var(--muted-foreground-strong);
+  border-top: 1px solid var(--aw-border);
+  color: var(--aw-text-muted);
   font-size: 10px;
 }
 
 .later-menu-error {
   margin: 8px 8px 0;
-  color: var(--destructive);
+  color: var(--aw-color-error);
   font-size: 11px;
 }

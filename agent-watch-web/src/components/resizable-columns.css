@@ -65,13 +65,13 @@
   right: 3px;
   bottom: 0;
   width: 1px;
-  background: #1a1a1a;
+  background: var(--aw-border-row);
   content: '';
 }
 
 .resizable-columns-separator:hover::after,
 .resizable-columns-separator:focus-visible::after {
-  background: #71717a;
+  background: var(--aw-border-dashed);
 }
 
 .resizable-columns-separator:focus-visible {
@@ -111,7 +111,7 @@
     bottom: 0;
     width: min(300px, 100%);
     min-width: 0;
-    box-shadow: -12px 0 24px #0008;
+    box-shadow: var(--aw-shadow);
   }
 
   .resizable-columns[data-overlay-second-pane='true']

@@ -1,14 +1,14 @@
 .chat-tool-summary {
   align-self: flex-start;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-size: 12.5px;
 }
 
 .chat-tool-summary summary {
   min-height: 30px;
   padding: 5px 9px;
-  border: 1px solid #2a2a2a;
-  border-radius: 5px;
+  border: 1px solid var(--aw-border);
+  border-radius: var(--aw-radius);
   cursor: pointer;
   list-style: disclosure-closed;
 }
@@ -23,7 +23,7 @@
   flex-direction: column;
   gap: 6px;
   padding-left: 10px;
-  color: #d4d4d8;
+  color: var(--aw-text-body);
   list-style: none;
 }
 
@@ -35,13 +35,13 @@
 }
 
 .chat-tool-operations li::before {
-  color: var(--muted-foreground-ghost);
+  color: var(--aw-text-muted);
   content: '•';
 }
 
 .chat-tool-name {
   flex: 0 0 auto;
-  color: var(--muted-foreground-strong);
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   white-space: nowrap;
 }
@@ -49,7 +49,7 @@
 .chat-tool-operations code {
   min-width: 0;
   flex: 1;
-  color: #a1a1aa;
+  color: var(--aw-text-muted);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
@@ -57,35 +57,35 @@
 
 .chat-tool-command .hljs-comment,
 .chat-tool-command .hljs-quote {
-  color: #71717a;
+  color: var(--aw-text-disabled);
 }
 
 .chat-tool-command .hljs-keyword,
 .chat-tool-command .hljs-meta,
 .chat-tool-command .hljs-selector-tag {
-  color: #c084fc;
+  color: var(--aw-color-neutral);
 }
 
 .chat-tool-command .hljs-string,
 .chat-tool-command .hljs-regexp,
 .chat-tool-command .hljs-addition {
-  color: #a3e635;
+  color: var(--aw-color-neutral);
 }
 
 .chat-tool-command .hljs-built_in,
 .chat-tool-command .hljs-literal,
 .chat-tool-command .hljs-type {
-  color: #67e8f9;
+  color: var(--aw-color-neutral);
 }
 
 .chat-tool-command .hljs-number,
 .chat-tool-command .hljs-symbol,
 .chat-tool-command .hljs-bullet {
-  color: #fbbf24;
+  color: var(--aw-color-warning);
 }
 
 .chat-tool-command .hljs-variable,
 .chat-tool-command .hljs-template-variable,
 .chat-tool-command .hljs-attr {
-  color: #fda4af;
+  color: var(--aw-color-neutral);
 }

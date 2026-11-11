@@ -20,7 +20,7 @@
 }
 
 .markdown-message :is(h1, h2, h3, h4, h5, h6) {
-  color: #fafafa;
+  color: var(--aw-text-primary);
   font-weight: 700;
   line-height: 1.35;
 }
@@ -74,14 +74,14 @@
 
 .markdown-message blockquote {
   padding-left: 0.75rem;
-  border-left: 2px solid #52525b;
-  color: #a1a1aa;
+  border-left: 2px solid var(--aw-border);
+  color: var(--aw-text-muted);
 }
 
 .markdown-message :not(pre) > code {
   padding: 0.1em 0.35em;
-  border-radius: 4px;
-  background: #27272a;
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-pressed);
   font-family: var(--font-mono);
   font-size: 0.9em;
 }
@@ -89,9 +89,9 @@
 .markdown-message pre {
   overflow-x: auto;
   padding: 0.75rem 0.9rem;
-  border: 1px solid #27272a;
-  border-radius: 6px;
-  background: #111113;
+  border: 1px solid var(--aw-bg-pressed);
+  border-radius: var(--aw-radius);
+  background: var(--aw-bg-palette-muted);
 }
 
 .markdown-message pre code {
@@ -101,7 +101,7 @@
 
 .markdown-message a,
 .markdown-message .markdown-link-text {
-  color: #93c5fd;
+  color: var(--aw-color-brand);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -118,12 +118,12 @@
 
 .markdown-message :is(th, td) {
   padding: 0.35rem 0.6rem;
-  border: 1px solid #3f3f46;
+  border: 1px solid var(--aw-border-control);
   text-align: left;
 }
 
 .markdown-message th {
-  background: #1f1f1f;
-  color: #fafafa;
+  background: var(--aw-bg-popover);
+  color: var(--aw-text-primary);
   font-weight: 600;
 }
