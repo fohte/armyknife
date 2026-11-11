@@ -13,10 +13,16 @@ use crate::commands::agent::error::CcError;
 use crate::commands::agent::types::Session;
 
 mod migration;
+mod proposals;
 mod queued_prompts;
 mod wake;
 mod web_state;
 
+pub(crate) use proposals::AgentProposal;
+pub(crate) use proposals::{
+    add_agent_proposal, agent_proposals, close_unanswered_agent_proposals,
+    unanswered_agent_proposal_session_ids, write_agent_proposal_answer,
+};
 pub(crate) use queued_prompts::WatchWebQueuedPrompt;
 pub(crate) use queued_prompts::{
     delete_watch_web_queued_prompts, insert_watch_web_queued_prompt, watch_web_queued_prompts,
@@ -31,7 +37,7 @@ pub(super) use web_state::{
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // Migrations must stay readable by older binaries: add tables or nullable columns only.
-static MIGRATION_ENTRIES: [M<'static>; 5] = [
+static MIGRATION_ENTRIES: [M<'static>; 6] = [
     M::up(
         "CREATE TABLE sessions (
             session_id TEXT PRIMARY KEY,
@@ -67,6 +73,19 @@ static MIGRATION_ENTRIES: [M<'static>; 5] = [
         );
         CREATE INDEX watch_web_queued_prompt_session_id_id
             ON watch_web_queued_prompt (session_id, id);",
+    ),
+    M::up(
+        "CREATE TABLE agent_proposal (
+            session_id TEXT NOT NULL,
+            seq INTEGER NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            answer TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY (session_id, seq)
+        );
+        CREATE INDEX agent_proposal_unresolved_session_id
+            ON agent_proposal (session_id) WHERE resolved_at IS NULL;",
     ),
 ];
 
@@ -449,6 +468,10 @@ fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool>
         )?;
         connection.execute(
             "DELETE FROM watch_web_queued_prompt WHERE session_id = ?1",
+            [session_id],
+        )?;
+        connection.execute(
+            "DELETE FROM agent_proposal WHERE session_id = ?1",
             [session_id],
         )?;
         increment_revision(connection)?;
