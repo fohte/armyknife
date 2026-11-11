@@ -153,7 +153,10 @@ pub(crate) fn insert_agent_decision(
     )
 }
 
-#[expect(dead_code, reason = "Exposed for the watch-web decision APIs")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
 pub(crate) fn agent_decisions_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -161,7 +164,10 @@ pub(crate) fn agent_decisions_from(
     database::agent_decisions(sessions_dir, session_id)
 }
 
-#[expect(dead_code, reason = "Exposed for the watch-web decision APIs")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
 pub(crate) fn agent_decision_counts_from(
     sessions_dir: &Path,
     session_id: &str,
@@ -169,7 +175,10 @@ pub(crate) fn agent_decision_counts_from(
     database::agent_decision_counts(sessions_dir, session_id)
 }
 
-#[expect(dead_code, reason = "Exposed for the watch-web decision APIs")]
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
+)]
 pub(crate) fn set_agent_decision_review_from(
     sessions_dir: &Path,
     session_id: &str,

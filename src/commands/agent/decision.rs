@@ -1,3 +1,6 @@
+use std::io::{self, Write};
+use std::path::Path;
+
 use anyhow::{Result, ensure};
 use clap::{Args, Subcommand};
 
@@ -43,15 +46,26 @@ fn add(args: &AddArgs) -> Result<()> {
     let session_id = EnvVars::load()
         .own_session_id()
         .ok_or(CcError::SelfSessionUnknown)?;
+    let sessions_dir = store::sessions_dir()?;
+    let mut stdout = io::stdout().lock();
+    add_in(args, &session_id, &sessions_dir, &mut stdout)
+}
+
+fn add_in(
+    args: &AddArgs,
+    session_id: &str,
+    sessions_dir: &Path,
+    output: &mut impl Write,
+) -> Result<()> {
     let seq = store::insert_agent_decision(
-        &store::sessions_dir()?,
-        &session_id,
+        sessions_dir,
+        session_id,
         &args.title,
         &args.why,
         &args.considered,
         &args.easy_to_change,
     )?;
-    println!("Recorded decision {seq}");
+    writeln!(output, "Recorded decision {seq}")?;
     Ok(())
 }
 
@@ -76,13 +90,62 @@ pub(crate) fn session_start_instruction() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::agent::types::{Engine, Session, SessionStatus};
     use clap::Parser;
+    use indoc::indoc;
     use rstest::rstest;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[derive(Parser)]
     struct TestCli {
         #[command(subcommand)]
         command: super::super::AgentCommands,
+    }
+
+    fn test_session(session_id: &str) -> Session {
+        Session {
+            session_id: session_id.to_string(),
+            archived_at: None,
+            pr_context: None,
+            crit_urls: Vec::new(),
+            pending_human_review_ids: Default::default(),
+            cwd: PathBuf::from("/workspace/project"),
+            transcript_path: None,
+            tty: None,
+            tmux_info: None,
+            status: SessionStatus::Running,
+            agent_status: None,
+            agent_status_clear_pending: false,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            last_message: None,
+            current_tool: None,
+            label: None,
+            work_type: None,
+            vibe_enabled: false,
+            launched_with_vibe: false,
+            work_type_pinned: false,
+            child_launch: Default::default(),
+            ancestor_session_ids: Vec::new(),
+            pending_bg_task_ids: Default::default(),
+            pending_agent_task_ids: Default::default(),
+            pending_permission_agent_ids: Default::default(),
+            pending_permission_request_ids: Default::default(),
+            read_at: None,
+            sweep_signaled: false,
+            stop_blocked_by_armyknife: false,
+            engine: Engine::Claude,
+            model: None,
+            effort: None,
+        }
+    }
+
+    fn normalize_timestamps(mut decision: store::AgentDecision) -> (store::AgentDecision, bool) {
+        let created_at_is_rfc3339 =
+            chrono::DateTime::parse_from_rfc3339(&decision.created_at).is_ok();
+        decision.created_at = "normalized timestamp".to_string();
+        (decision, created_at_is_rfc3339)
     }
 
     #[test]
@@ -175,6 +238,63 @@ mod tests {
                 "first option".to_string(),
                 "second option".to_string()
             ]),
+        );
+    }
+
+    #[test]
+    fn add_records_the_decision_and_prints_its_sequence() {
+        let sessions_dir = TempDir::new().expect("temporary directory should be created");
+        let session_id = "session-cobalt";
+        store::save_session_to(sessions_dir.path(), &test_session(session_id))
+            .expect("session should be stored");
+        let args = AddArgs {
+            title: "title".to_string(),
+            why: "reason".to_string(),
+            considered: vec![
+                "first alternative".to_string(),
+                "second alternative".to_string(),
+            ],
+            easy_to_change: "change is local".to_string(),
+        };
+        let mut output = Vec::new();
+
+        add_in(&args, session_id, sessions_dir.path(), &mut output)
+            .expect("decision should be recorded");
+        let decisions = store::agent_decisions_from(sessions_dir.path(), session_id)
+            .expect("decision should load");
+
+        assert_eq!(
+            (
+                decisions
+                    .into_iter()
+                    .map(normalize_timestamps)
+                    .collect::<Vec<_>>(),
+                output,
+            ),
+            (
+                vec![(
+                    store::AgentDecision {
+                        session_id: session_id.to_string(),
+                        seq: 1,
+                        title: "title".to_string(),
+                        why: "reason".to_string(),
+                        considered: vec![
+                            "first alternative".to_string(),
+                            "second alternative".to_string(),
+                        ],
+                        easy_to_change: "change is local".to_string(),
+                        created_at: "normalized timestamp".to_string(),
+                        review: None,
+                        reviewed_at: None,
+                    },
+                    true
+                )],
+                indoc! {"
+                    Recorded decision 1
+                "}
+                .as_bytes()
+                .to_vec(),
+            ),
         );
     }
 }

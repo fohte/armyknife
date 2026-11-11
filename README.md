@@ -561,6 +561,7 @@ Claude Code session monitoring with tmux integration. The canonical command is `
 | `focus <session_id> [--review-pane-id <pane_id>]`          |         | Focus the review pane when available, then the session's tmux pane                          |
 | `mark-read [-t <pane_id>]`                                 |         | Mark the pane's session as read (wire from tmux `pane-focus-in`)                            |
 | `status set <kind> <note>`                                 |         | Set the calling session's reason for stopping                                               |
+| `decision add <TITLE> --why <WHY> --considered <ALT>`      |         | Record a provisional decision for later review                                              |
 | `profile use <profile> / show`                             |         | Select a profile and show its effective settings for every type                             |
 | `vibe on / off / status / grant <session-id>`              |         | Enable, disable, check, or grant vibe mode to a descendant session                          |
 | `resume [session_id]`                                      | `r`     | Resume the pane's Claude Code session (reads pane option if no argument)                    |

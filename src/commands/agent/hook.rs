@@ -117,10 +117,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
     };
     if event == HookEvent::SessionStart && args.engine == Engine::Claude {
         let marker = store::watch_web_user_marker(&session_id)?;
-        return stop::write_session_start_response(
-            &session_start_context(marker.as_deref()),
-            &mut io::stdout().lock(),
-        );
+        return write_claude_session_start_response(marker.as_deref(), &mut io::stdout().lock());
     }
     write_stop_response(args.engine, event, block_reason.as_deref())
 }
@@ -128,10 +125,7 @@ pub fn run(args: &HookArgs) -> Result<()> {
 fn write_stop_response(engine: Engine, event: HookEvent, block_reason: Option<&str>) -> Result<()> {
     let stdout = io::stdout();
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        return stop::write_session_start_response(
-            &session_start_context(None),
-            &mut stdout.lock(),
-        );
+        return write_claude_session_start_response(None, &mut stdout.lock());
     }
     stop::write_response(engine, event, block_reason, &mut stdout.lock())
 }
@@ -144,6 +138,10 @@ fn session_start_context(marker: Option<&str>) -> String {
         context.push_str(&super::watch_web_user_marker::session_start_context(marker));
     }
     context
+}
+
+fn write_claude_session_start_response(marker: Option<&str>, output: impl Write) -> Result<()> {
+    stop::write_session_start_response(&session_start_context(marker), output)
 }
 
 /// Result of processing a hook event.
@@ -1605,23 +1603,24 @@ mod tests {
     #[rstest]
     #[case::without_watch_web_marker(None)]
     #[case::with_watch_web_marker(Some("⟦armyknife-user:fixture-marker-cobalt⟧"))]
-    fn claude_session_start_context_includes_the_decision_instruction(
+    fn claude_session_start_response_includes_the_decision_instruction(
         #[case] marker: Option<&str>,
     ) {
-        let expected = match marker {
-            Some(marker) => {
-                let mut expected = super::super::decision::session_start_instruction().to_string();
-                expected.push('\n');
-                expected.push('\n');
-                expected.push_str(&super::super::watch_web_user_marker::session_start_context(
-                    marker,
-                ));
-                expected
-            }
-            None => super::super::decision::session_start_instruction().to_string(),
-        };
+        let mut output = Vec::new();
 
-        assert_eq!(session_start_context(marker), expected);
+        write_claude_session_start_response(marker, &mut output)
+            .expect("SessionStart response should serialize");
+
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output)
+                .expect("response should be valid JSON"),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": session_start_context(marker),
+                }
+            }),
+        );
     }
 
     struct TqArchiveContext {

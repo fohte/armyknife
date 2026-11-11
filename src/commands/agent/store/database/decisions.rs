@@ -228,6 +228,20 @@ mod tests {
             .expect("session row should be stored");
     }
 
+    fn normalize_decision_timestamps(mut decision: AgentDecision) -> (AgentDecision, bool, bool) {
+        let created_at_is_rfc3339 =
+            chrono::DateTime::parse_from_rfc3339(&decision.created_at).is_ok();
+        let reviewed_at_is_rfc3339 = decision
+            .reviewed_at
+            .as_deref()
+            .is_some_and(|value| chrono::DateTime::parse_from_rfc3339(value).is_ok());
+        decision.created_at = "normalized timestamp".to_string();
+        decision.reviewed_at = decision
+            .reviewed_at
+            .map(|_| "normalized timestamp".to_string());
+        (decision, created_at_is_rfc3339, reviewed_at_is_rfc3339)
+    }
+
     #[rstest]
     fn insert_assigns_per_session_sequences_and_bumps_revision(sessions_dir: TempDir) {
         create_session(sessions_dir.path());
@@ -282,10 +296,8 @@ mod tests {
     }
 
     #[rstest]
-    fn listing_counts_and_review_updates_cover_the_saved_decisions(sessions_dir: TempDir) {
+    fn deleting_a_session_removes_its_decisions(sessions_dir: TempDir) {
         create_session(sessions_dir.path());
-        let initial_counts = agent_decision_counts(sessions_dir.path(), "session-cobalt")
-            .expect("empty counts load");
         insert_agent_decision(
             sessions_dir.path(),
             "session-cobalt",
@@ -295,46 +307,106 @@ mod tests {
             "easy",
         )
         .expect("decision is stored");
+
+        let removed = super::super::delete_session(sessions_dir.path(), "session-cobalt")
+            .expect("session should be deleted");
+        let decisions =
+            agent_decisions(sessions_dir.path(), "session-cobalt").expect("decisions load");
+        let counts = crate::commands::agent::store::agent_decision_counts_from(
+            sessions_dir.path(),
+            "session-cobalt",
+        )
+        .expect("counts load");
+
+        assert_eq!(
+            (removed, decisions, counts),
+            (
+                true,
+                Vec::new(),
+                AgentDecisionCounts {
+                    total: 0,
+                    unreviewed: 0,
+                }
+            ),
+        );
+    }
+
+    #[rstest]
+    fn listing_counts_and_review_updates_cover_the_saved_decisions(sessions_dir: TempDir) {
+        create_session(sessions_dir.path());
+        let initial_counts = crate::commands::agent::store::agent_decision_counts_from(
+            sessions_dir.path(),
+            "session-cobalt",
+        )
+        .expect("empty counts load");
+        insert_agent_decision(
+            sessions_dir.path(),
+            "session-cobalt",
+            "title",
+            "reason",
+            &["alternative".to_string()],
+            "easy",
+        )
+        .expect("decision is stored");
+        let unreviewed_counts = crate::commands::agent::store::agent_decision_counts_from(
+            sessions_dir.path(),
+            "session-cobalt",
+        )
+        .expect("unreviewed counts load");
         let before_review =
             session_store_revision_from(sessions_dir.path()).expect("revision loads");
-        set_agent_decision_review(sessions_dir.path(), "session-cobalt", 1, "ok")
-            .expect("review is stored");
+        crate::commands::agent::store::set_agent_decision_review_from(
+            sessions_dir.path(),
+            "session-cobalt",
+            1,
+            "ok",
+        )
+        .expect("review is stored");
 
         let decisions =
             agent_decisions(sessions_dir.path(), "session-cobalt").expect("decisions load");
-        let counts =
-            agent_decision_counts(sessions_dir.path(), "session-cobalt").expect("counts load");
+        let counts = crate::commands::agent::store::agent_decision_counts_from(
+            sessions_dir.path(),
+            "session-cobalt",
+        )
+        .expect("counts load");
         let revision = session_store_revision_from(sessions_dir.path()).expect("revision loads");
 
         assert_eq!(
             (
                 decisions
                     .iter()
-                    .map(|decision| (
-                        decision.seq,
-                        decision.title.as_str(),
-                        decision.considered.as_slice(),
-                        chrono::DateTime::parse_from_rfc3339(&decision.created_at).is_ok(),
-                        decision.review.as_deref(),
-                        decision.reviewed_at.is_some(),
-                    ))
+                    .cloned()
+                    .map(normalize_decision_timestamps)
                     .collect::<Vec<_>>(),
                 initial_counts,
+                unreviewed_counts,
                 counts,
                 revision,
             ),
             (
                 vec![(
-                    1,
-                    "title",
-                    &["alternative".to_string()][..],
+                    AgentDecision {
+                        session_id: "session-cobalt".to_string(),
+                        seq: 1,
+                        title: "title".to_string(),
+                        why: "reason".to_string(),
+                        considered: vec!["alternative".to_string()],
+                        easy_to_change: "easy".to_string(),
+                        created_at: "normalized timestamp".to_string(),
+                        review: Some("ok".to_string()),
+                        reviewed_at: Some("normalized timestamp".to_string()),
+                    },
                     true,
-                    Some("ok"),
-                    true
+                    true,
                 )],
                 AgentDecisionCounts {
                     total: 0,
                     unreviewed: 0
+                },
+                AgentDecisionCounts {
+                    total: 1,
+                    unreviewed: 1
                 },
                 AgentDecisionCounts {
                     total: 1,
