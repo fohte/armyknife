@@ -167,6 +167,11 @@ export type BackgroundTask = {
 export type ConversationResponse = {
   messages: ChatItem[]
   backgroundTasks: BackgroundTask[]
+  start: number
+  total: number
+  decisions: Extract<ChatItem, { type: 'decision' }>[]
+  hasUnansweredProposal: boolean
+  activeQuestionIndex: number | null
 }
 
 export type SessionActions = {
