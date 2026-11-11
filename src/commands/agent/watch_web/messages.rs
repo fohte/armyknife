@@ -16,7 +16,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::commands::agent::claude_sessions;
-use crate::commands::agent::store::WatchWebQueuedPrompt;
+use crate::commands::agent::store::{AgentDecision, WatchWebQueuedPrompt};
 use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 use crate::commands::agent::user_turn::is_ask_user_question;
 
@@ -38,12 +38,30 @@ pub(super) fn claude_content_text(content: Option<&Value>) -> String {
 
 type SessionLoader = Arc<dyn Fn(&str) -> Result<Option<Session>> + Send + Sync>;
 type UserMarkerLoader = Arc<dyn Fn(&str) -> Result<Option<String>> + Send + Sync>;
+type DecisionLoader = Arc<dyn Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync>;
 type QueuedPromptLoader = Arc<dyn Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync>;
 type QueuedPromptDeleter = Arc<dyn Fn(&str, &[i64]) -> Result<()> + Send + Sync>;
 
+#[cfg(test)]
 pub(super) fn routes_with_queued_prompts(
     load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
     load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
+    delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
+) -> Router {
+    routes_with_decisions_and_queued_prompts(
+        load_session,
+        load_user_marker,
+        |_| Ok(Vec::new()),
+        load_queued_prompts,
+        delete_queued_prompts,
+    )
+}
+
+pub(super) fn routes_with_decisions_and_queued_prompts(
+    load_session: impl Fn(&str) -> Result<Option<Session>> + Send + Sync + 'static,
+    load_user_marker: impl Fn(&str) -> Result<Option<String>> + Send + Sync + 'static,
+    load_decisions: impl Fn(&str) -> Result<Vec<AgentDecision>> + Send + Sync + 'static,
     load_queued_prompts: impl Fn(&str) -> Result<Vec<WatchWebQueuedPrompt>> + Send + Sync + 'static,
     delete_queued_prompts: impl Fn(&str, &[i64]) -> Result<()> + Send + Sync + 'static,
 ) -> Router {
@@ -52,15 +70,23 @@ pub(super) fn routes_with_queued_prompts(
         .with_state((
             Arc::new(load_session) as SessionLoader,
             Arc::new(load_user_marker) as UserMarkerLoader,
+            Arc::new(load_decisions) as DecisionLoader,
             Arc::new(load_queued_prompts) as QueuedPromptLoader,
             Arc::new(delete_queued_prompts) as QueuedPromptDeleter,
         ))
 }
 
 async fn get_messages(
-    State((load_session, load_user_marker, load_queued_prompts, delete_queued_prompts)): State<(
+    State((
+        load_session,
+        load_user_marker,
+        load_decisions,
+        load_queued_prompts,
+        delete_queued_prompts,
+    )): State<(
         SessionLoader,
         UserMarkerLoader,
+        DecisionLoader,
         QueuedPromptLoader,
         QueuedPromptDeleter,
     )>,
@@ -71,6 +97,7 @@ async fn get_messages(
             &session_id,
             |id| load_session(id),
             |id| load_user_marker(id),
+            |id| load_decisions(id),
             |id| load_queued_prompts(id),
             |id, ids| delete_queued_prompts(id, ids),
         )
@@ -111,6 +138,7 @@ fn load_messages_with(
         load_session,
         |_| Ok(None),
         |_| Ok(Vec::new()),
+        |_| Ok(Vec::new()),
         |_, _| Ok(()),
     )?
     .map(|conversation| conversation.messages))
@@ -120,6 +148,7 @@ fn load_conversation_with_queued_prompts(
     session_id: &str,
     mut load_session: impl FnMut(&str) -> Result<Option<Session>>,
     load_user_marker: impl FnOnce(&str) -> Result<Option<String>>,
+    load_decisions: impl FnOnce(&str) -> Result<Vec<AgentDecision>>,
     load_queued_prompts: impl FnOnce(&str) -> Result<Vec<WatchWebQueuedPrompt>>,
     delete_queued_prompts: impl FnOnce(&str, &[i64]) -> Result<()>,
 ) -> Result<Option<ConversationResponse>> {
@@ -131,6 +160,7 @@ fn load_conversation_with_queued_prompts(
     } else {
         None
     };
+    let decisions = load_decisions(session_id)?;
     let queued_prompts = if session.engine == Engine::Claude {
         load_queued_prompts(session_id)?
     } else {
@@ -150,6 +180,7 @@ fn load_conversation_with_queued_prompts(
         parent.as_ref(),
         pending_tool,
         user_marker.as_deref(),
+        &decisions,
         &queued_prompts,
     )?;
 
@@ -228,6 +259,7 @@ fn parse_session_transcript(
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     watch_web_user_marker: Option<&str>,
+    decisions: &[AgentDecision],
     queued_prompts: &[WatchWebQueuedPrompt],
 ) -> Result<(ConversationResponse, Vec<i64>)> {
     match engine {
@@ -237,25 +269,16 @@ fn parse_session_transcript(
                 None => None,
             };
             let reader = reader.unwrap_or_else(|| Box::new(Cursor::new(Vec::new())));
-            let (mut messages, background_tasks, resolved_ids) = if queued_prompts.is_empty() {
-                let (messages, background_tasks) = parser::claude::parse_with_background_tasks(
+            let (mut messages, background_tasks, resolved_ids) =
+                parser::claude::parse_with_decisions_and_queued_prompts(
                     reader,
                     parent,
                     pending_tool,
                     watch_web_user_marker,
                     chrono::Utc::now(),
-                )?;
-                (messages, background_tasks, Vec::new())
-            } else {
-                parser::claude::parse_with_queued_prompts(
-                    reader,
-                    parent,
-                    pending_tool,
-                    watch_web_user_marker,
-                    chrono::Utc::now(),
+                    decisions,
                     queued_prompts,
-                )?
-            };
+                )?;
             if let Some(path) = path {
                 subagent_reports::add_descriptions(path, &mut messages);
             }
@@ -269,14 +292,28 @@ fn parse_session_transcript(
         }
         Engine::Codex => {
             let Some(path) = path else {
-                return Ok((ConversationResponse::default(), Vec::new()));
+                return Ok((
+                    ConversationResponse {
+                        messages: decisions.iter().cloned().map(ChatItem::from).collect(),
+                        background_tasks: Vec::new(),
+                    },
+                    Vec::new(),
+                ));
             };
             let Some(reader) = open_transcript(path, true)? else {
-                return Ok((ConversationResponse::default(), Vec::new()));
+                return Ok((
+                    ConversationResponse {
+                        messages: decisions.iter().cloned().map(ChatItem::from).collect(),
+                        background_tasks: Vec::new(),
+                    },
+                    Vec::new(),
+                ));
             };
+            let mut messages = parser::codex::parse(reader, parent)?;
+            messages.extend(decisions.iter().cloned().map(ChatItem::from));
             Ok((
                 ConversationResponse {
-                    messages: parser::codex::parse(reader, parent)?,
+                    messages,
                     background_tasks: Vec::new(),
                 },
                 Vec::new(),
@@ -406,6 +443,31 @@ enum ChatItem {
         tool: String,
         description: String,
     },
+    Decision {
+        seq: i64,
+        title: String,
+        why: String,
+        considered: Vec<String>,
+        #[serde(rename = "easyToChange")]
+        easy_to_change: String,
+        review: Option<String>,
+        #[serde(rename = "createdAt")]
+        created_at: String,
+    },
+}
+
+impl From<AgentDecision> for ChatItem {
+    fn from(decision: AgentDecision) -> Self {
+        Self::Decision {
+            seq: decision.seq,
+            title: decision.title,
+            why: decision.why,
+            considered: decision.considered,
+            easy_to_change: decision.easy_to_change,
+            review: decision.review,
+            created_at: decision.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -470,8 +532,11 @@ mod tests {
     use serde_json::json;
     use tower::ServiceExt;
 
-    use super::{ChatItem, load_messages_with, routes_with_queued_prompts};
-    use crate::commands::agent::store::WatchWebQueuedPrompt;
+    use super::{
+        ChatItem, load_messages_with, routes_with_decisions_and_queued_prompts,
+        routes_with_queued_prompts,
+    };
+    use crate::commands::agent::store::{AgentDecision, WatchWebQueuedPrompt};
     use crate::commands::agent::types::{Engine, MAIN_THREAD_AGENT_KEY, Session};
 
     fn stored_session() -> Session {
@@ -523,6 +588,112 @@ mod tests {
         )
         .unwrap();
         (status, content_type, body)
+    }
+
+    #[tokio::test]
+    async fn claude_message_route_places_database_decisions_in_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            indoc::indoc! {r#"
+                {"type":"assistant","message":{"content":[{"type":"text","text":"Before the decision."}]}}
+                {"type":"assistant","message":{"content":[{"type":"tool_use","id":"fixture-decision-call","name":"Bash","input":{"command":"a agent decision add 'Choose the fixture path'"}}]}}
+                {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"fixture-decision-call","content":"Recorded decision 5"}]}}
+                {"type":"assistant","message":{"content":[{"type":"text","text":"After the decision."}]}}
+            "#},
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 5,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    review: Some("ok".to_string()),
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"assistant","text":"Before the decision."},{"type":"decision","seq":5,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":"ok","createdAt":"2026-11-11T00:00:00Z"},{"type":"assistant","text":"After the decision."}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_message_route_appends_database_decisions_after_the_transcript() {
+        let directory = tempfile::tempdir().unwrap();
+        let transcript_path = directory.path().join("transcript.jsonl");
+        std::fs::write(
+            &transcript_path,
+            r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Existing Codex message."}]}}"#,
+        )
+        .unwrap();
+        let mut session = stored_session();
+        session.engine = Engine::Codex;
+        session.transcript_path = Some(transcript_path);
+        let router = routes_with_decisions_and_queued_prompts(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            |_| {
+                Ok(vec![AgentDecision {
+                    session_id: "fixture-session".to_string(),
+                    seq: 1,
+                    title: "Choose the fixture path".to_string(),
+                    why: "The fixture remains reversible.".to_string(),
+                    considered: vec!["Choose the other fixture path".to_string()],
+                    easy_to_change: "Change one fixture value.".to_string(),
+                    created_at: "2026-11-11T00:00:00Z".to_string(),
+                    review: None,
+                    reviewed_at: None,
+                }])
+            },
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let response = router
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/fixture-session/messages")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response).await,
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                r#"{"messages":[{"type":"assistant","text":"Existing Codex message."},{"type":"decision","seq":1,"title":"Choose the fixture path","why":"The fixture remains reversible.","considered":["Choose the other fixture path"],"easyToChange":"Change one fixture value.","review":null,"createdAt":"2026-11-11T00:00:00Z"}],"backgroundTasks":[]}"#.to_string(),
+            ),
+        );
     }
 
     fn saved_prompt(id: i64, content: &str) -> WatchWebQueuedPrompt {

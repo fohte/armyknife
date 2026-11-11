@@ -7,10 +7,6 @@ use rusqlite::{TransactionBehavior, params};
 use super::{increment_revision, open_connection, validate_session_id};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) struct AgentDecision {
     pub(crate) session_id: String,
     pub(crate) seq: i64,
@@ -24,10 +20,6 @@ pub(crate) struct AgentDecision {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) struct AgentDecisionCounts {
     pub(crate) total: i64,
     pub(crate) unreviewed: i64,
@@ -76,10 +68,6 @@ pub(crate) fn insert_agent_decision(
     Ok(seq)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) fn agent_decisions(sessions_dir: &Path, session_id: &str) -> Result<Vec<AgentDecision>> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -132,10 +120,6 @@ pub(crate) fn agent_decisions(sessions_dir: &Path, session_id: &str) -> Result<V
     .collect()
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) fn agent_decision_counts(
     sessions_dir: &Path,
     session_id: &str,
@@ -161,10 +145,6 @@ pub(crate) fn agent_decision_counts(
     )?)
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "Exposed for the watch-web decision APIs")
-)]
 pub(crate) fn set_agent_decision_review(
     sessions_dir: &Path,
     session_id: &str,

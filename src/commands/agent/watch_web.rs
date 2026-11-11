@@ -174,9 +174,10 @@ fn app_with_assets_and_queued_prompt_loaders_and_restart_signal(
         .merge(session_state::router())
         .merge(sessions::router(enrichment_updates.clone()))
         .merge(events::router(enrichment_updates, restart_signal))
-        .merge(messages::routes_with_queued_prompts(
+        .merge(messages::routes_with_decisions_and_queued_prompts(
             load_session,
             load_user_marker,
+            |session_id| store::agent_decisions_from(&store::sessions_dir()?, session_id),
             load_queued_prompts,
             delete_queued_prompts,
         ))
