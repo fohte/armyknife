@@ -17,7 +17,7 @@ use crate::infra::git::{WorktreeCreationLock, get_main_branch_for_repo, open_rep
 use crate::shared::config::{Config, ResolvedLaunchOptions};
 use crate::shared::env_var::EnvVars;
 use crate::shared::hooks;
-use crate::shared::worktree::branch_to_worktree_name;
+use crate::shared::worktree::{LinkedWorktree, branch_to_worktree_name, list_linked_worktrees};
 
 struct WorktreeHookContext<'a> {
     worktree_dir: Option<&'a Path>,
@@ -65,6 +65,36 @@ fn run_worktree_hooks(
     Ok(())
 }
 
+fn find_linked_worktree_for_branch(
+    repo: &crate::infra::git::GitRepo,
+    name: &str,
+    branch_prefix: &str,
+) -> Result<Option<LinkedWorktree>> {
+    let branch = if repo_branch_exists(repo, name) {
+        Some(name.to_string())
+    } else {
+        let name_no_prefix = name.strip_prefix(branch_prefix).unwrap_or(name);
+        let prefixed_branch = format!("{branch_prefix}{name_no_prefix}");
+        repo_branch_exists(repo, &prefixed_branch).then_some(prefixed_branch)
+    };
+    let Some(branch) = branch else {
+        return Ok(None);
+    };
+
+    Ok(list_linked_worktrees(repo)?
+        .into_iter()
+        .find(|worktree| worktree.branch == branch))
+}
+
+fn run_reused_worktree_hook(
+    worktree_dir: &Path,
+    run_hook: impl FnOnce(&str, &[(&str, &str)]) -> Result<()>,
+) -> Result<()> {
+    let worktree_abs =
+        std::fs::canonicalize(worktree_dir).unwrap_or_else(|_| worktree_dir.to_path_buf());
+    run_pre_session_start_hook(Some(&worktree_abs), run_hook)
+}
+
 pub(super) fn run_worktree_creation(
     args: &NewArgs,
     name: &str,
@@ -79,9 +109,6 @@ pub(super) fn run_worktree_creation(
     let worktree_name = branch_to_worktree_name(name, branch_prefix);
     let worktrees_dir = format!("{repo_root}/{}", config.agent.worktree.dir);
     let worktree_dir = Path::new(&worktrees_dir).join(&worktree_name);
-
-    // Ensure worktrees directory exists
-    std::fs::create_dir_all(&worktrees_dir).context("Failed to create worktrees directory")?;
 
     // Fetch with prune
     fetch_with_prune(&repo).context("Failed to fetch from remote")?;
@@ -98,8 +125,12 @@ pub(super) fn run_worktree_creation(
     let actual_branch;
     let actual_base: Option<String>;
     let branch_rollback;
+    let mut selected_worktree_dir = worktree_dir.clone();
+    let mut selected_worktree_name = worktree_name.clone();
+    let mut reused_worktree = false;
 
     if args.force {
+        std::fs::create_dir_all(&worktrees_dir).context("Failed to create worktrees directory")?;
         // Force create new branch with prefix
         let main_branch = get_main_branch_for_repo(&repo)?;
         let base_branch = args
@@ -132,23 +163,40 @@ pub(super) fn run_worktree_creation(
 
         actual_branch = branch;
         actual_base = Some(base_branch);
-    } else if repo_branch_exists(&repo, name) {
-        // Branch exists with the exact name provided
-        add_worktree_for_branch(&repo, &worktree_dir, name)?;
-
-        actual_branch = name.to_string();
-        branch_rollback = BranchRollback::Keep;
-        actual_base = if prompt.is_some() {
-            let main_branch = get_main_branch_for_repo(&repo)?;
-            Some(format!("origin/{main_branch}"))
-        } else {
-            None
-        };
     } else {
         let branch_with_prefix = format!("{branch_prefix}{name_no_prefix}");
-        if repo_branch_exists(&repo, &branch_with_prefix) {
+        if let Some(linked_worktree) = find_linked_worktree_for_branch(&repo, name, branch_prefix)?
+        {
+            actual_branch = linked_worktree.branch.clone();
+            selected_worktree_dir = linked_worktree.path;
+            selected_worktree_name = linked_worktree.name;
+            reused_worktree = true;
+            branch_rollback = BranchRollback::Keep;
+            actual_base = if prompt.is_some() {
+                let main_branch = get_main_branch_for_repo(&repo)?;
+                Some(format!("origin/{main_branch}"))
+            } else {
+                None
+            };
+        } else if repo_branch_exists(&repo, name) {
+            // Branch exists in the main worktree or is available to check out.
+            std::fs::create_dir_all(&worktrees_dir)
+                .context("Failed to create worktrees directory")?;
+            add_worktree_for_branch(&repo, &selected_worktree_dir, name)?;
+
+            actual_branch = name.to_string();
+            branch_rollback = BranchRollback::Keep;
+            actual_base = if prompt.is_some() {
+                let main_branch = get_main_branch_for_repo(&repo)?;
+                Some(format!("origin/{main_branch}"))
+            } else {
+                None
+            };
+        } else if repo_branch_exists(&repo, &branch_with_prefix) {
             // Branch exists with prefix
-            add_worktree_for_branch(&repo, &worktree_dir, &branch_with_prefix)?;
+            std::fs::create_dir_all(&worktrees_dir)
+                .context("Failed to create worktrees directory")?;
+            add_worktree_for_branch(&repo, &selected_worktree_dir, &branch_with_prefix)?;
 
             actual_branch = branch_with_prefix;
             branch_rollback = BranchRollback::Keep;
@@ -159,6 +207,8 @@ pub(super) fn run_worktree_creation(
                 None
             };
         } else {
+            std::fs::create_dir_all(&worktrees_dir)
+                .context("Failed to create worktrees directory")?;
             // Branch doesn't exist, create new one with prefix
             let main_branch = get_main_branch_for_repo(&repo)?;
             let base_branch = args
@@ -187,7 +237,7 @@ pub(super) fn run_worktree_creation(
             .context("Failed to get current directory")?
             .to_string_lossy()
             .to_string();
-        let worktree_cwd_str = worktree_dir
+        let worktree_cwd_str = selected_worktree_dir
             .to_str()
             .context("Invalid worktree path")?
             .to_string();
@@ -204,23 +254,28 @@ pub(super) fn run_worktree_creation(
     };
 
     // Hook failures roll back the worktree and any branch created for it.
-    run_worktree_hooks(
-        WorktreeHookContext {
-            worktree_dir: (!args.skip_hooks).then_some(worktree_dir.as_path()),
-            actual_branch: &actual_branch,
-            repo_root,
-        },
-        hooks::run_hook,
-        |failed_hook| {
-            rollback_worktree(
-                &repo,
-                &worktree_name,
-                &actual_branch,
-                &branch_rollback,
-                failed_hook,
-            )
-        },
-    )?;
+    let rollback = |failed_hook: &str| {
+        rollback_worktree(
+            &repo,
+            &selected_worktree_name,
+            &actual_branch,
+            &branch_rollback,
+            failed_hook,
+        )
+    };
+    if reused_worktree && !args.skip_hooks {
+        run_reused_worktree_hook(&selected_worktree_dir, hooks::run_hook)?;
+    } else {
+        run_worktree_hooks(
+            WorktreeHookContext {
+                worktree_dir: (!args.skip_hooks).then_some(selected_worktree_dir.as_path()),
+                actual_branch: &actual_branch,
+                repo_root,
+            },
+            hooks::run_hook,
+            rollback,
+        )?;
+    }
 
     let (env_vars, background) = tmux_launch_inputs(&args.common, args.vibe)?;
     let env_refs: Vec<(&str, &str)> = env_vars
@@ -236,8 +291,8 @@ pub(super) fn run_worktree_creation(
     let route = setup_tmux_window(
         worktree_window_spec(WorktreeWindowContext {
             repo_root,
-            worktree_name: &worktree_name,
-            worktree_dir: &worktree_dir,
+            worktree_name: &selected_worktree_name,
+            worktree_dir: &selected_worktree_dir,
             config,
             launch_options: &launch_options,
             prompt: final_prompt.as_deref(),
@@ -248,9 +303,10 @@ pub(super) fn run_worktree_creation(
     )?;
 
     let suffix = if background { " (background)" } else { "" };
+    let action = if reused_worktree { "Reused" } else { "Created" };
     println!(
-        "Created worktree '{}' and opened tmux window{}{}",
-        worktree_name,
+        "{action} worktree '{}' and opened tmux window{}{}",
+        selected_worktree_name,
         suffix,
         route.display_suffix()
     );
@@ -292,6 +348,7 @@ fn worktree_window_spec(context: WorktreeWindowContext<'_>) -> TmuxWindowSpec<'_
 mod tests {
     use super::*;
     use crate::commands::agent::types::{Engine, ReasoningEffort};
+    use crate::shared::testing::TestRepo;
     use indoc::indoc;
     use rstest::{fixture, rstest};
     use std::cell::RefCell;
@@ -315,6 +372,72 @@ mod tests {
     #[fixture]
     fn worktree_dir() -> tempfile::TempDir {
         tempfile::tempdir().unwrap()
+    }
+
+    #[rstest]
+    #[case::name_without_prefix("team-widget", "widget")]
+    #[case::name_with_prefix("team-widget", "team-widget")]
+    fn finds_existing_linked_worktree_with_or_without_branch_prefix(
+        #[case] branch: &str,
+        #[case] requested_name: &str,
+    ) {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree(branch);
+        let repo = test_repo.open();
+
+        let linked_worktree =
+            find_linked_worktree_for_branch(&repo, requested_name, "team-").unwrap();
+
+        assert_eq!(
+            linked_worktree.map(|worktree| (worktree.branch, worktree.path)),
+            Some((branch.to_string(), test_repo.worktree_path(branch))),
+        );
+    }
+
+    #[test]
+    fn does_not_reuse_the_main_worktree_checkout() {
+        let test_repo = TestRepo::new();
+        let repo = test_repo.open();
+        let main_branch = repo.current_branch().unwrap();
+
+        let linked_worktree =
+            find_linked_worktree_for_branch(&repo, &main_branch, "team-").unwrap();
+
+        assert_eq!(linked_worktree.map(|worktree| worktree.branch), None);
+    }
+
+    #[test]
+    fn reused_worktree_runs_only_pre_session_hook_and_keeps_the_path_on_failure() {
+        let test_repo = TestRepo::new();
+        test_repo.create_worktree("topic");
+        let worktree_path = test_repo.worktree_path("topic");
+        let events = RefCell::new(Vec::new());
+
+        let result = run_reused_worktree_hook(&worktree_path, |name, env_vars| {
+            events.borrow_mut().push(capture_hook(name, env_vars));
+            anyhow::bail!("hook failed")
+        });
+
+        assert_eq!(
+            (
+                result.err().map(|error| error.to_string()),
+                events.into_inner(),
+                worktree_path.exists(),
+                test_repo.open().local_branch_exists("topic"),
+            ),
+            (
+                Some("Failed to run pre-session-start hook".to_string()),
+                vec![HookInvocation {
+                    name: "pre-session-start".to_string(),
+                    env_vars: vec![(
+                        EnvVars::session_cwd_name().to_string(),
+                        worktree_path.to_string_lossy().to_string(),
+                    )],
+                }],
+                true,
+                true,
+            ),
+        );
     }
 
     #[test]
