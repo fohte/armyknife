@@ -73,13 +73,13 @@ pub fn run(args: &HookArgs) -> Result<()> {
     // Skip hooks when called from armyknife's own claude -p invocations
     // to prevent infinite recursion (hook → claude -p → hook → ...).
     if EnvVars::load().skip_hooks {
-        return write_stop_response(args.engine, event, None);
+        return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
     // Headless runs inherit TMUX_PANE from their parent interactive session;
     // skip them to avoid overwriting the parent's registered session state.
     if is_headless_entrypoint(env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref()) {
-        return write_stop_response(args.engine, event, None);
+        return write_stop_response(args.engine, event, None, &mut io::stdout().lock());
     }
 
     let run_id = short_run_id();
@@ -119,15 +119,24 @@ pub fn run(args: &HookArgs) -> Result<()> {
         let marker = store::watch_web_user_marker(&session_id)?;
         return write_claude_session_start_response(marker.as_deref(), &mut io::stdout().lock());
     }
-    write_stop_response(args.engine, event, block_reason.as_deref())
+    write_stop_response(
+        args.engine,
+        event,
+        block_reason.as_deref(),
+        &mut io::stdout().lock(),
+    )
 }
 
-fn write_stop_response(engine: Engine, event: HookEvent, block_reason: Option<&str>) -> Result<()> {
-    let stdout = io::stdout();
+fn write_stop_response(
+    engine: Engine,
+    event: HookEvent,
+    block_reason: Option<&str>,
+    output: impl Write,
+) -> Result<()> {
     if event == HookEvent::SessionStart && engine == Engine::Claude {
-        return write_claude_session_start_response_without_agent_instruction(&mut stdout.lock());
+        return write_claude_session_start_response_without_agent_instruction(output);
     }
-    stop::write_response(engine, event, block_reason, &mut stdout.lock())
+    stop::write_response(engine, event, block_reason, output)
 }
 
 fn session_start_context(marker: Option<&str>) -> String {
@@ -1635,8 +1644,8 @@ mod tests {
     fn skipped_claude_session_start_response_omits_the_agent_instruction() {
         let mut output = Vec::new();
 
-        write_claude_session_start_response_without_agent_instruction(&mut output)
-            .expect("SessionStart response should serialize");
+        write_stop_response(Engine::Claude, HookEvent::SessionStart, None, &mut output)
+            .expect("skipped SessionStart response should serialize");
 
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output)

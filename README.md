@@ -663,7 +663,7 @@ $ a agent decision add "Keep the current format" --why "It matches existing comm
 Recorded decision 1
 ```
 
-Claude Code receives an instruction on every `SessionStart` to record choices that are cheap to reverse and continue working. It should stop and ask about choices that are hard to reverse.
+Tracked, hook-processed Claude Code sessions receive the instruction on `SessionStart` to record choices that are cheap to reverse and continue working. They should stop and ask about choices that are hard to reverse. Internal and headless invocations do not receive this instruction.
 
 [`crit`](https://github.com/tomasz-tomczyk/crit) review URLs passed to `a agent crit add <url>` must include an explicit port. When a tracked session is available, the command associates the URL with that session and sends a desktop notification. Its lifecycle monitor needs `crit` on `PATH`; without it, automatic cleanup is unavailable. If no tracked session ID is available, the command opens a review pane in the current tmux pane when `TMUX_PANE` is set; otherwise, macOS opens the URL with `open` and other platforms use `xdg-open`.
 
