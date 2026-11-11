@@ -5,6 +5,7 @@ import { Chip } from '@fohte/ui/chip'
 
 import { SessionPausedBadge } from '#components/session-paused-badge'
 import { cn } from '#lib/utils'
+import { formatSessionDecisionCount } from '#session-decision-count'
 import { formatLinkedTaskCount } from '#session-task-count'
 import type { Session } from '#types'
 
@@ -78,6 +79,7 @@ export function SessionRow({
   compactRepo = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
+  const decisionLabel = formatSessionDecisionCount(session)
 
   return (
     <li className="session-list-item">
@@ -128,6 +130,9 @@ export function SessionRow({
                   ? session.repo.split('/').at(-1)
                   : session.repo || '—'}
               </span>
+              {decisionLabel !== null ? (
+                <span className="session-decision-count">{decisionLabel}</span>
+              ) : null}
             </span>
           </span>
         </Button>
