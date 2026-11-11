@@ -248,6 +248,7 @@ fn load_conversation_with_queued_prompts(
         if let Some(path) = session.transcript_path.as_deref() {
             subagent_reports::add_descriptions(path, &mut cached.conversation.messages);
         }
+        resolve_peer_session_titles(&mut cached.conversation.messages, &mut load_session)?;
         cache::delete_resolved_queued_prompts(
             loaders,
             session_id,
@@ -269,6 +270,7 @@ fn load_conversation_with_queued_prompts(
                 proposals: &proposal_items,
             },
         })?;
+    resolve_peer_session_titles(&mut conversation.messages, &mut load_session)?;
 
     let messages = &mut conversation.messages;
     if main_permission_pending
@@ -331,9 +333,7 @@ fn parent_session(
     let Some(parent) = load_session(parent_id)? else {
         return Ok(None);
     };
-    let title = parent
-        .label
-        .or_else(|| claude_sessions::get_session_title(&parent.cwd, &parent.session_id))
+    let title = resolved_session_title(&parent)
         .or_else(|| {
             parent
                 .cwd
@@ -346,6 +346,36 @@ fn parent_session(
         session_id: parent.session_id,
         title,
     }))
+}
+
+fn resolve_peer_session_titles(
+    messages: &mut [ChatItem],
+    load_session: &mut impl FnMut(&str) -> Result<Option<Session>>,
+) -> Result<()> {
+    for message in messages {
+        let ChatItem::Peer {
+            session_id,
+            session_title,
+            ..
+        } = message
+        else {
+            continue;
+        };
+        if session_title.is_some() {
+            continue;
+        }
+        if let Some(session) = load_session(session_id)? {
+            *session_title = resolved_session_title(&session);
+        }
+    }
+    Ok(())
+}
+
+fn resolved_session_title(session: &Session) -> Option<String> {
+    session
+        .label
+        .clone()
+        .or_else(|| claude_sessions::get_session_title(&session.cwd, &session.session_id))
 }
 
 struct TranscriptInput<'a> {
@@ -1714,7 +1744,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn peer_message_route_includes_the_resolved_session_title() {
+    async fn peer_message_route_includes_a_resolved_sender_title() {
         let directory = tempfile::tempdir().unwrap();
         let transcript_path = directory.path().join("transcript.jsonl");
         let record = json!({
@@ -1732,17 +1762,16 @@ mod tests {
 
         let mut child = stored_session();
         child.session_id = "fixture-child-id".to_string();
-        child.ancestor_session_ids = vec!["fixture-parent-id".to_string()];
         child.transcript_path = Some(transcript_path);
-        let mut parent = stored_session();
-        parent.session_id = "fixture-parent-id".to_string();
-        parent.label = Some("Fixture parent".to_string());
+        let mut sender = stored_session();
+        sender.session_id = "fixture-parent-id".to_string();
+        sender.label = Some("Fixture parent".to_string());
 
         let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
             move |id| {
                 Ok(match id {
                     "fixture-child-id" => Some(child.clone()),
-                    "fixture-parent-id" => Some(parent.clone()),
+                    "fixture-parent-id" => Some(sender.clone()),
                     _ => None,
                 })
             },
