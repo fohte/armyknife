@@ -254,7 +254,7 @@
   left: -1px;
   color: var(--aw-text-muted);
   content: '✓';
-  font-size: 10px;
+  font-size: 8px;
 }
 
 .session-content,
