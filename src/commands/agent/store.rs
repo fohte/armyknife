@@ -507,6 +507,14 @@ pub(crate) fn set_watch_web_today_in(
     database::set_watch_web_today(sessions_dir, session_id, is_today)
 }
 
+pub(crate) fn set_watch_web_primary_task_in(
+    sessions_dir: &Path,
+    session_id: &str,
+    task_id: &str,
+) -> Result<bool> {
+    database::set_watch_web_primary_task(sessions_dir, session_id, task_id)
+}
+
 pub(crate) fn session_changes_since(
     sessions_dir: &Path,
     revision: i64,

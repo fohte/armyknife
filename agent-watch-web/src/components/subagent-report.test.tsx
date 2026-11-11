@@ -29,7 +29,7 @@ it('renders the task description with its report collapsed', () => {
       />,
     ),
   ).toBe(
-    '<details class="chat-tool-summary"><summary>Review the fictional feature</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',
+    '<details class="chat-tool-summary" data-has-operations="false"><summary>Review the fictional feature</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',
   )
 })
 
@@ -44,6 +44,6 @@ it('uses the agent type name and renders the report body as markdown', () => {
       />,
     ),
   ).toBe(
-    '<details class="chat-tool-summary" open=""><summary>general-purpose</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',
+    '<details class="chat-tool-summary" data-has-operations="false" open=""><summary>general-purpose</summary><div class="markdown-message"><h2>Result</h2>\n<p>The requested change is complete.</p></div></details>',
   )
 })

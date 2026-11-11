@@ -11,3 +11,9 @@ export function getCommandPaletteShortcut(
     ? { modifier: 'metaKey', label: '⌘K', ariaLabel: 'Command K' }
     : { modifier: 'ctrlKey', label: 'Ctrl K', ariaLabel: 'Control K' }
 }
+
+export function getCommandPaletteModifierLabel(
+  shortcut: CommandPaletteShortcut,
+): '⌘' | 'Ctrl' {
+  return shortcut.modifier === 'metaKey' ? '⌘' : 'Ctrl'
+}
