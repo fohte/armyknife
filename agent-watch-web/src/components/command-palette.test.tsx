@@ -116,11 +116,21 @@ it('shows the primary task and the count of other linked tasks for a session', (
 
 it.each([
   ['needs action', 'needs_action', 'Question', 300, '◆', 'Question', '5m'],
+  [
+    'needs action without a kind',
+    'needs_action',
+    null,
+    300,
+    '◆',
+    'Needs action',
+    '5m',
+  ],
   ['error', 'needs_action', 'Error', 720, '×', 'Error', '12m'],
   ['in progress', 'in_progress', null, 30, '●', 'Working', '30s'],
   ['later', 'later', null, 90, '◷', 'Later', ''],
   ['done', 'done', null, 360, '✓', 'Done', ''],
   ['short session', 'needs_action', 'Question', 8, '◆', 'Question', '8s'],
+  ['unknown category', 'blocked', null, 60, '•', 'blocked', '1m'],
 ] as const)(
   'renders the %s session icon, kind, and elapsed time',
   (
@@ -206,18 +216,39 @@ it('shows task priority before the task result summary', () => {
   ).toBe('P1 · 1 sessions · 1 need action · example/web-app')
 })
 
+it('shows an em dash when a task has no priority', () => {
+  renderPalette({
+    initialQuery: '#57',
+    sessions: [
+      {
+        ...session,
+        task: {
+          id: 'task-rollout',
+          number: 57,
+          title: 'Prepare a rollout plan',
+          priority: null,
+        },
+      },
+    ],
+  })
+
+  expect(
+    container.querySelector('.command-palette-item-subtitle')?.textContent,
+  ).toBe('P— · 1 sessions · 1 need action · example/web-app')
+})
+
 it.each([
-  ['switch board', '>Switch to Board', '⇧B'],
-  ['switch inbox', '>Switch to Inbox', ''],
-  ['archive done', '>Archive all done', ''],
+  ['switch board', '>Switch to Board'],
+  ['switch inbox', '>Switch to Inbox'],
+  ['archive done', '>Archive all done'],
 ] as const)(
-  'shows only the assigned shortcut for the %s command',
-  (_name, query, expectedShortcut) => {
+  'does not show an inactive keyboard shortcut for the %s command',
+  (_name, query) => {
     renderPalette({ initialQuery: query })
 
     expect(
       container.querySelector('.command-palette-item-detail')?.textContent,
-    ).toBe(expectedShortcut)
+    ).toBe('')
   },
 )
 

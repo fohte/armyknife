@@ -75,19 +75,24 @@ export function itemDetail(item: PaletteItem) {
     case 'project':
       return 'Show in Board'
     case 'command':
-      return item.id === 'switch-board' ? '⇧B' : ''
+      return ''
   }
 }
 
 export function sessionKindLabel(session: Session) {
   if (session.kind !== null) return session.kind
-  const labels: Record<Session['category'], string> = {
-    needs_action: 'Needs action',
-    in_progress: 'Working',
-    later: 'Later',
-    done: 'Done',
+  switch (session.category) {
+    case 'needs_action':
+      return 'Needs action'
+    case 'in_progress':
+      return 'Working'
+    case 'later':
+      return 'Later'
+    case 'done':
+      return 'Done'
+    default:
+      return session.category.replace('_', ' ')
   }
-  return labels[session.category]
 }
 
 export function itemColor(item: PaletteItem) {
