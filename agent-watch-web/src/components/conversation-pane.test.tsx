@@ -1,6 +1,7 @@
 import { act, useState } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { userEvent } from 'vitest/browser'
 
 import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
@@ -1034,7 +1035,31 @@ it('sends on Enter and Command-Enter and preserves modified newlines', async () 
       ['messages', { content: 'Use bounded retries' }],
       ['messages', { content: 'Keep the error visible' }],
     ],
-    defaultPrevented: [false, false],
+    defaultPrevented: [true, false],
+  })
+})
+
+it('inserts Alt-Enter at the cursor without sending the message', async () => {
+  const onAction = vi.fn(() => Promise.resolve(true))
+  renderView(onAction)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('textarea'),
+  )
+  setTextareaValue(textarea, 'Keep this as a draft')
+  textarea.focus()
+  textarea.setSelectionRange(9, 9)
+
+  await act(async () => {
+    await userEvent.keyboard('{Alt>}{Enter}{/Alt}')
+  })
+
+  const snapshot = () => ({
+    draft: textarea.value,
+    actionCalls: onAction.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    draft: 'Keep this\n as a draft',
+    actionCalls: [],
   })
 })
 
