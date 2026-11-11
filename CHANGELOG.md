@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.572](https://github.com/fohte/armyknife/compare/v0.1.571...v0.1.572) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match Board to design mock ([#1501](https://github.com/fohte/armyknife/issues/1501)) ([4f90367](https://github.com/fohte/armyknife/commit/4f903677f5123ddf5208a084ee49192a9efc5478))
+
 ## [0.1.571](https://github.com/fohte/armyknife/compare/v0.1.570...v0.1.571) (2026-11-11)
 
 
