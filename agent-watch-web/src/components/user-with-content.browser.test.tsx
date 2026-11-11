@@ -11,7 +11,10 @@ let container: HTMLDivElement
 let root: Root | null = null
 
 function render(
-  message: Extract<ChatItem, { type: 'user' | 'user_with_content' }>,
+  message: Extract<
+    ChatItem,
+    { type: 'user' | 'queued_user' | 'user_with_content' }
+  >,
 ) {
   root ??= createRoot(container)
   act(() => {
@@ -71,6 +74,26 @@ it('renders the sender, text, and image in message order', () => {
   ])
 })
 
+it('labels a queued prompt as You and keeps the user bubble style', () => {
+  render({
+    type: 'queued_user',
+    content: [{ type: 'text', text: 'Please rerun the example check.' }],
+  })
+
+  expect(snapshot()).toEqual([
+    {
+      className: 'chat-from',
+      text: 'You · Queued',
+      source: null,
+    },
+    {
+      className: 'markdown-message chat-user-message',
+      text: 'Please rerun the example check.',
+      source: null,
+    },
+  ])
+})
+
 it('explains when an image fails to load', () => {
   render({
     type: 'user_with_content',
@@ -82,6 +105,7 @@ it('explains when an image fails to load', () => {
   })
 
   expect(snapshot()).toEqual([
+    { className: 'chat-from', text: 'You', source: null },
     {
       className: 'chat-image-unavailable',
       text: '画像はもうありません',
@@ -97,6 +121,7 @@ it('explains when an image is already unavailable', () => {
   })
 
   expect(snapshot()).toEqual([
+    { className: 'chat-from', text: 'You', source: null },
     {
       className: 'chat-image-unavailable',
       text: '画像はもうありません',
@@ -115,6 +140,7 @@ it('renders a non-image attachment by its filename in message order', () => {
   })
 
   expect(snapshot()).toEqual([
+    { className: 'chat-from', text: 'You', source: null },
     {
       className: 'markdown-message chat-user-message',
       text: 'Inspect this document.',
@@ -132,6 +158,7 @@ it('renders a text-only user message', () => {
   render({ type: 'user', text: 'Please rerun the example check.' })
 
   expect(snapshot()).toEqual([
+    { className: 'chat-from', text: 'You', source: null },
     {
       className: 'markdown-message chat-user-message',
       text: 'Please rerun the example check.',

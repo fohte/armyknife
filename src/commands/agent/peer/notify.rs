@@ -66,6 +66,9 @@ pub fn run(args: &NotifyArgs) -> Result<()> {
         notify,
         bg::save_undelivered,
         alert_user,
+        |from, to, message| {
+            store::insert_watch_web_peer_out_message(from, to, message, chrono::Utc::now())
+        },
     )?;
     if let Some(output) = output {
         println!("{output}");
@@ -79,6 +82,7 @@ fn run_with(
     deliver: impl FnOnce(&str, &str, Option<&str>, Option<Engine>) -> Result<Delivery>,
     save: impl FnOnce(&str, &str) -> Result<()>,
     alert_user: impl FnOnce(&str, &str),
+    record_delivery: impl FnOnce(&str, &str, &str) -> Result<()>,
 ) -> Result<Option<String>> {
     let session_id =
         resolve_target_session_id(args, || resolve_parent().map(|session| session.session_id))?;
@@ -92,7 +96,19 @@ fn run_with(
         from.as_deref(),
         from_engine_hint,
     ) {
-        Ok(delivery) => return Ok(Some(delivery_output(&session_id, &delivery))),
+        Ok(delivery) => {
+            if let Some(from) = from.as_deref()
+                && let Err(error) = record_delivery(from, &session_id, &args.message)
+            {
+                tracing::warn!(
+                    event = "agent.peer.notify.record_failed",
+                    from_session = %from,
+                    to_session = %session_id,
+                    error = %error,
+                );
+            }
+            return Ok(Some(delivery_output(&session_id, &delivery)));
+        }
         Err(error) if is_permanent_failure(&error) => return Err(error),
         Err(error) => error,
     };
@@ -651,6 +667,64 @@ mod tests {
     }
 
     #[test]
+    fn recording_failure_does_not_change_a_successful_delivery() {
+        let cache_dir = tempfile::tempdir().expect("cache directory should be created");
+        let cache_home = cache_dir.path().to_string_lossy().to_string();
+        let args = NotifyArgs {
+            session_id: Some("fixture-target".to_string()),
+            parent: false,
+            message: "Expanded fictional request body".to_string(),
+        };
+        let mut records = Vec::new();
+        let mut saved = Vec::new();
+        let mut alerts = Vec::new();
+
+        let result = temp_env::with_vars(
+            [
+                ("XDG_CACHE_HOME", Some(cache_home.as_str())),
+                ("ARMYKNIFE_SESSION_ID", Some("fixture-sender")),
+                ("CLAUDE_CODE_SESSION_ID", None::<&str>),
+                ("CODEX_SESSION_ID", None::<&str>),
+            ],
+            || {
+                run_with(
+                    &args,
+                    || anyhow::bail!("the target is explicit"),
+                    |_, _, _, _| Ok(Delivery::Sent),
+                    |target, content| {
+                        saved.push((target.to_string(), content.to_string()));
+                        Ok(())
+                    },
+                    |target, failure| alerts.push((target.to_string(), failure.to_string())),
+                    |from, to, message| {
+                        records.push((from.to_string(), to.to_string(), message.to_string()));
+                        anyhow::bail!("fixture database error")
+                    },
+                )
+            },
+        );
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                records,
+                saved,
+                alerts,
+            ),
+            (
+                Ok(Some("Delivered to session fixture-target.".to_string())),
+                vec![(
+                    "fixture-sender".to_string(),
+                    "fixture-target".to_string(),
+                    "Expanded fictional request body".to_string(),
+                )],
+                Vec::new(),
+                Vec::new(),
+            ),
+        );
+    }
+
+    #[test]
     fn parent_target_is_delivered_to_the_notifier() {
         use clap::Parser;
 
@@ -687,6 +761,9 @@ mod tests {
             panic!("CLI should parse a peer notify command");
         };
         let mut deliveries = Vec::new();
+        let sent_at = chrono::DateTime::parse_from_rfc3339("2026-06-01T12:30:00Z")
+            .expect("fixture timestamp should parse")
+            .with_timezone(&chrono::Utc);
 
         let result = temp_env::with_vars(
             [
@@ -710,12 +787,21 @@ mod tests {
                     },
                     |_, _| Ok(()),
                     |_, _| {},
+                    |from, to, message| {
+                        store::insert_watch_web_peer_out_message(from, to, message, sent_at)
+                    },
                 )
             },
         );
+        let records = store::watch_web_peer_out_messages_from(&sessions_dir, "child-session")
+            .expect("delivered peer message should be saved");
 
         assert_eq!(
-            (result.map_err(|error| error.to_string()), deliveries),
+            (
+                result.map_err(|error| error.to_string()),
+                deliveries,
+                records,
+            ),
             (
                 Ok(Some("Delivered to session parent-session.".to_string())),
                 vec![(
@@ -724,6 +810,13 @@ mod tests {
                     Some("child-session".to_string()),
                     None,
                 )],
+                vec![store::WatchWebPeerOutMessage {
+                    id: 1,
+                    from_session_id: "child-session".to_string(),
+                    to_session_id: "parent-session".to_string(),
+                    content: "hello".to_string(),
+                    sent_at,
+                }],
             ),
         );
     }
@@ -773,6 +866,7 @@ mod tests {
                         save_result
                     },
                     |target, failure| alerts.push((target.to_string(), failure.to_string())),
+                    |_, _, _| Ok(()),
                 )
             },
         );

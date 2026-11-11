@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::Path;
 
@@ -13,13 +13,14 @@ mod user_input;
 use super::super::BackgroundTask;
 use super::super::ChatItem;
 use super::super::ParentSession;
+use super::super::TranscriptInput;
 use super::super::parser::{
     ToolSummary, append_classification_with_image_directory,
     append_record_with_user_marker_and_image_directory, append_text_with_image_directory,
     classifier::{self, MessageKind},
     for_each_jsonl_record, tool_target,
 };
-use crate::commands::agent::store::{AgentDecision, WatchWebQueuedPrompt};
+use crate::commands::agent::store::{AgentDecision, WatchWebPeerOutMessage, WatchWebQueuedPrompt};
 use background_tasks::{BackgroundTaskTracker, is_task_notification, record_timestamp};
 use questions::{
     append_questions, apply_question_answers, parse_question_answers, tool_use_result_answers,
@@ -29,9 +30,11 @@ use user_input::{
     content_blocks, is_tool_result_only_user_record, slash_command_text, user_content,
 };
 
-struct DecisionParserInput<'a> {
-    decisions: &'a [AgentDecision],
+struct ParseContext<'a> {
+    image_directory: Option<&'a Path>,
     queued_prompts: &'a [WatchWebQueuedPrompt],
+    peer_out_messages: &'a [WatchWebPeerOutMessage],
+    decisions: &'a [AgentDecision],
 }
 
 #[cfg(test)]
@@ -65,52 +68,39 @@ fn parse_with_image_directory(
         pending_tool,
         user_marker,
         Utc::now(),
-        image_directory,
-        DecisionParserInput {
-            decisions: &[],
+        ParseContext {
+            image_directory,
             queued_prompts: &[],
+            peer_out_messages: &[],
+            decisions: &[],
         },
     )
     .map(|(messages, _, _)| messages)
 }
 
 #[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_background_tasks(
+pub(super) fn parse_with_background_tasks_and_peer_out_messages(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
+    peer_out_messages: &[WatchWebPeerOutMessage],
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>)> {
-    parse_with_queued_prompts(reader, parent, pending_tool, user_marker, now, &[])
-        .map(|(messages, background_tasks, _)| (messages, background_tasks))
-}
-
-#[cfg(test)]
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_queued_prompts(
-    reader: impl BufRead + Seek,
-    parent: Option<&ParentSession>,
-    pending_tool: Option<&str>,
-    user_marker: Option<&str>,
-    now: DateTime<Utc>,
-    queued_prompts: &[WatchWebQueuedPrompt],
-) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
-    let image_directory = super::super::super::image_attachments::storage_directory().ok();
-    parse_with_background_tasks_and_image_directory(
+    parse_with_queued_prompts_and_peer_out_messages(
         reader,
         parent,
         pending_tool,
         user_marker,
         now,
-        image_directory.as_deref(),
-        DecisionParserInput {
-            decisions: &[],
-            queued_prompts,
-        },
+        &[],
+        peer_out_messages,
     )
+    .map(|(messages, background_tasks, _)| (messages, background_tasks))
 }
 
-pub(in crate::commands::agent::watch_web::messages) fn parse_with_decisions_and_queued_prompts(
+#[cfg(test)]
+fn parse_with_decisions_and_queued_prompts(
     reader: impl BufRead + Seek,
     parent: Option<&ParentSession>,
     pending_tool: Option<&str>,
@@ -126,10 +116,59 @@ pub(in crate::commands::agent::watch_web::messages) fn parse_with_decisions_and_
         pending_tool,
         user_marker,
         now,
-        image_directory.as_deref(),
-        DecisionParserInput {
-            decisions,
+        ParseContext {
+            image_directory: image_directory.as_deref(),
             queued_prompts,
+            peer_out_messages: &[],
+            decisions,
+        },
+    )
+}
+
+#[cfg(test)]
+pub(super) fn parse_with_queued_prompts_and_peer_out_messages(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    queued_prompts: &[WatchWebQueuedPrompt],
+    peer_out_messages: &[WatchWebPeerOutMessage],
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    parse_with_decisions_and_queued_prompts_and_peer_out_messages(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        TranscriptInput {
+            decisions: &[],
+            queued_prompts,
+            peer_out_messages,
+        },
+    )
+}
+
+pub(in crate::commands::agent::watch_web::messages) fn parse_with_decisions_and_queued_prompts_and_peer_out_messages(
+    reader: impl BufRead + Seek,
+    parent: Option<&ParentSession>,
+    pending_tool: Option<&str>,
+    user_marker: Option<&str>,
+    now: DateTime<Utc>,
+    input: TranscriptInput<'_>,
+) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
+    let image_directory = super::super::super::image_attachments::storage_directory().ok();
+    parse_with_background_tasks_and_image_directory(
+        reader,
+        parent,
+        pending_tool,
+        user_marker,
+        now,
+        ParseContext {
+            image_directory: image_directory.as_deref(),
+            queued_prompts: input.queued_prompts,
+            peer_out_messages: input.peer_out_messages,
+            decisions: input.decisions,
         },
     )
 }
@@ -140,12 +179,11 @@ fn parse_with_background_tasks_and_image_directory(
     pending_tool: Option<&str>,
     user_marker: Option<&str>,
     now: DateTime<Utc>,
-    image_directory: Option<&Path>,
-    input: DecisionParserInput<'_>,
+    context: ParseContext<'_>,
 ) -> std::io::Result<(Vec<ChatItem>, Vec<BackgroundTask>, Vec<i64>)> {
     let mut transcript_nodes = BTreeMap::new();
     let mut latest_uuid = None;
-    let mut queue = super::queue::Queue::new(input.queued_prompts);
+    let mut queue = super::queue::Queue::new(context.queued_prompts);
     for_each_jsonl_record(&mut reader, |record| {
         queue.observe(&record);
         let Some(uuid) = record.get("uuid").and_then(Value::as_str) else {
@@ -175,8 +213,9 @@ fn parse_with_background_tasks_and_image_directory(
     let mut tools = ToolSummary::default();
     let mut tool_uses = Vec::new();
     let mut question_uses = HashMap::<String, Vec<usize>>::new();
+    let mut matched_peer_out_message_ids = HashSet::new();
     let mut background_tasks = BackgroundTaskTracker::default();
-    let mut unplaced_decisions = input
+    let mut unplaced_decisions = context
         .decisions
         .iter()
         .cloned()
@@ -222,7 +261,7 @@ fn parse_with_background_tasks_and_image_directory(
                             text,
                             user_marker,
                             images,
-                            image_directory,
+                            context.image_directory,
                             parent,
                         );
                     }
@@ -270,15 +309,31 @@ fn parse_with_background_tasks_and_image_directory(
                                         &mut items,
                                         classifier::failed_peer_notification(&text),
                                         Vec::new(),
-                                        image_directory,
+                                        context.image_directory,
                                         parent,
                                     );
-                                } else if let Some(peer) = classifier::peer_out_from_tool(
+                                } else if let Some(mut peer) = classifier::peer_out_from_tool(
                                     &tool_use.name,
                                     tool_use.input.as_ref(),
                                     parent.map(|parent| parent.session_id.as_str()),
                                     Some(&text),
                                 ) {
+                                    let completed_at = record_timestamp(&record);
+                                    if let Some(delivered) =
+                                        context.peer_out_messages.iter().find(|message| {
+                                            !matched_peer_out_message_ids.contains(&message.id)
+                                                && message.to_session_id == peer.session_id
+                                                && tool_use.started_at.is_some_and(|started_at| {
+                                                    started_at <= message.sent_at
+                                                })
+                                                && completed_at.is_some_and(|completed_at| {
+                                                    message.sent_at <= completed_at
+                                                })
+                                        })
+                                    {
+                                        peer.text.clone_from(&delivered.content);
+                                        matched_peer_out_message_ids.insert(delivered.id);
+                                    }
                                     super::append_peer_out(&mut items, peer);
                                 }
                             } else if classifier::is_agent_add_tool(
@@ -323,7 +378,7 @@ fn parse_with_background_tasks_and_image_directory(
                             &mut items,
                             classification,
                             images,
-                            image_directory,
+                            context.image_directory,
                             parent,
                         );
                     }
@@ -341,7 +396,7 @@ fn parse_with_background_tasks_and_image_directory(
                     text,
                     None,
                     Vec::new(),
-                    image_directory,
+                    context.image_directory,
                     parent,
                 );
             }
@@ -360,7 +415,7 @@ fn parse_with_background_tasks_and_image_directory(
                                         text.to_owned(),
                                         false,
                                         None,
-                                        image_directory,
+                                        context.image_directory,
                                     );
                                 }
                             }
@@ -430,7 +485,7 @@ fn parse_with_background_tasks_and_image_directory(
         });
     }
     let resolved_queued_prompt_ids = queue.resolved_queued_prompt_ids();
-    items.extend(queue.pending_items(parent, user_marker, image_directory));
+    items.extend(queue.pending_items(parent, user_marker, context.image_directory));
     items.extend(unplaced_decisions.into_values().map(Into::into));
     let background_tasks = background_tasks.into_api_tasks(now);
     Ok((items, background_tasks, resolved_queued_prompt_ids))
