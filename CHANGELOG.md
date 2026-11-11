@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.578](https://github.com/fohte/armyknife/compare/v0.1.577...v0.1.578) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align conversation cards ([#1516](https://github.com/fohte/armyknife/issues/1516)) ([373955f](https://github.com/fohte/armyknife/commit/373955f90ddf8b09f00df29e2db8162f9a459085))
+
 ## [0.1.577](https://github.com/fohte/armyknife/compare/v0.1.576...v0.1.577) (2026-11-11)
 
 
