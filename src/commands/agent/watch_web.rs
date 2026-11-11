@@ -380,7 +380,7 @@ mod tests {
                     .header(HOST, "localhost")
                     .header(ORIGIN, "http://localhost")
                     .header(CONTENT_TYPE, "application/json")
-                    .body(Body::from("{}"))
+                    .body(Body::from(r#"{"skip":"invalid"}"#))
                     .unwrap(),
             )
             .await
