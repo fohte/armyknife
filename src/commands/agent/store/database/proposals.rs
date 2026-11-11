@@ -142,8 +142,8 @@ pub(crate) fn write_agent_proposal_answer(
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let changed = transaction.execute(
-        "UPDATE agent_proposal SET answer = ?1, resolved_at = ?2
-         WHERE session_id = ?3 AND seq = ?4 AND resolved_at IS NULL",
+        "UPDATE agent_proposal SET answer = ?1, resolved_at = COALESCE(resolved_at, ?2)
+         WHERE session_id = ?3 AND seq = ?4 AND answer IS NULL",
         params![answer, Utc::now().to_rfc3339(), session_id, seq],
     )?;
     if changed > 0 {
@@ -258,7 +258,7 @@ mod tests {
     }
 
     #[rstest]
-    fn answer_does_not_overwrite_a_resolved_proposal(sessions_dir: TempDir) {
+    fn answer_is_saved_if_a_hook_closed_the_proposal_during_delivery(sessions_dir: TempDir) {
         add_agent_proposal(sessions_dir.path(), "session-a", "body").expect("proposal should save");
         close_unanswered_agent_proposals(sessions_dir.path(), "session-a")
             .expect("proposal should close");
@@ -277,13 +277,13 @@ mod tests {
         assert_eq!(
             (updated, proposals),
             (
-                false,
+                true,
                 vec![AgentProposal {
                     session_id: "session-a".to_string(),
                     seq: 1,
                     body: "body".to_string(),
                     created_at: epoch,
-                    answer: None,
+                    answer: Some(answer.to_string()),
                     resolved_at: Some(epoch),
                 }],
             ),

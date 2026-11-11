@@ -25,7 +25,7 @@ pub(super) async fn answer_proposal(
     RoutePath((id, seq)): RoutePath<(String, i64)>,
     Json(request): Json<AnswerRequest>,
 ) -> Result<Json<Success>, ApiError> {
-    let proposal_answer_lock = state.proposal_answer_lock(&id, seq).await;
+    let proposal_answer_lock = state.proposal_answer_locks.get_or_create(&id, seq).await;
     let _answer_guard = proposal_answer_lock.lock().await;
     let session = load_session(state.clone(), id.clone()).await?;
     if session.status == SessionStatus::Ended {
@@ -110,9 +110,17 @@ pub(super) async fn answer_proposal(
         }
         None => store::write_agent_proposal_answer(&session_id, seq, &answer),
     })
-    .await?;
+    .await
+    .map_err(|error| {
+        tracing::error!(error = %error.message, "failed to save sent watch-web proposal answer");
+        ApiError::operation(
+            "proposal answer was sent but could not be saved; check the conversation before retrying",
+        )
+    })?;
     if !updated {
-        return Err(ApiError::conflict("proposal is no longer available"));
+        return Err(ApiError::conflict(
+            "proposal answer was sent but the proposal is no longer available",
+        ));
     }
     Ok(Json(Success::new()))
 }

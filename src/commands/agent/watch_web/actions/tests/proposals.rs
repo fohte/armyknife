@@ -1,14 +1,9 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use axum::http::StatusCode;
 use indoc::indoc;
 use rstest::rstest;
 use serde_json::json;
-use tokio::sync::Mutex;
 use tower::ServiceExt;
 
-use super::super::ActionState;
 use super::{ActionContext, action_context, post, response_snapshot, session};
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Engine, SessionStatus};
@@ -69,29 +64,83 @@ async fn chosen_option_is_notified_before_the_answer_is_stored(action_context: A
 }
 
 #[rstest]
-#[tokio::test]
-async fn proposal_answer_locks_are_scoped_to_one_proposal(action_context: ActionContext) {
-    let state = ActionState {
-        sessions_dir: Some(action_context.temp_dir.path().join("sessions")),
-        attachment_dir: Some(action_context.temp_dir.path().join("attachments")),
-        runtime: action_context.runtime.clone(),
-        proposal_answer_locks: Arc::new(Mutex::new(HashMap::new())),
-    };
-    let first = state.proposal_answer_lock("sample-session", 1).await;
-    let same_proposal = state.proposal_answer_lock("sample-session", 1).await;
-    let other_session = state.proposal_answer_lock("other-session", 1).await;
-    let other_proposal = state.proposal_answer_lock("sample-session", 2).await;
-    let _first_guard = first.lock().await;
+#[tokio::test(flavor = "multi_thread", worker_threads = 3)]
+async fn concurrent_answers_notify_the_agent_only_once(action_context: ActionContext) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+    let (router, answer_locks) = action_context.router_with_proposal_answer_locks();
+    let (message_started, release_message) = action_context.block_next_message();
+    let first_router = router.clone();
+    let first = tokio::spawn(async move {
+        first_router
+            .oneshot(post(
+                "/sessions/sample-session/proposals/1/answer",
+                json!({ "choice": 0, "comment": null }),
+            ))
+            .await
+            .unwrap()
+    });
+    message_started.await.unwrap();
+
+    let answer_lock = answer_locks.get_or_create("sample-session", 1).await;
+    let second = tokio::spawn(async move {
+        router
+            .oneshot(post(
+                "/sessions/sample-session/proposals/1/answer",
+                json!({ "choice": 0, "comment": null }),
+            ))
+            .await
+            .unwrap()
+    });
+    let second_waited_for_first = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while std::sync::Arc::strong_count(&answer_lock) < 3 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .is_ok();
+    let sent_before_first_completed = action_context.runtime.calls.lock().unwrap().len();
+    let _ = release_message.send(());
+
+    let first = response_snapshot(first.await.unwrap(), &action_context).await;
+    let second = response_snapshot(second.await.unwrap(), &action_context).await;
+    let proposals = store::agent_proposals_from(
+        &action_context.temp_dir.path().join("sessions"),
+        "sample-session",
+    )
+    .unwrap();
+
     assert_eq!(
         (
-            Arc::ptr_eq(&first, &same_proposal),
-            Arc::ptr_eq(&first, &other_session),
-            Arc::ptr_eq(&first, &other_proposal),
-            same_proposal.try_lock().is_err(),
-            other_session.try_lock().is_ok(),
-            other_proposal.try_lock().is_ok(),
+            second_waited_for_first,
+            sent_before_first_completed,
+            first,
+            second,
+            proposals[0].answer.clone(),
         ),
-        (true, false, false, true, true, true),
+        (
+            true,
+            1,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            json!({
+                "status": StatusCode::CONFLICT.as_u16(),
+                "body": { "error": "proposal is not awaiting an answer" },
+                "calls": [{
+                    "kind": "message",
+                    "sessionId": "sample-session",
+                    "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+                }],
+            }),
+            Some(r#"{"choice":0,"comment":null}"#.to_string()),
+        ),
     );
 }
 
@@ -255,7 +304,47 @@ async fn failed_peer_notification_does_not_store_the_answer(action_context: Acti
 
 #[rstest]
 #[tokio::test]
-async fn proposal_resolved_during_delivery_is_not_reported_as_answered(
+async fn save_failure_after_peer_notification_reports_the_partial_send(
+    action_context: ActionContext,
+) {
+    action_context.save_session(&session("sample-session"));
+    add_proposal(&action_context, "sample-session");
+    let sessions_dir = action_context.temp_dir.path().join("sessions");
+    action_context.set_after_message(move || {
+        let database = sessions_dir.join("sessions.db");
+        let backup = sessions_dir.join("sessions.db-backup");
+        std::fs::rename(database, backup).unwrap();
+        std::fs::create_dir(sessions_dir.join("sessions.db")).unwrap();
+    });
+
+    let response = action_context
+        .router()
+        .oneshot(post(
+            "/sessions/sample-session/proposals/1/answer",
+            json!({ "choice": 0, "comment": null }),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response_snapshot(response, &action_context).await,
+        json!({
+            "status": StatusCode::BAD_GATEWAY.as_u16(),
+            "body": {
+                "error": "proposal answer was sent but could not be saved; check the conversation before retrying",
+            },
+            "calls": [{
+                "kind": "message",
+                "sessionId": "sample-session",
+                "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
+            }],
+        }),
+    );
+}
+
+#[rstest]
+#[tokio::test]
+async fn proposal_resolved_during_delivery_keeps_the_delivered_answer(
     action_context: ActionContext,
 ) {
     action_context.save_session(&session("sample-session"));
@@ -287,15 +376,15 @@ async fn proposal_resolved_during_delivery_is_not_reported_as_answered(
         ),
         (
             json!({
-                "status": StatusCode::CONFLICT.as_u16(),
-                "body": { "error": "proposal is no longer available" },
+                "status": StatusCode::OK.as_u16(),
+                "body": { "ok": true },
                 "calls": [{
                     "kind": "message",
                     "sessionId": "sample-session",
                     "content": "Proposal 1 \"Pick a format\": chose A (Format A).",
                 }],
             }),
-            None,
+            Some(r#"{"choice":0,"comment":null}"#.to_string()),
             true,
         ),
     );
