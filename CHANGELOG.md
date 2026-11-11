@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.582](https://github.com/fohte/armyknife/compare/v0.1.581...v0.1.582) (2026-11-11)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** match Inbox and Later menu ([#1524](https://github.com/fohte/armyknife/issues/1524)) ([2ae5e3e](https://github.com/fohte/armyknife/commit/2ae5e3e8282c4663b7381bdfc7a83014a816a36c))
+
 ## [0.1.581](https://github.com/fohte/armyknife/compare/v0.1.580...v0.1.581) (2026-11-11)
 
 

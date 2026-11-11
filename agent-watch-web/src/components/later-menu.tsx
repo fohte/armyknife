@@ -46,7 +46,10 @@ export function LaterMenu({
           event.stopPropagation()
         }}
       >
-        <p className="later-menu-title">Later: {sessionTitle}</p>
+        <p className="later-menu-title">
+          Later:{' '}
+          <span className="later-menu-session-title">{sessionTitle}</span>
+        </p>
         {LATER_PRESET_OPTIONS.map((option) => (
           <Button
             key={option.preset}
@@ -90,6 +93,7 @@ export function LaterMenu({
             Back now
           </Button>
         ) : null}
+        <div className="later-menu-divider" aria-hidden="true" />
         <p className="later-menu-note">
           New activity in the session also brings it back.
         </p>

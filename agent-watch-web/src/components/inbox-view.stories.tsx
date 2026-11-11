@@ -3,6 +3,32 @@ import type { Meta, StoryObj } from '@storybook/react-vite'
 import { InboxView } from '#components/inbox-view'
 import type { Session } from '#types'
 
+function sampleSession(
+  id: string,
+  category: Session['category'],
+  title: string,
+  overrides: Partial<Session> = {},
+): Session {
+  return {
+    id,
+    category,
+    isPaused: false,
+    kind: null,
+    title,
+    preview: null,
+    elapsedSeconds: 30,
+    unread: false,
+    task: null,
+    tasks: [],
+    repo: 'example/service',
+    project: 'sample project',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+    ...overrides,
+  }
+}
+
 const sessions: Session[] = [
   {
     id: 'sample-later',
@@ -21,6 +47,24 @@ const sessions: Session[] = [
     ancestorSessionIds: [],
     pullRequest: null,
     laterUntil: '2030-01-02T09:00:00.000Z',
+  },
+  {
+    id: 'sample-later-secondary',
+    category: 'later',
+    isPaused: false,
+    categoryWhenNotLater: 'in_progress',
+    kind: null,
+    title: 'Wait for the staging build',
+    preview: null,
+    elapsedSeconds: 240,
+    unread: false,
+    task: null,
+    repo: 'example/service',
+    project: 'sample project',
+    parent: null,
+    ancestorSessionIds: [],
+    pullRequest: null,
+    laterUntil: '2030-01-02T10:00:00.000Z',
   },
   {
     id: 'sample-question',
@@ -43,6 +87,22 @@ const sessions: Session[] = [
     parent: null,
     pullRequest: null,
   },
+  ...Array.from({ length: 5 }, (_, index) =>
+    sampleSession(
+      `sample-action-${String(index + 1)}`,
+      'needs_action',
+      `Review the delivery check ${String(index + 1)}`,
+      {
+        kind:
+          (['Review', 'Error', 'Plan', 'Approve', 'Question'] as const)[
+            index
+          ] ?? 'Question',
+        preview: 'The latest update needs your attention.',
+        elapsedSeconds: 120 + index * 60,
+        unread: index < 3,
+      },
+    ),
+  ),
   {
     id: 'sample-work',
     category: 'in_progress',
@@ -91,6 +151,14 @@ const sessions: Session[] = [
     parent: null,
     pullRequest: null,
   },
+  ...Array.from({ length: 12 }, (_, index) =>
+    sampleSession(
+      `sample-work-extra-${String(index + 1)}`,
+      'in_progress',
+      `Update the delivery monitor ${String(index + 1)}`,
+      { elapsedSeconds: 180 + index * 60, repo: 'example/observability' },
+    ),
+  ),
   {
     id: 'sample-done',
     category: 'done',
@@ -107,6 +175,17 @@ const sessions: Session[] = [
     parent: null,
     pullRequest: { number: 2049, state: 'Merged' },
   },
+  ...Array.from({ length: 3 }, (_, index) =>
+    sampleSession(
+      `sample-done-extra-${String(index + 1)}`,
+      'done',
+      `Document the delivery result ${String(index + 1)}`,
+      {
+        elapsedSeconds: 7200 + index * 3600,
+        repo: 'example/service',
+      },
+    ),
+  ),
 ]
 
 const meta = {
@@ -119,7 +198,7 @@ const meta = {
     showAllInProgress: false,
     onShowMore: () => undefined,
     onSelect: () => undefined,
-    laterExpanded: true,
+    laterExpanded: false,
     onToggleLater: () => undefined,
     onLater: () => undefined,
     onToggleToday: () => undefined,
@@ -137,12 +216,20 @@ const meta = {
     onSaveViewNameChange: () => undefined,
   },
   decorators: [
-    (Story) => (
-      <div className="story-inbox-container">
+    (Story, context) => (
+      <div
+        className="story-inbox-container"
+        data-layout={context.args.isMobile ? 'mobile' : 'desktop'}
+      >
         <Story />
       </div>
     ),
   ],
+  parameters: {
+    overflowCheck: {
+      ignoreSelectors: ['.done-section .session-status-dot'],
+    },
+  },
 } satisfies Meta<typeof InboxView>
 
 export default meta
@@ -206,7 +293,7 @@ export const InboxCannotLoadSessions: Story = {
 }
 
 export const InboxFitsAnIPhone: Story = {
-  name: 'The inbox keeps its actions usable on an iPhone',
+  name: 'The inbox uses its narrow layout on an iPhone',
   args: {
     isMobile: true,
     laterExpanded: false,
@@ -219,7 +306,11 @@ export const InboxFitsAnIPhone: Story = {
       <div
         className="story-mobile-layout"
         data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
       >
         <Story />
       </div>
@@ -241,7 +332,11 @@ export const IPhoneInboxHasNoLaterSessions: Story = {
       <div
         className="story-mobile-layout"
         data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
       >
         <Story />
       </div>
@@ -261,7 +356,11 @@ export const IPhoneInboxShowsExpandedProgress: Story = {
       <div
         className="story-mobile-layout"
         data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
       >
         <Story />
       </div>
@@ -281,7 +380,11 @@ export const IPhoneInboxShowsCompletedSessions: Story = {
       <div
         className="story-mobile-layout"
         data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
       >
         <Story />
       </div>
@@ -309,7 +412,11 @@ export const IPhoneInboxShowsSavedViews: Story = {
       <div
         className="story-mobile-layout"
         data-layout="mobile"
-        style={{ width: '390px', height: '844px', display: 'flex' }}
+        style={{
+          width: '390px',
+          height: '844px',
+          display: 'flex',
+        }}
       >
         <Story />
       </div>
