@@ -46,8 +46,12 @@ pub struct CloseArgs {
     pub force: bool,
 
     /// Skip worktree deletion hooks.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "keep_worktree")]
     pub skip_hooks: bool,
+
+    /// Keep the linked worktree and branch when closing a session.
+    #[arg(long, conflicts_with = "skip_hooks")]
+    pub keep_worktree: bool,
 }
 
 pub async fn run(args: &CloseArgs) -> Result<()> {
@@ -70,6 +74,7 @@ pub async fn run(args: &CloseArgs) -> Result<()> {
             session_close::close_session_value(&session, args, None).await
         }
         DefaultTarget::Worktree(worktree_root) => {
+            ensure_keep_worktree_session_target(args)?;
             close_worktree(&worktree_root, args, false, None).await
         }
     }
@@ -112,6 +117,8 @@ async fn close_target(
         return session_close::close_session_value(&session, args, child_parent_session_id).await;
     }
 
+    ensure_keep_worktree_session_target(args)?;
+
     let config = load_config()?;
     let worktree_path = worktree_delete::resolve_worktree_path(
         target,
@@ -121,6 +128,13 @@ async fn close_target(
     let worktree_path = PathBuf::from(worktree_path);
     let worktree_root = linked_worktree_root(&worktree_path).unwrap_or(worktree_path);
     close_worktree(&worktree_root, args, false, child_parent_session_id).await
+}
+
+fn ensure_keep_worktree_session_target(args: &CloseArgs) -> Result<()> {
+    if args.keep_worktree {
+        bail!("--keep-worktree requires a session target");
+    }
+    Ok(())
 }
 
 fn close_tracked_session(session: &Session, force: bool) -> Result<()> {
@@ -1380,20 +1394,65 @@ mod tests {
             "feature/worktree",
             "--child",
             "--force",
-            "--skip-hooks",
+            "--keep-worktree",
         ])
         .expect("the close command should parse");
 
         let close_args = match parsed.command {
-            crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => {
-                Some((args.target, args.child, args.force, args.skip_hooks))
-            }
+            crate::cli::Commands::Agent(super::super::AgentCommands::Close(args)) => Some((
+                args.target,
+                args.child,
+                args.force,
+                args.skip_hooks,
+                args.keep_worktree,
+            )),
             _ => None,
         };
 
         assert_eq!(
             close_args,
-            Some((Some("feature/worktree".to_string()), true, true, true))
+            Some((
+                Some("feature/worktree".to_string()),
+                true,
+                true,
+                false,
+                true
+            ))
+        );
+    }
+
+    #[test]
+    fn keep_worktree_conflicts_with_skip_hooks() {
+        use clap::Parser;
+
+        let parsed = crate::cli::Cli::try_parse_from([
+            "a",
+            "ag",
+            "c",
+            "session-1",
+            "--keep-worktree",
+            "--skip-hooks",
+        ]);
+
+        assert_eq!(
+            parsed.err().map(|error| error.kind()),
+            Some(clap::error::ErrorKind::ArgumentConflict)
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_worktree_rejects_a_worktree_target() {
+        let args = CloseArgs {
+            target: Some("feature/worktree".to_string()),
+            keep_worktree: true,
+            ..CloseArgs::default()
+        };
+
+        let result = close_target("feature/worktree", &args, None).await;
+
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "--keep-worktree requires a session target"
         );
     }
 

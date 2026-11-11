@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -12,7 +12,9 @@ pub(super) async fn close_session_value(
     args: &CloseArgs,
     child_parent_session_id: Option<&str>,
 ) -> Result<()> {
-    let Some(worktree_root) = super::worktree::linked_worktree_root(&session.cwd) else {
+    let Some(worktree_root) =
+        worktree_root_to_delete(args, super::worktree::linked_worktree_root(&session.cwd))
+    else {
         return close_session_value_without_worktree(
             session,
             args,
@@ -39,6 +41,17 @@ pub(super) async fn close_session_value(
         &mut io::stderr(),
     )
     .await
+}
+
+fn worktree_root_to_delete(
+    args: &CloseArgs,
+    linked_worktree_root: Option<PathBuf>,
+) -> Option<PathBuf> {
+    if args.keep_worktree {
+        None
+    } else {
+        linked_worktree_root
+    }
 }
 
 struct SessionWorktreeContext<'a> {
@@ -160,6 +173,7 @@ mod tests {
 
     use super::super::test_support::session;
     use super::*;
+    use crate::commands::agent::types::SessionStatus;
 
     fn linked_session(session_id: &str, cwd: &str, pane_id: Option<&str>) -> Session {
         let mut session = session();
@@ -232,7 +246,7 @@ mod tests {
         Err("Agent session `session-1` is not a direct child of the calling session"),
         vec![],
     )]
-    fn validates_before_closing_a_tracked_session_without_a_linked_worktree(
+    fn validates_a_kept_session_before_closing_it(
         mut session: Session,
         #[case] ancestors: Vec<&str>,
         #[case] expected_result: std::result::Result<(), &str>,
@@ -266,6 +280,55 @@ mod tests {
                 calls.into_inner(),
             ),
             (expected_result.map_err(str::to_string), expected_calls,),
+        );
+    }
+
+    #[rstest]
+    #[case::keep_worktree(true, None)]
+    #[case::delete_worktree(false, Some(PathBuf::from("/tmp/worktrees/feature")))]
+    fn selects_linked_worktree_deletion_from_keep_option(
+        #[case] keep_worktree: bool,
+        #[case] expected: Option<PathBuf>,
+    ) {
+        let args = CloseArgs {
+            keep_worktree,
+            ..CloseArgs::default()
+        };
+
+        assert_eq!(
+            worktree_root_to_delete(&args, Some(PathBuf::from("/tmp/worktrees/feature"))),
+            expected,
+        );
+    }
+
+    #[rstest]
+    #[case::running(SessionStatus::Running)]
+    #[case::waiting_for_input(SessionStatus::WaitingInput)]
+    fn keep_worktree_still_rejects_active_sessions(
+        mut session: Session,
+        #[case] status: SessionStatus,
+    ) {
+        session.status = status;
+        let args = CloseArgs {
+            keep_worktree: true,
+            ..CloseArgs::default()
+        };
+
+        let result =
+            close_session_value_without_worktree(&session, &args, None, |session, force| {
+                if force {
+                    Ok(())
+                } else {
+                    super::super::ensure_session_is_idle(session, session.status)
+                }
+            });
+
+        assert_eq!(
+            result.map_err(|error| error.to_string()),
+            Err(format!(
+                "Agent session `{}` is running or waiting for input; pass --force to close it",
+                session.session_id,
+            )),
         );
     }
 
