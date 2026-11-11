@@ -2,10 +2,16 @@ import { err, ok, Result, ResultAsync } from 'neverthrow'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { CritPane } from '#components/crit-pane'
+import type { Decision } from '#components/decision-card'
+import { DecisionsPanel } from '#components/decisions-panel'
 import type {
   PendingPermissionAction,
   PermissionRequestIdentity,
 } from '#components/permission-card'
+import { ResizableColumns } from '#components/resizable-columns'
+import type { SessionStatusPanelTab } from '#components/session-status-panel'
+import { SessionStatusPanel } from '#components/session-status-panel'
 import type {
   BackgroundTask,
   ChatItem,
@@ -92,6 +98,19 @@ function isChatItem(value: unknown): value is ChatItem {
       return (
         typeof value['tool'] === 'string' &&
         typeof value['description'] === 'string'
+      )
+    case 'decision':
+      return (
+        typeof value['seq'] === 'number' &&
+        typeof value['title'] === 'string' &&
+        typeof value['why'] === 'string' &&
+        Array.isArray(value['considered']) &&
+        value['considered'].every((item) => typeof item === 'string') &&
+        typeof value['easyToChange'] === 'string' &&
+        (value['review'] === null ||
+          value['review'] === 'ok' ||
+          value['review'] === 'change') &&
+        typeof value['createdAt'] === 'string'
       )
     default:
       return false
@@ -199,6 +218,7 @@ type ConversationPaneProps = {
   isMobile?: boolean
   statusPanelOpen?: boolean
   onToggleStatusPanel?: () => void
+  onCloseStatusPanel?: () => void
   runningCount?: number
   onBack?: () => void
   onLater?: () => void
@@ -212,11 +232,16 @@ export function ConversationPane({
   isMobile = false,
   statusPanelOpen = false,
   onToggleStatusPanel = () => undefined,
+  onCloseStatusPanel = () => undefined,
   runningCount = 0,
   onBack = () => undefined,
   onLater = () => undefined,
 }: ConversationPaneProps) {
   const [messages, setMessages] = useState<ChatItem[]>([])
+  const [activePanelTabId, setActivePanelTabId] = useState<string | null>(null)
+  const [selectedDecisionSeq, setSelectedDecisionSeq] = useState<number | null>(
+    null,
+  )
   const [backgroundTasks, setBackgroundTasks] = useState<BackgroundTask[]>([])
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
@@ -341,8 +366,73 @@ export function ConversationPane({
     messagesLoadedAt === null
       ? 0
       : Math.max(0, Math.floor((Date.now() - messagesLoadedAt) / 1_000))
+  const decisions = messages.filter(
+    (message): message is Decision => message.type === 'decision',
+  )
+  const decisionCount = session.decisionCount ?? decisions.length
+  const selectedDecision =
+    decisions.find((decision) => decision.seq === selectedDecisionSeq) ??
+    decisions.find((decision) => decision.review === null) ??
+    decisions[0]
+  const critUrl =
+    session.kind === 'Review' &&
+    session.category === 'needs_action' &&
+    session.critUrl != null &&
+    session.critUrl !== ''
+      ? session.critUrl
+      : null
+  const panelTabs: readonly SessionStatusPanelTab[] = [
+    ...(decisionCount > 0
+      ? [
+          {
+            id: 'decisions',
+            label: '◇ Decisions',
+            count: decisionCount,
+            content: (
+              <DecisionsPanel
+                decisions={decisions}
+                session={session}
+                selectedSeq={selectedDecision?.seq ?? null}
+                onSelect={setSelectedDecisionSeq}
+                onOk={(seq) => onAction(`decisions/${String(seq)}/ok`)}
+                onChange={(seq, comment) =>
+                  onAction(`decisions/${String(seq)}/change`, { comment })
+                }
+              />
+            ),
+          },
+        ]
+      : []),
+    ...(critUrl === null
+      ? []
+      : [
+          {
+            id: 'crit',
+            label: 'crit',
+            count: 1,
+            content: <CritPane url={critUrl} onClose={onCloseStatusPanel} />,
+          },
+        ]),
+  ]
+  const defaultPanelTabId =
+    panelTabs.find((tab) => tab.id === 'crit')?.id ?? panelTabs[0]?.id ?? null
+  const effectivePanelTabId = panelTabs.some(
+    (tab) => tab.id === activePanelTabId,
+  )
+    ? activePanelTabId
+    : defaultPanelTabId
+  const decisionsPanelOpen =
+    statusPanelOpen && effectivePanelTabId === 'decisions'
+  const toggleDecisionsPanel = () => {
+    if (decisionsPanelOpen) {
+      onToggleStatusPanel()
+      return
+    }
+    setActivePanelTabId('decisions')
+    if (!statusPanelOpen) onToggleStatusPanel()
+  }
 
-  return (
+  const conversationView = (
     <ConversationPaneView
       session={session}
       sessions={sessions}
@@ -363,10 +453,39 @@ export function ConversationPane({
       onSelectSession={onSelectSession}
       isMobile={isMobile}
       statusPanelOpen={statusPanelOpen}
+      decisionsPanelOpen={decisionsPanelOpen}
+      selectedDecisionSeq={selectedDecision?.seq ?? null}
       onToggleStatusPanel={onToggleStatusPanel}
+      onToggleDecisionsPanel={toggleDecisionsPanel}
+      onSelectDecision={setSelectedDecisionSeq}
       runningCount={runningCount}
       onBack={onBack}
       onLater={onLater}
     />
+  )
+
+  if (isMobile) return conversationView
+  if (!statusPanelOpen) return conversationView
+
+  return (
+    <div className="conversation-status-panel-container">
+      <ResizableColumns
+        first={conversationView}
+        second={
+          <SessionStatusPanel
+            tabs={panelTabs}
+            activeTabId={effectivePanelTabId}
+            onTabChange={setActivePanelTabId}
+            onClose={onCloseStatusPanel}
+          />
+        }
+        overlaySecondPane
+        storageKey="agent-watch:conversation-width"
+        firstSize={560}
+        firstMinSize={240}
+        secondMinSize={300}
+        label="Resize conversation and status panel"
+      />
+    </div>
   )
 }

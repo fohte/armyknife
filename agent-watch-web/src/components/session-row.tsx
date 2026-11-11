@@ -69,6 +69,18 @@ function sessionKind(session: Session) {
   return session.kind ?? 'Stopped'
 }
 
+function sessionDecisionLabel(session: Session) {
+  const decisionCount = session.decisionCount ?? 0
+  const unreviewedDecisionCount = session.unreviewedDecisionCount ?? 0
+
+  if (session.category === 'done' && unreviewedDecisionCount > 0) {
+    return `◇ ${String(unreviewedDecisionCount)} decisions to review`
+  }
+  if (decisionCount === 0) return null
+  const label = decisionCount === 1 ? 'decision' : 'decisions'
+  return `◇ ${String(decisionCount)} ${label}`
+}
+
 export function SessionRow({
   session,
   selected,
@@ -78,6 +90,7 @@ export function SessionRow({
   compactRepo = false,
 }: SessionRowProps) {
   const kind = sessionKind(session)
+  const decisionLabel = sessionDecisionLabel(session)
 
   return (
     <li className="session-list-item">
@@ -128,6 +141,9 @@ export function SessionRow({
                   ? session.repo.split('/').at(-1)
                   : session.repo || '—'}
               </span>
+              {decisionLabel !== null ? (
+                <span className="session-decision-count">{decisionLabel}</span>
+              ) : null}
             </span>
           </span>
         </Button>

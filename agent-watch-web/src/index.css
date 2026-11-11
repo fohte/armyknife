@@ -224,6 +224,10 @@
   background: var(--aw-bg-pressed);
 }
 
+.done-section .session-row {
+  grid-template-columns: 9px minmax(0, 1fr);
+}
+
 .session-status-dot {
   width: 7px;
   height: 7px;
@@ -244,6 +248,7 @@
 
 .done-section .session-status-dot {
   position: relative;
+  width: 9px;
   margin-top: 0;
   background: transparent;
 }
@@ -350,6 +355,12 @@
   color: var(--aw-text-secondary);
   font-family: var(--font-mono);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-decision-count {
+  flex: 0 0 auto;
+  color: var(--aw-text-body);
   white-space: nowrap;
 }
 

@@ -43,7 +43,11 @@ type ConversationPaneViewProps = {
   onSelectSession: (id: string) => void
   isMobile?: boolean
   statusPanelOpen?: boolean
+  decisionsPanelOpen?: boolean
+  selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
+  onToggleDecisionsPanel?: () => void
+  onSelectDecision?: (seq: number) => void
   runningCount?: number
   fileDropActive?: boolean
   onBack?: () => void
@@ -102,7 +106,11 @@ export function ConversationPaneView({
   onSelectSession,
   isMobile = false,
   statusPanelOpen = false,
+  decisionsPanelOpen = false,
+  selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
+  onToggleDecisionsPanel = () => undefined,
+  onSelectDecision = () => undefined,
   runningCount = 0,
   fileDropActive = false,
   onBack,
@@ -143,6 +151,12 @@ export function ConversationPaneView({
     (message) =>
       message.type !== 'tool_in_progress' ||
       (session.category !== 'in_progress' && session.isCompacting !== true),
+  )
+  const decisions = conversationMessages.filter(
+    (message) => message.type === 'decision',
+  )
+  const decisionPositions = new Map(
+    decisions.map((decision, index) => [decision.seq, index + 1]),
   )
   const waitingQuestion = messages[activeQuestionIndex]
   const parent = session.parent
@@ -345,6 +359,24 @@ export function ConversationPaneView({
                 <span aria-hidden="true">◐</span>
                 {runningCount > 0 ? <span>{runningCount}</span> : null}
               </Button>
+              {(session.decisionCount ?? 0) > 0 ? (
+                <Button
+                  className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
+                  type="button"
+                  variant="plain"
+                  aria-pressed={decisionsPanelOpen}
+                  aria-controls="session-status-panel"
+                  onClick={() => {
+                    onToggleDecisionsPanel()
+                  }}
+                >
+                  ◇{' '}
+                  {session.category === 'done' &&
+                  (session.unreviewedDecisionCount ?? 0) > 0
+                    ? `${String(session.unreviewedDecisionCount)} decisions to review`
+                    : `${String(session.decisionCount)} ${session.decisionCount === 1 ? 'decision' : 'decisions'}`}
+                </Button>
+              ) : null}
               {session.pullRequest ? (
                 <a
                   className="conversation-pr-link"
@@ -394,6 +426,14 @@ export function ConversationPaneView({
             activeQuestionIndex,
             index,
             isMobile,
+            selectedDecisionSeq,
+            decisionPosition:
+              message.type === 'decision' &&
+              message.seq === selectedDecisionSeq &&
+              decisionPositions.has(message.seq)
+                ? `${String(decisionPositions.get(message.seq))} of ${String(decisions.length)}`
+                : undefined,
+            onSelectDecision,
             message,
             onAction,
             onOpenInTerminal: openInTerminal,
