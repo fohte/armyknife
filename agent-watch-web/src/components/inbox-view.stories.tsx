@@ -215,7 +215,7 @@ const meta = {
     onToggleInProgress: () => undefined,
     doneExpanded: false,
     onToggleDone: () => undefined,
-    onArchiveDone: () => undefined,
+    onCloseDone: () => undefined,
     onSaveView: () => undefined,
     onSaveViewOpenChange: () => undefined,
     onSaveViewNameChange: () => undefined,

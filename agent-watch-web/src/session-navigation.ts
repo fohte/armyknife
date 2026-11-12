@@ -6,7 +6,7 @@ export type SessionShortcutAction =
   | { type: 'move'; key: 'j' | 'k' }
   | { type: 'view'; view: SessionView }
   | { type: 'later' }
-  | { type: 'archive' }
+  | { type: 'close' }
   | null
 
 export const LATER_PRESET_OPTIONS = [
@@ -44,7 +44,7 @@ export function getSessionShortcutAction(
   }
 
   if (!shiftKey && key.toLowerCase() === 'e') {
-    return { type: 'archive' }
+    return { type: 'close' }
   }
 
   if (!shiftKey && (key === 'j' || key === 'k')) {
