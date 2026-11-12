@@ -229,6 +229,22 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   })
 }
 
+function expectDraftRetained(
+  textarea: HTMLTextAreaElement,
+  selector: string,
+  expectedValue: string,
+) {
+  const currentTextarea = container.querySelector<HTMLTextAreaElement>(selector)
+  const snapshot = () => ({
+    sameTextarea: textarea === currentTextarea,
+    value: currentTextarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    sameTextarea: true,
+    value: expectedValue,
+  })
+}
+
 function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
@@ -7190,16 +7206,7 @@ it('keeps a todo comment when a preceding conversation row arrives', () => {
     1,
   )
 
-  const currentTextarea =
-    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment')
-  const snapshot = () => ({
-    sameTextarea: textarea === currentTextarea,
-    value: currentTextarea?.value,
-  })
-  expect(snapshot()).toEqual({
-    sameTextarea: true,
-    value: 'Keep the rollback step',
-  })
+  expectDraftRetained(textarea, '.chat-todo-comment', 'Keep the rollback step')
 })
 
 it('keeps a decision change comment when a preceding conversation row arrives', () => {
@@ -7238,17 +7245,11 @@ it('keeps a decision change comment when a preceding conversation row arrives', 
     1,
   )
 
-  const currentTextarea = container.querySelector<HTMLTextAreaElement>(
+  expectDraftRetained(
+    textarea,
     '.decision-card-change-form textarea',
+    'Include a timeout limit',
   )
-  const snapshot = () => ({
-    sameTextarea: textarea === currentTextarea,
-    value: currentTextarea?.value,
-  })
-  expect(snapshot()).toEqual({
-    sameTextarea: true,
-    value: 'Include a timeout limit',
-  })
 })
 
 it('keeps a question answer draft when a preceding conversation row arrives', () => {
@@ -7278,16 +7279,52 @@ it('keeps a question answer draft when a preceding conversation row arrives', ()
     1,
   )
 
-  const currentTextarea = container.querySelector<HTMLTextAreaElement>(
+  expectDraftRetained(
+    textarea,
     '.chat-question-prompt textarea',
+    'Use the bounded option',
   )
+})
+
+it('keeps a tool summary expanded when its operations grow', () => {
+  const summary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Read ×1',
+    operations: [{ tool: 'Read', target: 'one.rs', failed: false }],
+  }
+  renderConversationMessages([summary], 0)
+  const details = requireElement(
+    container.querySelector<HTMLDetailsElement>('.chat-tool-summary'),
+  )
+  act(() => {
+    requireElement(details.querySelector<HTMLElement>('summary')).click()
+  })
+
+  renderConversationMessages(
+    [
+      {
+        ...summary,
+        summary: 'Read ×2',
+        operations: [
+          ...(summary.operations ?? []),
+          { tool: 'Read', target: 'two.rs', failed: false },
+        ],
+      },
+    ],
+    0,
+  )
+
+  const currentDetails =
+    container.querySelector<HTMLDetailsElement>('.chat-tool-summary')
   const snapshot = () => ({
-    sameTextarea: textarea === currentTextarea,
-    value: currentTextarea?.value,
+    sameDetails: details === currentDetails,
+    open: currentDetails?.open,
+    operationCount: currentDetails?.querySelectorAll('li').length,
   })
   expect(snapshot()).toEqual({
-    sameTextarea: true,
-    value: 'Use the bounded option',
+    sameDetails: true,
+    open: true,
+    operationCount: 2,
   })
 })
 
