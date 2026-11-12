@@ -2,7 +2,7 @@ import '#components/conversation-pane.css'
 import '#components/conversation-pane-view.css'
 
 import { Button } from '@fohte/ui/button'
-import { ChevronLeft, PanelRightOpen } from 'lucide-react'
+import { ChevronLeft, PanelRightClose, PanelRightOpen } from 'lucide-react'
 import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
@@ -21,12 +21,12 @@ import type {
 import { SessionHeading } from '#components/session-heading'
 import { SessionLinkElapsedSecondsContext } from '#components/session-link-elapsed-seconds'
 import { SessionTaskLinks } from '#components/session-task-links'
+import { StarredSessionToggle } from '#components/starred-session-toggle'
 import { useComposerDraft } from '#components/use-composer-draft'
 import { useComposerMessage } from '#components/use-composer-message'
 import { useConversationFileDrop } from '#components/use-conversation-file-drop'
 import { useConversationMessageElements } from '#components/use-conversation-message-elements'
 import { useConversationScroll } from '#components/use-conversation-scroll'
-import { formatSessionDecisionCount } from '#session-decision-count'
 import { useSessionLinkTargets } from '#session-link-targets'
 import type {
   BackgroundTask,
@@ -67,10 +67,8 @@ type ConversationPaneViewProps = {
   isMobile?: boolean
   statusPanelOpen?: boolean
   mobileStatusPanel?: ReactNode
-  decisionsPanelOpen?: boolean
   selectedDecisionSeq?: number | null
   onToggleStatusPanel?: () => void
-  onToggleDecisionsPanel?: () => void
   onSelectDecision?: (seq: number) => void
   fileDropActive?: boolean
   onBack?: () => void
@@ -106,10 +104,8 @@ export function ConversationPaneView({
   isMobile = false,
   statusPanelOpen = false,
   mobileStatusPanel = null,
-  decisionsPanelOpen = false,
   selectedDecisionSeq = null,
   onToggleStatusPanel = () => undefined,
-  onToggleDecisionsPanel = () => undefined,
   onSelectDecision = () => undefined,
   fileDropActive = false,
   onBack,
@@ -161,7 +157,6 @@ export function ConversationPaneView({
   const selectLinkedSession = useCallback((id: string) => {
     onSelectSessionRef.current(id)
   }, [])
-  const decisionLabel = formatSessionDecisionCount(session)
   const openInTerminal = useCallback(() => {
     if (onOpenInTerminal === undefined) {
       void onAction('focus')
@@ -176,7 +171,6 @@ export function ConversationPaneView({
     hasUnansweredProposal,
   } = useConversationMessageElements({
     messages,
-    start,
     ...(decisions === undefined ? {} : { decisions }),
     ...(responseHasUnansweredProposal === undefined
       ? {}
@@ -299,14 +293,27 @@ export function ConversationPaneView({
               className="mobile-conversation-status-toggle"
               type="button"
               variant="plain"
-              aria-label="Toggle session status panel"
+              aria-label={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
               aria-expanded={statusPanelOpen}
               aria-controls="session-status-panel"
+              title={
+                statusPanelOpen
+                  ? 'Close session status panel'
+                  : 'Open session status panel'
+              }
               onClick={() => {
                 onToggleStatusPanel()
               }}
             >
-              <PanelRightOpen aria-hidden="true" size={18} />
+              {statusPanelOpen ? (
+                <PanelRightClose aria-hidden="true" size={18} />
+              ) : (
+                <PanelRightOpen aria-hidden="true" size={18} />
+              )}
               {backgroundTasks.length > 0 ? (
                 <span className="conversation-status-panel-count">
                   {backgroundTasks.length}
@@ -331,18 +338,12 @@ export function ConversationPaneView({
                 Close
               </Button>
             ) : null}
-            <Button
+            <StarredSessionToggle
               className="mobile-conversation-today cursor-pointer"
-              type="button"
-              variant="plain"
-              aria-label={isToday ? 'Remove from Starred' : 'Add to Starred'}
-              aria-pressed={isToday}
-              onClick={() => {
-                onToggleToday?.(!isToday)
-              }}
-            >
-              {isToday ? '★' : '☆'}
-            </Button>
+              size="mobile"
+              isStarred={isToday}
+              onToggleToday={onToggleToday}
+            />
           </>
         ) : (
           <>
@@ -381,39 +382,39 @@ export function ConversationPaneView({
                     className="conversation-status-panel-toggle"
                     type="button"
                     variant="plain"
-                    aria-label="Toggle session status panel with Command Period"
+                    aria-label={
+                      statusPanelOpen
+                        ? 'Close session status panel'
+                        : 'Open session status panel'
+                    }
                     aria-expanded={statusPanelOpen}
                     aria-controls="session-status-panel"
+                    title={
+                      statusPanelOpen
+                        ? 'Close session status panel'
+                        : 'Open session status panel'
+                    }
                     onClick={() => {
                       onToggleStatusPanel()
                     }}
                   >
-                    <span
-                      className="conversation-status-panel-icon"
-                      aria-hidden="true"
-                    >
-                      ◐
-                    </span>
+                    {statusPanelOpen ? (
+                      <PanelRightClose aria-hidden="true" size={15} />
+                    ) : (
+                      <PanelRightOpen aria-hidden="true" size={15} />
+                    )}
                     {backgroundTasks.length > 0 ? (
                       <span className="conversation-status-panel-count">
                         {backgroundTasks.length}
                       </span>
                     ) : null}
                   </Button>
-                  {decisionLabel !== null ? (
-                    <Button
-                      className={`conversation-decisions-toggle aw-button ${decisionsPanelOpen ? 'aw-button--pressed' : 'aw-button--outline'}`}
-                      type="button"
-                      variant="plain"
-                      aria-pressed={decisionsPanelOpen}
-                      aria-controls="session-status-panel"
-                      onClick={() => {
-                        onToggleDecisionsPanel()
-                      }}
-                    >
-                      {decisionLabel}
-                    </Button>
-                  ) : null}
+                  <StarredSessionToggle
+                    className="conversation-today-toggle"
+                    size="desktop"
+                    isStarred={isToday}
+                    onToggleToday={onToggleToday}
+                  />
                   {session.pullRequest ? (
                     <a
                       className="conversation-pr-link"

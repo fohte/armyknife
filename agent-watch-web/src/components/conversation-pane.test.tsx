@@ -229,6 +229,22 @@ function setTextareaValue(textarea: HTMLTextAreaElement, value: string) {
   })
 }
 
+function expectDraftRetained(
+  textarea: HTMLTextAreaElement,
+  selector: string,
+  expectedValue: string,
+) {
+  const currentTextarea = container.querySelector<HTMLTextAreaElement>(selector)
+  const snapshot = () => ({
+    sameTextarea: textarea === currentTextarea,
+    value: currentTextarea?.value,
+  })
+  expect(snapshot()).toEqual({
+    sameTextarea: true,
+    value: expectedValue,
+  })
+}
+
 function renderView(
   onAction: ActionHandler,
   viewSession: Session = session,
@@ -241,8 +257,6 @@ function renderView(
   statusPanelOpen = false,
   onToggleStatusPanel?: () => void,
   pendingPermissionAction?: PendingPermissionAction | null,
-  decisionsPanelOpen = false,
-  onToggleDecisionsPanel?: () => void,
   today: {
     isToday: boolean
     onToggleToday: (isToday: boolean) => void
@@ -275,11 +289,28 @@ function renderView(
         onToggleToday={today.onToggleToday}
         statusPanelOpen={statusPanelOpen}
         mobileStatusPanel={mobileStatusPanel}
-        decisionsPanelOpen={decisionsPanelOpen}
         {...(onToggleStatusPanel === undefined ? {} : { onToggleStatusPanel })}
-        {...(onToggleDecisionsPanel === undefined
-          ? {}
-          : { onToggleDecisionsPanel })}
+      />,
+    )
+  })
+}
+
+function renderConversationMessages(
+  messages: readonly ChatItem[],
+  start: number,
+) {
+  root ??= createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPaneView
+        session={session}
+        messages={messages}
+        start={start}
+        actions={actions}
+        loading={false}
+        error={null}
+        onAction={() => Promise.resolve(true)}
+        onSelectSession={() => undefined}
       />,
     )
   })
@@ -602,13 +633,14 @@ it('refetches the initial tree when a member changes while it loads', async () =
   })
 })
 
-function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
+function starredToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   const toggle = container.querySelector<HTMLButtonElement>(
     '.mobile-conversation-today',
   )
   return {
     label: toggle?.getAttribute('aria-label'),
     pressed: toggle?.getAttribute('aria-pressed'),
+    title: toggle?.getAttribute('title'),
     calls: onToggleToday.mock.calls,
   }
 }
@@ -627,8 +659,6 @@ it('toggles Starred from the iPhone conversation header', () => {
     false,
     undefined,
     null,
-    false,
-    undefined,
     { isToday: false, onToggleToday },
   )
 
@@ -639,9 +669,10 @@ it('toggles Starred from the iPhone conversation header', () => {
     toggle?.dispatchEvent(new MouseEvent('click', { bubbles: true }))
   })
 
-  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+  expect(starredToggleSnapshot(onToggleToday)).toEqual({
     label: 'Add to Starred',
     pressed: 'false',
+    title: 'Add to Starred',
     calls: [[true]],
   })
 })
@@ -660,14 +691,13 @@ it('labels a Starred iPhone session for removal', () => {
     false,
     undefined,
     null,
-    false,
-    undefined,
     { isToday: true, onToggleToday },
   )
 
-  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+  expect(starredToggleSnapshot(onToggleToday)).toEqual({
     label: 'Remove from Starred',
     pressed: 'true',
+    title: 'Remove from Starred',
     calls: [],
   })
 })
@@ -3406,7 +3436,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
       '◐FixtureExplorerInspect the fictional module2h 0m',
       '▶cargo test -p fictional-crateOutput2h 0m',
     ],
-    panelToggle: '◐2',
+    panelToggle: '2',
     workingStatus: undefined,
     legacyTaskList: false,
   })
@@ -3488,22 +3518,22 @@ it('keeps the Decisions tab active when running tasks appear', async () => {
   const states = () => ({ beforeTaskStarts, afterTaskStarts: snapshot() })
   expect(states()).toEqual({
     beforeTaskStarts: {
-      tabs: [{ label: '◇ Decisions', selected: 'true' }],
-      selectedTab: '◇ Decisions',
+      tabs: [{ label: 'Decisions1', selected: 'true' }],
+      selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
     },
     afterTaskStarts: {
       tabs: [
         { label: 'Running1', selected: 'false' },
-        { label: '◇ Decisions', selected: 'true' },
+        { label: 'Decisions1', selected: 'true' },
       ],
-      selectedTab: '◇ Decisions',
+      selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
     },
   })
 })
 
-it('selects Running by default and opens Decisions from the header', () => {
+it('selects Running by default and switches to Decisions from its tab', () => {
   const decision: ChatItem = {
     type: 'decision',
     seq: 1,
@@ -3532,10 +3562,8 @@ it('selects Running by default and opens Decisions from the header', () => {
       session: reviewSession,
       messages: [decision],
       backgroundTasks: [runningTask],
-      statusPanelOpen: true,
       onAction: () => Promise.resolve(true),
       onCloseStatusPanel: () => undefined,
-      onToggleStatusPanel: () => undefined,
     })
     return (
       <>
@@ -3549,9 +3577,7 @@ it('selects Running by default and opens Decisions from the header', () => {
           onAction={() => Promise.resolve(true)}
           onSelectSession={() => undefined}
           statusPanelOpen
-          decisionsPanelOpen={statusPanel.decisionsPanelOpen}
           selectedDecisionSeq={statusPanel.selectedDecisionSeq}
-          onToggleDecisionsPanel={statusPanel.onToggleDecisionsPanel}
           onSelectDecision={statusPanel.onSelectDecision}
         />
         <SessionStatusPanel
@@ -3581,16 +3607,11 @@ it('selects Running by default and opens Decisions from the header', () => {
     ),
     decisionHeading: container.querySelector('.decisions-panel-header h2')
       ?.textContent,
-    decisionButtonPressed: container
-      .querySelector('.conversation-decisions-toggle')
-      ?.getAttribute('aria-pressed'),
   })
   const runningState = snapshot()
   act(() => {
     requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-decisions-toggle',
-      ),
+      container.querySelectorAll<HTMLButtonElement>('[role="tab"]').item(1),
     ).click()
   })
   const states = () => ({ runningState, decisionsState: snapshot() })
@@ -3598,23 +3619,87 @@ it('selects Running by default and opens Decisions from the header', () => {
     runningState: {
       tabs: [
         { label: 'Running1', selected: 'true' },
-        { label: '◇ Decisions', selected: 'false' },
+        { label: 'Decisions1', selected: 'false' },
       ],
       selectedTab: 'Running1',
       sections: ['SUBAGENTS'],
       decisionHeading: undefined,
-      decisionButtonPressed: 'false',
     },
     decisionsState: {
       tabs: [
         { label: 'Running1', selected: 'false' },
-        { label: '◇ Decisions', selected: 'true' },
+        { label: 'Decisions1', selected: 'true' },
       ],
-      selectedTab: '◇ Decisions',
+      selectedTab: 'Decisions1',
       sections: [],
       decisionHeading: 'Decisions in this session',
-      decisionButtonPressed: 'true',
     },
+  })
+})
+
+it('shows the unreviewed count instead of the total on the Decisions tab', () => {
+  const decisions: ChatItem[] = [
+    {
+      type: 'decision',
+      seq: 1,
+      title: 'Choose a retry limit',
+      why: 'Keep recovery bounded.',
+      considered: ['Retry indefinitely'],
+      easyToChange: 'Update one setting.',
+      review: null,
+      createdAt: '2026-11-11T03:25:59Z',
+    },
+    {
+      type: 'decision',
+      seq: 2,
+      title: 'Keep the current interval',
+      why: 'It already meets the service limit.',
+      considered: ['Use a shorter interval'],
+      easyToChange: 'Update one setting.',
+      review: 'ok',
+      createdAt: '2026-11-11T03:27:59Z',
+    },
+  ]
+  const reviewSession: Session = {
+    ...session,
+    decisionCount: 2,
+    unreviewedDecisionCount: 1,
+  }
+  function StatusPanelHarness() {
+    const statusPanel = useConversationStatusPanel({
+      session: reviewSession,
+      messages: decisions,
+      backgroundTasks: [],
+      onAction: () => Promise.resolve(true),
+      onCloseStatusPanel: () => undefined,
+    })
+    return (
+      <SessionStatusPanel
+        tabs={statusPanel.tabs}
+        activeTabId={statusPanel.activeTabId}
+        onTabChange={statusPanel.onTabChange}
+        onClose={() => undefined}
+      />
+    )
+  }
+  root = createRoot(container)
+  act(() => {
+    root?.render(<StatusPanelHarness />)
+  })
+
+  const snapshot = () => ({
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    decisions: Array.from(
+      container.querySelectorAll('.decision-card--panel'),
+      (card) => card.getAttribute('data-review'),
+    ),
+    progress: container.querySelector('.decisions-panel-header span')
+      ?.textContent,
+  })
+  expect(snapshot()).toEqual({
+    tab: 'Decisions1',
+    decisions: ['unreviewed'],
+    progress: '1 / 2 reviewed',
   })
 })
 
@@ -3648,10 +3733,8 @@ it('prefers crit when other status tabs are available', () => {
       },
       messages: [decision],
       backgroundTasks: [runningTask],
-      statusPanelOpen: true,
       onAction: () => Promise.resolve(true),
       onCloseStatusPanel: () => undefined,
-      onToggleStatusPanel: () => undefined,
     })
     return (
       <SessionStatusPanel
@@ -3679,7 +3762,7 @@ it('prefers crit when other status tabs are available', () => {
   expect(snapshot()).toEqual({
     tabs: [
       { label: 'Running1', selected: 'false' },
-      { label: '◇ Decisions', selected: 'false' },
+      { label: 'Decisions1', selected: 'false' },
       { label: 'crit', selected: 'true' },
     ],
     selectedTab: 'crit',
@@ -3856,19 +3939,43 @@ it('shows the status panel toggle and reports its open state', () => {
   })
 
   const snapshot = () => ({
+    label: toggle.getAttribute('aria-label'),
+    icon: toggle.querySelector('svg')?.getAttribute('class'),
     expanded: toggle.getAttribute('aria-expanded'),
     controls: toggle.getAttribute('aria-controls'),
     calls: onToggleStatusPanel.mock.calls,
   })
   expect(snapshot()).toEqual({
+    label: 'Close session status panel',
+    icon: 'lucide lucide-panel-right-close',
     expanded: 'true',
     controls: 'session-status-panel',
     calls: [[]],
   })
 })
 
-it('shows the decision count button and reports its pressed state', () => {
-  const onToggleDecisionsPanel = vi.fn<() => void>()
+it('shows the open action when the status panel is closed', () => {
+  renderView(vi.fn(() => Promise.resolve(true)))
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>(
+      '.conversation-status-panel-toggle',
+    ),
+  )
+
+  const snapshot = () => ({
+    label: toggle.getAttribute('aria-label'),
+    icon: toggle.querySelector('svg')?.getAttribute('class'),
+    expanded: toggle.getAttribute('aria-expanded'),
+  })
+  expect(snapshot()).toEqual({
+    label: 'Open session status panel',
+    icon: 'lucide lucide-panel-right-open',
+    expanded: 'false',
+  })
+})
+
+it('keeps Decisions in the status panel and toggles Starred from the header', () => {
+  const onToggleToday = vi.fn<(isToday: boolean) => void>()
   renderView(
     vi.fn(() => Promise.resolve(true)),
     {
@@ -3885,122 +3992,79 @@ it('shows the decision count button and reports its pressed state', () => {
     false,
     undefined,
     undefined,
-    true,
-    onToggleDecisionsPanel,
+    { isToday: false, onToggleToday },
   )
   const toggle = requireElement(
-    container.querySelector<HTMLButtonElement>(
-      '.conversation-decisions-toggle',
-    ),
+    container.querySelector<HTMLButtonElement>('.conversation-today-toggle'),
   )
   act(() => {
     toggle.click()
   })
 
   const snapshot = () => ({
-    label: toggle.textContent,
-    pressed: toggle.getAttribute('aria-pressed'),
-    calls: onToggleDecisionsPanel.mock.calls,
-  })
-  expect(snapshot()).toEqual({
-    label: '◇ 2 decisions',
-    pressed: 'true',
-    calls: [[]],
-  })
-})
-
-it('keeps the decision button hidden when an older session has no count fields', () => {
-  renderView(vi.fn(() => Promise.resolve(true)))
-
-  expect(container.querySelector('.conversation-decisions-toggle')).toBeNull()
-})
-
-it('opens and closes the Decisions tab from the conversation header', async () => {
-  const jsonResponse = (body: unknown) =>
-    new Response(JSON.stringify(body), {
-      headers: { 'Content-Type': 'application/json' },
-    })
-  const decision: ChatItem = {
-    type: 'decision',
-    seq: 1,
-    title: 'Use a fixed retry limit',
-    why: 'The current service has no reliable timing data.',
-    considered: ['Retry using the latest duration'],
-    easyToChange: 'One configuration value in the CI workflow.',
-    review: null,
-    createdAt: '2026-11-11T03:25:59Z',
-  }
-  const fetcher = vi
-    .fn<typeof fetch>()
-    .mockResolvedValueOnce(jsonResponse(messagesResponse([decision])))
-    .mockResolvedValueOnce(jsonResponse(actions))
-  vi.stubGlobal('fetch', fetcher)
-  function ToggleHarness() {
-    const [statusPanelOpen, setStatusPanelOpen] = useState(false)
-    return (
-      <ConversationPane
-        session={{
-          ...session,
-          category: 'done',
-          decisionCount: 1,
-          unreviewedDecisionCount: 1,
-        }}
-        refreshKey={0}
-        sessionTreeRefreshKey={0}
-        onSelectSession={() => undefined}
-        statusPanelOpen={statusPanelOpen}
-        onToggleStatusPanel={() => {
-          setStatusPanelOpen((open) => !open)
-        }}
-        onCloseStatusPanel={() => {
-          setStatusPanelOpen(false)
-        }}
-      />
-    )
-  }
-  root = createRoot(container)
-  act(() => root?.render(<ToggleHarness />))
-  await act(async () => {
-    for (let index = 0; index < 10; index += 1) await Promise.resolve()
-  })
-  const decisionToggle = requireElement(
-    container.querySelector<HTMLButtonElement>(
+    noDecisionsAction: container.querySelector(
       '.conversation-decisions-toggle',
     ),
-  )
-
-  act(() => {
-    decisionToggle.click()
+    label: toggle.getAttribute('aria-label'),
+    icon: toggle.textContent,
+    pressed: toggle.getAttribute('aria-pressed'),
+    title: toggle.getAttribute('title'),
+    calls: onToggleToday.mock.calls,
   })
-  const panelState = () => ({
-    pressed: container
-      .querySelector('.conversation-decisions-toggle')
-      ?.getAttribute('aria-pressed'),
-    selectedTab: container.querySelector('[role="tab"][aria-selected="true"]')
-      ?.textContent,
-    heading: container.querySelector('.decisions-panel-header h2')?.textContent,
-  })
-  const opened = panelState()
-  act(() => {
-    requireElement(
-      container.querySelector<HTMLButtonElement>(
-        '.conversation-decisions-toggle',
-      ),
-    ).click()
-  })
-
-  const snapshot = () => ({ opened, closed: panelState() })
   expect(snapshot()).toEqual({
-    opened: {
-      pressed: 'true',
-      selectedTab: '◇ Decisions',
-      heading: 'Decisions in this session',
-    },
-    closed: {
-      pressed: 'false',
-      selectedTab: undefined,
-      heading: undefined,
-    },
+    noDecisionsAction: null,
+    label: 'Add to Starred',
+    icon: '☆',
+    pressed: 'false',
+    title: 'Add to Starred',
+    calls: [[true]],
+  })
+})
+
+it('keeps the Starred toggle available when a session has no decisions', () => {
+  renderView(vi.fn(() => Promise.resolve(true)))
+
+  const snapshot = () => ({
+    star: container.querySelector('.conversation-today-toggle') !== null,
+    decisions: container.querySelector('.conversation-decisions-toggle'),
+  })
+  expect(snapshot()).toEqual({ star: true, decisions: null })
+})
+
+it('removes a session from Starred from the desktop header', () => {
+  const onToggleToday = vi.fn<(isToday: boolean) => void>()
+  renderView(
+    vi.fn(() => Promise.resolve(true)),
+    session,
+    undefined,
+    [],
+    actions,
+    false,
+    [],
+    [],
+    false,
+    undefined,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+  const toggle = requireElement(
+    container.querySelector<HTMLButtonElement>('.conversation-today-toggle'),
+  )
+  act(() => {
+    toggle.click()
+  })
+
+  const snapshot = () => ({
+    label: toggle.getAttribute('aria-label'),
+    pressed: toggle.getAttribute('aria-pressed'),
+    title: toggle.getAttribute('title'),
+    calls: onToggleToday.mock.calls,
+  })
+  expect(snapshot()).toEqual({
+    label: 'Remove from Starred',
+    pressed: 'true',
+    title: 'Remove from Starred',
+    calls: [[false]],
   })
 })
 
@@ -4081,7 +4145,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
   expect(snapshot()).toEqual({
     opened: {
       overlay: true,
-      selectedTab: '◇ Decisions',
+      selectedTab: 'Decisions1',
       decisionHeading: 'Decisions in this session',
     },
     closed: { overlay: false, conversation: true },
@@ -4279,7 +4343,12 @@ it('directs Codex questions and permissions to the terminal', () => {
       container.querySelectorAll('.conversation-terminal-fallback span'),
       (element) => element.textContent,
     ),
-    terminalButtons: terminalButtons.map((button) => button.textContent),
+    terminalButtons: terminalButtons.map((button) => ({
+      label: button.getAttribute('aria-label'),
+      title: button.title,
+      text: button.textContent,
+      hasIcon: button.querySelector('svg') !== null,
+    })),
     composerDisabled: requireElement(
       container.querySelector<HTMLTextAreaElement>('textarea'),
     ).disabled,
@@ -4292,7 +4361,20 @@ it('directs Codex questions and permissions to the terminal', () => {
       'Answer in terminal to continue.',
       'Review this permission in terminal.',
     ],
-    terminalButtons: ['Open in terminal', 'Open in terminal'],
+    terminalButtons: [
+      {
+        label: 'Open in terminal',
+        title: 'Open in terminal',
+        text: '',
+        hasIcon: true,
+      },
+      {
+        label: 'Open in terminal',
+        title: 'Open in terminal',
+        text: '',
+        hasIcon: true,
+      },
+    ],
     composerDisabled: false,
     shortcutDefaultPrevented: false,
     actionCalls: [['focus'], ['focus']],
@@ -7173,7 +7255,6 @@ it('skips committing an unchanged memoized conversation row', () => {
   const rowProps = {
     actions,
     actionsReady: true,
-    index: 0,
     isMobile: false,
     selected: false,
     decisionPosition: undefined,
@@ -7196,6 +7277,145 @@ it('skips committing an unchanged memoized conversation row', () => {
   })
 
   expect(renderMessage).toHaveBeenCalledTimes(1)
+})
+
+it('keeps a todo comment when a preceding conversation row arrives', () => {
+  const todo: ChatItem = {
+    type: 'todo',
+    seq: 12,
+    title: 'Review the deployment plan',
+    detail: null,
+    completed: false,
+    comment: null,
+  }
+  renderConversationMessages([todo], 0)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>('.chat-todo-comment'),
+  )
+  setTextareaValue(textarea, 'Keep the rollback step')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, todo],
+    1,
+  )
+
+  expectDraftRetained(textarea, '.chat-todo-comment', 'Keep the rollback step')
+})
+
+it('keeps a decision change comment when a preceding conversation row arrives', () => {
+  const decision: ChatItem = {
+    type: 'decision',
+    seq: 14,
+    title: 'Use a bounded retry policy',
+    why: 'The service has no reliable duration estimate.',
+    considered: ['Retry using the latest duration'],
+    easyToChange: 'Adjust one configuration value.',
+    review: null,
+    createdAt: '2026-11-11T12:00:00Z',
+  }
+  renderConversationMessages([decision], 0)
+  act(() => {
+    requireElement(
+      container.querySelector<HTMLButtonElement>('.decision-card-summary'),
+    ).click()
+  })
+  act(() => {
+    requireElement(
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (button) => button.textContent.trim() === 'Change…',
+      ) ?? null,
+    ).click()
+  })
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.decision-card-change-form textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Include a timeout limit')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, decision],
+    1,
+  )
+
+  expectDraftRetained(
+    textarea,
+    '.decision-card-change-form textarea',
+    'Include a timeout limit',
+  )
+})
+
+it('keeps a question answer draft when a preceding conversation row arrives', () => {
+  const question: ChatItem = {
+    type: 'question',
+    requestId: 'question-request-3',
+    questions: [
+      {
+        header: 'Retry behavior',
+        question: 'Which behavior should be used?',
+        choices: [{ label: 'Retry once' }, { label: 'Do not retry' }],
+        multi_select: true,
+        answer: null,
+      },
+    ],
+  }
+  renderConversationMessages([question], 0)
+  const textarea = requireElement(
+    container.querySelector<HTMLTextAreaElement>(
+      '.chat-question-prompt textarea',
+    ),
+  )
+  setTextareaValue(textarea, 'Use the bounded option')
+
+  renderConversationMessages(
+    [{ type: 'assistant', text: 'A new reply arrived.' }, question],
+    1,
+  )
+
+  expectDraftRetained(
+    textarea,
+    '.chat-question-prompt textarea',
+    'Use the bounded option',
+  )
+})
+
+it('keeps repeated tool summaries attached to their batch when older rows arrive', () => {
+  const earlierSummary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Read ×2',
+    operations: [
+      { tool: 'Read', target: 'one.rs', failed: false },
+      { tool: 'Read', target: 'two.rs', failed: false },
+    ],
+  }
+  const summary: ChatItem = {
+    type: 'tool_summary',
+    summary: 'Read ×1',
+    operations: [{ tool: 'Read', target: 'one.rs', failed: false }],
+  }
+  renderConversationMessages([summary], 0)
+  const details = requireElement(
+    container.querySelector<HTMLDetailsElement>('.chat-tool-summary'),
+  )
+  act(() => {
+    requireElement(details.querySelector<HTMLElement>('summary')).click()
+  })
+
+  renderConversationMessages([earlierSummary, summary], 0)
+
+  const snapshot = () =>
+    Array.from(
+      container.querySelectorAll<HTMLDetailsElement>('.chat-tool-summary'),
+      (currentDetails) => ({
+        sameDetails: currentDetails === details,
+        open: currentDetails.open,
+        operationCount: currentDetails.querySelectorAll('li').length,
+      }),
+    )
+  expect(snapshot()).toEqual([
+    { sameDetails: false, open: false, operationCount: 2 },
+    { sameDetails: true, open: true, operationCount: 1 },
+  ])
 })
 
 it('keeps message rows memoized for elapsed and closed-task updates', () => {

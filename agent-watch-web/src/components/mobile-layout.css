@@ -377,23 +377,6 @@ html[data-mobile-layout='true'] {
   margin-left: 0;
 }
 
-.agent-watch-shell[data-layout='mobile'] .mobile-conversation-today,
-.story-mobile-layout .mobile-conversation-today {
-  width: 36px;
-  min-width: 36px;
-  min-height: 36px;
-  padding: 0;
-  border: 1px solid var(--aw-border-control);
-  color: var(--aw-text-body);
-  font-size: 16px;
-}
-
-.agent-watch-shell[data-layout='mobile']
-  .mobile-conversation-today[aria-pressed='true'],
-.story-mobile-layout .mobile-conversation-today[aria-pressed='true'] {
-  color: var(--aw-color-warning);
-}
-
 .agent-watch-shell[data-layout='mobile']
   .in-progress-section
   > .section-heading,

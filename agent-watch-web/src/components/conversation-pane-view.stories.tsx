@@ -196,7 +196,7 @@ export const PausedSessionIsVisibleOnIPhone: Story = {
   decorators: [iPhoneViewportDecorator],
 }
 
-export const TodayCanBeChangedFromTheIPhoneConversation: Story = {
+export const StarredCanBeChangedFromTheIPhoneConversation: Story = {
   name: 'The iPhone conversation header shows the active Starred toggle',
   args: {
     isMobile: true,
@@ -237,7 +237,7 @@ export const IPhoneConversationShowsTheStatusPanel: Story = {
           },
           {
             id: 'decisions',
-            label: '◇ Decisions',
+            label: 'Decisions',
             count: 1,
             content: <div className="session-tree-feedback">Decisions</div>,
           },
@@ -553,7 +553,6 @@ export const DoneSessionNeedsDecisionReview: Story = {
       decisionCount: 2,
       unreviewedDecisionCount: 1,
     },
-    decisionsPanelOpen: true,
     selectedDecisionSeq: 1,
     messages: [
       {
@@ -567,6 +566,39 @@ export const DoneSessionNeedsDecisionReview: Story = {
         createdAt: '2026-11-11T03:25:59Z',
       },
     ],
+  },
+}
+
+export const DesktopHeaderShowsClosedStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows closed status and Starred controls',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'sample-background-task',
+        description: 'Inspect the request flow',
+        elapsedSeconds: 12,
+        kind: 'subagent',
+        agentType: 'Inspector',
+      },
+    ],
+    isToday: false,
+  },
+}
+
+export const DesktopHeaderShowsOpenStatusPanelAndStarredControl: Story = {
+  name: 'The desktop header shows open status and an active Starred control',
+  args: {
+    backgroundTasks: [
+      {
+        id: 'sample-background-task',
+        description: 'Inspect the request flow',
+        elapsedSeconds: 12,
+        kind: 'subagent',
+        agentType: 'Inspector',
+      },
+    ],
+    isToday: true,
+    statusPanelOpen: true,
   },
 }
 
