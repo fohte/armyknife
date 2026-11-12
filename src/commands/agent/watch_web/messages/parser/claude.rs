@@ -703,15 +703,10 @@ fn matches_pending_tool(tool_use: &ToolUse, pending_tool: &str) -> bool {
     let Some(detail) = detail else {
         return true;
     };
-    ["command", "file_path", "pattern"]
-        .into_iter()
-        .find_map(|key| {
-            tool_use
-                .input
-                .as_ref()
-                .and_then(|input| input.get(key))
-                .and_then(Value::as_str)
-        })
+    tool_use
+        .input
+        .as_ref()
+        .and_then(super::super::permission_request_tool_detail)
         == Some(detail)
 }
 

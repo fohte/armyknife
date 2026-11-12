@@ -403,13 +403,17 @@ fn load_conversation_with_queued_prompts(
 
 fn permission_request_pending_tool(data: &PermissionRequestData) -> Option<String> {
     let tool_name = data.tool_name.as_deref()?;
-    let detail = ["command", "file_path", "pattern"]
-        .into_iter()
-        .find_map(|key| data.tool_input.get(key).and_then(Value::as_str));
+    let detail = permission_request_tool_detail(&data.tool_input);
     Some(match detail {
         Some(detail) => format!("{tool_name}({detail})"),
         None => tool_name.to_string(),
     })
+}
+
+fn permission_request_tool_detail(tool_input: &Value) -> Option<&str> {
+    ["command", "file_path", "pattern"]
+        .into_iter()
+        .find_map(|key| tool_input.get(key).and_then(Value::as_str))
 }
 
 pub(in crate::commands::agent::watch_web::messages) struct TranscriptInput<'a> {
