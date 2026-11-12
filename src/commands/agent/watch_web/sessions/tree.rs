@@ -29,7 +29,7 @@ pub(super) struct SessionTreeResponse {
     sessions: Vec<TreeSessionView>,
 }
 
-fn session_parent_ids(
+pub(super) fn session_parent_ids(
     tree_sessions: &[Session],
     tree_session_ids: &HashSet<&str>,
 ) -> HashMap<String, Option<String>> {
@@ -121,6 +121,7 @@ pub(super) async fn session_tree<S: SessionSource>(
                     .iter()
                     .any(|ancestor_id| ancestor_id == &root_id)
         })
+        .filter(|session| session.status != SessionStatus::Ended)
         .cloned()
         .collect::<Vec<_>>();
     let tree_session_ids = tree_sessions
