@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.656](https://github.com/fohte/armyknife/compare/v0.1.655...v0.1.656) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** collapse completed PRs ([#1685](https://github.com/fohte/armyknife/issues/1685)) ([24eeddd](https://github.com/fohte/armyknife/commit/24eeddd60c52ca4c37b31c0e3ada5360f8f90a95))
+
 ## [0.1.655](https://github.com/fohte/armyknife/compare/v0.1.654...v0.1.655) (2026-11-12)
 
 
