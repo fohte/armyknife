@@ -289,6 +289,8 @@ function treeSession(
     id,
     title,
     hasSessionTree: true,
+    ancestorSessionIds:
+      parent === null ? [] : [...parent.ancestorSessionIds, parent.id],
     parent: parent === null ? null : { id: parent.id, title: parent.title },
   }
 }
@@ -329,7 +331,7 @@ function inboxFetch(respondToTreeRequest: (url: string) => Promise<Response>) {
 function renderInboxPanes(
   sessions: readonly Session[],
   selectedSession: Session,
-  refreshKey = 0,
+  sessionRefreshRevisions: ReadonlyMap<string, number> = new Map(),
 ) {
   root ??= createRoot(container)
   const inboxProps = {
@@ -359,7 +361,7 @@ function renderInboxPanes(
         inboxProps={inboxProps}
         sessions={sessions}
         selectedSession={selectedSession}
-        refreshKey={refreshKey}
+        sessionRefreshRevisions={sessionRefreshRevisions}
         isMobile={false}
         showMobileConversation={false}
         statusPanelOpen
@@ -371,6 +373,228 @@ function renderInboxPanes(
     )
   })
 }
+
+it('refreshes a session tree only when a tree member changes', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const unrelatedSession = treeSession('unrelated-session', 'Other session')
+  const sessions = [rootSession, childSession, unrelatedSession]
+  const addedSession = treeSession(
+    'added-session',
+    'Added session',
+    rootSession,
+  )
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  let treeRequestCount = 0
+  const fetcher = inboxFetch(() => {
+    treeRequestCount += 1
+    return Promise.resolve(
+      jsonResponse({
+        revision: treeRequestCount,
+        sessions:
+          treeRequestCount === 1
+            ? tree
+            : [
+                ...tree,
+                treeNode(addedSession.id, rootSession.id, addedSession.title),
+              ],
+      }),
+    )
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+    ]),
+  )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+      [unrelatedSession.id, 2],
+    ]),
+  )
+  const requestsAfterUnrelatedChange = fetcher.mock.calls.map(([input]) =>
+    requestUrl(input),
+  )
+
+  renderInboxPanes(
+    [...sessions, addedSession],
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+      [unrelatedSession.id, 2],
+      [addedSession.id, 3],
+    ]),
+  )
+  await waitForState(
+    () =>
+      fetcher.mock.calls.some(([input]) =>
+        requestUrl(input).endsWith('/tree'),
+      ) &&
+      fetcher.mock.calls.filter(([input]) =>
+        requestUrl(input).endsWith('/tree'),
+      ).length === 2,
+  )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-added-session') !== null,
+  )
+
+  const snapshot = () => ({
+    requestsAfterUnrelatedChange,
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    addedChildRow:
+      container.querySelector('#session-tree-row-added-session') !== null,
+  })
+  expect(snapshot()).toEqual({
+    requestsAfterUnrelatedChange: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+    ],
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+      '/api/sessions/root-session/tree',
+    ],
+    addedChildRow: true,
+  })
+})
+
+it('uses existing descendant revisions for the initial tree request', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const sessions = [rootSession, childSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  const fetcher = inboxFetch(() =>
+    Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 2],
+    ]),
+  )
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  const snapshot = () => ({
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+    childRow:
+      container.querySelector('#session-tree-row-child-session') !== null,
+  })
+  expect(snapshot()).toEqual({
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+    ],
+    childRow: true,
+  })
+})
+
+it('refetches the initial tree when a member changes while it loads', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const sessions = [rootSession, childSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  let resolveInitialTree: ((response: Response) => void) | undefined
+  const initialTreeResponse = new Promise<Response>((resolve) => {
+    resolveInitialTree = resolve
+  })
+  let treeRequestCount = 0
+  const fetcher = inboxFetch(() => {
+    treeRequestCount += 1
+    return treeRequestCount === 1
+      ? initialTreeResponse
+      : Promise.resolve(jsonResponse({ revision: 2, sessions: tree }))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 1],
+    ]),
+  )
+  await waitForState(() => treeRequestCount === 1)
+
+  renderInboxPanes(
+    sessions,
+    rootSession,
+    new Map([
+      [rootSession.id, 1],
+      [childSession.id, 2],
+    ]),
+  )
+  const requestsWhileInitialTreeIsPending = treeRequestCount
+
+  await act(async () => {
+    resolveInitialTree?.(jsonResponse({ revision: 1, sessions: tree }))
+    await initialTreeResponse
+    for (let index = 0; index < 12; index += 1) await Promise.resolve()
+  })
+  await waitForState(() => treeRequestCount === 2)
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+
+  const snapshot = () => ({
+    requestsWhileInitialTreeIsPending,
+    treeRequestCount,
+    requests: fetcher.mock.calls.map(([input]) => requestUrl(input)),
+  })
+  expect(snapshot()).toEqual({
+    requestsWhileInitialTreeIsPending: 1,
+    treeRequestCount: 2,
+    requests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/root-session/messages?limit=100',
+      '/api/sessions/root-session/actions',
+      '/api/sessions/root-session/tree',
+    ],
+  })
+})
 
 function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   const toggle = container.querySelector<HTMLButtonElement>(
@@ -591,6 +815,7 @@ it('loads and shows the session tree from the tree endpoint', async () => {
       <ConversationPane
         session={treeSession}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         statusPanelOpen
         onSelectSession={() => undefined}
       />,
@@ -644,6 +869,7 @@ it('shows a tree request error instead of hiding the tree tab', async () => {
       <ConversationPane
         session={treeSession}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         statusPanelOpen
         onSelectSession={() => undefined}
       />,
@@ -721,6 +947,7 @@ it('shows an error when the returned tree omits the selected session', async () 
       <ConversationPane
         session={treeSession}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         statusPanelOpen
         onSelectSession={() => undefined}
       />,
@@ -953,13 +1180,14 @@ it('retains the cached tree after a refresh failure without retrying the same re
   const requestsBeforeRefresh = fetcher.mock.calls
     .map(([input]) => requestUrl(input))
     .filter((url) => url.endsWith('/tree'))
-  renderInboxPanes(sessions, siblingSession, 1)
+  const sessionRefreshRevisions = new Map([[siblingSession.id, 1]])
+  renderInboxPanes(sessions, siblingSession, sessionRefreshRevisions)
   await act(async () => {
     resolveRefresh?.(jsonResponse({ error: 'Refresh failed' }, 503))
     await refreshResponse
   })
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
-  renderInboxPanes(sessions, childSession, 1)
+  renderInboxPanes(sessions, childSession, sessionRefreshRevisions)
 
   const snapshot = () => ({
     requestsBeforeRefresh,
@@ -1034,14 +1262,15 @@ it('removes sessions dropped by a refreshed tree from the cache', async () => {
     () =>
       container.querySelector('#session-tree-row-grandchild-session') !== null,
   )
-  renderInboxPanes(sessions, siblingSession, 1)
+  const sessionRefreshRevisions = new Map([[siblingSession.id, 1]])
+  renderInboxPanes(sessions, siblingSession, sessionRefreshRevisions)
   await waitForState(
     () =>
       container.querySelector(
         '#session-tree-row-sibling-session .session-tree-title',
       )?.textContent === 'Updated sibling session',
   )
-  renderInboxPanes(sessions, grandchildSession, 1)
+  renderInboxPanes(sessions, grandchildSession, sessionRefreshRevisions)
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
 
   const snapshot = () => ({
@@ -2284,7 +2513,7 @@ it('shows the linked task count in a peer session card', async () => {
     title: 'Review task links',
     preview: 'Check the linked task summary.',
     elapsedSeconds: 120,
-    engine: 'Claude',
+    engine: 'claude',
     workType: 'PM',
     task: {
       id: 'fixture-task-one',
@@ -2349,7 +2578,7 @@ it('shows the linked task count in a peer session card', async () => {
     document.querySelector<HTMLElement>('.session-link-card'),
   )
   expect(card.textContent).toBe(
-    `Review task linksPM · ClaudeReview · Check the linked task summary. · 2m` +
+    `Review task linksPM · claudeReview · Check the linked task summary. · 2m` +
       `P1 #71Review the linked task +2sample-org/example-repo` +
       `Click to open · ${openBesideModifier}-click to open beside`,
   )
@@ -2431,6 +2660,7 @@ it('renders file attachments returned by the messages endpoint', async () => {
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -2492,6 +2722,7 @@ it('posts a proposal answer to its sequence route and refreshes the conversation
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -2578,6 +2809,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -2645,6 +2877,7 @@ it('accepts a subagent report without a description from the messages endpoint',
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -2975,6 +3208,7 @@ it('accepts classified messages and the active tool from messages endpoint', asy
       <ConversationPane
         session={{ ...session, category: 'in_progress', elapsedSeconds: 30 }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         isMobile
       />,
@@ -3066,6 +3300,7 @@ it('shows running tasks in the desktop status panel and counts them in the heade
           elapsedSeconds: 30,
         }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen
       />,
@@ -3163,6 +3398,7 @@ it('keeps the Decisions tab active when running tasks appear', async () => {
           unreviewedDecisionCount: 1,
         }}
         refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen
       />,
@@ -3499,6 +3735,7 @@ it('posts decision reviews and reflects the refreshed review state', async () =>
       <ConversationPane
         session={{ ...session, decisionCount: 2, unreviewedDecisionCount: 2 }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -3769,6 +4006,7 @@ it('opens and closes the existing status panel over the mobile conversation', as
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         isMobile
         statusPanelOpen={statusPanelOpen}
@@ -3976,7 +4214,7 @@ it('directs Codex questions and permissions to the terminal', () => {
   }
   renderView(
     onAction,
-    { ...session, engine: 'Codex' },
+    { ...session, engine: 'codex' },
     undefined,
     [
       question,
@@ -4455,6 +4693,7 @@ it('shows a server attachment validation error and retains the rejected attachme
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -4554,6 +4793,7 @@ it('waits for pasted image optimization and sends the optimized attachment', asy
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -4987,6 +5227,7 @@ it.each([
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5086,6 +5327,7 @@ it.each([
         <ConversationPane
           session={session}
           refreshKey={0}
+          sessionTreeRefreshKey={0}
           onSelectSession={() => undefined}
         />,
       )
@@ -5146,6 +5388,7 @@ it.each([
         <ConversationPane
           session={session}
           refreshKey={1}
+          sessionTreeRefreshKey={0}
           onSelectSession={() => undefined}
         />,
       )
@@ -5168,6 +5411,7 @@ it.each([
         <ConversationPane
           session={session}
           refreshKey={2}
+          sessionTreeRefreshKey={0}
           onSelectSession={() => undefined}
         />,
       )
@@ -5235,6 +5479,7 @@ it('shows an HTTP status when the initial messages response has no body', async 
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5306,6 +5551,7 @@ it('reloads the selected conversation when the session feed changes', async () =
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5323,6 +5569,7 @@ it('reloads the selected conversation when the session feed changes', async () =
       <ConversationPane
         session={session}
         refreshKey={1}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5375,6 +5622,7 @@ it('keeps conversation DOM connected while toggling the status panel', async () 
       <ConversationPane
         session={session}
         refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen={statusPanelOpen}
       />,
@@ -5457,6 +5705,7 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5479,6 +5728,7 @@ it('keeps the conversation and focused draft while a feed refresh is pending', a
       <ConversationPane
         session={session}
         refreshKey={1}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5536,8 +5786,9 @@ it('shows terminal switch progress and success without reloading messages', asyn
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5648,8 +5899,9 @@ it('shows the server reason beside every terminal action when switching fails', 
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5711,8 +5963,9 @@ it('ignores a terminal result after the conversation switches sessions', async (
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5733,9 +5986,10 @@ it('ignores a terminal result after the conversation switches sessions', async (
           ...session,
           id: 'next-session',
           title: 'A later session',
-          engine: 'Codex',
+          engine: 'codex',
         }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5779,8 +6033,9 @@ it('hides successful terminal feedback after three seconds', async () => {
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5845,8 +6100,9 @@ it('clears terminal feedback timers when the session changes or unmounts', async
   act(() => {
     root?.render(
       <ConversationPane
-        session={{ ...session, engine: 'Codex' }}
+        session={{ ...session, engine: 'codex' }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5872,9 +6128,10 @@ it('clears terminal feedback timers when the session changes or unmounts', async
           ...session,
           id: 'next-session',
           title: 'A later session',
-          engine: 'Codex',
+          engine: 'codex',
         }}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5962,6 +6219,7 @@ it('keeps question and permission actions active after a refresh error', async (
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -5974,6 +6232,7 @@ it('keeps question and permission actions active after a refresh error', async (
       <ConversationPane
         session={session}
         refreshKey={1}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6030,6 +6289,7 @@ it('keeps unchanged message DOM nodes across a conversation refresh', async () =
         session={session}
         sessions={sessions}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={onSelectSession}
       />,
     )
@@ -6047,6 +6307,7 @@ it('keeps unchanged message DOM nodes across a conversation refresh', async () =
         session={session}
         sessions={sessions}
         refreshKey={1}
+        sessionTreeRefreshKey={0}
         onSelectSession={onSelectSession}
       />,
     )
@@ -6108,6 +6369,7 @@ it('loads only the latest page initially and refreshes from the loaded start', a
       <ConversationPane
         session={session}
         refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6189,6 +6451,7 @@ it('prepends an older page without moving existing messages in the viewport', as
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6278,6 +6541,7 @@ it('loads an older page near the top and ignores repeated scrolls while it loads
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6445,6 +6709,7 @@ it('prunes to the latest 200 messages at the bottom and can load the discarded r
       <ConversationPane
         session={session}
         refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen
       />,
@@ -6589,6 +6854,7 @@ it('re-enables older-page loading after a request fails so it can be retried', a
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6697,6 +6963,7 @@ it('keeps an older page loaded when a conversation refresh overlaps its request'
       <ConversationPane
         session={session}
         refreshKey={refreshKey}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -6840,6 +7107,7 @@ it('uses full conversation metadata for questions, proposals, and decisions', as
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
         statusPanelOpen
       />,
@@ -6904,7 +7172,7 @@ it('skips committing an unchanged memoized conversation row', () => {
     message,
     pendingAction: null,
     openInTerminalStatus: null,
-    sessionEngine: 'Claude' as const,
+    sessionEngine: 'claude' as const,
     sessions,
     onAction,
     onOpenInTerminal,
@@ -7043,6 +7311,7 @@ it('keeps an unsent proposal comment when its position changes after refresh', a
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )
@@ -7060,6 +7329,7 @@ it('keeps an unsent proposal comment when its position changes after refresh', a
       <ConversationPane
         session={session}
         refreshKey={1}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )

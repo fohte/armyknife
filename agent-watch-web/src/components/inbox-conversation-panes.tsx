@@ -19,6 +19,44 @@ type SessionTreeCacheEntry = {
   viewState: SessionTreeViewState
 }
 
+function treeRefreshKey(
+  treeSessionIds: ReadonlySet<string>,
+  sessionRefreshRevisions: ReadonlyMap<string, number>,
+  sessions: readonly Session[],
+) {
+  const treeRevision = [...treeSessionIds].reduce(
+    (latestRevision, sessionId) =>
+      Math.max(latestRevision, sessionRefreshRevisions.get(sessionId) ?? 0),
+    0,
+  )
+  return sessions.reduce(
+    (latestRevision, session) =>
+      session.ancestorSessionIds.some((ancestorId) =>
+        treeSessionIds.has(ancestorId),
+      )
+        ? Math.max(latestRevision, sessionRefreshRevisions.get(session.id) ?? 0)
+        : latestRevision,
+    treeRevision,
+  )
+}
+
+function treeRefreshKeyForSelectedSession(
+  selectedSession: Session | null | undefined,
+  sessionRefreshRevisions: ReadonlyMap<string, number>,
+  sessions: readonly Session[],
+) {
+  if (selectedSession == null) return 0
+
+  const rootSessionId =
+    selectedSession.ancestorSessionIds[0] ?? selectedSession.id
+
+  return treeRefreshKey(
+    new Set([rootSessionId]),
+    sessionRefreshRevisions,
+    sessions,
+  )
+}
+
 function replaceTreeCacheEntry(
   current: ReadonlyMap<string, SessionTreeCacheEntry>,
   existing: SessionTreeCacheEntry,
@@ -35,7 +73,7 @@ type InboxConversationPanesProps = {
   inboxProps: Omit<ComponentProps<typeof InboxView>, 'isMobile'>
   sessions?: readonly Session[]
   selectedSession: Session | null | undefined
-  refreshKey: number
+  sessionRefreshRevisions: ReadonlyMap<string, number>
   isMobile: boolean
   showMobileConversation: boolean
   inboxCollapsed?: boolean
@@ -52,7 +90,7 @@ export function InboxConversationPanes({
   inboxProps,
   sessions = [],
   selectedSession,
-  refreshKey,
+  sessionRefreshRevisions,
   isMobile,
   showMobileConversation,
   inboxCollapsed = false,
@@ -68,6 +106,13 @@ export function InboxConversationPanes({
     ReadonlyMap<string, SessionTreeCacheEntry>
   >(() => new Map())
   const nextTreeRequestSequence = useRef(0)
+  const pendingTreeRefreshes = useRef(
+    new Map<string, { refreshKey: number; requestSequence: number }>(),
+  )
+  const sessionRefreshRevisionsRef = useRef(sessionRefreshRevisions)
+  sessionRefreshRevisionsRef.current = sessionRefreshRevisions
+  const sessionsRef = useRef(sessions)
+  sessionsRef.current = sessions
   const previousSelectedSessionId = useRef(selectedSession?.id)
   const cacheSessionTree = useCallback(
     (
@@ -76,6 +121,21 @@ export function InboxConversationPanes({
       requestRefreshKey: number,
       requestSequence: number,
     ) => {
+      if (
+        pendingTreeRefreshes.current.get(selectedSessionId)?.requestSequence ===
+        requestSequence
+      ) {
+        pendingTreeRefreshes.current.delete(selectedSessionId)
+      }
+      const currentTreeRefreshKey = treeRefreshKey(
+        new Set(tree.map((node) => node.id)),
+        sessionRefreshRevisionsRef.current,
+        sessionsRef.current,
+      )
+      const treeChangedWhileLoading = currentTreeRefreshKey > requestRefreshKey
+      const cachedRefreshKey = treeChangedWhileLoading
+        ? requestRefreshKey
+        : currentTreeRefreshKey
       setSessionTrees((current) => {
         if (
           tree.some((node) => {
@@ -114,7 +174,7 @@ export function InboxConversationPanes({
               }
         const entry: SessionTreeCacheEntry = {
           sessions: tree,
-          refreshKey: requestRefreshKey,
+          refreshKey: cachedRefreshKey,
           requestSequence,
           refreshError: null,
           viewState,
@@ -135,6 +195,10 @@ export function InboxConversationPanes({
     (selectedSessionId: string, requestRefreshKey: number) => {
       const requestSequence = nextTreeRequestSequence.current + 1
       nextTreeRequestSequence.current = requestSequence
+      pendingTreeRefreshes.current.set(selectedSessionId, {
+        refreshKey: requestRefreshKey,
+        requestSequence,
+      })
       setSessionTrees((current) => {
         const existing = current.get(selectedSessionId)
         if (
@@ -162,6 +226,12 @@ export function InboxConversationPanes({
       requestSequence: number,
       message: string,
     ) => {
+      if (
+        pendingTreeRefreshes.current.get(selectedSessionId)?.requestSequence ===
+        requestSequence
+      ) {
+        pendingTreeRefreshes.current.delete(selectedSessionId)
+      }
       setSessionTrees((current) => {
         const existing = current.get(selectedSessionId)
         if (
@@ -196,9 +266,23 @@ export function InboxConversationPanes({
   const inboxView = <InboxView {...inboxProps} isMobile={isMobile} />
   const selectedTreeCache =
     selectedSession == null ? undefined : sessionTrees.get(selectedSession.id)
+  const selectedTreeRefreshKey =
+    selectedTreeCache === undefined
+      ? (pendingTreeRefreshes.current.get(selectedSession?.id ?? '')
+          ?.refreshKey ??
+        treeRefreshKeyForSelectedSession(
+          selectedSession,
+          sessionRefreshRevisions,
+          sessions,
+        ))
+      : treeRefreshKey(
+          new Set(selectedTreeCache.sessions.map((node) => node.id)),
+          sessionRefreshRevisions,
+          sessions,
+        )
   const skipSessionTreeFetch =
     selectedTreeCache !== undefined &&
-    selectedTreeCache.refreshKey === refreshKey
+    selectedTreeCache.refreshKey === selectedTreeRefreshKey
   useLayoutEffect(() => {
     const selectedSessionId = selectedSession?.id
     if (previousSelectedSessionId.current === selectedSessionId) return
@@ -229,11 +313,12 @@ export function InboxConversationPanes({
         initialSessionTreeError={selectedTreeCache?.refreshError ?? null}
         initialSessionTreeViewState={selectedTreeCache?.viewState ?? null}
         shouldSkipSessionTreeFetch={skipSessionTreeFetch}
+        sessionTreeRefreshKey={selectedTreeRefreshKey}
         onSessionTreeLoaded={cacheSessionTree}
         onSessionTreeRequestStarted={markTreeRefreshStarted}
         onSessionTreeRequestFailed={recordTreeRefreshFailure}
         onSessionTreeViewStateChange={updateTreeViewState}
-        refreshKey={refreshKey}
+        refreshKey={sessionRefreshRevisions.get(selectedSession.id) ?? 0}
         isMobile={isMobile}
         statusPanelOpen={statusPanelOpen}
         onToggleStatusPanel={onToggleStatusPanel}

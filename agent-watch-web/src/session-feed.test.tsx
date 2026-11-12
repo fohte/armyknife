@@ -144,8 +144,8 @@ it('requests deltas and restores the ordered full session response', async () =>
   vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
 
   const stop = startSessionFeed(
-    (response) => {
-      responses.push(response)
+    (response, changedSessionIds) => {
+      responses.push({ response, changedSessionIds })
       if (responses.length === 1) {
         firstReceived.resolve(undefined)
       } else if (responses.length === 2) {
@@ -180,19 +180,28 @@ it('requests deltas and restores the ordered full session response', async () =>
     ],
     responses: [
       {
-        revision: 1,
-        workTypeNavLabels: { 'type-a': 'Type A' },
-        sessions: [sessionA, sessionB],
+        response: {
+          revision: 1,
+          workTypeNavLabels: { 'type-a': 'Type A' },
+          sessions: [sessionA, sessionB],
+        },
+        changedSessionIds: ['session-a', 'session-b'],
       },
       {
-        revision: 2,
-        workTypeNavLabels: { 'type-a': 'Type A' },
-        sessions: [sessionC, updatedSessionB],
+        response: {
+          revision: 2,
+          workTypeNavLabels: { 'type-a': 'Type A' },
+          sessions: [sessionC, updatedSessionB],
+        },
+        changedSessionIds: ['session-b', 'session-c', 'session-a'],
       },
       {
-        revision: 3,
-        workTypeNavLabels: { 'type-a': 'Updated Type A' },
-        sessions: [updatedSessionC, elapsedSessionB],
+        response: {
+          revision: 3,
+          workTypeNavLabels: { 'type-a': 'Updated Type A' },
+          sessions: [updatedSessionC, elapsedSessionB],
+        },
+        changedSessionIds: ['session-c'],
       },
     ],
   })

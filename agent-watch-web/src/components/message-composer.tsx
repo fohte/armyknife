@@ -330,7 +330,7 @@ function findSkillCompletion(
   engine: Session['engine'],
   cursor: number,
 ) {
-  if (engine !== 'Claude' && engine !== 'Codex') return null
+  if (engine !== 'claude' && engine !== 'codex') return null
   const beforeCursor = draft.slice(0, cursor)
   const match = /(?:^|\s)([/$])([^\s]*)$/.exec(beforeCursor)
   if (match === null || match[1] === undefined || match[2] === undefined) {
@@ -338,8 +338,8 @@ function findSkillCompletion(
   }
   const trigger = match[1]
   if (
-    (engine === 'Claude' && trigger !== '/') ||
-    (engine === 'Codex' && trigger !== '$')
+    (engine === 'claude' && trigger !== '/') ||
+    (engine === 'codex' && trigger !== '$')
   ) {
     return null
   }
