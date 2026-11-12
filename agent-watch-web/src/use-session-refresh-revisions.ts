@@ -19,5 +19,5 @@ export function useSessionRefreshRevisions() {
     [],
   )
 
-  return { ...state, recordSessionChanges }
+  return { sessionRevisions: state.sessionRevisions, recordSessionChanges }
 }

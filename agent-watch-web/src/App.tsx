@@ -56,11 +56,8 @@ export function App() {
   const [workTypeNavLabels, setWorkTypeNavLabels] = useState<
     Record<string, string>
   >({})
-  const {
-    revision: sessionRefreshRevision,
-    sessionRevisions,
-    recordSessionChanges,
-  } = useSessionRefreshRevisions()
+  const { sessionRevisions, recordSessionChanges } =
+    useSessionRefreshRevisions()
   const [sessionsReceivedAt, setSessionsReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
   const {
@@ -500,7 +497,6 @@ export function App() {
           inboxProps={inboxProps}
           sessions={sessionsWithElapsedTime}
           selectedSession={selectedSession}
-          refreshKey={sessionRefreshRevision}
           sessionRefreshRevisions={sessionRevisions}
           isMobile={isMobile}
           showMobileConversation={showMobileConversation}
