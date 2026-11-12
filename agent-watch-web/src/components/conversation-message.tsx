@@ -238,7 +238,7 @@ export function renderConversationMessage({
       actionsReady={actionsReady}
       pendingAction={pendingAction}
       openInTerminalStatus={openInTerminalStatus}
-      isCodex={sessionEngine === 'Codex'}
+      isCodex={sessionEngine === 'codex'}
       onAction={(action, permissionIdentity) => {
         void onAction(
           action,

@@ -6,7 +6,7 @@ import type { ChatItem, Session, SessionActions } from '#types'
 
 const session: Session = {
   id: 'sample-session',
-  engine: 'Claude',
+  engine: 'claude',
   category: 'needs_action',
   isPaused: false,
   kind: 'Question',
@@ -451,7 +451,7 @@ export const IPhoneReviewHeaderOffersStatusPanel: Story = {
 export const CodexOnlyOpensInTerminal: Story = {
   name: 'A Codex session sends questions and permissions to the terminal',
   args: {
-    session: { ...session, engine: 'Codex' },
+    session: { ...session, engine: 'codex' },
     messages: [
       {
         type: 'question',
@@ -682,6 +682,28 @@ export const OlderMessagesAreLoading: Story = {
       {
         type: 'assistant',
         text: 'The earlier part of the conversation is available on demand.',
+      },
+    ],
+  },
+}
+
+export const CompactBoundarySeparatesConversation: Story = {
+  name: 'A divider marks where the conversation was compacted',
+  args: {
+    messages: [
+      {
+        type: 'assistant',
+        text: 'The earlier part of the conversation is summarized.',
+      },
+      {
+        type: 'event',
+        kind: 'compact_boundary',
+        text: 'Context compacted',
+        failed: false,
+      },
+      {
+        type: 'assistant',
+        text: 'The assistant continues after the conversation is compacted.',
       },
     ],
   },

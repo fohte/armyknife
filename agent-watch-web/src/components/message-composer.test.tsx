@@ -26,7 +26,7 @@ function ComposerHarness({
 }: {
   isMobile?: boolean
   isProcessingAttachments?: boolean
-  engine?: 'Claude' | 'Codex'
+  engine?: 'claude' | 'codex'
   skills?: readonly SkillSuggestion[]
   initialDraft?: string
   onSend?: () => void
@@ -359,7 +359,7 @@ it('shows the byte size of a small non-image attachment', () => {
 
 it('shows Claude skill suggestions after a slash following whitespace', () => {
   renderFreshComposer({
-    engine: 'Claude',
+    engine: 'claude',
     skills: skillSuggestions,
   })
   const textarea = requireElement(
@@ -379,7 +379,7 @@ it('shows Claude skill suggestions after a slash following whitespace', () => {
 
 it('inserts the selected skill while preserving surrounding text', () => {
   renderFreshComposer({
-    engine: 'Claude',
+    engine: 'claude',
     isMobile: true,
     skills: skillSuggestions,
   })
@@ -408,7 +408,7 @@ it('inserts the selected skill while preserving surrounding text', () => {
 
 it('selects a Codex skill with the dollar trigger by keyboard', () => {
   renderFreshComposer({
-    engine: 'Codex',
+    engine: 'codex',
     skills: skillSuggestions,
   })
   const textarea = requireElement(
@@ -446,7 +446,7 @@ it('selects a Codex skill with the dollar trigger by keyboard', () => {
 
 it('selects the final skill with ArrowUp and Tab', () => {
   renderFreshComposer({
-    engine: 'Codex',
+    engine: 'codex',
     skills: skillSuggestions,
   })
   const textarea = requireElement(
@@ -485,13 +485,13 @@ it('selects the final skill with ArrowUp and Tab', () => {
 it.each([
   {
     reason: 'Codex slash commands',
-    engine: 'Codex' as const,
+    engine: 'codex' as const,
     skills: skillSuggestions,
     draft: 'Run /de',
   },
   {
     reason: 'a missing transcript catalog',
-    engine: 'Claude' as const,
+    engine: 'claude' as const,
     skills: [],
     draft: 'Run /de',
   },
@@ -510,7 +510,7 @@ it.each([
 
 it('dismisses an open skill list with Escape', () => {
   renderFreshComposer({
-    engine: 'Claude',
+    engine: 'claude',
     skills: skillSuggestions,
   })
   setTextareaValue(
@@ -538,7 +538,7 @@ it('dismisses an open skill list with Escape', () => {
 
 it('does not restore an old cursor after selecting an unchanged skill', () => {
   renderFreshComposer({
-    engine: 'Claude',
+    engine: 'claude',
     skills: skillSuggestions,
   })
   const textarea = requireElement(
@@ -566,7 +566,7 @@ it('does not restore an old cursor after selecting an unchanged skill', () => {
 it('selects a matching skill after the caret moves to a narrower query', () => {
   const onKeyDown = vi.fn()
   renderFreshComposer({
-    engine: 'Codex',
+    engine: 'codex',
     skills: skillSuggestions,
     onKeyDown,
   })

@@ -748,6 +748,7 @@ enum PeerDirection {
 #[serde(rename_all = "snake_case")]
 enum EventKind {
     Armyknife,
+    CompactBoundary,
     System,
     Hook,
 }
