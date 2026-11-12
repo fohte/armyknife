@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.616](https://github.com/fohte/armyknife/compare/v0.1.615...v0.1.616) (2026-11-12)
+
+
+### Features
+
+* **agent:** allow preserving worktrees on close ([#1577](https://github.com/fohte/armyknife/issues/1577)) ([0fe9786](https://github.com/fohte/armyknife/commit/0fe9786dd89334d2aade96537370ba003f3fb473))
+
+
+### Bug Fixes
+
+* **agent:** reuse linked worktrees ([#1576](https://github.com/fohte/armyknife/issues/1576)) ([d3c5eb8](https://github.com/fohte/armyknife/commit/d3c5eb892b880f1931d2109bb26cac3b926de5fd))
+
 ## [0.1.615](https://github.com/fohte/armyknife/compare/v0.1.614...v0.1.615) (2026-11-12)
 
 
