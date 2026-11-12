@@ -218,6 +218,27 @@ it.each([
 )
 
 it.each([
+  ['needs action', 'needs_action', 'Question', 'needs-action'],
+  ['in progress', 'in_progress', null, 'in-progress'],
+  ['stopped in progress', 'in_progress', 'Stopped', 'in-progress'],
+  ['Error overrides its category', 'in_progress', 'Error', 'error'],
+] as const)(
+  'uses the shared %s session tone in the command palette',
+  (_label, category, kind, tone) => {
+    renderPalette({
+      sessions: [{ ...session, category, kind }],
+      initialQuery: 'Review notification settings',
+    })
+
+    expect(
+      container
+        .querySelector('.command-palette-item')
+        ?.getAttribute('data-tone'),
+    ).toEqual(tone)
+  },
+)
+
+it.each([
   ['task', '#notification', '#', '#42 Improve notifications'],
   ['project', '@notification', '▤', 'notification refresh'],
   ['command', '>Switch to Board', '›', 'Switch to Board'],

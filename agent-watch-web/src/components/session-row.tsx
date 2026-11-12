@@ -170,8 +170,8 @@ export function SessionRow({
                 variant="plain"
                 aria-label={
                   session.isToday === true
-                    ? 'Remove from TODAY'
-                    : 'Add to TODAY'
+                    ? 'Remove from Starred'
+                    : 'Add to Starred'
                 }
                 aria-pressed={session.isToday ?? false}
                 className="session-action-button cursor-pointer"

@@ -613,7 +613,7 @@ function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   }
 }
 
-it('toggles TODAY from the iPhone conversation header', () => {
+it('toggles Starred from the iPhone conversation header', () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -640,9 +640,35 @@ it('toggles TODAY from the iPhone conversation header', () => {
   })
 
   expect(todayToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Add to TODAY',
+    label: 'Add to Starred',
     pressed: 'false',
     calls: [[true]],
+  })
+})
+
+it('labels a Starred iPhone session for removal', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Remove from Starred',
+    pressed: 'true',
+    calls: [],
   })
 })
 

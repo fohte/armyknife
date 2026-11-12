@@ -9,6 +9,7 @@ import type { WorkTypeNavGroup } from '#board-model'
 import type { CommandPaletteShortcut } from '#command-palette-shortcut'
 import { cn } from '#lib/utils'
 import type { SavedInboxView } from '#saved-inbox-views'
+import { sessionKindLabel, sessionKindTone } from '#session-kind-label'
 import type { Session } from '#types'
 
 type View = 'inbox' | 'board'
@@ -167,44 +168,49 @@ export function AgentWatchNav({
         </section>
       ) : null}
       <section className="today-nav" aria-labelledby="today-nav-title">
-        <h2 id="today-nav-title">TODAY</h2>
-        {todaySessions.map((session) => (
-          <div key={session.id} className="today-nav-item">
-            <Button
-              type="button"
-              variant="plain"
-              className="today-nav-link cursor-pointer"
-              onClick={() => {
-                onSelectToday(session.id)
-              }}
-            >
-              <span className="today-star" aria-hidden="true">
-                ★
-              </span>
-              <span
-                className={cn(
-                  'today-session-title',
-                  session.category === 'needs_action' && 'is-needs-action',
-                )}
+        <h2 id="today-nav-title">Starred</h2>
+        {todaySessions.map((session) => {
+          const tone = sessionKindTone(session)
+          return (
+            <div key={session.id} className="today-nav-item">
+              <Button
+                type="button"
+                variant="plain"
+                className="today-nav-link cursor-pointer"
+                onClick={() => {
+                  onSelectToday(session.id)
+                }}
               >
-                {session.title}
-              </span>
-              {session.category === 'needs_action' ? (
+                <span className="today-star" aria-hidden="true">
+                  ★
+                </span>
                 <span
-                  className={`today-indicator kind-${(session.kind ?? '').toLowerCase()}`}
-                  aria-hidden="true"
-                />
-              ) : (
-                <span className="today-start">Start</span>
-              )}
-            </Button>
-            {session.task !== null ? (
-              <span className="today-session-meta">
-                #{String(session.task.number)} · {session.repo}
-              </span>
-            ) : null}
-          </div>
-        ))}
+                  className={cn(
+                    'today-session-title',
+                    session.category === 'needs_action' && 'is-needs-action',
+                  )}
+                >
+                  {session.title}
+                </span>
+                <span
+                  className={cn(
+                    'today-session-status',
+                    tone === 'needs-action' && 'is-needs-action',
+                    tone === 'in-progress' && 'is-working',
+                    tone === 'error' && 'is-error',
+                  )}
+                >
+                  {sessionKindLabel(session)}
+                </span>
+              </Button>
+              {session.task !== null ? (
+                <span className="today-session-meta">
+                  #{String(session.task.number)} · {session.repo}
+                </span>
+              ) : null}
+            </div>
+          )
+        })}
       </section>
       {workTypeNavGroups.map((group, index) => (
         <section

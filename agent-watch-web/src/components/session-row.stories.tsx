@@ -73,7 +73,7 @@ export const PausedNeedsActionKeepsItsRequestStatus: Story = {
 }
 
 export const SessionIsStarredForToday: Story = {
-  name: 'A starred session stays on the TODAY list',
+  name: 'A starred session stays in the Starred list',
   args: {
     session: { ...session, isToday: true },
     onLater: () => undefined,
