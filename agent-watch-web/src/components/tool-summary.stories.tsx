@@ -1,6 +1,26 @@
-import type { Meta, StoryObj } from '@storybook/react-vite'
+import type { Decorator, Meta, StoryObj } from '@storybook/react-vite'
 
 import { ToolSummary } from '#components/tool-summary'
+
+const conversationWidthDecorator: Decorator = (Story) => (
+  <div
+    style={{
+      boxSizing: 'border-box',
+      display: 'flex',
+      width: '600px',
+      minWidth: '600px',
+      maxWidth: '600px',
+      height: '400px',
+      flex: 'none',
+      flexDirection: 'column',
+      gap: '14px',
+      overflowY: 'auto',
+      padding: '24px',
+    }}
+  >
+    <Story />
+  </div>
+)
 
 const meta = {
   component: ToolSummary,
@@ -58,4 +78,37 @@ export const ExpandedOperationsOmitEmptyTargets: Story = {
     ],
     open: true,
   },
+}
+
+export const LongOperationPathFitsConversation: Story = {
+  name: 'An expanded summary keeps a long operation path inside the conversation',
+  args: {
+    open: true,
+    operations: [
+      {
+        tool: 'Read',
+        target:
+          'sample/workspace/verification/runs/retry-policy/output/collected/responses/fixtures/request-timing-summary.json',
+        failed: false,
+      },
+    ],
+  },
+  decorators: [conversationWidthDecorator],
+}
+
+export const LongCollapsedOperationPathFitsConversation: Story = {
+  name: 'A collapsed summary truncates a long operation path inside the conversation',
+  args: {
+    summary:
+      'Read sample/workspace/verification/runs/retry-policy/output/collected/responses/fixtures/request-timing-summary.json',
+    operations: [
+      {
+        tool: 'Read',
+        target:
+          'sample/workspace/verification/runs/retry-policy/output/collected/responses/fixtures/request-timing-summary.json',
+        failed: false,
+      },
+    ],
+  },
+  decorators: [conversationWidthDecorator],
 }
