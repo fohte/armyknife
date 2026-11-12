@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.649](https://github.com/fohte/armyknife/compare/v0.1.648...v0.1.649) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** keep card drafts on updates ([#1671](https://github.com/fohte/armyknife/issues/1671)) ([682f938](https://github.com/fohte/armyknife/commit/682f938aa3e8a836f4ff11c02fe8a4105fb12e99))
+
 ## [0.1.648](https://github.com/fohte/armyknife/compare/v0.1.647...v0.1.648) (2026-11-12)
 
 
