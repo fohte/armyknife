@@ -56,11 +56,12 @@ impl PermissionRequestWaiter {
         poll_permission_request_from(&mut self.connection, session_id, agent_key, request_id)
     }
 
-    pub(crate) fn expire(
+    pub(crate) fn expire_with_deny(
         &mut self,
         session_id: &str,
         agent_key: &str,
         request_id: &str,
+        message: &str,
     ) -> Result<PermissionRequestWait> {
         finalize_permission_request_from(
             &mut self.connection,
@@ -68,6 +69,10 @@ impl PermissionRequestWaiter {
             agent_key,
             request_id,
             true,
+            Some(&PermissionRequestDecision::Deny {
+                message: message.to_string(),
+                interrupt: false,
+            }),
         )
     }
 }
@@ -212,7 +217,7 @@ fn poll_permission_request_from(
         return Ok(PermissionRequestWait::Pending);
     }
 
-    finalize_permission_request_from(connection, session_id, agent_key, request_id, false)
+    finalize_permission_request_from(connection, session_id, agent_key, request_id, false, None)
 }
 
 fn finalize_permission_request_from(
@@ -221,6 +226,7 @@ fn finalize_permission_request_from(
     agent_key: &str,
     request_id: &str,
     expire_pending: bool,
+    expiration_decision: Option<&PermissionRequestDecision>,
 ) -> Result<PermissionRequestWait> {
     super::validate_session_id(session_id)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -240,7 +246,7 @@ fn finalize_permission_request_from(
         transaction.commit()?;
         return Ok(PermissionRequestWait::Finished);
     };
-    if !is_current || (decision.is_none() && expire_pending) {
+    if !is_current {
         transaction.execute(
             "DELETE FROM permission_request_decision
              WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
@@ -248,6 +254,19 @@ fn finalize_permission_request_from(
         )?;
         transaction.commit()?;
         return Ok(PermissionRequestWait::Finished);
+    }
+    if decision.is_none() && expire_pending {
+        transaction.execute(
+            "DELETE FROM permission_request_decision
+             WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
+            params![session_id, agent_key, request_id],
+        )?;
+        transaction.commit()?;
+        return Ok(
+            expiration_decision.map_or(PermissionRequestWait::Finished, |decision| {
+                PermissionRequestWait::Decision(decision.clone())
+            }),
+        );
     }
     let Some(decision) = decision else {
         transaction.commit()?;
@@ -409,17 +428,29 @@ mod tests {
         );
     }
 
-    #[test]
-    fn terminal_resolution_ends_wait_without_a_hook_decision() {
-        let sessions_dir = sessions_dir();
-        let mut session = session("session-cobalt");
+    #[rstest::rstest]
+    fn terminal_resolution_ends_wait_without_a_hook_decision(pending_bash_request: TempDir) {
+        let connection =
+            open_connection(pending_bash_request.path()).expect("database should open");
+        let mut session = read_session_strict(&connection, "session-cobalt")
+            .expect("session should load")
+            .expect("session should exist");
         session.pending_permission_agent_ids.clear();
         session.pending_permission_request_ids.clear();
-        super::super::super::save_session_to(sessions_dir.path(), &session)
+        super::super::super::save_session_to(pending_bash_request.path(), &session)
             .expect("session should be saved");
+        let mut waiter =
+            PermissionRequestWaiter::open(pending_bash_request.path()).expect("waiter should open");
 
         assert_eq!(
-            poll_request(sessions_dir.path(), "session-cobalt", "request-cobalt"),
+            waiter
+                .expire_with_deny(
+                    "session-cobalt",
+                    MAIN_THREAD_AGENT_KEY,
+                    "request-cobalt",
+                    "automatic denial fixture",
+                )
+                .expect("request expiration should finish"),
             PermissionRequestWait::Finished,
         );
     }
@@ -449,30 +480,34 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn expiring_a_pending_request_removes_its_mailbox(pending_bash_request: TempDir) {
+    fn expiring_a_pending_hook_request_returns_a_non_interrupting_deny(
+        pending_bash_request: TempDir,
+    ) {
         let mut waiter =
             PermissionRequestWaiter::open(pending_bash_request.path()).expect("waiter should open");
         let wait = waiter
-            .expire("session-cobalt", MAIN_THREAD_AGENT_KEY, "request-cobalt")
-            .expect("request should expire");
+            .expire_with_deny(
+                "session-cobalt",
+                MAIN_THREAD_AGENT_KEY,
+                "request-cobalt",
+                "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.",
+            )
+            .expect("request should expire with a deny");
         let request = permission_request_data(
             pending_bash_request.path(),
             "session-cobalt",
             "request-cobalt",
         )
         .expect("request should load after expiration");
-        let connection =
-            open_connection(pending_bash_request.path()).expect("database should open");
-        let session = read_session_strict(&connection, "session-cobalt")
-            .expect("session should load")
-            .expect("session should exist");
 
         assert_eq!(
-            (wait, request, session.status),
+            (wait, request),
             (
-                PermissionRequestWait::Finished,
+                PermissionRequestWait::Decision(PermissionRequestDecision::Deny {
+                    message: "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.".to_string(),
+                    interrupt: false,
+                }),
                 None,
-                SessionStatus::WaitingInput,
             ),
         );
     }

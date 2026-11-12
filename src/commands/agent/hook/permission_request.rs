@@ -11,8 +11,9 @@ use super::super::store::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
-// Leave time for Claude Code to fall back to its terminal dialog before the command hook times out.
+// Leave time for a terminal decision before Claude Code's command hook times out.
 const MAX_WAIT: Duration = Duration::from_secs(590);
+const EXPIRATION_DENIAL_MESSAGE: &str = "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.";
 
 pub(super) fn wait_and_write(
     sessions_dir: &Path,
@@ -43,7 +44,7 @@ fn wait_until_deadline(
 ) -> Result<()> {
     loop {
         let wait = if Instant::now() >= deadline {
-            waiter.expire(session_id, agent_key, request_id)?
+            waiter.expire_with_deny(session_id, agent_key, request_id, EXPIRATION_DENIAL_MESSAGE)?
         } else {
             waiter.poll(session_id, agent_key, request_id)?
         };
@@ -84,8 +85,10 @@ fn write_response(decision: PermissionRequestDecision, mut output: impl Write) -
 mod tests {
     use super::*;
 
-    #[test]
-    fn expired_wait_finishes_without_writing_a_hook_response() {
+    #[rstest::rstest]
+    #[case::permission_request("Bash")]
+    #[case::ask_user_question("AskUserQuestion")]
+    fn expired_wait_denies_a_pending_request(#[case] tool_name: &str) {
         let sessions_dir = tempfile::tempdir().expect("sessions directory should be created");
         let session_id = "fixture-session";
         let request_id = "fixture-request";
@@ -116,7 +119,7 @@ mod tests {
             .register_permission_request(
                 agent_key,
                 request_id,
-                Some("Bash"),
+                Some(tool_name),
                 &json!({ "command": "echo fixture" }),
             )
             .expect("permission request should register");
@@ -139,7 +142,8 @@ mod tests {
 
         assert_eq!(
             (
-                output,
+                serde_json::from_slice::<serde_json::Value>(&output)
+                    .expect("deny response should be JSON"),
                 super::super::super::store::permission_request_data(
                     sessions_dir.path(),
                     session_id,
@@ -147,7 +151,19 @@ mod tests {
                 )
                 .expect("expired request should be readable"),
             ),
-            (Vec::<u8>::new(), None),
+            (
+                json!({
+                    "hookSpecificOutput": {
+                        "hookEventName": "PermissionRequest",
+                        "decision": {
+                            "behavior": "deny",
+                            "message": EXPIRATION_DENIAL_MESSAGE,
+                            "interrupt": false,
+                        },
+                    },
+                }),
+                None,
+            ),
         );
     }
 
