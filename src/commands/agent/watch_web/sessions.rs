@@ -499,12 +499,22 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
 }
 
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
+    let tree_sessions = sessions
+        .iter()
+        .filter(|session| session.status != SessionStatus::Ended)
+        .cloned()
+        .collect::<Vec<_>>();
+    let tree_session_ids = tree_sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<HashSet<_>>();
+    let parent_ids = tree::session_parent_ids(&tree_sessions, &tree_session_ids);
+
     let mut related_ids = HashSet::new();
-    for session in sessions {
-        if !session.ancestor_session_ids.is_empty() {
-            related_ids.insert(session.session_id.clone());
+    for (session_id, parent_id) in parent_ids {
+        if let Some(parent_id) = parent_id {
+            related_ids.extend([session_id, parent_id]);
         }
-        related_ids.extend(session.ancestor_session_ids.iter().cloned());
     }
     related_ids
 }
@@ -797,18 +807,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_includes_ended_ancestors_and_active_session_data() {
+    async fn session_tree_route_excludes_ended_ancestors_and_keeps_active_session_data() {
         let (status, tree) = session_tree_response(source(), "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -826,28 +837,9 @@ mod tests {
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
-                    {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 
@@ -895,16 +887,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_returns_siblings_and_descendants_with_nearest_living_parent() {
+    async fn session_tree_route_reparents_active_descendants_across_ended_sessions() {
         let mut source = source();
-        let mut grandchild = session(SessionStatus::Ended);
+        let mut grandchild = session(SessionStatus::Stopped);
         grandchild.session_id = "grandchild-session".to_string();
-        grandchild.ancestor_session_ids = vec![
-            "parent-session".to_string(),
-            "deleted-intermediate".to_string(),
-        ];
+        grandchild.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
         grandchild.updated_at = Utc.timestamp_opt(800, 0).unwrap();
-        grandchild.last_message = Some("completed the delegated work".to_string());
+        grandchild.last_message = Some("working on delegated task".to_string());
         let mut sibling = session(SessionStatus::Ended);
         sibling.session_id = "sibling-session".to_string();
         sibling.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -930,15 +920,16 @@ mod tests {
 
         let (status, tree) = session_tree_response(source, "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -957,55 +948,22 @@ mod tests {
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
                     {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
-                    {
                         "id": "grandchild-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
+                        "parentId": "child-session",
+                        "category": "needs_action",
+                        "isActive": true,
+                        "kind": "Stopped",
                         "title": "Grandchild session",
-                        "preview": "completed the delegated work",
+                        "preview": "working on delegated task",
                         "elapsedSeconds": 300,
                         "task": null,
                         "repo": "example-org/grandchild-repo",
                         "decisionCount": 0,
                         "pullRequest": null,
                     },
-                    {
-                        "id": "sibling-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "Sibling session",
-                        "preview": null,
-                        "elapsedSeconds": 400,
-                        "task": null,
-                        "repo": "example-org/sibling-repo",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 
@@ -1045,20 +1003,6 @@ mod tests {
                 ]),
                 vec![active.cwd],
             ),
-        );
-    }
-
-    #[test]
-    fn session_tree_relation_flag_includes_a_parent_with_only_ended_children() {
-        let mut parent = session(SessionStatus::Running);
-        parent.session_id = "parent-session".to_string();
-        let mut child = session(SessionStatus::Ended);
-        child.session_id = "child-session".to_string();
-        child.ancestor_session_ids = vec!["parent-session".to_string()];
-
-        assert_eq!(
-            super::session_tree_related_ids(&[parent, child]),
-            HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
         );
     }
 
@@ -1127,7 +1071,7 @@ mod tests {
                     "id": "parent-session",
                     "title": "parent title"
                 },
-                "hasSessionTree": true,
+                "hasSessionTree": false,
                 "ancestorSessionIds": ["parent-session"],
                 "pullRequest": {
                     "number": 42,
@@ -1181,6 +1125,52 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_marks_tree_available_for_live_relatives_across_ended_ancestors(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        let mut ended_intermediate = session(SessionStatus::Ended);
+        ended_intermediate.session_id = "ended-intermediate-session".to_string();
+        ended_intermediate.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
+        let mut descendant = session(SessionStatus::Running);
+        descendant.session_id = "live-descendant-session".to_string();
+        descendant.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "child-session".to_string(),
+            "ended-intermediate-session".to_string(),
+        ];
+        source.all_sessions.extend([ended_intermediate, descendant]);
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["hasSessionTree"] = serde_json::json!(true);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
