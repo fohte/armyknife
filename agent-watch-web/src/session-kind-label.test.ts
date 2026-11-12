@@ -46,11 +46,6 @@ it.each([
     session: { category: 'done', kind: null },
     expected: 'Done',
   },
-  {
-    label: 'paused overrides its kind label',
-    session: { isPaused: true, kind: 'Stopped' },
-    expected: 'Paused',
-  },
 ] satisfies {
   label: string
   session: Partial<Session>

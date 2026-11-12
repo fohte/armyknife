@@ -35,7 +35,7 @@ const todaySessionInProgress: Session = {
   },
 }
 
-const todaySessionPaused: Session = {
+const todaySessionStopped: Session = {
   ...todaySessionInProgress,
   id: 'today-session-paused',
   isPaused: true,
@@ -109,18 +109,18 @@ export const BoardIsSelected: Story = {
 }
 
 export const InProgressTodaySession: Story = {
-  name: 'An in-progress TODAY session shows the Working status',
+  name: 'An in-progress starred session shows the Working status',
   args: { todaySessions: [todaySessionInProgress] },
 }
 
 export const TodaySessionStatusesUseTheirCategoryColors: Story = {
-  name: 'TODAY sessions show their state labels in category colors',
+  name: 'Starred sessions show their state labels in category colors',
   args: {
     todaySessions: [
       todaySession,
       todaySessionInProgress,
       { ...todaySession, id: 'today-session-error', kind: 'Error' },
-      todaySessionPaused,
+      todaySessionStopped,
     ],
   },
 }

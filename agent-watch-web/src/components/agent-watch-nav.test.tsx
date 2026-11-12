@@ -132,7 +132,7 @@ it('renders no work type sections without configured groups', () => {
   ).toEqual([])
 })
 
-it('shows Today status labels with their category colors', () => {
+it('shows Starred status labels with their category colors', () => {
   renderNav([], {
     todaySessions: [
       baseTodaySession,
@@ -145,23 +145,16 @@ it('shows Today status labels with their category colors', () => {
       { ...baseTodaySession, id: 'error-session', kind: 'Error' },
       {
         ...baseTodaySession,
-        id: 'paused-session',
+        id: 'stopped-session',
         category: 'in_progress',
         isPaused: true,
         kind: 'Stopped',
-      },
-      { ...baseTodaySession, id: 'paused-needs-action', isPaused: true },
-      {
-        ...baseTodaySession,
-        id: 'paused-error',
-        category: 'in_progress',
-        isPaused: true,
-        kind: 'Error',
       },
     ],
   })
 
   const snapshot = () => ({
+    heading: container.querySelector('#today-nav-title')?.textContent,
     statuses: Array.from(
       container.querySelectorAll<HTMLElement>('.today-session-status'),
       (status) => ({
@@ -175,6 +168,7 @@ it('shows Today status labels with their category colors', () => {
   })
 
   expect(snapshot()).toEqual({
+    heading: 'Starred',
     statuses: [
       {
         text: 'Question',
@@ -192,19 +186,9 @@ it('shows Today status labels with their category colors', () => {
         color: 'rgb(248, 113, 113)',
       },
       {
-        text: 'Paused',
-        className: 'today-session-status is-paused',
-        color: 'rgb(139, 139, 148)',
-      },
-      {
-        text: 'Paused',
-        className: 'today-session-status is-needs-action is-paused',
-        color: 'rgb(251, 191, 36)',
-      },
-      {
-        text: 'Paused',
-        className: 'today-session-status is-error is-paused',
-        color: 'rgb(248, 113, 113)',
+        text: 'Stopped',
+        className: 'today-session-status is-working',
+        color: 'rgb(96, 165, 250)',
       },
     ],
     oldIndicators: 0,

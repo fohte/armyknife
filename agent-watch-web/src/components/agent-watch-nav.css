@@ -233,7 +233,3 @@
 .today-session-status.is-error {
   color: var(--aw-color-error);
 }
-
-.today-session-status.is-paused:not(.is-needs-action):not(.is-error) {
-  color: var(--aw-text-secondary);
-}

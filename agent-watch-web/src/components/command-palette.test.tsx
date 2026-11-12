@@ -403,14 +403,6 @@ it('matches a session by branch name and shows its task, branch, and repository'
   )
 })
 
-it('shows Paused for a paused session regardless of its kind', () => {
-  renderPalette({ sessions: [{ ...session, isPaused: true, kind: 'Stopped' }] })
-
-  expect(
-    container.querySelector('.command-palette-item-kind')?.textContent,
-  ).toEqual('Paused')
-})
-
 it.each([
   ['omitted', undefined],
   ['null', null],

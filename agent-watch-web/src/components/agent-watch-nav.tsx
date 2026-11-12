@@ -168,7 +168,7 @@ export function AgentWatchNav({
         </section>
       ) : null}
       <section className="today-nav" aria-labelledby="today-nav-title">
-        <h2 id="today-nav-title">TODAY</h2>
+        <h2 id="today-nav-title">Starred</h2>
         {todaySessions.map((session) => (
           <div key={session.id} className="today-nav-item">
             <Button
@@ -194,11 +194,8 @@ export function AgentWatchNav({
                 className={cn(
                   'today-session-status',
                   session.category === 'needs_action' && 'is-needs-action',
-                  session.category === 'in_progress' &&
-                    !session.isPaused &&
-                    'is-working',
+                  session.category === 'in_progress' && 'is-working',
                   session.kind === 'Error' && 'is-error',
-                  session.isPaused && 'is-paused',
                 )}
               >
                 {sessionKindLabel(session)}
