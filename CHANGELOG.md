@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.631](https://github.com/fohte/armyknife/compare/v0.1.630...v0.1.631) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** close iPhone Inbox top gap ([#1630](https://github.com/fohte/armyknife/issues/1630)) ([3b1608a](https://github.com/fohte/armyknife/commit/3b1608adf0b875ac17ef30464aebf0a8547e30f9))
+
 ## [0.1.630](https://github.com/fohte/armyknife/compare/v0.1.629...v0.1.630) (2026-11-12)
 
 
