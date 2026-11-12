@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.652](https://github.com/fohte/armyknife/compare/v0.1.651...v0.1.652) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** show linked PRs in sidebar ([#1676](https://github.com/fohte/armyknife/issues/1676)) ([974064a](https://github.com/fohte/armyknife/commit/974064a4c431321deaac8afd3dd814c0ed23e364))
+
 ## [0.1.651](https://github.com/fohte/armyknife/compare/v0.1.650...v0.1.651) (2026-11-12)
 
 
