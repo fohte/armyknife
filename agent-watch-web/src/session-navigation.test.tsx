@@ -71,7 +71,7 @@ it('maps Later and Board shortcuts separately from row movement', () => {
     { type: 'later' },
     { type: 'later' },
     { type: 'later' },
-    { type: 'archive' },
+    { type: 'close' },
     null,
   ])
 })

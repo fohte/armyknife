@@ -44,7 +44,7 @@ type InboxConversationPanesProps = {
   onCloseStatusPanel?: () => void
   onBack: () => void
   onLater: (id: string) => void
-  onArchiveSession: (id: string) => void
+  onCloseSession: (id: string, keepWorktree?: boolean) => void
   onSelectSession: (id: string) => void
 }
 
@@ -61,7 +61,7 @@ export function InboxConversationPanes({
   onCloseStatusPanel = () => undefined,
   onBack,
   onLater,
-  onArchiveSession,
+  onCloseSession,
   onSelectSession,
 }: InboxConversationPanesProps) {
   const [sessionTrees, setSessionTrees] = useState<
@@ -242,8 +242,8 @@ export function InboxConversationPanes({
         onLater={() => {
           onLater(selectedSession.id)
         }}
-        onArchive={() => {
-          onArchiveSession(selectedSession.id)
+        onClose={() => {
+          onCloseSession(selectedSession.id)
         }}
         isToday={selectedSession.isToday === true}
         onToggleToday={(isToday) => {

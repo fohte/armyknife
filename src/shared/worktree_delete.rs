@@ -21,7 +21,35 @@ pub(crate) struct WorktreeDeletePlan {
     merge_status: Option<MergeStatus>,
 }
 
-pub(crate) async fn prepare(worktree_path: &Path, force: bool) -> Result<WorktreeDeletePlan> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnmergedWorktreePolicy {
+    Confirm,
+    Reject,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "Branch `{branch}` is not merged ({reason}); close the session while keeping its worktree to continue"
+)]
+pub(crate) struct UnmergedWorktreeError {
+    branch: String,
+    reason: String,
+}
+
+impl UnmergedWorktreeError {
+    pub(crate) fn new(branch: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            branch: branch.into(),
+            reason: reason.into(),
+        }
+    }
+}
+
+pub(crate) async fn prepare(
+    worktree_path: &Path,
+    force: bool,
+    unmerged_policy: UnmergedWorktreePolicy,
+) -> Result<WorktreeDeletePlan> {
     let repo = GitRepo::open_at(worktree_path).map_err(|_| WmError::NotInGitRepo)?;
     let main_repo = get_main_repo(&repo)?;
 
@@ -30,7 +58,8 @@ pub(crate) async fn prepare(worktree_path: &Path, force: bool) -> Result<Worktre
     let worktree_name = find_worktree_name(&main_repo, &worktree_path_str)?;
     let branch_name = get_worktree_branch(&main_repo, &worktree_name);
 
-    let merge_status = check_merge_status(&main_repo, branch_name.as_deref(), force).await?;
+    let merge_status =
+        check_merge_status(&main_repo, branch_name.as_deref(), force, unmerged_policy).await?;
 
     Ok(WorktreeDeletePlan {
         main_repo,
@@ -178,11 +207,13 @@ async fn check_merge_status(
     repo: &GitRepo,
     branch_name: Option<&str>,
     force: bool,
+    unmerged_policy: UnmergedWorktreePolicy,
 ) -> Result<Option<MergeStatus>> {
     let repo_for_status = repo.clone();
     check_merge_status_with(
         branch_name,
         force,
+        unmerged_policy,
         |branch| repo.local_branch_exists(branch),
         move |branch| {
             let branch = branch.to_string();
@@ -195,6 +226,7 @@ async fn check_merge_status(
 async fn check_merge_status_with<F, G, Fut>(
     branch_name: Option<&str>,
     force: bool,
+    unmerged_policy: UnmergedWorktreePolicy,
     branch_exists: F,
     get_status: G,
 ) -> Result<Option<MergeStatus>>
@@ -209,6 +241,9 @@ where
 
     let merge_status = get_status(branch).await;
     if !merge_status.should_cleanup() && !force {
+        if unmerged_policy == UnmergedWorktreePolicy::Reject {
+            return Err(UnmergedWorktreeError::new(branch, merge_status.reason()).into());
+        }
         eprintln!(
             "Warning: Branch '{}' is not merged ({})",
             branch,
@@ -279,6 +314,7 @@ mod tests {
         let result = check_merge_status_with(
             Some("feature"),
             false,
+            UnmergedWorktreePolicy::Confirm,
             |branch| {
                 looked_up_branch = Some(branch.to_string());
                 true
@@ -300,6 +336,30 @@ mod tests {
                 Some(MergeStatus::Merged {
                     reason: "PR #42 merged".to_string(),
                 }),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_unmerged_worktrees_without_prompting() {
+        let result = check_merge_status_with(
+            Some("feature"),
+            false,
+            UnmergedWorktreePolicy::Reject,
+            |_| true,
+            |_| {
+                std::future::ready(MergeStatus::NotMerged {
+                    reason: "pull request is still open".to_string(),
+                })
+            },
+        )
+        .await;
+
+        assert_eq!(
+            result.err().map(|error| error.to_string()),
+            Some(
+                "Branch `feature` is not merged (pull request is still open); close the session while keeping its worktree to continue"
+                    .to_string(),
             ),
         );
     }

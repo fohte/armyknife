@@ -71,6 +71,7 @@ pub use clean::CleanArgs;
 pub use clean_detached::CleanDetachedArgs;
 pub use close::CloseArgs;
 pub(crate) use close::close_worktree_path;
+pub(crate) use close::{SessionLifecyclePersistenceError, close_from_watch_web};
 pub use codex::CodexArgs;
 pub use codex_subagent_stop::{CodexSubagentStopArgs, CodexSubagentStopWorkerArgs};
 pub use crit::CritCommands;

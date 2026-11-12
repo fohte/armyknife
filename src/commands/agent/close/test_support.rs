@@ -71,6 +71,7 @@ pub(super) enum Call {
 
 pub(super) struct FakeRuntime {
     pub(super) calls: RefCell<Vec<Call>>,
+    pub(super) ended_sessions: RefCell<Vec<String>>,
     pub(super) pane_exists: Result<bool>,
     pub(super) pane_session_id: Option<String>,
     pub(super) draft: Option<bool>,
@@ -86,6 +87,7 @@ impl Default for FakeRuntime {
     fn default() -> Self {
         Self {
             calls: RefCell::new(Vec::new()),
+            ended_sessions: RefCell::new(Vec::new()),
             pane_exists: Ok(true),
             pane_session_id: Some("session-1".to_string()),
             draft: Some(false),
@@ -179,6 +181,13 @@ impl CloseRuntime for FakeRuntime {
         self.calls
             .borrow_mut()
             .push(Call::EndCodexSession(session_id.to_string()));
+        Ok(())
+    }
+
+    fn mark_session_ended(&self, session_id: &str) -> Result<()> {
+        self.ended_sessions
+            .borrow_mut()
+            .push(session_id.to_string());
         Ok(())
     }
 

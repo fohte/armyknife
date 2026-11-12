@@ -83,6 +83,9 @@ export function App() {
   const laterSubmissionInFlight = useRef(false)
   const laterRequestId = useRef(0)
   const [error, setError] = useState<string | null>(null)
+  const [closeRetrySessionId, setCloseRetrySessionId] = useState<string | null>(
+    null,
+  )
   const [loaded, setLoaded] = useState(false)
   const inboxCollapsed = manualInboxCollapsed ?? statusPanelOpen
   const toggleInbox = useCallback(() => {
@@ -165,12 +168,13 @@ export function App() {
     openSessionInInbox,
     openTodaySession,
     focusSession,
-    archiveDoneSessions,
+    closeDoneSessions,
     toggleToday,
   } = useCommandPaletteController({
     sessions: sessionsWithElapsedTime,
     navigate,
     setError,
+    setCloseRetrySessionId,
     setFocusedProjectName,
     setLaterExpanded,
     selectedId,
@@ -293,16 +297,16 @@ export function App() {
     [beginLaterMutation, closeLater, finishLaterMutation],
   )
 
-  const archiveDoneSession = useCallback(
-    (sessionId: string) => {
+  const closeDoneSession = useCallback(
+    (sessionId: string, keepWorktree = false) => {
       const session = sessionsWithElapsedTime.find(
         (candidate) => candidate.id === sessionId,
       )
       if (session !== undefined) {
-        void archiveDoneSessions([session])
+        void closeDoneSessions([session], keepWorktree)
       }
     },
-    [archiveDoneSessions, sessionsWithElapsedTime],
+    [closeDoneSessions, sessionsWithElapsedTime],
   )
 
   useEffect(
@@ -371,7 +375,7 @@ export function App() {
     laterSessionId,
     laterSubmissionInFlight,
     closeLater,
-    archiveSession: archiveDoneSession,
+    closeSession: closeDoneSession,
     submitLater,
     navigableSessions,
     openLater,
@@ -453,8 +457,12 @@ export function App() {
     onToggleDone: () => {
       setDoneExpanded((expanded) => !expanded)
     },
-    onArchiveDone: (doneSessions: readonly Session[]) => {
-      void archiveDoneSessions(doneSessions)
+    onCloseDone: (doneSessions: readonly Session[]) => {
+      void closeDoneSessions(doneSessions)
+    },
+    closeRetrySessionId,
+    onCloseKeepWorktree: (sessionId: string) => {
+      closeDoneSession(sessionId, true)
     },
   }
   const navigation = !isMobile ? (
@@ -498,7 +506,7 @@ export function App() {
           }}
           onBack={backToInbox}
           onLater={openLater}
-          onArchiveSession={archiveDoneSession}
+          onCloseSession={closeDoneSession}
           onSelectSession={(id) => {
             if (orderedSessions.some((session) => session.id === id)) {
               navigate((current) => ({ ...current, selectedId: id }))
