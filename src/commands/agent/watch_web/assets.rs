@@ -95,7 +95,7 @@ mod tests {
             (
                 StatusCode::OK,
                 Some("text/html".to_owned()),
-                b"<main>fixture content repeated to verify gzip compression and cache revalidation: fixture content repeated to verify gzip compression and cache revalidation: fixture content repeated to verify gzip compression and cache revalidation</main>\n".to_vec(),
+                include_bytes!("test_assets/index.html").to_vec(),
             )
         );
     }

@@ -342,7 +342,7 @@ mod tests {
         "/apifoo",
         StatusCode::OK,
         Some("text/html"),
-        "<main>fixture content repeated to verify gzip compression and cache revalidation: fixture content repeated to verify gzip compression and cache revalidation: fixture content repeated to verify gzip compression and cache revalidation</main>\n"
+        include_str!("watch_web/test_assets/index.html")
     )]
     #[tokio::test]
     async fn only_api_paths_use_the_api_fallback(
