@@ -10,7 +10,7 @@ import type { ConversationResponse } from '#types'
 
 const MAX_CACHED_CONVERSATIONS = 8
 
-export type CachedConversation = {
+type CachedConversation = {
   conversation: ConversationResponse
   messagesLoadedAt: number
 }
