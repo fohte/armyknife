@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.614](https://github.com/fohte/armyknife/compare/v0.1.613...v0.1.614) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-decision:** clarify sequence scope ([#1595](https://github.com/fohte/armyknife/issues/1595)) ([83669ed](https://github.com/fohte/armyknife/commit/83669ed275267d603b59ff0a58e805d95ea67d76))
+
 ## [0.1.613](https://github.com/fohte/armyknife/compare/v0.1.612...v0.1.613) (2026-11-11)
 
 
