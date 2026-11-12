@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
 
@@ -15,7 +15,7 @@ pub(super) fn clear_stale_links(sessions_dir: &Path, dry_run: bool) -> Result<us
 fn clear_stale_links_with_port_probe(
     sessions_dir: &Path,
     dry_run: bool,
-    mut is_port_live: impl FnMut(u16) -> bool,
+    mut is_endpoint_live: impl FnMut(SocketAddr) -> bool,
 ) -> Result<usize> {
     let candidates = store::list_all_sessions_from(sessions_dir)?
         .into_iter()
@@ -23,7 +23,7 @@ fn clear_stale_links_with_port_probe(
             session
                 .crit_urls
                 .iter()
-                .any(|url| local_crit_port(url).is_some())
+                .any(|url| local_crit_address(url).is_some())
         })
         .collect::<Vec<_>>();
     if candidates.is_empty() {
@@ -32,10 +32,10 @@ fn clear_stale_links_with_port_probe(
     let live_ports = candidates
         .iter()
         .flat_map(|session| session.crit_urls.iter())
-        .filter_map(|url| local_crit_port(url))
+        .filter_map(|url| local_crit_address(url))
         .collect::<HashSet<_>>()
         .into_iter()
-        .filter(|port| is_port_live(*port))
+        .filter(|endpoint| is_endpoint_live(*endpoint))
         .collect::<HashSet<_>>();
     let mut cleared = 0;
 
@@ -74,40 +74,37 @@ fn clear_stale_links_with_port_probe(
     Ok(cleared)
 }
 
-fn is_crit_port_live(port: u16) -> bool {
-    TcpStream::connect_timeout(
-        &SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
-        Duration::from_millis(100),
-    )
-    .is_ok()
+fn is_crit_port_live(endpoint: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&endpoint, Duration::from_secs(1)).is_ok()
 }
 
-fn is_stale_local_crit_url(url: &str, live_ports: &HashSet<u16>) -> bool {
-    local_crit_port(url).is_some_and(|port| !live_ports.contains(&port))
+fn is_stale_local_crit_url(url: &str, live_endpoints: &HashSet<SocketAddr>) -> bool {
+    local_crit_address(url).is_some_and(|endpoint| !live_endpoints.contains(&endpoint))
 }
 
-fn local_crit_port(url: &str) -> Option<u16> {
+fn local_crit_address(url: &str) -> Option<SocketAddr> {
     let port = crit::crit_port_from_url(url).ok()?;
-    reqwest::Url::parse(url)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_string))
-        .is_some_and(|host| {
-            host == "localhost"
-                || host.ends_with(".localhost")
-                || host
-                    .strip_prefix('[')
-                    .and_then(|host| host.strip_suffix(']'))
-                    .unwrap_or(&host)
-                    .parse::<IpAddr>()
-                    .is_ok_and(|address| address.is_loopback())
-        })
-        .then_some(port)
+    let host = reqwest::Url::parse(url).ok()?.host_str()?.to_string();
+    if host == "localhost" || host.ends_with(".localhost") {
+        return Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)));
+    }
+
+    match host.parse::<IpAddr>().ok()? {
+        IpAddr::V4(address) if address.is_loopback() => {
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+        }
+        IpAddr::V6(address) if address.is_loopback() => {
+            Some(SocketAddr::from((Ipv6Addr::LOCALHOST, port)))
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
     use std::collections::{BTreeMap, BTreeSet, HashSet};
+    use std::net::TcpListener;
     use std::path::PathBuf;
 
     use chrono::Utc;
@@ -181,10 +178,14 @@ mod tests {
             "not a URL",
         ]);
         let dir = sessions_dir(&before);
-        let live_ports = HashSet::from([41004]);
-        let actual =
-            clear_stale_links_with_port_probe(dir.path(), false, |port| live_ports.contains(&port))
-                .expect("crit cleanup pass should succeed");
+        let live_endpoints = HashSet::from([
+            SocketAddr::from((Ipv6Addr::LOCALHOST, 41003)),
+            SocketAddr::from((Ipv4Addr::LOCALHOST, 41004)),
+        ]);
+        let actual = clear_stale_links_with_port_probe(dir.path(), false, |endpoint| {
+            live_endpoints.contains(&endpoint)
+        })
+        .expect("crit cleanup pass should succeed");
 
         assert_eq!(
             (
@@ -192,8 +193,9 @@ mod tests {
                 load_session(dir.path(), &before.session_id).crit_urls
             ),
             (
-                4,
+                3,
                 vec![
+                    "http://[::1]:41003/review".to_string(),
                     "http://localhost:41004/review".to_string(),
                     "https://review.example.test:41005/review".to_string(),
                     "http://localhost/review".to_string(),
@@ -228,9 +230,9 @@ mod tests {
         ]);
         let dir = sessions_dir(&before);
         let mut probed_ports = Cell::new(Vec::new());
-        let result = clear_stale_links_with_port_probe(dir.path(), false, |port| {
-            probed_ports.get_mut().push(port);
-            port == 43002
+        let result = clear_stale_links_with_port_probe(dir.path(), false, |endpoint| {
+            probed_ports.get_mut().push(endpoint);
+            endpoint.port() == 43002
         });
         let mut probed_ports = probed_ports.into_inner();
         probed_ports.sort_unstable();
@@ -243,9 +245,38 @@ mod tests {
             ),
             (
                 Ok(2),
-                vec![43001, 43002],
+                vec![
+                    SocketAddr::from((Ipv4Addr::LOCALHOST, 43001)),
+                    SocketAddr::from((Ipv4Addr::LOCALHOST, 43002)),
+                ],
                 vec!["http://localhost:43002/review".to_string()],
             ),
+        );
+    }
+
+    #[test]
+    fn keeps_a_link_when_its_loopback_port_accepts_tcp_connections() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+            .expect("test listener should bind to an ephemeral loopback port");
+        let live_url = format!(
+            "http://127.0.0.1:{}/review",
+            listener
+                .local_addr()
+                .expect("listener has a local address")
+                .port()
+        );
+        let before = session(&[&live_url]);
+        let dir = sessions_dir(&before);
+
+        let actual = clear_stale_links(dir.path(), false)
+            .expect("crit cleanup pass should succeed while the port accepts connections");
+
+        assert_eq!(
+            (
+                actual,
+                load_session(dir.path(), &before.session_id).crit_urls
+            ),
+            (0, vec![live_url]),
         );
     }
 }
