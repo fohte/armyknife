@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.657](https://github.com/fohte/armyknife/compare/v0.1.656...v0.1.657) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** reduce load time ([#1687](https://github.com/fohte/armyknife/issues/1687)) ([c0f6d5e](https://github.com/fohte/armyknife/commit/c0f6d5ee5f7cb0ba38d72d8e1f261633814fff83))
+
 ## [0.1.656](https://github.com/fohte/armyknife/compare/v0.1.655...v0.1.656) (2026-11-12)
 
 
