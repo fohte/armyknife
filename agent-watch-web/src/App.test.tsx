@@ -1594,7 +1594,7 @@ it('resizes the mobile shell with the visual viewport', () => {
   })
 })
 
-it('opens a Later session from its mobile TODAY chip', () => {
+it('opens a Later session from its mobile Starred chip', () => {
   renderApp()
   publishSessions({
     revision: 1,
@@ -3201,7 +3201,7 @@ it('ignores return times from an earlier Later menu request', async () => {
   expect(returnTime).toEqual('22:00')
 })
 
-it('saves a TODAY star from the session row', async () => {
+it('adds a session to Starred from the session row', async () => {
   const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation((input) =>
@@ -3217,7 +3217,7 @@ it('saves a TODAY star from the session row', async () => {
   })
 
   const todayButton = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Add to TODAY"]',
+    '[aria-label="Add to Starred"]',
   )
   await act(async () => {
     todayButton?.click()
@@ -3238,6 +3238,34 @@ it('saves a TODAY star from the session row', async () => {
       },
     ],
   ])
+})
+
+it('reports a Starred update failure', async () => {
+  const fetchMock = vi
+    .fn<typeof fetch>()
+    .mockImplementation((input) =>
+      isConversationPaneRequest(input)
+        ? mockPendingResponse()
+        : Promise.resolve(new Response(null, { status: 500 })),
+    )
+  vi.stubGlobal('fetch', fetchMock)
+  renderApp()
+  publishSessions({
+    revision: 1,
+    sessions: [session('session-a', 'First session')],
+  })
+
+  const starredButton = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Add to Starred"]',
+  )
+  await act(async () => {
+    starredButton?.click()
+    await flushAsyncState()
+  })
+
+  expect(
+    container.querySelector('.load-message.is-error')?.textContent,
+  ).toEqual('Could not update Starred.')
 })
 
 it('skips collapsed Later sessions during keyboard navigation', () => {
