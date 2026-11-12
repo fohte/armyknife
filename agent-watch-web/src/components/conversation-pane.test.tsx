@@ -11,6 +11,7 @@ import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import { useSessionPullRequests } from '#components/use-session-pull-requests'
 import type {
   BackgroundTask,
   ChatItem,
@@ -55,6 +56,27 @@ const session: Session = {
   parent: null,
   ancestorSessionIds: [],
   pullRequest: null,
+}
+
+function PullRequestHookTestView({
+  session: currentSession,
+  enabled,
+}: {
+  session: Session
+  enabled: boolean
+}) {
+  const state = useSessionPullRequests({
+    session: currentSession,
+    enabled,
+  })
+  return (
+    <div>
+      <span>
+        {state.pullRequests.map((pullRequest) => pullRequest.title).join(', ')}
+      </span>
+      <span>{state.loading ? 'Loading' : 'Ready'}</span>
+    </div>
+  )
 }
 
 const actions: SessionActions = {
@@ -1093,6 +1115,122 @@ it('pauses pull request refresh while hidden and refreshes when visible again', 
       '/api/sessions/sample-session/pull-requests',
       '/api/sessions/sample-session/pull-requests',
     ],
+  })
+})
+
+it('reuses recent pull request lists when switching between sessions', async () => {
+  vi.useFakeTimers()
+  setPageVisibility('visible')
+  const firstSession = { ...session, id: 'first-session' }
+  const secondSession = { ...session, id: 'second-session' }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/pull-requests')) {
+      const sessionId = url.split('/')[3] ?? 'unknown-session'
+      return Promise.resolve(
+        jsonResponse({
+          pullRequests: [
+            {
+              number: 43,
+              title: `Request for ${sessionId}`,
+              url: 'https://github.com/sample-org/sample-project/pull/43',
+              state: 'Open',
+              ciState: 'Successful',
+              reviewStatus: 'done',
+            },
+          ],
+          error: null,
+        }),
+      )
+    }
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+
+  const render = (currentSession: Session, enabled: boolean) => {
+    act(() => {
+      root?.render(
+        <PullRequestHookTestView session={currentSession} enabled={enabled} />,
+      )
+    })
+  }
+  const flushRequests = async () => {
+    await act(async () => {
+      for (let index = 0; index < 12; index += 1) await Promise.resolve()
+    })
+  }
+
+  render(firstSession, true)
+  await flushRequests()
+  const requestsAfterFirstLoad = fetcher.mock.calls
+    .map(([input]) => requestUrl(input))
+    .filter((url) => url.endsWith('/pull-requests'))
+
+  render(firstSession, false)
+  render(secondSession, true)
+  await flushRequests()
+  render(firstSession, true)
+  const restoredImmediately = {
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+  await flushRequests()
+  const recentSessionSnapshot = {
+    title: container.querySelector('span')?.textContent,
+    state: container.querySelectorAll('span')[1]?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30_000)
+  })
+  const refreshedSessionSnapshot = {
+    title: container.querySelector('span')?.textContent,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/pull-requests')),
+  }
+
+  const snapshot = () => ({
+    requestsAfterFirstLoad,
+    restoredImmediately,
+    recentSessionSnapshot,
+    refreshedSessionSnapshot,
+  })
+  expect(snapshot()).toEqual({
+    requestsAfterFirstLoad: ['/api/sessions/first-session/pull-requests'],
+    restoredImmediately: {
+      title: 'Request for first-session',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+      ],
+    },
+    recentSessionSnapshot: {
+      title: 'Request for first-session',
+      state: 'Ready',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+      ],
+    },
+    refreshedSessionSnapshot: {
+      title: 'Request for first-session',
+      requests: [
+        '/api/sessions/first-session/pull-requests',
+        '/api/sessions/second-session/pull-requests',
+        '/api/sessions/first-session/pull-requests',
+      ],
+    },
   })
 })
 

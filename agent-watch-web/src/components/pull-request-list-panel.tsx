@@ -1,5 +1,7 @@
 import '#components/pull-request-list-panel.css'
 
+import { useState } from 'react'
+
 import type { SessionPullRequest } from '#types'
 
 type PullRequestListPanelProps = {
@@ -44,6 +46,7 @@ export function PullRequestListPanel({
   loading,
   error,
 }: PullRequestListPanelProps) {
+  const [showCompleted, setShowCompleted] = useState(false)
   if (error !== null && pullRequests.length === 0) {
     return (
       <div className="pull-request-list-feedback" role="alert">
@@ -59,6 +62,18 @@ export function PullRequestListPanel({
     )
   }
 
+  const activePullRequests = pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state !== 'Merged' && pullRequest.state !== 'Closed',
+  )
+  const completedPullRequests = pullRequests.filter(
+    (pullRequest) =>
+      pullRequest.state === 'Merged' || pullRequest.state === 'Closed',
+  )
+  const visiblePullRequests = showCompleted
+    ? [...activePullRequests, ...completedPullRequests]
+    : activePullRequests
+
   return (
     <div className="pull-request-list-panel">
       {error === null ? null : (
@@ -67,7 +82,7 @@ export function PullRequestListPanel({
         </div>
       )}
       <ul className="pull-request-list">
-        {pullRequests.map((pullRequest) => (
+        {visiblePullRequests.map((pullRequest) => (
           <li
             className="pull-request-list-item"
             key={`${pullRequest.url}-${String(pullRequest.number)}`}
@@ -95,11 +110,19 @@ export function PullRequestListPanel({
           </li>
         ))}
       </ul>
-      {loading ? (
-        <div className="pull-request-list-refreshing" role="status">
-          Refreshing…
-        </div>
-      ) : null}
+      {completedPullRequests.length === 0 ? null : (
+        <button
+          className="pull-request-list-completed-toggle"
+          type="button"
+          aria-expanded={showCompleted}
+          onClick={() => {
+            setShowCompleted((expanded) => !expanded)
+          }}
+        >
+          {showCompleted ? 'Hide' : 'Show'}{' '}
+          {String(completedPullRequests.length)} merged
+        </button>
+      )}
     </div>
   )
 }

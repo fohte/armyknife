@@ -19,7 +19,9 @@ use crate::commands::agent::session_title::title_display_name;
 use crate::commands::agent::store;
 #[cfg(test)]
 use crate::commands::agent::tq_session_tasks::SessionTask as LinkedSessionTask;
-use crate::commands::agent::tui::progress_fetch::PullRequestListResponse;
+use crate::commands::agent::tui::progress_fetch::{
+    PullRequestListCache, PullRequestListResponse, fetch_pull_request_list,
+};
 use crate::commands::agent::types::{Engine, Session, SessionStatus};
 use crate::commands::agent::user_turn::{UserTurnKind, user_turns};
 use crate::infra::github::{PrInfo, PrState};
@@ -158,13 +160,15 @@ trait SessionSource: Clone + Send + Sync + 'static {
         task_ids_by_session: HashMap<String, Vec<String>>,
         agent_config: AgentConfig,
     ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
+        let cache = PullRequestListCache::default();
         async move {
-            crate::commands::agent::tui::progress_fetch::fetch_pull_request_list(
+            fetch_pull_request_list(
                 selected_session_id,
                 task_id.as_deref(),
                 &sessions,
                 &task_ids_by_session,
                 &agent_config,
+                &cache,
             )
             .await
         }
@@ -184,6 +188,7 @@ trait SessionSource: Clone + Send + Sync + 'static {
 struct LiveSessionSource {
     enrichment: SessionEnrichmentCache,
     message_loaders: super::messages::RouteLoaders,
+    pull_request_list_cache: PullRequestListCache,
 }
 
 impl SessionSource for LiveSessionSource {
@@ -197,6 +202,28 @@ impl SessionSource for LiveSessionSource {
 
     async fn fetch_pull_requests(&self, sessions: &[Session]) -> HashMap<String, Option<PrInfo>> {
         self.enrichment.pull_requests(sessions).await
+    }
+
+    fn fetch_session_pull_request_list(
+        &self,
+        selected_session_id: String,
+        task_id: Option<String>,
+        sessions: Vec<Session>,
+        task_ids_by_session: HashMap<String, Vec<String>>,
+        agent_config: AgentConfig,
+    ) -> impl Future<Output = Result<PullRequestListResponse, String>> + Send {
+        let cache = self.pull_request_list_cache.clone();
+        async move {
+            fetch_pull_request_list(
+                selected_session_id,
+                task_id.as_deref(),
+                &sessions,
+                &task_ids_by_session,
+                &agent_config,
+                &cache,
+            )
+            .await
+        }
     }
 
     async fn running_background_task_session_ids(
@@ -222,6 +249,7 @@ pub(super) fn router(
     router_with_source(LiveSessionSource {
         enrichment: SessionEnrichmentCache::new(updates),
         message_loaders,
+        pull_request_list_cache: PullRequestListCache::default(),
     })
 }
 

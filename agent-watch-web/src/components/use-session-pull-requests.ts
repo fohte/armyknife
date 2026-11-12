@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { isSessionPullRequestListResponse } from '#components/conversation-pane-response'
 import { requestJson } from '#components/conversation-requests'
@@ -8,10 +8,17 @@ import type { Session, SessionPullRequest } from '#types'
 const PULL_REQUEST_REFRESH_INTERVAL = 30_000
 
 type PullRequestListState = {
-  sessionId: string | null
+  cacheKey: string | null
   pullRequests: SessionPullRequest[]
   loading: boolean
   error: string | null
+}
+
+type CachedPullRequestList = {
+  pullRequests: SessionPullRequest[]
+  error: string | null
+  fetchedAt: number
+  lastAttemptAt: number
 }
 
 type UseSessionPullRequestsOptions = {
@@ -23,12 +30,14 @@ export function useSessionPullRequests({
   session,
   enabled,
 }: UseSessionPullRequestsOptions) {
+  const cacheKey = JSON.stringify([session.id, session.task?.id ?? null])
   const [state, setState] = useState<PullRequestListState>({
-    sessionId: null,
+    cacheKey: null,
     pullRequests: [],
     loading: false,
     error: null,
   })
+  const cache = useRef(new Map<string, CachedPullRequestList>())
 
   useEffect(() => {
     if (!enabled) return
@@ -39,18 +48,25 @@ export function useSessionPullRequests({
     let visible = isPageVisible(visibilityTarget)
     let inFlight = false
     let refreshQueued = false
-    let interval: number | null = null
+    let refreshTimeout: number | null = null
 
-    const stopInterval = () => {
-      if (interval === null) return
-      window.clearInterval(interval)
-      interval = null
+    const stopScheduledRefresh = () => {
+      if (refreshTimeout === null) return
+      window.clearTimeout(refreshTimeout)
+      refreshTimeout = null
     }
-    const startInterval = () => {
-      if (interval !== null) return
-      interval = window.setInterval(() => {
-        refresh()
-      }, PULL_REQUEST_REFRESH_INTERVAL)
+    const scheduleRefresh = () => {
+      stopScheduledRefresh()
+      if (!current || !visible) return
+      const cached = cache.current.get(cacheKey)
+      const dueAt =
+        (cached?.lastAttemptAt ?? Date.now()) + PULL_REQUEST_REFRESH_INTERVAL
+      refreshTimeout = window.setTimeout(
+        () => {
+          refresh()
+        },
+        Math.max(0, dueAt - Date.now()),
+      )
     }
     const refresh = () => {
       if (!current || !visible) return
@@ -60,21 +76,29 @@ export function useSessionPullRequests({
       }
       inFlight = true
       setState((previous) => ({
-        sessionId: session.id,
+        cacheKey,
         pullRequests:
-          previous.sessionId === session.id ? previous.pullRequests : [],
-        loading: true,
-        error: null,
+          previous.cacheKey === cacheKey ? previous.pullRequests : [],
+        loading: previous.cacheKey !== cacheKey,
+        error: previous.cacheKey === cacheKey ? previous.error : null,
       }))
+      const requestedAt = Date.now()
       void requestJson(
         `/api/sessions/${encodeURIComponent(session.id)}/pull-requests`,
         isSessionPullRequestListResponse,
       )
         .match(
           (response) => {
+            const fetchedAt = Date.now()
+            cache.current.set(cacheKey, {
+              pullRequests: response.pullRequests,
+              error: response.error,
+              fetchedAt,
+              lastAttemptAt: requestedAt,
+            })
             if (current) {
               setState({
-                sessionId: session.id,
+                cacheKey,
                 pullRequests: response.pullRequests,
                 loading: false,
                 error: response.error,
@@ -82,13 +106,18 @@ export function useSessionPullRequests({
             }
           },
           (error) => {
+            const previous = cache.current.get(cacheKey)
+            cache.current.set(cacheKey, {
+              pullRequests: previous?.pullRequests ?? [],
+              error: error.message,
+              fetchedAt: previous?.fetchedAt ?? requestedAt,
+              lastAttemptAt: requestedAt,
+            })
             if (current) {
               setState((previous) => ({
-                sessionId: session.id,
+                cacheKey,
                 pullRequests:
-                  previous.sessionId === session.id
-                    ? previous.pullRequests
-                    : [],
+                  previous.cacheKey === cacheKey ? previous.pullRequests : [],
                 loading: false,
                 error: error.message,
               }))
@@ -100,7 +129,9 @@ export function useSessionPullRequests({
           if (current && visible && refreshQueued) {
             refreshQueued = false
             refresh()
+            return
           }
+          scheduleRefresh()
         })
     }
     const onVisibilityChange = (nextVisible: boolean) => {
@@ -108,34 +139,65 @@ export function useSessionPullRequests({
       visible = nextVisible
       if (!visible) {
         refreshQueued = false
-        stopInterval()
+        stopScheduledRefresh()
         return
       }
-      refresh()
-      startInterval()
+      const cached = cache.current.get(cacheKey)
+      if (
+        cached === undefined ||
+        Date.now() - cached.fetchedAt >= PULL_REQUEST_REFRESH_INTERVAL
+      ) {
+        refresh()
+      } else {
+        scheduleRefresh()
+      }
     }
     const unsubscribeVisibility = subscribeToPageVisibility(
       visibilityTarget,
       onVisibilityChange,
     )
 
+    const cached = cache.current.get(cacheKey)
+    if (cached !== undefined) {
+      setState({
+        cacheKey,
+        pullRequests: cached.pullRequests,
+        loading: false,
+        error: cached.error,
+      })
+    }
     if (visible) {
-      refresh()
-      startInterval()
+      if (
+        cached === undefined ||
+        Date.now() - cached.fetchedAt >= PULL_REQUEST_REFRESH_INTERVAL
+      ) {
+        refresh()
+      } else {
+        scheduleRefresh()
+      }
     }
 
     return () => {
       current = false
-      stopInterval()
+      stopScheduledRefresh()
       unsubscribeVisibility()
     }
-  }, [enabled, session.id, session.task?.id])
+  }, [enabled, session.id, cacheKey])
 
-  if (state.sessionId === session.id) {
+  if (state.cacheKey === cacheKey) {
     return state
   }
+  const cached = cache.current.get(cacheKey)
+  if (cached !== undefined) {
+    return {
+      cacheKey,
+      pullRequests: cached.pullRequests,
+      loading: false,
+      error: cached.error,
+    }
+  }
   return {
-    sessionId: session.id,
+    cacheKey,
     pullRequests: [],
     loading: enabled,
     error: null,

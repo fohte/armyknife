@@ -1,11 +1,14 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
 use crate::commands::agent::store;
 use crate::commands::agent::types::{Session, SessionPrContext};
 use crate::infra::git::GitRepo;
-use crate::infra::github::{BranchPrQuery, GitHubClient, PrCiState, PrState};
+use crate::infra::github::{
+    BranchPrQuery, GitHubClient, PrCiState, PrNumberQuery, PrProgressInfo, PrState,
+};
 use crate::infra::tq::{TqChecklist, TqClient, TqGithubLink};
 use crate::shared::config::AgentConfig;
 
@@ -14,6 +17,13 @@ use super::progress::{FetchedDelegate, FetchedProgress, ProgressFetchScope};
 use super::progress_batches::{
     build_implementation_plan, pull_request_list_items, pull_request_queries,
 };
+
+type BranchPrKey = (String, String, String);
+type PrNumberKey = (String, String, u64);
+type BranchProgressMap = HashMap<BranchPrKey, PrProgressInfo>;
+type NumberProgressMap = HashMap<PrNumberKey, PrProgressInfo>;
+type BranchProgressResults = HashMap<BranchPrKey, Option<PrProgressInfo>>;
+type NumberProgressResults = HashMap<PrNumberKey, Option<PrProgressInfo>>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -33,17 +43,112 @@ pub(in crate::commands::agent) struct PullRequestListResponse {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Default)]
+pub(in crate::commands::agent) struct PullRequestListCache {
+    branches: Arc<Mutex<BranchProgressMap>>,
+    numbers: Arc<Mutex<NumberProgressMap>>,
+}
+
+impl PullRequestListCache {
+    fn branches_to_fetch(
+        &self,
+        queries: &[BranchPrQuery],
+    ) -> (Vec<BranchPrQuery>, BranchProgressResults) {
+        let cached = self
+            .branches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut to_fetch = Vec::new();
+        let mut results = HashMap::new();
+        for query in queries {
+            if let Some(progress) = cached.get(&query.key()) {
+                results.insert(query.key(), Some(progress.clone()));
+            } else {
+                to_fetch.push(query.clone());
+            }
+        }
+        (to_fetch, results)
+    }
+
+    fn numbers_to_fetch(
+        &self,
+        queries: &[PrNumberQuery],
+    ) -> (Vec<PrNumberQuery>, NumberProgressResults) {
+        let cached = self
+            .numbers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut to_fetch = Vec::new();
+        let mut results = HashMap::new();
+        for query in queries {
+            if let Some(progress) = cached.get(&query.key()) {
+                results.insert(query.key(), Some(progress.clone()));
+            } else {
+                to_fetch.push(query.clone());
+            }
+        }
+        (to_fetch, results)
+    }
+
+    fn remember_branches(&self, results: &BranchProgressResults) {
+        let terminal = results
+            .iter()
+            .filter_map(|(key, progress)| {
+                progress
+                    .as_ref()
+                    .filter(|progress| is_terminal(&progress.pull_request.state))
+                    .map(|progress| (key.clone(), progress.clone()))
+            })
+            .collect::<Vec<_>>();
+        let mut cached = self
+            .branches
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cached.extend(terminal.iter().cloned());
+        let mut cached_numbers = self
+            .numbers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cached_numbers.extend(terminal.into_iter().map(|((owner, repo, _), progress)| {
+            ((owner, repo, progress.pull_request.number), progress)
+        }));
+    }
+
+    fn remember_numbers(&self, results: &NumberProgressResults) {
+        let mut cached = self
+            .numbers
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cached.extend(results.iter().filter_map(|(key, progress)| {
+            progress
+                .as_ref()
+                .filter(|progress| is_terminal(&progress.pull_request.state))
+                .map(|progress| (key.clone(), progress.clone()))
+        }));
+    }
+}
+
+fn is_terminal(state: &PrState) -> bool {
+    matches!(state, PrState::Merged | PrState::Closed)
+}
+
 pub(in crate::commands::agent) async fn fetch_pull_request_list(
     selected_session_id: String,
     task_id: Option<&str>,
     sessions: &[Session],
     task_ids_by_session: &HashMap<String, Vec<String>>,
     agent_config: &AgentConfig,
+    cache: &PullRequestListCache,
 ) -> Result<PullRequestListResponse, String> {
     let request_scope =
         progress_scope(&selected_session_id, task_id, sessions, task_ids_by_session);
-    let fetched =
-        fetch_progress_for_sessions(selected_session_id, request_scope, sessions.to_vec()).await?;
+    let fetched = fetch_progress_for_sessions(
+        selected_session_id,
+        request_scope,
+        sessions.to_vec(),
+        Some(cache),
+    )
+    .await?;
     let pull_requests = pull_request_list_items(
         &fetched.delegated,
         fetched.implementation.as_ref(),
@@ -109,13 +214,14 @@ pub(super) async fn fetch_progress(
         .await
         .map_err(|error| format!("failed to read agent sessions: {error}"))?
         .map_err(|error| format!("failed to read agent sessions: {error}"))?;
-    fetch_progress_for_sessions(selected_session_id, request_scope, sessions).await
+    fetch_progress_for_sessions(selected_session_id, request_scope, sessions, None).await
 }
 
 async fn fetch_progress_for_sessions(
     selected_session_id: String,
     request_scope: ProgressFetchScope,
     sessions: Vec<Session>,
+    pull_request_cache: Option<&PullRequestListCache>,
 ) -> Result<FetchedProgress, String> {
     let delegated = match request_scope.session_ids.as_ref() {
         Some(session_ids) => {
@@ -146,28 +252,42 @@ async fn fetch_progress_for_sessions(
 
     let mut github_error = None;
     let mut linked_pr_lookup_failed = false;
-    let mut prs = HashMap::new();
-    let mut linked_prs = HashMap::new();
-    if !query_data.queries.is_empty() || !linked_pr_queries.is_empty() {
+    let (branch_queries, mut prs) = pull_request_cache.map_or_else(
+        || (query_data.queries.clone(), HashMap::new()),
+        |cache| cache.branches_to_fetch(&query_data.queries),
+    );
+    let (number_queries, mut linked_prs) = pull_request_cache.map_or_else(
+        || (linked_pr_queries.clone(), HashMap::new()),
+        |cache| cache.numbers_to_fetch(&linked_pr_queries),
+    );
+    let mut fetched_branches = HashMap::new();
+    let mut fetched_numbers = HashMap::new();
+    if !branch_queries.is_empty() || !number_queries.is_empty() {
         match GitHubClient::get() {
             Ok(client) => {
-                if !query_data.queries.is_empty() {
+                if !branch_queries.is_empty() {
                     match client
-                        .get_pr_progress_for_branches_batch(&query_data.queries)
+                        .get_pr_progress_for_branches_batch(&branch_queries)
                         .await
                     {
-                        Ok(found) => prs = found,
+                        Ok(found) => {
+                            prs.extend(found.clone());
+                            fetched_branches = found;
+                        }
                         Err(error) => {
                             github_error = Some(format!("failed to fetch PR progress: {error:#}"));
                         }
                     }
                 }
-                if !linked_pr_queries.is_empty() {
+                if !number_queries.is_empty() {
                     match client
-                        .get_pr_progress_for_numbers_batch(&linked_pr_queries)
+                        .get_pr_progress_for_numbers_batch(&number_queries)
                         .await
                     {
-                        Ok(found) => linked_prs = found,
+                        Ok(found) => {
+                            linked_prs.extend(found.clone());
+                            fetched_numbers = found;
+                        }
                         Err(error) => {
                             linked_pr_lookup_failed = true;
                             github_error.get_or_insert_with(|| {
@@ -182,6 +302,10 @@ async fn fetch_progress_for_sessions(
                 github_error = Some(format!("GitHub is unavailable: {error:#}"));
             }
         }
+    }
+    if let Some(cache) = pull_request_cache {
+        cache.remember_branches(&fetched_branches);
+        cache.remember_numbers(&fetched_numbers);
     }
 
     let delegated: Vec<FetchedDelegate> = delegated
@@ -401,11 +525,103 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::{
-        BranchLookup, ProgressFetchScope, Resolution, branch_query_for_with, direct_children,
-        progress_scope, task_descendant_children,
+        BranchLookup, ProgressFetchScope, PullRequestListCache, Resolution, branch_query_for_with,
+        direct_children, progress_scope, task_descendant_children,
     };
     use crate::commands::agent::types::{Engine, Session, SessionPrContext, SessionStatus};
-    use crate::infra::github::BranchPrQuery;
+    use crate::infra::github::{
+        BranchPrQuery, PrCiState, PrInfo, PrNumberQuery, PrProgressInfo, PrState,
+    };
+
+    #[test]
+    fn pull_request_list_cache_reuses_terminal_branches_only() {
+        let cache = PullRequestListCache::default();
+        let terminal = BranchPrQuery {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            branch: "finished-branch".to_string(),
+        };
+        let open = BranchPrQuery {
+            branch: "active-branch".to_string(),
+            ..terminal.clone()
+        };
+        let missing = BranchPrQuery {
+            branch: "unlinked-branch".to_string(),
+            ..terminal.clone()
+        };
+        let terminal_progress = progress(PrState::Merged, 2048);
+        let (initial_queries, initial_cached) =
+            cache.branches_to_fetch(&[terminal.clone(), open.clone(), missing.clone()]);
+        assert_eq!(
+            initial_queries,
+            vec![terminal.clone(), open.clone(), missing.clone()]
+        );
+        assert_eq!(initial_cached, HashMap::new());
+
+        cache.remember_branches(&HashMap::from([
+            (terminal.key(), Some(terminal_progress.clone())),
+            (open.key(), Some(progress(PrState::Open, 2046))),
+            (missing.key(), None),
+        ]));
+
+        let terminal_number = PrNumberQuery {
+            owner: terminal.owner.clone(),
+            repo: terminal.repo.clone(),
+            number: 2048,
+        };
+        assert_eq!(
+            cache.numbers_to_fetch(std::slice::from_ref(&terminal_number)),
+            (
+                vec![],
+                HashMap::from([(terminal_number.key(), Some(terminal_progress.clone()))])
+            )
+        );
+
+        let (queries, cached) =
+            cache.branches_to_fetch(&[terminal.clone(), open.clone(), missing.clone()]);
+        assert_eq!(queries, vec![open, missing]);
+        assert_eq!(
+            cached,
+            HashMap::from([(terminal.key(), Some(terminal_progress))])
+        );
+    }
+
+    #[test]
+    fn pull_request_list_cache_reuses_closed_number_queries() {
+        let cache = PullRequestListCache::default();
+        let closed = PrNumberQuery {
+            owner: "sample-owner".to_string(),
+            repo: "sample-repo".to_string(),
+            number: 2048,
+        };
+        let open = PrNumberQuery {
+            number: 2046,
+            ..closed.clone()
+        };
+        cache.remember_numbers(&HashMap::from([
+            (closed.key(), Some(progress(PrState::Closed, 2048))),
+            (open.key(), Some(progress(PrState::Open, 2046))),
+        ]));
+
+        let (queries, cached) = cache.numbers_to_fetch(&[closed.clone(), open.clone()]);
+        assert_eq!(queries, vec![open.clone()]);
+        assert_eq!(
+            cached,
+            HashMap::from([(closed.key(), Some(progress(PrState::Closed, 2048)))])
+        );
+    }
+
+    fn progress(state: PrState, number: u64) -> PrProgressInfo {
+        PrProgressInfo {
+            pull_request: PrInfo {
+                number,
+                title: "A sample change".to_string(),
+                state,
+                url: format!("https://github.com/sample-owner/sample-repo/pull/{number}"),
+            },
+            ci_state: PrCiState::Successful,
+        }
+    }
 
     #[test]
     fn lists_all_immediate_children_by_recent_activity() {
