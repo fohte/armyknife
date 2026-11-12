@@ -9,14 +9,10 @@ function areConversationMessagePropsEqual(
   previous: ConversationMessageRowProps,
   next: ConversationMessageRowProps,
 ): boolean {
-  const previousNow = previous.now
-  const nextNow = next.now
   if (
     previous.message !== next.message ||
     previous.isMobile !== next.isMobile ||
-    previousNow?.getFullYear() !== nextNow?.getFullYear() ||
-    previousNow?.getMonth() !== nextNow?.getMonth() ||
-    previousNow?.getDate() !== nextNow?.getDate()
+    previous.now !== next.now
   ) {
     return false
   }

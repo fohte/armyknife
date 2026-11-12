@@ -7292,6 +7292,7 @@ it('refreshes a memoized message time when the local day changes', () => {
   const onSelectSession = () => undefined
   const renderMessage = vi.mocked(renderConversationMessage)
   renderMessage.mockClear()
+  const beforeMidnight = new Date(2030, 8, 11, 23, 59)
   const rowProps = {
     actions,
     actionsReady: true,
@@ -7299,7 +7300,7 @@ it('refreshes a memoized message time when the local day changes', () => {
     selected: false,
     decisionPosition: undefined,
     message,
-    now: new Date(2030, 8, 11, 23, 59),
+    now: beforeMidnight,
     pendingAction: null,
     openInTerminalStatus: null,
     sessionEngine: 'claude' as const,
@@ -7315,12 +7316,7 @@ it('refreshes a memoized message time when the local day changes', () => {
     root?.render(<ConversationMessageRow {...rowProps} />)
   })
   act(() => {
-    root?.render(
-      <ConversationMessageRow
-        {...rowProps}
-        now={new Date(2030, 8, 11, 23, 59, 30)}
-      />,
-    )
+    root?.render(<ConversationMessageRow {...rowProps} now={beforeMidnight} />)
   })
   act(() => {
     root?.render(<ConversationMessageRow {...rowProps} now={afterMidnight} />)
