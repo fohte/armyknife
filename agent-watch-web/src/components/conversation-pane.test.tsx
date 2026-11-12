@@ -613,7 +613,7 @@ function todayToggleSnapshot(onToggleToday: ReturnType<typeof vi.fn>) {
   }
 }
 
-it('toggles TODAY from the iPhone conversation header', () => {
+it('toggles Starred from the iPhone conversation header', () => {
   const onToggleToday = vi.fn()
   renderView(
     () => Promise.resolve(true),
@@ -640,9 +640,35 @@ it('toggles TODAY from the iPhone conversation header', () => {
   })
 
   expect(todayToggleSnapshot(onToggleToday)).toEqual({
-    label: 'Add to TODAY',
+    label: 'Add to Starred',
     pressed: 'false',
     calls: [[true]],
+  })
+})
+
+it('labels a Starred iPhone session for removal', () => {
+  const onToggleToday = vi.fn()
+  renderView(
+    () => Promise.resolve(true),
+    session,
+    undefined,
+    [],
+    actions,
+    true,
+    [],
+    [],
+    false,
+    undefined,
+    null,
+    false,
+    undefined,
+    { isToday: true, onToggleToday },
+  )
+
+  expect(todayToggleSnapshot(onToggleToday)).toEqual({
+    label: 'Remove from Starred',
+    pressed: 'true',
+    calls: [],
   })
 })
 
@@ -2399,6 +2425,27 @@ it('shows a local time on system event rows', () => {
   })
 })
 
+it('renders compact boundaries as a distinct conversation event', () => {
+  renderView(() => Promise.resolve(true), session, undefined, [
+    {
+      type: 'event',
+      kind: 'compact_boundary',
+      text: 'Context compacted',
+      failed: false,
+    },
+  ])
+
+  const event = container.querySelector<HTMLElement>('.chat-event')
+  const getActual = () => ({
+    text: event?.querySelector('.chat-event-text')?.textContent ?? null,
+    kind: event?.getAttribute('data-kind') ?? null,
+  })
+  expect(getActual()).toEqual({
+    text: 'Context compacted',
+    kind: 'compact_boundary',
+  })
+})
+
 it('shows peer images and supports keyboard navigation', () => {
   const linkedSession: Session = {
     ...session,
@@ -2817,6 +2864,7 @@ it('posts a todo completion to its sequence route with the comment', async () =>
       <ConversationPane
         session={session}
         refreshKey={0}
+        sessionTreeRefreshKey={0}
         onSelectSession={() => undefined}
       />,
     )

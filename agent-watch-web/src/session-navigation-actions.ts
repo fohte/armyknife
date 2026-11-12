@@ -56,7 +56,7 @@ export function createSessionNavigationActions({
         setError(null)
       },
       () => {
-        setError('Could not update TODAY.')
+        setError('Could not update Starred.')
       },
     )
   }

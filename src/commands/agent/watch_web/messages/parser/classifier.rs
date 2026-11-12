@@ -25,6 +25,7 @@ pub(super) enum MessageKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum EventKind {
     Armyknife,
+    CompactBoundary,
     System,
     Hook,
 }
@@ -323,6 +324,11 @@ fn system_record(record: &Value, raw_text: &str) -> MessageKind {
         .get("subtype")
         .and_then(Value::as_str)
         .unwrap_or("system event");
+    let kind = if subtype == "compact_boundary" {
+        EventKind::CompactBoundary
+    } else {
+        EventKind::System
+    };
     let text = match subtype {
         "compact_boundary" => "Context compacted".to_owned(),
         "resume" | "session_resume" => "Session resumed".to_owned(),
@@ -331,7 +337,7 @@ fn system_record(record: &Value, raw_text: &str) -> MessageKind {
         _ => subtype.replace('_', " "),
     };
     MessageKind::Event {
-        kind: EventKind::System,
+        kind,
         failed: is_failure(record, subtype, &text),
         text,
     }
@@ -539,6 +545,7 @@ mod tests {
     )]
     #[case::delegation_event(json!({"type":"user","isMeta":true}), "<delegation-update>Worker completed its fictional task.</delegation-update>", None, MessageKind::Event { kind: EventKind::Armyknife, text: "Worker completed its fictional task.".to_owned(), failed: false })]
     #[case::unknown_tag_is_system(json!({"type":"user","isMeta":true}), "<future-notice>Future notice text.</future-notice>", None, MessageKind::Event { kind: EventKind::System, text: "Future notice text.".to_owned(), failed: false })]
+    #[case::compact_boundary_has_a_distinct_kind(json!({"type":"system","subtype":"compact_boundary"}), "", None, MessageKind::Event { kind: EventKind::CompactBoundary, text: "Context compacted".to_owned(), failed: false })]
     #[case::hook_output_is_one_line(json!({"type":"user"}), "<local-command-stdout>First line.\nSecond line.</local-command-stdout>", None, MessageKind::Event { kind: EventKind::Hook, text: "First line. Second line.".to_owned(), failed: false })]
     fn classifies_inbound_records(
         #[case] record: serde_json::Value,
