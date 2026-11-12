@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.658](https://github.com/fohte/armyknife/compare/v0.1.657...v0.1.658) (2026-11-12)
+
+
+### Features
+
+* **agent-watch-web:** fetch deltas, reuse cache ([#1689](https://github.com/fohte/armyknife/issues/1689)) ([697780d](https://github.com/fohte/armyknife/commit/697780d2babe6fc70cb0ffc0221465ecf5984091))
+
 ## [0.1.657](https://github.com/fohte/armyknife/compare/v0.1.656...v0.1.657) (2026-11-12)
 
 
