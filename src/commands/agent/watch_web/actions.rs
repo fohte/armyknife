@@ -1076,8 +1076,18 @@ mod tests {
     #[rstest]
     #[case::approve_without_body("approve", None)]
     #[case::approve_without_request_id("approve", Some(json!({})))]
+    #[case::approve_with_empty_request_id(
+        "approve",
+        Some(json!({ "requestId": "" })),
+    )]
+    #[case::approve_with_whitespace_request_id(
+        "approve",
+        Some(json!({ "requestId": "   " })),
+    )]
     #[case::reject_without_body("reject", None)]
     #[case::reject_without_request_id("reject", Some(json!({})))]
+    #[case::reject_with_empty_request_id("reject", Some(json!({ "requestId": "" })))]
+    #[case::reject_with_whitespace_request_id("reject", Some(json!({ "requestId": "   " })))]
     #[tokio::test]
     async fn permission_actions_require_a_request_id(
         #[case] action: &str,
