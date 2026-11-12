@@ -67,7 +67,10 @@ pub(super) fn parse_session_transcript_incrementally(
     let tail = if fingerprint.is_compressed() {
         Vec::new()
     } else {
-        fingerprint.tail_bytes()?
+        let Some(tail) = fingerprint.tail_bytes()? else {
+            return parse_session_transcript(input);
+        };
+        tail
     };
     *cached = Some(CachedTranscriptParser {
         fingerprint,
@@ -130,7 +133,10 @@ fn advance_cached_parser(
                 }
             };
             if appended {
-                entry.tail = fingerprint.tail_bytes()?;
+                let Some(tail) = fingerprint.tail_bytes()? else {
+                    return Ok(false);
+                };
+                entry.tail = tail;
                 entry.fingerprint = fingerprint.clone();
                 #[cfg(test)]
                 {

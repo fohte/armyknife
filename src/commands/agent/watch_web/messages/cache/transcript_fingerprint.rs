@@ -72,20 +72,17 @@ impl TranscriptFingerprint {
 
     pub(in crate::commands::agent::watch_web::messages) fn tail_bytes(
         &self,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> anyhow::Result<Option<Vec<u8>>> {
         let mut file = match File::open(&self.source_path) {
             Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => {
                 return Err(error)
                     .with_context(|| format!("open transcript {}", self.source_path.display()));
             }
         };
         if !file_matches_fingerprint(&file, self)? {
-            anyhow::bail!(
-                "transcript changed while reading its tail {}",
-                self.source_path.display()
-            );
+            return Ok(None);
         }
         let tail_start = self.len.saturating_sub(TRANSCRIPT_TAIL_BYTES);
         let tail_len = self.len - tail_start;
@@ -97,12 +94,9 @@ impl TranscriptFingerprint {
             .read_to_end(&mut tail)
             .with_context(|| format!("read transcript tail {}", self.source_path.display()))?;
         if tail.len() as u64 != tail_len || !file_matches_fingerprint(&file, self)? {
-            anyhow::bail!(
-                "transcript changed while reading its tail {}",
-                self.source_path.display()
-            );
+            return Ok(None);
         }
-        Ok(tail)
+        Ok(Some(tail))
     }
 
     pub(in crate::commands::agent::watch_web::messages) fn read_delta_from(
@@ -269,7 +263,7 @@ fn matches_tail(
         return Ok(false);
     }
     if previous_tail.is_empty() {
-        return Ok(true);
+        return Ok(previous_len == 0);
     }
     file.seek(SeekFrom::Start(previous_len - tail_len))
         .with_context(|| format!("seek transcript tail {}", path.display()))?;
@@ -432,12 +426,12 @@ mod tests {
             fingerprint
                 .tail_bytes()
                 .expect("captured tail should be read"),
-            expected_tail,
+            Some(expected_tail),
         );
     }
 
     #[rstest]
-    fn transcript_tail_bytes_are_empty_after_the_file_disappears(
+    fn transcript_tail_bytes_are_unavailable_after_the_file_disappears(
         transcript_file: (tempfile::TempDir, std::path::PathBuf),
     ) {
         let (_directory, path) = transcript_file;
@@ -450,8 +444,69 @@ mod tests {
         assert_eq!(
             fingerprint
                 .tail_bytes()
-                .expect("missing transcript should yield an empty tail"),
-            Vec::<u8>::new(),
+                .expect("missing transcript should not be an error"),
+            None,
+        );
+    }
+
+    #[rstest]
+    #[case::file_is_replaced(true)]
+    #[case::file_is_truncated(false)]
+    fn transcript_tail_read_treats_a_changed_file_as_a_rewrite(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+        #[case] replace_file: bool,
+    ) {
+        let (_directory, path) = transcript_file;
+        std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        let fingerprint = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        if replace_file {
+            let replacement = path.with_extension("replacement");
+            std::fs::write(&replacement, b"replacement record\n")
+                .expect("replacement should be written");
+            std::fs::rename(&replacement, &path).expect("transcript should be replaced");
+        } else {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&path)
+                .expect("transcript should open for truncation")
+                .set_len(0)
+                .expect("transcript should be truncated");
+        }
+
+        assert_eq!(
+            fingerprint
+                .tail_bytes()
+                .expect("rewrite should not be a tail read error"),
+            None,
+        );
+    }
+
+    #[rstest]
+    fn empty_saved_tail_does_not_match_a_nonempty_transcript_prefix(
+        transcript_file: (tempfile::TempDir, std::path::PathBuf),
+    ) {
+        let (_directory, path) = transcript_file;
+        std::fs::write(&path, b"first record\n").expect("transcript should be written");
+        let previous = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .expect("transcript should open for appending")
+            .write_all(b"second record\n")
+            .expect("record should be appended");
+        let current = transcript_fingerprint(Engine::Claude, Some(&path))
+            .expect("transcript metadata should be read")
+            .expect("transcript should exist");
+
+        assert_eq!(
+            current
+                .read_delta_from(&previous, &[])
+                .expect("saved tail mismatch should be detected"),
+            (TranscriptChange::Rewritten, Vec::new()),
         );
     }
 
