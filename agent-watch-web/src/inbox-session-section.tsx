@@ -14,8 +14,8 @@ export function renderInboxSessionSection({
   compactRepo,
   isMobile,
   className = '',
-  onArchiveAll,
-  archiveAllDisabled,
+  onCloseAll,
+  closeAllDisabled,
 }: {
   title: string
   sessions: readonly Session[]
@@ -27,23 +27,23 @@ export function renderInboxSessionSection({
   compactRepo: boolean
   isMobile: boolean
   className?: string
-  onArchiveAll?: () => void
-  archiveAllDisabled?: boolean
+  onCloseAll?: () => void
+  closeAllDisabled?: boolean
 }) {
   return (
     <section className={`session-section ${className}`} aria-label={title}>
       <h2 className="section-heading">
         <span>{title}</span>
         <span className="section-count">{count}</span>
-        {onArchiveAll !== undefined ? (
+        {onCloseAll !== undefined ? (
           <Button
             type="button"
             variant="plain"
-            className="inbox-archive-all cursor-pointer"
-            disabled={archiveAllDisabled ?? sessions.length === 0}
-            onClick={onArchiveAll}
+            className="inbox-close-all cursor-pointer"
+            disabled={closeAllDisabled ?? sessions.length === 0}
+            onClick={onCloseAll}
           >
-            Archive all
+            Close all
           </Button>
         ) : null}
       </h2>

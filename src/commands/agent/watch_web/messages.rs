@@ -349,10 +349,7 @@ fn load_conversation_with_queued_prompts(
                 .current_tool
                 .clone()
                 .unwrap_or_else(|| "Permission required".to_string()),
-            description: session
-                .last_message
-                .clone()
-                .unwrap_or_else(|| "Waiting for permission".to_string()),
+            description: "Waiting for permission".to_string(),
         });
     }
 
@@ -1898,7 +1895,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_permission_without_transcript_uses_the_stored_request_details() {
+    fn pending_permission_fallback_does_not_reuse_the_last_assistant_message() {
         let mut session = stored_session();
         session.pending_permission_agent_ids = BTreeSet::from([MAIN_THREAD_AGENT_KEY.to_string()]);
         session.current_tool = Some("Bash(cargo test -p sample)".to_string());
@@ -1911,7 +1908,7 @@ mod tests {
             .unwrap(),
             Some(vec![ChatItem::Permission {
                 tool: "Bash(cargo test -p sample)".to_string(),
-                description: "Run the package tests".to_string(),
+                description: "Waiting for permission".to_string(),
             }])
         );
     }

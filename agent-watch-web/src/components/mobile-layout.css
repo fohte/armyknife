@@ -415,7 +415,7 @@
   font-weight: 700;
 }
 
-.mobile-done-row .mobile-archive-all {
+.mobile-done-row .mobile-close-all {
   height: 26px;
   min-height: 26px;
   flex: 0 0 auto;
@@ -473,7 +473,7 @@
 }
 
 .mobile-conversation-later,
-.mobile-conversation-archive {
+.mobile-conversation-close {
   min-width: 36px;
   min-height: 36px;
   align-self: center;

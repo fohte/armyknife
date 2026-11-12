@@ -35,6 +35,9 @@ export type Session = {
   workType?: string | null
   category: SessionCategory
   isPaused: boolean
+  activityStatus?: 'working' | 'waiting' | 'stopped'
+  waitingReason?: string | null
+  waitingForBackgroundTasks?: boolean
   isCompacting?: boolean
   categoryWhenNotLater?: SessionCategory
   kind: SessionKind | null

@@ -32,6 +32,10 @@ const MAX_DESCENDANT_NODES: usize = 64;
 const SIGTERM_GRACE_PERIOD: Duration = Duration::from_secs(5);
 const DEFAULT_AUTO_PAUSE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+pub(crate) async fn close_from_watch_web(session: &Session, keep_worktree: bool) -> Result<()> {
+    session_close::close_session_value_from_watch_web(session, keep_worktree).await
+}
+
 #[derive(Args, Clone, Default, PartialEq, Eq)]
 pub struct CloseArgs {
     /// Session ID, worktree name, or worktree path to close.
@@ -85,7 +89,23 @@ fn close_tracked_session_with_runtime<R: CloseRuntime>(
 ) -> Result<()> {
     let mut session = session.clone();
     super::session_status::include_pending_status(&mut session);
-    close_session(&session, force, runtime)
+    close_session(&session, force, runtime)?;
+    runtime
+        .mark_session_ended(&session.session_id)
+        .map_err(SessionLifecyclePersistenceError::new)?;
+    Ok(())
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error(
+    "the session closed, but its lifecycle storage cleanup failed; retry Close when storage is available: {0}"
+)]
+pub(crate) struct SessionLifecyclePersistenceError(#[source] anyhow::Error);
+
+impl SessionLifecyclePersistenceError {
+    pub(crate) fn new(source: anyhow::Error) -> Self {
+        Self(source)
+    }
 }
 
 trait CloseRuntime {
@@ -98,6 +118,7 @@ trait CloseRuntime {
     fn send_sigterm(&self, pid: u32) -> io::Result<()>;
     fn wait_for_exit(&self, pid: u32) -> bool;
     fn end_codex_session(&self, session_id: &str) -> Result<()>;
+    fn mark_session_ended(&self, session_id: &str) -> Result<()>;
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()>;
 
     fn unknown_draft_timeout(&self) -> Duration {
@@ -166,6 +187,10 @@ impl CloseRuntime for LiveCloseRuntime {
 
     fn end_codex_session(&self, session_id: &str) -> Result<()> {
         super::hook::end_codex_session(session_id)
+    }
+
+    fn mark_session_ended(&self, session_id: &str) -> Result<()> {
+        super::hook::mark_session_ended_after_close(session_id)
     }
 
     fn kill_pane(&self, tmux_info: &TmuxInfo) -> Result<()> {
@@ -382,6 +407,12 @@ fn ensure_session_is_idle(session: &Session, effective_status: SessionStatus) ->
             ),
         }
     }
+    if session.has_pending_permission_requests() {
+        bail!(
+            "Agent session `{}` has pending permission requests; resolve them and retry this command",
+            session.session_id
+        );
+    }
     Ok(())
 }
 
@@ -444,6 +475,43 @@ mod tests {
         pane_session_call, resolve_pid_call, session,
     };
     use super::*;
+
+    #[rstest]
+    #[case::stopped(
+        SessionStatus::Stopped,
+        Ok(()),
+        vec!["session-1"],
+    )]
+    #[case::running(
+        SessionStatus::Running,
+        Err("Agent session `session-1` is running or waiting for input; complete any requested input and wait for the current turn to finish, then retry this command"),
+        vec![],
+    )]
+    fn close_marks_session_ended_only_after_shutdown_succeeds(
+        mut session: Session,
+        #[case] status: SessionStatus,
+        #[case] expected_result: std::result::Result<(), &str>,
+        #[case] expected_ended_sessions: Vec<&str>,
+    ) {
+        session.status = status;
+        let runtime = FakeRuntime::default();
+
+        let result = close_tracked_session_with_runtime(&session, false, &runtime);
+
+        assert_eq!(
+            (
+                result.map_err(|error| error.to_string()),
+                runtime.ended_sessions.into_inner(),
+            ),
+            (
+                expected_result.map_err(str::to_string),
+                expected_ended_sessions
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+            ),
+        );
+    }
 
     #[rstest]
     #[case::running(SessionStatus::Running, false, false)]
@@ -601,6 +669,27 @@ mod tests {
                     pane_session_call(),
                     Call::LatestTurnStatus("session-1".to_string()),
                 ],
+            ),
+        );
+    }
+
+    #[test]
+    fn close_rejects_pending_permissions_when_the_session_is_stopped() {
+        let mut session = session();
+        session.status = SessionStatus::Stopped;
+        session
+            .pending_permission_agent_ids
+            .insert("fixture-agent-id".to_string());
+        let runtime = FakeRuntime::default();
+
+        let result = close_session(&session, false, &runtime);
+
+        assert_eq!(
+            (result.unwrap_err().to_string(), runtime.calls.into_inner()),
+            (
+                "Agent session `session-1` has pending permission requests; resolve them and retry this command"
+                    .to_string(),
+                vec![pane_exists_call(), pane_session_call()],
             ),
         );
     }

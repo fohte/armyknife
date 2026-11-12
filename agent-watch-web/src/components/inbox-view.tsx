@@ -34,7 +34,9 @@ type InboxViewProps = {
   onToggleInProgress: () => void
   doneExpanded: boolean
   onToggleDone: () => void
-  onArchiveDone: (sessions: readonly Session[]) => void
+  onCloseDone?: (sessions: readonly Session[]) => void
+  closeRetrySessionId?: string | null
+  onCloseKeepWorktree?: (sessionId: string) => void
   filterQuery?: string
   onFilterQueryChange?: (query: string) => void
   filterDialogOpen?: boolean
@@ -74,7 +76,9 @@ export function InboxView({
   onToggleInProgress,
   doneExpanded,
   onToggleDone,
-  onArchiveDone,
+  onCloseDone = () => undefined,
+  closeRetrySessionId = null,
+  onCloseKeepWorktree = () => undefined,
   filterQuery: controlledFilterQuery,
   onFilterQueryChange,
   filterDialogOpen: controlledFilterDialogOpen,
@@ -272,9 +276,20 @@ export function InboxView({
       </div>
       <div className="inbox-scroll-area">
         {error !== null ? (
-          <p className="load-message is-error" role="status">
-            {error}
-          </p>
+          <div className="load-message is-error" role="status">
+            <p>{error}</p>
+            {closeRetrySessionId !== null ? (
+              <Button
+                type="button"
+                variant="plain"
+                onClick={() => {
+                  onCloseKeepWorktree(closeRetrySessionId)
+                }}
+              >
+                Close and keep worktree
+              </Button>
+            ) : null}
+          </div>
         ) : null}
         {!loaded && error === null ? (
           <p className="load-message" role="status">
@@ -401,13 +416,13 @@ export function InboxView({
           <Button
             type="button"
             variant="plain"
-            className="mobile-archive-all cursor-pointer"
+            className="mobile-close-all cursor-pointer"
             disabled={allDone.length === 0}
             onClick={() => {
-              onArchiveDone(allDone)
+              onCloseDone(allDone)
             }}
           >
-            Archive all
+            Close all
           </Button>
         </div>
         {renderInboxSessionSection({
@@ -420,10 +435,10 @@ export function InboxView({
           onToggleToday,
           compactRepo: isMobile,
           isMobile,
-          onArchiveAll: () => {
-            onArchiveDone(allDone)
+          onCloseAll: () => {
+            onCloseDone(allDone)
           },
-          archiveAllDisabled: allDone.length === 0,
+          closeAllDisabled: allDone.length === 0,
         })}
       </div>
       <footer className="inbox-footer" aria-label="Keyboard shortcuts">
@@ -434,7 +449,7 @@ export function InboxView({
           <kbd>L</kbd> Later
         </span>
         <span>
-          <kbd>E</kbd> Archive
+          <kbd>E</kbd> Close
         </span>
         <span>
           <kbd>⇧B</kbd> Board

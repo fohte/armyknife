@@ -1117,7 +1117,7 @@ When `tq` isn't on `PATH`, or the command fails, rows keep task associations fro
 
 Press `t` to open the selected session's linked task in the browser (no-op if the session has no linked task).
 
-armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. Claude Code `SessionEnd`, Codex exits through `a agent codex` or `a agent resume`, explicit Codex close, and thread takeovers can transition sessions to `Ended`. Codex `SessionEnd` keeps an existing `Paused` session paused, records a sweep-signaled shutdown as `Paused`, and otherwise records `Stopped` because a daemon restart also triggers it. Ended sessions are archived by a detached `a agent archive-tq-session-detached --session <id>` worker. Archiving is best-effort and never blocks session shutdown; failures are logged and ignored. This requires a tq CLI that supports `tq session archive`.
+armyknife distinguishes a `Paused` session (auto-paused by `a agent sweep`, resumable) from an `Ended` one (the user exited; gone for good) -- tq's own hooks see both as the same `SessionEnd` event. Claude Code `SessionEnd`, Codex exits through `a agent codex` or `a agent resume`, explicit close with `a agent close` or watch-web (including paused sessions), and thread takeovers can transition sessions to `Ended`. Codex `SessionEnd` keeps an existing `Paused` session paused, records a sweep-signaled shutdown as `Paused`, and otherwise records `Stopped` because a daemon restart also triggers it. Ended sessions are archived by a detached `a agent archive-tq-session-detached --session <id>` worker. Archiving is best-effort and never blocks session shutdown; failures are logged and ignored. This requires a tq CLI that supports `tq session archive`.
 
 #### Environment Variables
 
@@ -1133,10 +1133,10 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 
 ### `a agent watch-web`
 
-`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has related parents or children, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
+`a agent watch-web` starts an HTTP server at `http://127.0.0.1:4317` and opens it in the default browser. Pass `--no-open` to keep it from opening a browser, such as when running it as a background service. If the running executable is replaced, the server restarts with the new binary and open pages reload the embedded SPA. It serves the SPA embedded in the binary, with an Inbox grouped into Needs action, Later, In progress, and Done, plus a Board grouped by project. Sessions can be starred for TODAY from the Inbox and Nav. Later sessions return to Needs action when their timer expires or when they change. The Board puts projects that need action first and can hide quiet projects. Both views reload session metadata when the server sends an update. When a session has an active parent or child, the conversation pane adds a Tree tab that shows their hierarchy and lets users open available sessions. The backend provides `GET /api/sessions` for session metadata, `GET /api/events` for session-store and enrichment updates, and `GET /api/sessions/{id}/messages` for conversation items. `GET /api/sessions/{id}/background-tasks/{task_id}/output` returns plain-text output for a running background Bash task, capped to the last 20 lines and 64 KiB. It reads only the output file recorded in that session's transcript. Saved conversation images are served by `GET /api/images/{name}`; the route only serves files in watch-web's image storage directory, and expired images return `404`. Session actions are available through the routes below. If the SPA has not been built, the page shows the build instructions; build it with:
 
 - `GET /api/sessions/{id}/actions`
-- `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, including ended, non-archived sessions.
+- `GET /api/sessions/{id}/tree` returns the ancestor-rooted session tree, excluding ended sessions.
 - `GET /api/sessions/{id}/background-tasks/{task_id}/output` for the running task's output tail
 - `GET /api/images/{name}` for saved conversation images
 - `GET /api/sessions/later-options` for server-calculated return times
@@ -1149,7 +1149,7 @@ Logs are saved to `~/Library/Caches/armyknife/cc/logs/` (macOS) or `~/.cache/arm
 - `POST /api/sessions/{id}/focus`
 - `POST /api/sessions/{id}/read`
 - `POST /api/sessions/{id}/primary-task` with `{"taskId":"..."}` to choose the primary linked tq task
-- `POST /api/sessions/{id}/archive`
+- `POST /api/sessions/{id}/close` to close a session; send `{"keepWorktree":true}` to preserve its linked worktree
 - `POST /api/sessions/{id}/later` with `{"preset":"one_hour"}` (also accepts `this_evening`, `tomorrow`, `next_week`, `until_it_changes`, and `back_now`)
 - `POST /api/sessions/{id}/today` with `{"isToday":true}` or `{"isToday":false}`
 - `POST /api/sessions/{id}/decisions/{seq}/ok` to mark a decision reviewed
@@ -1212,9 +1212,10 @@ To access the server from another device in your tailnet, keep `a agent watch-we
 
 ```sh
 tailscale serve 4317
+tailscale serve --bg --https=8443 http://127.0.0.1:4318
 ```
 
-Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. The server listens only on `127.0.0.1`; it does not bind to `0.0.0.0`.
+Open the `https://example-device.example-tailnet.ts.net` address printed by Tailscale. The second serve rule publishes Crit reviews through the local relay on port `4318`. See the [Tailscale Serve CLI reference](https://tailscale.com/docs/reference/tailscale-cli/serve) for details. Both servers listen only on `127.0.0.1`; they do not bind to `0.0.0.0`.
 
 ### `a agent clean`
 

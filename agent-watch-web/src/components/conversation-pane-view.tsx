@@ -69,7 +69,7 @@ type ConversationPaneViewProps = {
   fileDropActive?: boolean
   onBack?: () => void
   onLater?: () => void
-  onArchive?: () => void
+  onClose?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
 }
@@ -108,7 +108,7 @@ export function ConversationPaneView({
   fileDropActive = false,
   onBack,
   onLater,
-  onArchive,
+  onClose,
   isToday = false,
   onToggleToday,
 }: ConversationPaneViewProps) {
@@ -298,14 +298,14 @@ export function ConversationPaneView({
             >
               Later
             </Button>
-            {session.category === 'done' && onArchive !== undefined ? (
+            {session.category === 'done' && onClose !== undefined ? (
               <Button
-                className="mobile-conversation-archive cursor-pointer"
+                className="mobile-conversation-close cursor-pointer"
                 type="button"
                 variant="plain"
-                onClick={onArchive}
+                onClick={onClose}
               >
-                Archive
+                Close
               </Button>
             ) : null}
             <Button
@@ -401,14 +401,14 @@ export function ConversationPaneView({
                       #{session.pullRequest.number} PR
                     </a>
                   ) : null}
-                  {session.category === 'done' && onArchive !== undefined ? (
+                  {session.category === 'done' && onClose !== undefined ? (
                     <Button
-                      className="conversation-archive cursor-pointer"
+                      className="conversation-close cursor-pointer"
                       type="button"
                       variant="plain"
-                      onClick={onArchive}
+                      onClick={onClose}
                     >
-                      Archive
+                      Close
                     </Button>
                   ) : null}
                   {actions?.openInTerminal === true ? (
@@ -468,7 +468,15 @@ export function ConversationPaneView({
       session.category === 'in_progress' ||
       (isMobile && backgroundTasks.length > 0) ? (
         <ConversationWorkingStatus
-          showWorking={session.category === 'in_progress'}
+          showWorking={
+            session.activityStatus === 'working' ||
+            (session.activityStatus == null &&
+              session.category === 'in_progress' &&
+              session.waitingForBackgroundTasks !== true)
+          }
+          isWaiting={session.activityStatus === 'waiting'}
+          waitingReason={session.waitingReason}
+          waitingForBackgroundTasks={session.waitingForBackgroundTasks}
           elapsedSeconds={session.elapsedSeconds}
           activeTool={activeTool}
           backgroundTasks={backgroundTasks}

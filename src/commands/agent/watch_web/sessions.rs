@@ -60,6 +60,14 @@ struct PullRequestView {
     state: PrState,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SessionActivityStatus {
+    Working,
+    Waiting,
+    Stopped,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SessionView {
@@ -68,6 +76,9 @@ struct SessionView {
     work_type: Option<String>,
     category: SessionCategory,
     is_paused: bool,
+    activity_status: SessionActivityStatus,
+    waiting_reason: Option<String>,
+    waiting_for_background_tasks: bool,
     category_when_not_later: SessionCategory,
     kind: Option<SessionKind>,
     title: String,
@@ -326,6 +337,8 @@ async fn list_sessions<S: SessionSource>(
                 .agent_status
                 .as_ref()
                 .map(|status| snapshot.agent_config.status_state(&status.kind));
+            let agent_is_waiting = session.status == SessionStatus::Stopped
+                && agent_status_state == Some(config::AgentStatusState::Waiting);
             let proposal_title = unanswered_proposal_titles.get(&session.session_id);
             let needs_action = interrupted || proposal_title.is_some();
             let category_when_not_later = category_for_with_interruption(
@@ -335,6 +348,8 @@ async fn list_sessions<S: SessionSource>(
                 has_running_background_task,
                 agent_status_state,
             );
+            let waiting =
+                agent_is_waiting && category_when_not_later == SessionCategory::InProgress;
             let category = category_for_with_later(
                 session,
                 turn,
@@ -350,6 +365,26 @@ async fn list_sessions<S: SessionSource>(
                 work_type: session.work_type.clone(),
                 category,
                 is_paused: session.status == SessionStatus::Paused,
+                activity_status: if session.status == SessionStatus::Running {
+                    SessionActivityStatus::Working
+                } else if waiting {
+                    SessionActivityStatus::Waiting
+                } else {
+                    SessionActivityStatus::Stopped
+                },
+                waiting_reason: if waiting {
+                    session
+                        .agent_status
+                        .as_ref()
+                        .map(|status| status.note.trim())
+                        .filter(|reason| !reason.is_empty())
+                        .map(str::to_string)
+                } else {
+                    None
+                },
+                waiting_for_background_tasks: session.status == SessionStatus::Stopped
+                    && has_running_background_task
+                    && category_when_not_later == SessionCategory::InProgress,
                 category_when_not_later,
                 kind: kind_for(
                     session,
@@ -464,12 +499,22 @@ fn load_snapshot() -> anyhow::Result<SessionSnapshot> {
 }
 
 fn session_tree_related_ids(sessions: &[Session]) -> HashSet<String> {
+    let tree_sessions = sessions
+        .iter()
+        .filter(|session| session.status != SessionStatus::Ended)
+        .cloned()
+        .collect::<Vec<_>>();
+    let tree_session_ids = tree_sessions
+        .iter()
+        .map(|session| session.session_id.as_str())
+        .collect::<HashSet<_>>();
+    let parent_ids = tree::session_parent_ids(&tree_sessions, &tree_session_ids);
+
     let mut related_ids = HashSet::new();
-    for session in sessions {
-        if !session.ancestor_session_ids.is_empty() {
-            related_ids.insert(session.session_id.clone());
+    for (session_id, parent_id) in parent_ids {
+        if let Some(parent_id) = parent_id {
+            related_ids.extend([session_id, parent_id]);
         }
-        related_ids.extend(session.ancestor_session_ids.iter().cloned());
     }
     related_ids
 }
@@ -762,18 +807,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_includes_ended_ancestors_and_active_session_data() {
+    async fn session_tree_route_excludes_ended_ancestors_and_keeps_active_session_data() {
         let (status, tree) = session_tree_response(source(), "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -791,28 +837,9 @@ mod tests {
                         "decisionCount": 4,
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
-                    {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 
@@ -860,16 +887,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_tree_route_returns_siblings_and_descendants_with_nearest_living_parent() {
+    async fn session_tree_route_reparents_active_descendants_across_ended_sessions() {
         let mut source = source();
-        let mut grandchild = session(SessionStatus::Ended);
+        let mut grandchild = session(SessionStatus::Stopped);
         grandchild.session_id = "grandchild-session".to_string();
-        grandchild.ancestor_session_ids = vec![
-            "parent-session".to_string(),
-            "deleted-intermediate".to_string(),
-        ];
+        grandchild.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
         grandchild.updated_at = Utc.timestamp_opt(800, 0).unwrap();
-        grandchild.last_message = Some("completed the delegated work".to_string());
+        grandchild.last_message = Some("working on delegated task".to_string());
         let mut sibling = session(SessionStatus::Ended);
         sibling.session_id = "sibling-session".to_string();
         sibling.ancestor_session_ids = vec!["parent-session".to_string()];
@@ -895,15 +920,16 @@ mod tests {
 
         let (status, tree) = session_tree_response(source, "child-session").await;
 
-        assert_eq!(status, StatusCode::OK);
         assert_eq!(
-            tree,
-            serde_json::json!({
+            (status, tree),
+            (
+                StatusCode::OK,
+                serde_json::json!({
                 "revision": 7,
                 "sessions": [
                     {
                         "id": "child-session",
-                        "parentId": "parent-session",
+                        "parentId": null,
                         "category": "later",
                         "isActive": true,
                         "kind": "Stopped",
@@ -922,55 +948,22 @@ mod tests {
                         "pullRequest": { "number": 42, "state": "Open" },
                     },
                     {
-                        "id": "parent-session",
-                        "parentId": null,
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "parent title",
-                        "preview": null,
-                        "elapsedSeconds": 200,
-                        "task": {
-                            "id": "parent-task-id",
-                            "number": 18,
-                            "title": "parent task",
-                            "priority": null,
-                            "isClosed": false,
-                        },
-                        "repo": "example-org/parent-repository",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
-                    {
                         "id": "grandchild-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
+                        "parentId": "child-session",
+                        "category": "needs_action",
+                        "isActive": true,
+                        "kind": "Stopped",
                         "title": "Grandchild session",
-                        "preview": "completed the delegated work",
+                        "preview": "working on delegated task",
                         "elapsedSeconds": 300,
                         "task": null,
                         "repo": "example-org/grandchild-repo",
                         "decisionCount": 0,
                         "pullRequest": null,
                     },
-                    {
-                        "id": "sibling-session",
-                        "parentId": "parent-session",
-                        "category": "done",
-                        "isActive": false,
-                        "kind": null,
-                        "title": "Sibling session",
-                        "preview": null,
-                        "elapsedSeconds": 400,
-                        "task": null,
-                        "repo": "example-org/sibling-repo",
-                        "decisionCount": 0,
-                        "pullRequest": null,
-                    },
                 ],
-            }),
+                }),
+            ),
         );
     }
 
@@ -1013,20 +1006,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn session_tree_relation_flag_includes_a_parent_with_only_ended_children() {
-        let mut parent = session(SessionStatus::Running);
-        parent.session_id = "parent-session".to_string();
-        let mut child = session(SessionStatus::Ended);
-        child.session_id = "child-session".to_string();
-        child.ancestor_session_ids = vec!["parent-session".to_string()];
-
-        assert_eq!(
-            super::session_tree_related_ids(&[parent, child]),
-            HashSet::from(["child-session".to_string(), "parent-session".to_string(),]),
-        );
-    }
-
     struct ExpectedSessionDetails<'a> {
         kind: Option<&'a str>,
         category_when_not_later: &'a str,
@@ -1060,6 +1039,9 @@ mod tests {
                 "workType": response.work_type,
                 "category": category,
                 "isPaused": details.is_paused,
+                "activityStatus": if category == "in_progress" { "working" } else { "stopped" },
+                "waitingReason": null,
+                "waitingForBackgroundTasks": false,
                 "categoryWhenNotLater": details.category_when_not_later,
                 "kind": details.kind,
                 "title": "child title",
@@ -1089,7 +1071,7 @@ mod tests {
                     "id": "parent-session",
                     "title": "parent title"
                 },
-                "hasSessionTree": true,
+                "hasSessionTree": false,
                 "ancestorSessionIds": ["parent-session"],
                 "pullRequest": {
                     "number": 42,
@@ -1143,6 +1125,52 @@ mod tests {
                 ),
             ),
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_marks_tree_available_for_live_relatives_across_ended_ancestors(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Running;
+        source.all_sessions[0] = source.sessions[0].clone();
+        let mut ended_intermediate = session(SessionStatus::Ended);
+        ended_intermediate.session_id = "ended-intermediate-session".to_string();
+        ended_intermediate.ancestor_session_ids =
+            vec!["parent-session".to_string(), "child-session".to_string()];
+        let mut descendant = session(SessionStatus::Running);
+        descendant.session_id = "live-descendant-session".to_string();
+        descendant.ancestor_session_ids = vec![
+            "parent-session".to_string(),
+            "child-session".to_string(),
+            "ended-intermediate-session".to_string(),
+        ];
+        source.all_sessions.extend([ended_intermediate, descendant]);
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["hasSessionTree"] = serde_json::json!(true);
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
@@ -1209,6 +1237,7 @@ mod tests {
                 can_open_in_terminal: true,
             },
         );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("working");
         expected["sessions"][0]["preview"] = serde_json::json!("Sample proposal");
 
         assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
@@ -1278,40 +1307,43 @@ mod tests {
         source.sessions[0].transcript_path = Some(transcript_file.path().to_path_buf());
         source.web_states[0].later_until = None;
 
-        assert_eq!(
-            sessions_response(source).await,
-            (
-                StatusCode::OK,
-                expected_response(
-                    expected_category,
-                    None,
-                    true,
-                    ExpectedSessionDetails {
-                        kind: None,
-                        category_when_not_later: expected_category,
-                        is_paused: false,
-                        unread: false,
-                        crit_url: None,
-                    },
-                    ExpectedSessionResponse {
-                        engine: match engine {
-                            Engine::Claude => "claude",
-                            Engine::Codex => "codex",
-                        },
-                        work_type: None,
-                        work_type_nav_labels: serde_json::json!({}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
-            ),
+        let mut expected = expected_response(
+            expected_category,
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: expected_category,
+                is_paused: false,
+                unread: false,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: match engine {
+                    Engine::Claude => "claude",
+                    Engine::Codex => "codex",
+                },
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["activityStatus"] =
+            serde_json::json!(if status == SessionStatus::Running {
+                "working"
+            } else {
+                "stopped"
+            });
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]
     #[case::without_agent_status(None, true, false)]
     #[case::configured_done_with_transcript(Some(AgentStatusState::Done), true, false)]
+    #[case::waiting_with_background_task(Some(AgentStatusState::Waiting), false, false)]
     #[case::pending_task_without_transcript(None, false, false)]
     #[case::pending_task_with_parse_error(None, false, true)]
     #[tokio::test]
@@ -1354,32 +1386,84 @@ mod tests {
                 .insert(status_kind.to_string(), AgentStatusConfig { state });
         }
 
-        assert_eq!(
-            sessions_response(source).await,
-            (
-                StatusCode::OK,
-                expected_response(
-                    "in_progress",
-                    None,
-                    true,
-                    ExpectedSessionDetails {
-                        kind: None,
-                        category_when_not_later: "in_progress",
-                        is_paused: false,
-                        unread: true,
-                        crit_url: None,
-                    },
-                    ExpectedSessionResponse {
-                        engine: "claude",
-                        work_type: None,
-                        work_type_nav_labels: serde_json::json!({}),
-                        updated_at: "1970-01-01T00:16:40Z",
-                        elapsed_seconds: 100,
-                        can_open_in_terminal: true,
-                    },
-                ),
-            ),
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: None,
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
         );
+        expected["sessions"][0]["activityStatus"] =
+            serde_json::json!(if status_state == Some(AgentStatusState::Waiting) {
+                "waiting"
+            } else {
+                "stopped"
+            });
+        expected["sessions"][0]["waitingForBackgroundTasks"] = serde_json::json!(true);
+        if status_state == Some(AgentStatusState::Waiting) {
+            expected["sessions"][0]["waitingReason"] =
+                serde_json::json!("The synthetic task is complete.");
+        }
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn sessions_route_exposes_the_reason_for_a_stopped_waiting_session(
+        mut source: TestSessionSource,
+    ) {
+        source.sessions[0].status = SessionStatus::Stopped;
+        source.sessions[0].agent_status = Some(AgentStatus {
+            kind: "external_wait".to_string(),
+            note: "waiting for an external build".to_string(),
+        });
+        source.agent_statuses.insert(
+            "external_wait".to_string(),
+            AgentStatusConfig {
+                state: AgentStatusState::Waiting,
+            },
+        );
+        source.web_states[0].later_until = None;
+
+        let mut expected = expected_response(
+            "in_progress",
+            None,
+            true,
+            ExpectedSessionDetails {
+                kind: Some("Stopped"),
+                category_when_not_later: "in_progress",
+                is_paused: false,
+                unread: true,
+                crit_url: None,
+            },
+            ExpectedSessionResponse {
+                engine: "claude",
+                work_type: None,
+                work_type_nav_labels: serde_json::json!({}),
+                updated_at: "1970-01-01T00:16:40Z",
+                elapsed_seconds: 100,
+                can_open_in_terminal: true,
+            },
+        );
+        expected["sessions"][0]["activityStatus"] = serde_json::json!("waiting");
+        expected["sessions"][0]["waitingReason"] =
+            serde_json::json!("waiting for an external build");
+
+        assert_eq!(sessions_response(source).await, (StatusCode::OK, expected));
     }
 
     #[rstest]

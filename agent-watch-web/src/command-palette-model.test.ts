@@ -86,9 +86,9 @@ it('builds default groups from needs-action, recent, and available commands', ()
           },
           {
             type: 'command',
-            id: 'archive-done',
-            label: 'Archive all done',
-            description: 'Archive every done session',
+            id: 'close-done',
+            label: 'Close all done',
+            description: 'Close every done session',
           },
         ],
       },

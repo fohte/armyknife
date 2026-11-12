@@ -20,7 +20,7 @@ use crate::shared::caller_pane;
 use crate::shared::env_var::EnvVars;
 use crate::shared::log::short_run_id;
 
-use self::url::parse_port;
+use self::url::{add_url, parse_port};
 
 const CRIT_TITLE: &str = "■ crit - Review requested";
 
@@ -166,7 +166,7 @@ fn record_session_url(session_id: &str, url: &str) -> Result<Session> {
     let Some(mut session) = lock.load()? else {
         bail!("Agent session not found: {session_id}");
     };
-    add_url(&mut session, url);
+    add_url(&mut session.crit_urls, url);
     lock.save(&session)?;
     drop(lock);
     Ok(session)
@@ -399,17 +399,6 @@ fn send_notification(session: &Session, port: u16) -> Result<()> {
     }
 
     crate::infra::notification::send(&notification)
-}
-
-fn add_url(session: &mut Session, url: &str) {
-    if let Some(position) = session
-        .crit_urls
-        .iter()
-        .position(|existing| existing == url)
-    {
-        session.crit_urls.remove(position);
-    }
-    session.crit_urls.push(url.to_string());
 }
 
 pub(super) fn spawn_open_after_watch(session_id: &str) -> Result<()> {

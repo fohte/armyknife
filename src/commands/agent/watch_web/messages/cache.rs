@@ -25,7 +25,6 @@ pub(super) struct MessageCacheKey {
     pub(super) pending_permission_agent_ids: BTreeSet<String>,
     pub(super) pending_permission_request: Option<PendingPermissionRequestCacheKey>,
     pub(super) current_tool: Option<String>,
-    pub(super) last_message: Option<String>,
     pub(super) user_marker: Option<String>,
     pub(super) decisions: Vec<AgentDecision>,
     pub(super) queued_prompts: Vec<WatchWebQueuedPrompt>,
@@ -62,7 +61,6 @@ impl MessageCacheKey {
             pending_permission_agent_ids: session.pending_permission_agent_ids.clone(),
             pending_permission_request: inputs.pending_permission_request,
             current_tool: session.current_tool.clone(),
-            last_message: session.last_message.clone(),
             user_marker: inputs.user_marker,
             decisions: inputs.decisions,
             queued_prompts: inputs.queued_prompts,
@@ -311,8 +309,58 @@ impl MessageCache {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConversationResponse, refresh_image_availability_with};
+    use serde_json::json;
+
+    use super::{
+        ConversationResponse, MessageCacheInputs, MessageCacheKey, refresh_image_availability_with,
+    };
+    use crate::commands::agent::types::{MAIN_THREAD_AGENT_KEY, Session};
     use crate::commands::agent::watch_web::messages::{ChatItem, UserContentPart};
+
+    #[test]
+    fn message_cache_key_ignores_last_assistant_message() {
+        let mut session: Session = serde_json::from_value(json!({
+            "session_id": "fixture-session",
+            "cwd": "/fixture/project",
+            "status": "ended",
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:00Z",
+            "last_message": "Earlier response.",
+            "pending_permission_agent_ids": [MAIN_THREAD_AGENT_KEY],
+            "current_tool": "Bash(echo fixture)",
+        }))
+        .unwrap();
+
+        let first_key = MessageCacheKey::new(
+            &session,
+            MessageCacheInputs {
+                parent: None,
+                pending_permission_request: None,
+                user_marker: None,
+                decisions: Vec::new(),
+                queued_prompts: Vec::new(),
+                peer_out_messages: Vec::new(),
+                proposals: Vec::new(),
+            },
+        )
+        .unwrap();
+        session.last_message = Some("Later response.".to_string());
+        let second_key = MessageCacheKey::new(
+            &session,
+            MessageCacheInputs {
+                parent: None,
+                pending_permission_request: None,
+                user_marker: None,
+                decisions: Vec::new(),
+                queued_prompts: Vec::new(),
+                peer_out_messages: Vec::new(),
+                proposals: Vec::new(),
+            },
+        )
+        .unwrap();
+
+        assert!(first_key == second_key);
+    }
 
     #[test]
     fn refreshes_external_image_status_but_keeps_inline_images_available() {

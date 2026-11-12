@@ -8,6 +8,7 @@ import { renderConversationMessage } from '#components/conversation-message'
 import { ConversationMessageRow } from '#components/conversation-message-row'
 import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
+import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import type {
@@ -254,6 +255,99 @@ function renderView(
         {...(onToggleDecisionsPanel === undefined
           ? {}
           : { onToggleDecisionsPanel })}
+      />,
+    )
+  })
+}
+
+function treeSession(
+  id: string,
+  title: string,
+  parent: Session | null = null,
+): Session {
+  return {
+    ...session,
+    id,
+    title,
+    hasSessionTree: true,
+    parent: parent === null ? null : { id: parent.id, title: parent.title },
+  }
+}
+
+function treeNode(
+  id: string,
+  parentId: string | null,
+  title: string,
+): SessionTreeNode {
+  return {
+    id,
+    parentId,
+    category: 'in_progress',
+    isActive: true,
+    kind: null,
+    title,
+    preview: null,
+    elapsedSeconds: 0,
+    task: null,
+    repo: session.repo,
+    decisionCount: 0,
+    pullRequest: null,
+  }
+}
+
+function inboxFetch(respondToTreeRequest: (url: string) => Promise<Response>) {
+  return vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/tree')) return respondToTreeRequest(url)
+    return Promise.resolve(jsonResponse({}))
+  })
+}
+
+function renderInboxPanes(
+  sessions: readonly Session[],
+  selectedSession: Session,
+  refreshKey = 0,
+) {
+  root ??= createRoot(container)
+  const inboxProps = {
+    sessions,
+    selectedId: selectedSession.id,
+    loaded: true,
+    error: null,
+    connectionError: null,
+    lastUpdatedAt: 0,
+    showAllInProgress: false,
+    onShowMore: () => undefined,
+    onSelect: () => undefined,
+    laterExpanded: false,
+    onToggleLater: () => undefined,
+    onLater: () => undefined,
+    onToggleToday: () => undefined,
+    todaySessions: [],
+    onSelectToday: () => undefined,
+    inProgressExpanded: false,
+    onToggleInProgress: () => undefined,
+    doneExpanded: false,
+    onToggleDone: () => undefined,
+  }
+  act(() => {
+    root?.render(
+      <InboxConversationPanes
+        inboxProps={inboxProps}
+        sessions={sessions}
+        selectedSession={selectedSession}
+        refreshKey={refreshKey}
+        isMobile={false}
+        showMobileConversation={false}
+        statusPanelOpen
+        onBack={() => undefined}
+        onLater={() => undefined}
+        onCloseSession={() => undefined}
+        onSelectSession={() => undefined}
       />,
     )
   })
@@ -547,6 +641,475 @@ it('shows a tree request error instead of hiding the tree tab', async () => {
     treeRequest: ['/api/sessions/sample-session/tree'],
     tab: 'Tree',
     alert: 'Could not load the session tree: Sample tree error',
+  })
+})
+
+it('shows an error when the returned tree omits the selected session', async () => {
+  const treeSession = { ...session, hasSessionTree: true }
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.endsWith('/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(messagesResponse([])))
+    }
+    if (url.endsWith('/actions')) {
+      return Promise.resolve(jsonResponse(actions))
+    }
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(
+        jsonResponse({
+          revision: 1,
+          sessions: [
+            {
+              id: 'other-session',
+              parentId: null,
+              category: 'in_progress',
+              isActive: true,
+              kind: null,
+              title: 'Other session',
+              preview: null,
+              elapsedSeconds: 0,
+              task: null,
+              repo: session.repo,
+              decisionCount: 0,
+              pullRequest: null,
+            },
+            {
+              id: 'other-child-session',
+              parentId: 'other-session',
+              category: 'in_progress',
+              isActive: true,
+              kind: null,
+              title: 'Other child',
+              preview: null,
+              elapsedSeconds: 0,
+              task: null,
+              repo: session.repo,
+              decisionCount: 0,
+              pullRequest: null,
+            },
+          ],
+        }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <ConversationPane
+        session={treeSession}
+        refreshKey={0}
+        statusPanelOpen
+        onSelectSession={() => undefined}
+      />,
+    )
+  })
+
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const snapshot = () => ({
+    treeRequest: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+    tab: container.querySelector('[role="tab"]')?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    rows: container.querySelectorAll('.session-tree-row').length,
+  })
+  expect(snapshot()).toEqual({
+    treeRequest: ['/api/sessions/sample-session/tree'],
+    tab: 'Tree',
+    alert:
+      'Could not load the session tree: The session tree does not contain the selected session.',
+    rows: 0,
+  })
+})
+
+it('reuses cached tree state when navigating within the same tree', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const grandchildSession = treeSession(
+    'grandchild-session',
+    'Grandchild session',
+    childSession,
+  )
+  const siblingSession = treeSession(
+    'sibling-session',
+    'Sibling session',
+    rootSession,
+  )
+  const sessions = [
+    rootSession,
+    childSession,
+    grandchildSession,
+    siblingSession,
+  ]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+    treeNode(grandchildSession.id, childSession.id, grandchildSession.title),
+    treeNode(siblingSession.id, rootSession.id, siblingSession.title),
+  ]
+  const fetcher = inboxFetch(() =>
+    Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(sessions, rootSession)
+  await waitForState(
+    () =>
+      container.querySelector('#session-tree-row-grandchild-session') !== null,
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Collapse Child session"]')
+      ?.click()
+  })
+  renderInboxPanes(sessions, siblingSession)
+  const sameTreeNavigation = {
+    loading: container.querySelector('.session-tree-feedback')?.textContent,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    focusedRow: container.querySelector('.session-tree-row.is-focused')?.id,
+    treeFocused:
+      document.activeElement === container.querySelector('.session-tree-list'),
+    childExpanded: container
+      .querySelector('#session-tree-row-child-session')
+      ?.getAttribute('aria-expanded'),
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+
+  renderInboxPanes(sessions, grandchildSession)
+  const collapsedDescendantNavigation = {
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    focusedRow: container.querySelector('.session-tree-row.is-focused')?.id,
+    treeFocused:
+      document.activeElement === container.querySelector('.session-tree-list'),
+    childExpanded: container
+      .querySelector('#session-tree-row-child-session')
+      ?.getAttribute('aria-expanded'),
+    grandchildRow:
+      container.querySelector('#session-tree-row-grandchild-session') !== null,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+
+  const snapshot = () => ({
+    sameTreeNavigation,
+    collapsedDescendantNavigation,
+  })
+  expect(snapshot()).toEqual({
+    sameTreeNavigation: {
+      loading: undefined,
+      currentRow: 'session-tree-row-sibling-session',
+      focusedRow: 'session-tree-row-child-session',
+      treeFocused: true,
+      childExpanded: 'false',
+      treeRequests: ['/api/sessions/root-session/tree'],
+    },
+    collapsedDescendantNavigation: {
+      currentRow: 'session-tree-row-grandchild-session',
+      focusedRow: 'session-tree-row-child-session',
+      treeFocused: true,
+      childExpanded: 'true',
+      grandchildRow: true,
+      treeRequests: ['/api/sessions/root-session/tree'],
+    },
+  })
+})
+
+it.each(['success', 'failure'] as const)(
+  'ignores an older tree request after a newer tree is cached (%s)',
+  async (oldRequestResult) => {
+    const rootSession = treeSession('root-session', 'Root session')
+    const childSession = treeSession(
+      'child-session',
+      'Child session',
+      rootSession,
+    )
+    const newChildSession = treeSession(
+      'new-child-session',
+      'New child session',
+      childSession,
+    )
+    const sessions = [rootSession, childSession, newChildSession]
+    const oldTree = [
+      treeNode(rootSession.id, null, rootSession.title),
+      treeNode(childSession.id, rootSession.id, childSession.title),
+    ]
+    const latestTree = [
+      treeNode(childSession.id, null, childSession.title),
+      treeNode(newChildSession.id, childSession.id, newChildSession.title),
+    ]
+    let resolveOldTree: ((response: Response) => void) | undefined
+    const oldTreeResponse = new Promise<Response>((resolve) => {
+      resolveOldTree = resolve
+    })
+    const fetcher = inboxFetch((url) => {
+      if (url.endsWith(`/${rootSession.id}/tree`)) return oldTreeResponse
+      return Promise.resolve(
+        jsonResponse({ revision: 2, sessions: latestTree }),
+      )
+    })
+    vi.stubGlobal('fetch', fetcher)
+
+    renderInboxPanes(sessions, rootSession)
+    renderInboxPanes(sessions, childSession)
+    await waitForState(
+      () =>
+        container.querySelector('#session-tree-row-new-child-session') !== null,
+    )
+    await act(async () => {
+      resolveOldTree?.(
+        oldRequestResult === 'success'
+          ? jsonResponse({ revision: 1, sessions: oldTree })
+          : jsonResponse({ error: 'Old tree error' }, 503),
+      )
+      await oldTreeResponse
+    })
+    renderInboxPanes(sessions, childSession)
+
+    const snapshot = () => ({
+      alert: container.querySelector('[role="alert"]')?.textContent,
+      currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+      newChildRow:
+        container.querySelector('#session-tree-row-new-child-session') !== null,
+      treeRequests: fetcher.mock.calls
+        .map(([input]) => requestUrl(input))
+        .filter((url) => url.endsWith('/tree')),
+    })
+    expect(snapshot()).toEqual({
+      alert: undefined,
+      currentRow: 'session-tree-row-child-session',
+      newChildRow: true,
+      treeRequests: [
+        '/api/sessions/root-session/tree',
+        '/api/sessions/child-session/tree',
+      ],
+    })
+  },
+)
+
+it('retains the cached tree after a refresh failure without retrying the same refresh key', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const siblingSession = treeSession(
+    'sibling-session',
+    'Sibling session',
+    rootSession,
+  )
+  const sessions = [rootSession, childSession, siblingSession]
+  const tree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+    treeNode(siblingSession.id, rootSession.id, siblingSession.title),
+  ]
+  let resolveRefresh: ((response: Response) => void) | undefined
+  const refreshResponse = new Promise<Response>((resolve) => {
+    resolveRefresh = resolve
+  })
+  const fetcher = inboxFetch((url) =>
+    url.endsWith(`/${siblingSession.id}/tree`)
+      ? refreshResponse
+      : Promise.resolve(jsonResponse({ revision: 1, sessions: tree })),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(sessions, rootSession)
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+  renderInboxPanes(sessions, siblingSession)
+  const requestsBeforeRefresh = fetcher.mock.calls
+    .map(([input]) => requestUrl(input))
+    .filter((url) => url.endsWith('/tree'))
+  renderInboxPanes(sessions, siblingSession, 1)
+  await act(async () => {
+    resolveRefresh?.(jsonResponse({ error: 'Refresh failed' }, 503))
+    await refreshResponse
+  })
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  renderInboxPanes(sessions, childSession, 1)
+
+  const snapshot = () => ({
+    requestsBeforeRefresh,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    childRow:
+      container.querySelector('#session-tree-row-child-session') !== null,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  })
+  expect(snapshot()).toEqual({
+    requestsBeforeRefresh: ['/api/sessions/root-session/tree'],
+    alert: 'Could not refresh the session tree: Refresh failed',
+    currentRow: 'session-tree-row-child-session',
+    childRow: true,
+    treeRequests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/sibling-session/tree',
+    ],
+  })
+})
+
+it('removes sessions dropped by a refreshed tree from the cache', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const grandchildSession = treeSession(
+    'grandchild-session',
+    'Grandchild session',
+    childSession,
+  )
+  const siblingSession = treeSession(
+    'sibling-session',
+    'Sibling session',
+    rootSession,
+  )
+  const sessions = [
+    rootSession,
+    childSession,
+    grandchildSession,
+    siblingSession,
+  ]
+  const oldTree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+    treeNode(grandchildSession.id, childSession.id, grandchildSession.title),
+    treeNode(siblingSession.id, rootSession.id, siblingSession.title),
+  ]
+  const updatedTree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+    treeNode(siblingSession.id, rootSession.id, 'Updated sibling session'),
+  ]
+  const fetcher = inboxFetch((url) =>
+    Promise.resolve(
+      jsonResponse({
+        revision: 2,
+        sessions: url.endsWith(`/${rootSession.id}/tree`)
+          ? oldTree
+          : updatedTree,
+      }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(sessions, rootSession)
+  await waitForState(
+    () =>
+      container.querySelector('#session-tree-row-grandchild-session') !== null,
+  )
+  renderInboxPanes(sessions, siblingSession, 1)
+  await waitForState(
+    () =>
+      container.querySelector(
+        '#session-tree-row-sibling-session .session-tree-title',
+      )?.textContent === 'Updated sibling session',
+  )
+  renderInboxPanes(sessions, grandchildSession, 1)
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+
+  const snapshot = () => ({
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    siblingTitle: container.querySelector(
+      '#session-tree-row-sibling-session .session-tree-title',
+    )?.textContent,
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  })
+  expect(snapshot()).toEqual({
+    currentRow: undefined,
+    siblingTitle: undefined,
+    alert:
+      'Could not load the session tree: The session tree does not contain the selected session.',
+    treeRequests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/sibling-session/tree',
+      '/api/sessions/grandchild-session/tree',
+    ],
+  })
+})
+
+it('loads a different tree after navigating away from a cached tree', async () => {
+  const rootSession = treeSession('root-session', 'Root session')
+  const childSession = treeSession(
+    'child-session',
+    'Child session',
+    rootSession,
+  )
+  const otherSession = treeSession('other-session', 'Other session')
+  const otherChildSession = treeSession(
+    'other-child-session',
+    'Other child session',
+    otherSession,
+  )
+  const sessions = [rootSession, childSession, otherSession, otherChildSession]
+  const rootTree = [
+    treeNode(rootSession.id, null, rootSession.title),
+    treeNode(childSession.id, rootSession.id, childSession.title),
+  ]
+  const otherTree = [
+    treeNode(otherSession.id, null, otherSession.title),
+    treeNode(otherChildSession.id, otherSession.id, otherChildSession.title),
+  ]
+  const fetcher = inboxFetch((url) =>
+    Promise.resolve(
+      jsonResponse({
+        revision: 1,
+        sessions: url.endsWith(`/${otherSession.id}/tree`)
+          ? otherTree
+          : rootTree,
+      }),
+    ),
+  )
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes(sessions, rootSession)
+  await waitForState(
+    () => container.querySelector('#session-tree-row-child-session') !== null,
+  )
+  renderInboxPanes(sessions, otherSession)
+  const otherTreeLoading = container.querySelector(
+    '.session-tree-feedback',
+  )?.textContent
+  await waitForState(
+    () =>
+      container.querySelector('#session-tree-row-other-child-session') !== null,
+  )
+
+  const snapshot = () => ({
+    otherTreeLoading,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    otherChildRow:
+      container.querySelector('#session-tree-row-other-child-session') !== null,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  })
+  expect(snapshot()).toEqual({
+    otherTreeLoading: 'Loading session tree…',
+    currentRow: 'session-tree-row-other-session',
+    otherChildRow: true,
+    treeRequests: [
+      '/api/sessions/root-session/tree',
+      '/api/sessions/other-session/tree',
+    ],
   })
 })
 
@@ -1996,6 +2559,48 @@ it('shows elapsed time while the session is working without an active tool', () 
   expect(snapshot()).toEqual({
     workingStatus: 'Working · 1m 32s',
     message: 'No messages yet.',
+  })
+})
+
+it('shows the agent status reason while the stopped session is waiting', () => {
+  renderView(vi.fn().mockResolvedValue(true), {
+    ...session,
+    category: 'in_progress',
+    activityStatus: 'waiting',
+    waitingReason: 'waiting for an external build',
+  })
+
+  const snapshot = () => ({
+    status: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    workingDotVisible:
+      container.querySelector('.conversation-working-dot') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Waiting · waiting for an external build',
+    workingDotVisible: false,
+  })
+})
+
+it('shows when the stopped session is waiting for background tasks', () => {
+  renderView(vi.fn().mockResolvedValue(true), {
+    ...session,
+    category: 'in_progress',
+    activityStatus: 'stopped',
+    waitingForBackgroundTasks: true,
+  })
+
+  const snapshot = () => ({
+    status: container.querySelector('.conversation-working-status')
+      ?.textContent,
+    workingDotVisible:
+      container.querySelector('.conversation-working-dot') !== null,
+  })
+
+  expect(snapshot()).toEqual({
+    status: 'Waiting for background tasks',
+    workingDotVisible: false,
   })
 })
 

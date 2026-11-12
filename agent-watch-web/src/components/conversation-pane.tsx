@@ -8,7 +8,6 @@ import {
 import {
   isConversationResponse,
   isSessionActions,
-  isSessionTreeResponse,
 } from '#components/conversation-pane-response'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { requestAction, requestJson } from '#components/conversation-requests'
@@ -19,6 +18,11 @@ import type {
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import {
+  type SessionTreeCallbacks,
+  useSessionTree,
+} from '#components/use-session-tree'
+import type { SessionTreeViewState } from '#session-tree-model'
 import type {
   ConversationResponse,
   OpenInTerminalStatus,
@@ -45,6 +49,14 @@ const RETAINED_MESSAGE_COUNT = 200
 type ConversationPaneProps = {
   session: Session
   sessions?: readonly Session[]
+  initialSessionTree?: readonly SessionTreeNode[] | null
+  initialSessionTreeError?: string | null
+  initialSessionTreeViewState?: SessionTreeViewState | null
+  shouldSkipSessionTreeFetch?: boolean
+  onSessionTreeViewStateChange?: (
+    selectedSessionId: string,
+    state: SessionTreeViewState,
+  ) => void
   refreshKey: number
   onSelectSession: (id: string) => void
   isMobile?: boolean
@@ -53,14 +65,22 @@ type ConversationPaneProps = {
   onCloseStatusPanel?: () => void
   onBack?: () => void
   onLater?: () => void
-  onArchive?: () => void
+  onClose?: () => void
   isToday?: boolean
   onToggleToday?: (isToday: boolean) => void
-}
+} & SessionTreeCallbacks
 
 export function ConversationPane({
   session,
   sessions = EMPTY_SESSIONS,
+  initialSessionTree = null,
+  initialSessionTreeError = null,
+  initialSessionTreeViewState = null,
+  shouldSkipSessionTreeFetch = false,
+  onSessionTreeLoaded,
+  onSessionTreeRequestStarted,
+  onSessionTreeRequestFailed,
+  onSessionTreeViewStateChange,
   refreshKey,
   onSelectSession,
   isMobile = false,
@@ -69,7 +89,7 @@ export function ConversationPane({
   onCloseStatusPanel = () => undefined,
   onBack = () => undefined,
   onLater = () => undefined,
-  onArchive,
+  onClose,
   isToday = false,
   onToggleToday = () => undefined,
 }: ConversationPaneProps) {
@@ -81,8 +101,16 @@ export function ConversationPane({
   const loadingOlderRef = useRef(false)
   const [messagesLoadedAt, setMessagesLoadedAt] = useState<number | null>(null)
   const [actions, setActions] = useState<SessionActions | null>(null)
-  const [sessionTree, setSessionTree] = useState<SessionTreeNode[] | null>(null)
-  const [sessionTreeError, setSessionTreeError] = useState<string | null>(null)
+  const { sessionTree, sessionTreeError } = useSessionTree({
+    session,
+    initialSessionTree,
+    initialSessionTreeError,
+    shouldSkipSessionTreeFetch,
+    refreshKey,
+    onSessionTreeLoaded,
+    onSessionTreeRequestStarted,
+    onSessionTreeRequestFailed,
+  })
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -219,33 +247,6 @@ export function ConversationPane({
       requestGeneration.current += 1
     }
   }, [refresh, refreshKey])
-
-  useEffect(() => {
-    if (session.hasSessionTree !== true) {
-      setSessionTree(null)
-      setSessionTreeError(null)
-      return
-    }
-    let current = true
-    setSessionTreeError(null)
-    void requestJson(
-      `/api/sessions/${encodeURIComponent(session.id)}/tree`,
-      isSessionTreeResponse,
-    ).match(
-      (response) => {
-        if (current) {
-          setSessionTree(response.sessions)
-          setSessionTreeError(null)
-        }
-      },
-      (treeError) => {
-        if (current) setSessionTreeError(treeError.message)
-      },
-    )
-    return () => {
-      current = false
-    }
-  }, [refreshKey, session.hasSessionTree, session.id])
 
   useEffect(() => {
     setPendingPermissionAction(null)
@@ -401,6 +402,9 @@ export function ConversationPane({
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
     sessionTreeError,
+    sessionTreeViewState: initialSessionTreeViewState,
+    onSessionTreeViewStateChange: (state) =>
+      onSessionTreeViewStateChange?.(session.id, state),
     onSelectSession,
     statusPanelOpen,
     onAction,
@@ -443,7 +447,7 @@ export function ConversationPane({
       onSelectDecision={onSelectDecision}
       onBack={onBack}
       onLater={onLater}
-      {...(onArchive === undefined ? {} : { onArchive })}
+      {...(onClose === undefined ? {} : { onClose })}
       isToday={isToday}
       onToggleToday={onToggleToday}
     />

@@ -1,5 +1,59 @@
 # Changelog
 
+## [0.1.627](https://github.com/fohte/armyknife/compare/v0.1.626...v0.1.627) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** support Crit over tailnet ([#1622](https://github.com/fohte/armyknife/issues/1622)) ([59685fc](https://github.com/fohte/armyknife/commit/59685fc19370801dc1b8fbe96383afca48d51d1a))
+
+## [0.1.626](https://github.com/fohte/armyknife/compare/v0.1.625...v0.1.626) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** avoid reloading the Tree ([#1620](https://github.com/fohte/armyknife/issues/1620)) ([03c3920](https://github.com/fohte/armyknife/commit/03c3920f2df2073ba3d381fffc1d1dd54616dca1))
+
+## [0.1.625](https://github.com/fohte/armyknife/compare/v0.1.624...v0.1.625) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** close completed sessions ([#1618](https://github.com/fohte/armyknife/issues/1618)) ([60b7812](https://github.com/fohte/armyknife/commit/60b7812ea14c80d7b522bc51ad732c18e172b7ec))
+
+## [0.1.624](https://github.com/fohte/armyknife/compare/v0.1.623...v0.1.624) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** hide ended sessions in tree ([#1616](https://github.com/fohte/armyknife/issues/1616)) ([6c68721](https://github.com/fohte/armyknife/commit/6c6872141500cb6d27ea5a4d81b3d031eecf6f0f))
+
+## [0.1.623](https://github.com/fohte/armyknife/compare/v0.1.622...v0.1.623) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/watch-web:** hide prior replies ([#1614](https://github.com/fohte/armyknife/issues/1614)) ([5f2e40e](https://github.com/fohte/armyknife/commit/5f2e40e52911032d2925154ace9e31cfbfd3c352))
+
+## [0.1.622](https://github.com/fohte/armyknife/compare/v0.1.621...v0.1.622) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent:** show when stopped sessions are waiting ([#1612](https://github.com/fohte/armyknife/issues/1612)) ([af521d9](https://github.com/fohte/armyknife/commit/af521d916e5f4c244274a1843e3e366cc69f9dbd))
+
+## [0.1.621](https://github.com/fohte/armyknife/compare/v0.1.620...v0.1.621) (2026-11-12)
+
+
+### Features
+
+* **agent:** allow browser opt-out for watch-web ([#1609](https://github.com/fohte/armyknife/issues/1609)) ([6921756](https://github.com/fohte/armyknife/commit/6921756a25396d55e7f33e931fe937a46e2d220f))
+
+
+### Bug Fixes
+
+* **agent:** preserve HTML preview URL on reopen ([#1611](https://github.com/fohte/armyknife/issues/1611)) ([1026cfd](https://github.com/fohte/armyknife/commit/1026cfdca19b1ce59334d42e18e63bef3beb858c))
+
 ## [0.1.620](https://github.com/fohte/armyknife/compare/v0.1.619...v0.1.620) (2026-11-12)
 
 
