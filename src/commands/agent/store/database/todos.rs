@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use rusqlite::{TransactionBehavior, params, params_from_iter};
 
@@ -26,6 +26,12 @@ pub(crate) fn add_agent_todo(
     validate_session_id(session_id)?;
     let mut connection = open_connection(sessions_dir)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let session_exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sessions WHERE session_id = ?1)",
+        [session_id],
+        |row| row.get(0),
+    )?;
+    ensure!(session_exists, "session not found: {session_id}");
     let now = Utc::now().to_rfc3339();
     let seq: i64 = transaction.query_row(
         "SELECT COALESCE(MAX(seq), 0) + 1 FROM agent_todo WHERE session_id = ?1",
@@ -135,6 +141,8 @@ pub(crate) fn complete_agent_todo(
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use chrono::{TimeZone, Utc};
     use rstest::{fixture, rstest};
     use tempfile::TempDir;
@@ -148,6 +156,16 @@ mod tests {
     #[fixture]
     fn sessions_dir() -> TempDir {
         tempfile::tempdir().expect("temporary sessions directory should be created")
+    }
+
+    fn create_session(sessions_dir: &Path, session_id: &str) {
+        open_connection(sessions_dir)
+            .expect("database should open")
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
+                [session_id],
+            )
+            .expect("session row should be stored");
     }
 
     fn normalize_timestamps(mut todos: Vec<AgentTodo>) -> Vec<AgentTodo> {
@@ -164,6 +182,8 @@ mod tests {
 
     #[rstest]
     fn records_lists_and_completes_todos_for_their_sessions(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        create_session(sessions_dir.path(), "session-b");
         let first = add_agent_todo(sessions_dir.path(), "session-a", "First", None)
             .expect("todo should save");
         let second = add_agent_todo(sessions_dir.path(), "session-a", "Second", Some("Details"))
@@ -220,6 +240,7 @@ mod tests {
 
     #[rstest]
     fn completion_advances_the_store_revision_only_once(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
         let seq = add_agent_todo(sessions_dir.path(), "session-a", "Task", None)
             .expect("todo should save");
         let before =
@@ -245,6 +266,21 @@ mod tests {
     }
 
     #[rstest]
+    fn todo_is_not_added_after_its_session_was_deleted(sessions_dir: TempDir) {
+        create_session(sessions_dir.path(), "session-a");
+        let removed = super::super::delete_session(sessions_dir.path(), "session-a")
+            .expect("session should be deleted");
+
+        let result = add_agent_todo(sessions_dir.path(), "session-a", "Orphan", None);
+        let todos = agent_todos(sessions_dir.path(), "session-a").unwrap();
+
+        assert_eq!(
+            (removed, result.unwrap_err().to_string(), todos),
+            (true, "session not found: session-a".to_string(), Vec::new()),
+        );
+    }
+
+    #[rstest]
     #[case::incomplete_todo(false, false, true)]
     #[case::all_todos_completed(true, true, false)]
     fn deleting_a_session_preserves_todos_until_all_are_completed(
@@ -253,13 +289,7 @@ mod tests {
         #[case] expected_removed: bool,
         #[case] expected_session_exists: bool,
     ) {
-        let connection = open_connection(sessions_dir.path()).expect("database should open");
-        connection
-            .execute(
-                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
-                ["session-a"],
-            )
-            .expect("session row should be stored");
+        create_session(sessions_dir.path(), "session-a");
         let first_seq = add_agent_todo(sessions_dir.path(), "session-a", "First", None).unwrap();
         let second_seq = add_agent_todo(sessions_dir.path(), "session-a", "Second", None).unwrap();
         complete_agent_todo(sessions_dir.path(), "session-a", first_seq, Some("Done")).unwrap();

@@ -103,8 +103,22 @@ mod tests {
             .expect("todo bodies should load")
     }
 
+    fn create_session(sessions_dir: &Path) {
+        crate::commands::agent::store::session_store_revision_from(sessions_dir)
+            .expect("session store should initialize");
+        let connection = rusqlite::Connection::open(sessions_dir.join("sessions.db"))
+            .expect("session database should open");
+        connection
+            .execute(
+                "INSERT INTO sessions (session_id, data, rev) VALUES (?1, '{}', 0)",
+                ["session-a"],
+            )
+            .expect("session row should be stored");
+    }
+
     #[rstest]
     fn records_a_todo_with_optional_detail(sessions_dir: TempDir) {
+        create_session(sessions_dir.path());
         let seq = record_todo(
             sessions_dir.path(),
             "session-a",

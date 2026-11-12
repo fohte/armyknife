@@ -1274,7 +1274,7 @@ mod tests {
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
         assert!(matches!(app.mode, AppMode::Confirm { .. }));
-        app.confirm_delete_with(|_| Ok(()))
+        app.confirm_delete_with(|_| Ok(true))
             .expect("session deletion should succeed");
 
         assert_eq!(
@@ -1323,7 +1323,7 @@ mod tests {
         let mut app = App::with_sessions(vec![s1]);
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
-        app.confirm_delete_with(|_| Ok(()))
+        app.confirm_delete_with(|_| Ok(true))
             .expect("session deletion should succeed");
 
         assert_eq!(app.mode, AppMode::Normal);
@@ -1536,7 +1536,7 @@ mod tests {
         let mut app = App::with_sessions(vec![s1]);
 
         handle_key_event(&mut app, key(KeyCode::Char('d')));
-        app.confirm_delete_with(|_| Ok(()))
+        app.confirm_delete_with(|_| Ok(true))
             .expect("session deletion should succeed");
 
         assert_eq!(app.mode, AppMode::Normal);

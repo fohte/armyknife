@@ -339,22 +339,23 @@ pub(crate) fn update_session_tmux_pane_id_in(
 }
 
 /// Archives a Codex thread before deleting its session record.
-/// Returns Ok(()) even if the record doesn't exist or archiving fails.
-pub fn delete_session(session_id: &str) -> Result<()> {
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub fn delete_session(session_id: &str) -> Result<bool> {
     archive::delete_session_with_archive(session_id)
 }
 
 /// Deletes a session without archiving its Codex thread.
 /// Used when cleanup handles archive ordering separately.
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
 pub(crate) fn delete_session_without_archive(session_id: &str) -> Result<bool> {
     database::delete_session(&sessions_dir()?, session_id)
 }
 
 /// Deletes a session from a specific directory.
 /// Allows testing with temporary directories.
-pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<()> {
-    database::delete_session(sessions_dir, session_id)?;
-    Ok(())
+/// Returns false when an incomplete todo keeps the row available or it was already absent.
+pub(crate) fn delete_session_from(sessions_dir: &Path, session_id: &str) -> Result<bool> {
+    database::delete_session(sessions_dir, session_id)
 }
 
 /// Sorts sessions by updated_at descending with stability threshold.

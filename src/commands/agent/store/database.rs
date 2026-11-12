@@ -274,6 +274,8 @@ pub(crate) fn touch_session(sessions_dir: &Path, session_id: &str) -> Result<()>
     Ok(())
 }
 
+/// Deletes a session unless an incomplete todo still needs the user's attention.
+/// Returns false when a todo keeps the row available or the row was already absent.
 pub(crate) fn delete_session(sessions_dir: &Path, session_id: &str) -> Result<bool> {
     validate_session_id(session_id)?;
     if !sessions_dir.exists() {
@@ -444,6 +446,8 @@ fn read_revision(connection: &Connection) -> Result<i64> {
     )?)
 }
 
+/// Keeps sessions with incomplete todos available to watch-web.
+/// Returns false when a todo keeps the row available or the row was already absent.
 fn delete_session_row(connection: &Connection, session_id: &str) -> Result<bool> {
     let has_incomplete_todos: bool = connection.query_row(
         "SELECT EXISTS(

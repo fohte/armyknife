@@ -46,6 +46,15 @@ impl App {
         &mut self,
         changes: store::SessionStoreChanges,
     ) -> Result<(bool, bool)> {
+        self.apply_session_store_changes_with(changes, is_session_stale, store::delete_session)
+    }
+
+    fn apply_session_store_changes_with(
+        &mut self,
+        changes: store::SessionStoreChanges,
+        mut is_stale: impl FnMut(&Session) -> bool,
+        mut delete_session: impl FnMut(&str) -> Result<bool>,
+    ) -> Result<(bool, bool)> {
         let selection = self.selection_anchor();
         let revision_changed = changes.revision > self.session_store_revision;
         let mut visible_state_changed = false;
@@ -71,11 +80,16 @@ impl App {
                     self.vibe_enabled_session_ids.remove(&session_id);
                 }
 
-                if is_session_stale(&session) {
-                    self.remove_session(&session_id);
-                    store::delete_session(&session_id)?;
-                    self.vibe_enabled_session_ids.remove(&session_id);
-                    visible_state_changed |= was_visible;
+                if is_stale(&session) {
+                    if delete_session(&session_id)? {
+                        self.remove_session(&session_id);
+                        self.vibe_enabled_session_ids.remove(&session_id);
+                        visible_state_changed |= was_visible;
+                    } else {
+                        self.upsert_session(session);
+                        visible_state_changed = true;
+                        new_session_created |= !was_visible;
+                    }
                 } else if session.status == SessionStatus::Ended {
                     self.remove_session(&session_id);
                     visible_state_changed |= was_visible;
@@ -427,6 +441,59 @@ mod tests {
 
     fn create_test_app(sessions: Vec<Session>) -> App {
         App::with_sessions(sessions)
+    }
+
+    #[test]
+    fn stale_session_with_pending_todo_stays_visible_when_deletion_is_blocked() {
+        let stale = create_test_session("todo-session");
+        let mut app = create_test_app(vec![stale.clone()]);
+
+        let result = app
+            .apply_session_store_changes_with(
+                store::SessionStoreChanges {
+                    changed_sessions: vec![stale],
+                    existing_session_ids: HashSet::from(["todo-session".to_string()]),
+                    revision: 1,
+                },
+                |_| true,
+                |_| Ok(false),
+            )
+            .expect("session-store changes should apply");
+
+        assert_eq!(
+            (
+                result,
+                app.sessions
+                    .iter()
+                    .map(|session| session.session_id.as_str())
+                    .collect::<Vec<_>>(),
+            ),
+            ((true, false), vec!["todo-session"]),
+        );
+    }
+
+    #[test]
+    fn confirmed_delete_keeps_a_session_when_store_blocks_removal() {
+        let mut app = create_test_app(vec![create_test_session("todo-session")]);
+        app.mode = super::super::AppMode::Confirm {
+            session_id: "todo-session".to_string(),
+            is_alive: false,
+            worktree_cleanup: None,
+        };
+
+        app.confirm_delete_with(|_| Ok(false))
+            .expect("blocked deletion should be handled");
+
+        assert_eq!(
+            (
+                app.sessions
+                    .iter()
+                    .map(|session| session.session_id.as_str())
+                    .collect::<Vec<_>>(),
+                app.mode,
+            ),
+            (vec!["todo-session"], super::super::AppMode::Normal),
+        );
     }
 
     #[test]
