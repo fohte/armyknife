@@ -10,6 +10,7 @@ import { ConversationPane } from '#components/conversation-pane'
 import { ConversationPaneView } from '#components/conversation-pane-view'
 import { InboxConversationPanes } from '#components/inbox-conversation-panes'
 import { formatMessageTime } from '#components/message-time'
+import { clearCachedConversation } from '#components/session-conversation-cache'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
 import { useSessionPullRequests } from '#components/use-session-pull-requests'
@@ -854,6 +855,14 @@ function dispatchKeyInAct(
 }
 
 beforeEach(() => {
+  for (const sessionId of [
+    'root-session',
+    'child-session',
+    'cache-session-a',
+    'cache-session-b',
+  ]) {
+    clearCachedConversation(sessionId)
+  }
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   optimizeImageAttachmentMock.mockReset()
   optimizeImageAttachmentMock.mockImplementation((file) =>
@@ -7095,6 +7104,105 @@ it('loads only the latest page initially and refreshes from the loaded start', a
       'Loaded message two updated.',
       'New message.',
     ],
+  })
+})
+
+it('reuses a cached conversation across an A to B to A session switch', async () => {
+  const firstSession = { ...session, id: 'cache-session-a', title: 'Session A' }
+  const secondSession = {
+    ...session,
+    id: 'cache-session-b',
+    title: 'Session B',
+  }
+  const firstMessages = Array.from({ length: 21 }, (_, index) => ({
+    type: 'assistant' as const,
+    text: `A message ${String(index + 1)}`,
+  })) satisfies ChatItem[]
+  const secondMessages = [
+    { type: 'assistant', text: 'B message' },
+  ] satisfies ChatItem[]
+  const initialFirstResponse = {
+    ...messagesResponse(firstMessages, [], { start: 0, total: 21 }),
+    tailStart: 0,
+    tailEnd: 1,
+    tailDigest: 'digest-a',
+  }
+  const initialSecondResponse = messagesResponse(secondMessages)
+  const refreshedFirstMessages = [
+    ...firstMessages.slice(1),
+    { type: 'assistant', text: 'A message 22' },
+  ] satisfies ChatItem[]
+  let resolveFirstRefresh!: (response: Response) => void
+  const delayedFirstRefresh = new Promise<Response>((resolve) => {
+    resolveFirstRefresh = resolve
+  })
+  const fetcher = vi.fn<typeof fetch>((input) => {
+    const url = requestUrl(input)
+    if (url.includes('/sessions/cache-session-a/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(initialFirstResponse))
+    }
+    if (url.includes('/sessions/cache-session-b/messages?limit=100')) {
+      return Promise.resolve(jsonResponse(initialSecondResponse))
+    }
+    if (
+      url.includes(
+        '/sessions/cache-session-a/messages?from=0&tailStart=0&tailEnd=1&tailDigest=digest-a',
+      )
+    ) {
+      return delayedFirstRefresh
+    }
+    if (url.endsWith('/actions')) return Promise.resolve(jsonResponse(actions))
+    if (url.endsWith('/tree')) {
+      return Promise.resolve(
+        jsonResponse({ revision: 1, sessions: [] satisfies SessionTreeNode[] }),
+      )
+    }
+    return Promise.resolve(jsonResponse({}))
+  })
+  vi.stubGlobal('fetch', fetcher)
+
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(() => container.textContent.includes('A message 1'))
+  renderInboxPanes([firstSession, secondSession], secondSession)
+  await waitForState(() => container.textContent.includes('B message'))
+  renderInboxPanes([firstSession, secondSession], firstSession)
+  await waitForState(() =>
+    fetcher.mock.calls.some(([input]) =>
+      requestUrl(input).includes('&tailDigest=digest-a'),
+    ),
+  )
+  const cachedMessageWasShown = container.textContent.includes('A message 1')
+  resolveFirstRefresh(
+    jsonResponse(
+      messagesResponse(refreshedFirstMessages, [], { start: 1, total: 22 }),
+    ),
+  )
+  await waitForState(() => container.textContent.includes('A message 22'))
+
+  const snapshot = () => ({
+    cachedMessageWasShown,
+    requests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.includes('/messages') || url.endsWith('/actions')),
+    messages: Array.from(
+      container.querySelectorAll('.chat-assistant-message'),
+      (element) => element.textContent,
+    ),
+  })
+  expect(snapshot()).toEqual({
+    cachedMessageWasShown: true,
+    requests: [
+      '/api/sessions/cache-session-a/messages?limit=100',
+      '/api/sessions/cache-session-a/actions',
+      '/api/sessions/cache-session-b/messages?limit=100',
+      '/api/sessions/cache-session-b/actions',
+      '/api/sessions/cache-session-a/messages?from=0&tailStart=0&tailEnd=1&tailDigest=digest-a',
+      '/api/sessions/cache-session-a/actions',
+    ],
+    messages: [
+      ...firstMessages,
+      { type: 'assistant', text: 'A message 22' },
+    ].map((message) => message.text),
   })
 })
 

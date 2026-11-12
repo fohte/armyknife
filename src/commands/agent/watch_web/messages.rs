@@ -676,6 +676,12 @@ struct ConversationResponse {
     decisions: Vec<ChatItem>,
     has_unanswered_proposal: bool,
     active_question_index: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tail_start: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tail_end: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tail_digest: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -731,7 +737,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use axum::Router;
@@ -740,6 +746,7 @@ mod tests {
     use axum::http::{Request, Response, StatusCode};
     use rstest::rstest;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
     use tower::ServiceExt;
 
     use super::cache::TranscriptChange;
@@ -1626,6 +1633,100 @@ mod tests {
                     Some("application/json".to_string()),
                     ranged_response(2, &[3, 4]),
                 ),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    async fn messages_route_uses_tail_digest_only_when_the_prefix_matches() {
+        let session = Session {
+            engine: Engine::Codex,
+            ..stored_session()
+        };
+        let original_decisions = (1..=22).map(fixture_decision).collect::<Vec<_>>();
+        let mut changed_decisions = original_decisions.clone();
+        changed_decisions[0].title = "Updated fixture decision".to_string();
+        let prefix = original_decisions[..2]
+            .iter()
+            .cloned()
+            .map(ChatItem::from)
+            .collect::<Vec<_>>();
+        let changed_prefix = changed_decisions[..2]
+            .iter()
+            .cloned()
+            .map(ChatItem::from)
+            .collect::<Vec<_>>();
+        let digest =
+            crate::shared::hex::encode(&Sha256::digest(serde_json::to_vec(&prefix).unwrap()));
+        let changed_digest = crate::shared::hex::encode(&Sha256::digest(
+            serde_json::to_vec(&changed_prefix).unwrap(),
+        ));
+        let request_count = Arc::new(AtomicUsize::new(0));
+        let request_count_for_loader = Arc::clone(&request_count);
+        let decisions_for_loader = [original_decisions.clone(), changed_decisions.clone()];
+        let router = routes_with_decisions_and_queued_prompts_and_peer_out_messages(
+            move |_| Ok(Some(session.clone())),
+            |_| Ok(None),
+            move |_| {
+                let index = request_count_for_loader.fetch_add(1, Ordering::SeqCst);
+                Ok(decisions_for_loader[index.min(1)].clone())
+            },
+            |_| Ok(Vec::new()),
+            |_| Ok(Vec::new()),
+            |_, _| Ok(()),
+        );
+        let mut responses = Vec::new();
+        for query in [
+            format!("?from=0&tailStart=0&tailEnd=2&tailDigest={digest}"),
+            format!("?from=0&tailStart=0&tailEnd=2&tailDigest={digest}"),
+        ] {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(format!("/sessions/fixture-session/messages{query}"))
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            responses.push(response_json_snapshot(response).await);
+        }
+
+        let original_json = (1..=22).map(fixture_decision_json).collect::<Vec<_>>();
+        let mut changed_json = original_json.clone();
+        changed_json[0]["title"] = json!("Updated fixture decision");
+        let response = |start: usize,
+                        messages: Vec<serde_json::Value>,
+                        decisions: Vec<serde_json::Value>,
+                        digest: String| {
+            (
+                StatusCode::OK,
+                Some("application/json".to_string()),
+                json!({
+                    "messages": messages,
+                    "backgroundTasks": [],
+                    "start": start,
+                    "total": 22,
+                    "decisions": decisions,
+                    "hasUnansweredProposal": false,
+                    "activeQuestionIndex": null,
+                    "tailStart": 0,
+                    "tailEnd": 2,
+                    "tailDigest": digest,
+                }),
+            )
+        };
+        assert_eq!(
+            responses,
+            vec![
+                response(
+                    2,
+                    (3..=22).map(fixture_decision_json).collect::<Vec<_>>(),
+                    original_json,
+                    digest,
+                ),
+                response(0, changed_json.clone(), changed_json, changed_digest,),
             ],
         );
     }
