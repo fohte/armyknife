@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.639](https://github.com/fohte/armyknife/compare/v0.1.638...v0.1.639) (2026-11-12)
+
+
+### Features
+
+* **agent/watch-web:** answer questions ([#1647](https://github.com/fohte/armyknife/issues/1647)) ([ebb0d79](https://github.com/fohte/armyknife/commit/ebb0d796e0778a1103c58ab0398cb5308f6b4bee))
+
 ## [0.1.638](https://github.com/fohte/armyknife/compare/v0.1.637...v0.1.638) (2026-11-12)
 
 
