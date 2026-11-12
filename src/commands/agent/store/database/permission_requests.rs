@@ -230,7 +230,7 @@ fn finalize_permission_request_from(
 ) -> Result<PermissionRequestWait> {
     super::validate_session_id(session_id)?;
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let session = read_session_strict(&transaction, session_id)?;
+    let mut session = read_session_strict(&transaction, session_id)?;
     let is_current = session
         .as_ref()
         .is_some_and(|session| permission_request_is_current(session, agent_key, request_id));
@@ -261,6 +261,19 @@ fn finalize_permission_request_from(
              WHERE session_id = ?1 AND agent_key = ?2 AND request_id = ?3",
             params![session_id, agent_key, request_id],
         )?;
+        if expiration_decision.is_some()
+            && let Some(session) = session.as_mut()
+        {
+            session.pending_permission_agent_ids.remove(agent_key);
+            session.pending_permission_request_ids.remove(agent_key);
+            if !session.has_pending_permission_requests()
+                && session.status == crate::commands::agent::types::SessionStatus::WaitingInput
+            {
+                session.status = crate::commands::agent::types::SessionStatus::Running;
+            }
+            session.updated_at = Utc::now();
+            write_session(&transaction, session)?;
+        }
         transaction.commit()?;
         return Ok(
             expiration_decision.map_or(PermissionRequestWait::Finished, |decision| {
@@ -429,6 +442,43 @@ mod tests {
     }
 
     #[rstest::rstest]
+    fn expiration_returns_a_previously_saved_watch_web_decision(pending_bash_request: TempDir) {
+        let decision = PermissionRequestDecision::Allow;
+        assert_eq!(
+            resolve_permission_request(
+                pending_bash_request.path(),
+                "session-cobalt",
+                MAIN_THREAD_AGENT_KEY,
+                "request-cobalt",
+                &decision,
+            )
+            .expect("watch-web decision should be saved"),
+            PermissionRequestResolution::Resolved,
+        );
+        let mut waiter =
+            PermissionRequestWaiter::open(pending_bash_request.path()).expect("waiter should open");
+        let wait = waiter
+            .expire_with_deny(
+                "session-cobalt",
+                MAIN_THREAD_AGENT_KEY,
+                "request-cobalt",
+                "timeout fixture",
+            )
+            .expect("request expiration should complete");
+        let request = permission_request_data(
+            pending_bash_request.path(),
+            "session-cobalt",
+            "request-cobalt",
+        )
+        .expect("request should load after expiration");
+
+        assert_eq!(
+            (wait, request),
+            (PermissionRequestWait::Decision(decision), None)
+        );
+    }
+
+    #[rstest::rstest]
     fn terminal_resolution_ends_wait_without_a_hook_decision(pending_bash_request: TempDir) {
         let connection =
             open_connection(pending_bash_request.path()).expect("database should open");
@@ -490,7 +540,7 @@ mod tests {
                 "session-cobalt",
                 MAIN_THREAD_AGENT_KEY,
                 "request-cobalt",
-                "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.",
+                "timeout fixture",
             )
             .expect("request should expire with a deny");
         let request = permission_request_data(
@@ -499,15 +549,29 @@ mod tests {
             "request-cobalt",
         )
         .expect("request should load after expiration");
+        let connection =
+            open_connection(pending_bash_request.path()).expect("database should open");
+        let session = read_session_strict(&connection, "session-cobalt")
+            .expect("session should load")
+            .expect("session should exist");
 
         assert_eq!(
-            (wait, request),
+            (
+                wait,
+                request,
+                session.pending_permission_agent_ids,
+                session.pending_permission_request_ids,
+                session.status,
+            ),
             (
                 PermissionRequestWait::Decision(PermissionRequestDecision::Deny {
-                    message: "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.".to_string(),
+                    message: "timeout fixture".to_string(),
                     interrupt: false,
                 }),
                 None,
+                BTreeSet::new(),
+                BTreeMap::new(),
+                SessionStatus::Running,
             ),
         );
     }

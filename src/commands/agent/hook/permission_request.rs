@@ -13,7 +13,6 @@ use super::super::store::{
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 // Leave time for a terminal decision before Claude Code's command hook times out.
 const MAX_WAIT: Duration = Duration::from_secs(590);
-const EXPIRATION_DENIAL_MESSAGE: &str = "No response was provided in watch-web or the terminal within 590 seconds. This request was automatically denied.";
 
 pub(super) fn wait_and_write(
     sessions_dir: &Path,
@@ -44,7 +43,11 @@ fn wait_until_deadline(
 ) -> Result<()> {
     loop {
         let wait = if Instant::now() >= deadline {
-            waiter.expire_with_deny(session_id, agent_key, request_id, EXPIRATION_DENIAL_MESSAGE)?
+            let message = format!(
+                "No response was provided in watch-web or the terminal within {} seconds. This request was automatically denied.",
+                MAX_WAIT.as_secs(),
+            );
+            waiter.expire_with_deny(session_id, agent_key, request_id, &message)?
         } else {
             waiter.poll(session_id, agent_key, request_id)?
         };
@@ -140,6 +143,10 @@ mod tests {
         )
         .expect("expired wait should finish successfully");
 
+        let message = format!(
+            "No response was provided in watch-web or the terminal within {} seconds. This request was automatically denied.",
+            MAX_WAIT.as_secs(),
+        );
         assert_eq!(
             (
                 serde_json::from_slice::<serde_json::Value>(&output)
@@ -157,7 +164,7 @@ mod tests {
                         "hookEventName": "PermissionRequest",
                         "decision": {
                             "behavior": "deny",
-                            "message": EXPIRATION_DENIAL_MESSAGE,
+                            "message": message,
                             "interrupt": false,
                         },
                     },
