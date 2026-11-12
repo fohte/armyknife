@@ -6,7 +6,10 @@ import { DecisionsPanel } from '#components/decisions-panel'
 import { RunningTasksPanel } from '#components/running-tasks-panel'
 import type { SessionStatusPanelTab } from '#components/session-status-panel'
 import { SessionTreePanel } from '#components/session-tree-panel'
-import { needsActionDescendantCount } from '#session-tree-model'
+import {
+  needsActionDescendantCount,
+  type SessionTreeViewState,
+} from '#session-tree-model'
 import type { BackgroundTask, ChatItem, Session, SessionTreeNode } from '#types'
 
 type UseConversationStatusPanelOptions = {
@@ -16,6 +19,8 @@ type UseConversationStatusPanelOptions = {
   backgroundTasks: readonly BackgroundTask[]
   sessionTree?: readonly SessionTreeNode[] | null
   sessionTreeError?: string | null
+  sessionTreeViewState?: SessionTreeViewState | null
+  onSessionTreeViewStateChange?: (state: SessionTreeViewState) => void
   onSelectSession?: (id: string) => void
   statusPanelOpen: boolean
   onAction: (
@@ -33,6 +38,8 @@ export function useConversationStatusPanel({
   backgroundTasks,
   sessionTree = null,
   sessionTreeError = null,
+  sessionTreeViewState = null,
+  onSessionTreeViewStateChange,
   onSelectSession = () => undefined,
   statusPanelOpen,
   onAction,
@@ -117,6 +124,10 @@ export function useConversationStatusPanel({
                     sessions={sessionTree}
                     selectedSessionId={session.id}
                     onSelectSession={onSelectSession}
+                    viewState={sessionTreeViewState}
+                    {...(onSessionTreeViewStateChange === undefined
+                      ? {}
+                      : { onViewStateChange: onSessionTreeViewStateChange })}
                   />
                 </>
               ),

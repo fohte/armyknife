@@ -1,5 +1,11 @@
 import type { SessionTreeNode } from '#types'
 
+export type SessionTreeViewState = {
+  expandedSessionIds: readonly string[]
+  focusedSessionId: string
+  treeHasFocus: boolean
+}
+
 export type VisibleSessionTreeRow = {
   session: SessionTreeNode
   depth: number

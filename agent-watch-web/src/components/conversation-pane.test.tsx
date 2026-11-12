@@ -631,7 +631,7 @@ it('shows an error when the returned tree omits the selected session', async () 
   })
 })
 
-it('keeps the session tree while selecting another session and loads a different tree', async () => {
+it('reuses cached trees and preserves view state until the refresh key changes', async () => {
   const rootSession = { ...session, hasSessionTree: true }
   const childSession = {
     ...session,
@@ -640,10 +640,24 @@ it('keeps the session tree while selecting another session and loads a different
     parent: { id: rootSession.id, title: rootSession.title },
     hasSessionTree: true,
   }
+  const grandchildSession = {
+    ...session,
+    id: 'grandchild-session',
+    title: 'Grandchild session',
+    parent: { id: childSession.id, title: childSession.title },
+    hasSessionTree: true,
+  }
   const otherSession = {
     ...session,
     id: 'other-session',
     title: 'Other session',
+    hasSessionTree: true,
+  }
+  const siblingSession = {
+    ...session,
+    id: 'sibling-session',
+    title: 'Sibling session',
+    parent: { id: rootSession.id, title: rootSession.title },
     hasSessionTree: true,
   }
   const makeNode = (
@@ -667,19 +681,40 @@ it('keeps the session tree while selecting another session and loads a different
   const firstTree = [
     makeNode(rootSession.id, null, rootSession.title),
     makeNode(childSession.id, rootSession.id, childSession.title),
+    makeNode('grandchild-session', childSession.id, 'Grandchild session'),
+    makeNode(siblingSession.id, rootSession.id, siblingSession.title),
   ]
   const otherTree = [
     makeNode(otherSession.id, null, otherSession.title),
     makeNode('other-child-session', otherSession.id, 'Other child'),
   ]
+  const staleTree = firstTree.filter((node) => node.id !== 'grandchild-session')
+  const updatedTree = staleTree.map((node) =>
+    node.id === siblingSession.id
+      ? { ...node, title: 'Updated sibling session' }
+      : node,
+  )
+  let resolveRootTree: ((response: Response) => void) | undefined
+  const rootTreeResponse = new Promise<Response>((resolve) => {
+    resolveRootTree = resolve
+  })
   let resolveChildTree: ((response: Response) => void) | undefined
   const childTreeResponse = new Promise<Response>((resolve) => {
     resolveChildTree = resolve
+  })
+  let resolveSiblingTree: ((response: Response) => void) | undefined
+  const siblingTreeResponse = new Promise<Response>((resolve) => {
+    resolveSiblingTree = resolve
   })
   let resolveOtherTree: ((response: Response) => void) | undefined
   const otherTreeResponse = new Promise<Response>((resolve) => {
     resolveOtherTree = resolve
   })
+  let resolveUpdatedSiblingTree: ((response: Response) => void) | undefined
+  const updatedSiblingTreeResponse = new Promise<Response>((resolve) => {
+    resolveUpdatedSiblingTree = resolve
+  })
+  let siblingTreeRequestCount = 0
   const fetcher = vi.fn<typeof fetch>((input) => {
     const url = requestUrl(input)
     if (url.endsWith('/messages?limit=100')) {
@@ -689,16 +724,32 @@ it('keeps the session tree while selecting another session and loads a different
       return Promise.resolve(jsonResponse(actions))
     }
     if (url.endsWith('/tree')) {
-      if (url.includes(otherSession.id)) return otherTreeResponse
-      if (url.includes(childSession.id)) return childTreeResponse
-      return Promise.resolve(jsonResponse({ revision: 1, sessions: firstTree }))
+      if (url.endsWith(`/${otherSession.id}/tree`)) return otherTreeResponse
+      if (url.endsWith(`/${grandchildSession.id}/tree`)) {
+        return Promise.resolve(
+          jsonResponse({ revision: 2, sessions: updatedTree }),
+        )
+      }
+      if (url.endsWith(`/${siblingSession.id}/tree`)) {
+        siblingTreeRequestCount += 1
+        if (siblingTreeRequestCount === 1) return siblingTreeResponse
+        return updatedSiblingTreeResponse
+      }
+      if (url.endsWith(`/${childSession.id}/tree`)) return childTreeResponse
+      return rootTreeResponse
     }
     return Promise.resolve(jsonResponse({}))
   })
   vi.stubGlobal('fetch', fetcher)
   root = createRoot(container)
-  const render = (selectedSession: Session) => {
-    const sessions = [rootSession, childSession, otherSession]
+  const render = (selectedSession: Session, refreshKey = 0) => {
+    const sessions = [
+      rootSession,
+      childSession,
+      grandchildSession,
+      siblingSession,
+      otherSession,
+    ]
     const inboxProps = {
       sessions,
       selectedId: selectedSession.id,
@@ -727,7 +778,7 @@ it('keeps the session tree while selecting another session and loads a different
           inboxProps={inboxProps}
           sessions={sessions}
           selectedSession={selectedSession}
-          refreshKey={0}
+          refreshKey={refreshKey}
           isMobile={false}
           showMobileConversation={false}
           statusPanelOpen
@@ -741,27 +792,105 @@ it('keeps the session tree while selecting another session and loads a different
   }
 
   render(rootSession)
-  await waitForState(() =>
-    Boolean(container.querySelector('#session-tree-row-child-session')),
-  )
   render(childSession)
-  const selectedFromSameTree = {
-    loading: container.querySelector('.session-tree-feedback')?.textContent,
-    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+  await act(async () => {
+    resolveChildTree?.(jsonResponse({ revision: 1, sessions: firstTree }))
+    await childTreeResponse
+  })
+  await waitForState(() =>
+    Boolean(container.querySelector('#session-tree-row-grandchild-session')),
+  )
+  await act(async () => {
+    resolveRootTree?.(jsonResponse({ revision: 1, sessions: staleTree }))
+    await rootTreeResponse
+  })
+  const treeAfterLateResponse = {
+    grandchildVisible:
+      container.querySelector('#session-tree-row-grandchild-session') !== null,
     treeRequests: fetcher.mock.calls
       .map(([input]) => requestUrl(input))
       .filter((url) => url.endsWith('/tree')),
   }
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Collapse Child session"]')
+      ?.click()
+  })
+  render(siblingSession)
+  const selectedFromSameTree = {
+    loading: container.querySelector('.session-tree-feedback')?.textContent,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    focusedRow: container.querySelector('.session-tree-row.is-focused')?.id,
+    treeFocused:
+      document.activeElement === container.querySelector('.session-tree-list'),
+    childExpanded: container
+      .querySelector('#session-tree-row-child-session')
+      ?.getAttribute('aria-expanded'),
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+  render(siblingSession, 1)
   await act(async () => {
-    resolveChildTree?.(jsonResponse({ error: 'Sample tree error' }, 503))
-    await childTreeResponse
+    resolveSiblingTree?.(jsonResponse({ error: 'Sample tree error' }, 503))
+    await siblingTreeResponse
   })
   await waitForState(() => container.querySelector('[role="alert"]') !== null)
   const cachedTreeAfterRefreshFailure = {
     alert: container.querySelector('[role="alert"]')?.textContent,
     currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    focusedRow: container.querySelector('.session-tree-row.is-focused')?.id,
+    treeFocused:
+      document.activeElement === container.querySelector('.session-tree-list'),
+    childExpanded: container
+      .querySelector('#session-tree-row-child-session')
+      ?.getAttribute('aria-expanded'),
   }
-  render(otherSession)
+  render(childSession, 1)
+  const reusedAfterFailedRefresh = {
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    currentRow: container.querySelector('.session-tree-row.is-current')?.id,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+  render(siblingSession, 2)
+  await act(async () => {
+    resolveUpdatedSiblingTree?.(
+      jsonResponse({ revision: 2, sessions: updatedTree }),
+    )
+    await updatedSiblingTreeResponse
+  })
+  await waitForState(
+    () =>
+      container.querySelector(
+        '#session-tree-row-sibling-session .session-tree-title',
+      )?.textContent === 'Updated sibling session',
+  )
+  act(() => {
+    container
+      .querySelector<HTMLButtonElement>('[aria-label="Expand Child session"]')
+      ?.click()
+  })
+  const treeAfterRemovedNodeRefresh = {
+    siblingTitle: container.querySelector(
+      '#session-tree-row-sibling-session .session-tree-title',
+    )?.textContent,
+    grandchildRow:
+      container.querySelector('#session-tree-row-grandchild-session') !== null,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+  render(grandchildSession, 2)
+  await waitForState(() => container.querySelector('[role="alert"]') !== null)
+  const removedSessionResponse = {
+    alert: container.querySelector('[role="alert"]')?.textContent,
+    treeRequests: fetcher.mock.calls
+      .map(([input]) => requestUrl(input))
+      .filter((url) => url.endsWith('/tree')),
+  }
+  render(otherSession, 1)
   const differentTreeLoading = container.querySelector(
     '.session-tree-feedback',
   )?.textContent
@@ -774,7 +903,11 @@ it('keeps the session tree while selecting another session and loads a different
   )
   const snapshot = () => ({
     selectedFromSameTree,
+    treeAfterLateResponse,
     cachedTreeAfterRefreshFailure,
+    reusedAfterFailedRefresh,
+    treeAfterRemovedNodeRefresh,
+    removedSessionResponse,
     differentTreeLoading,
     currentRow: container.querySelector('.session-tree-row.is-current')?.id,
     treeRequests: fetcher.mock.calls
@@ -785,7 +918,17 @@ it('keeps the session tree while selecting another session and loads a different
   expect(snapshot()).toEqual({
     selectedFromSameTree: {
       loading: undefined,
-      currentRow: 'session-tree-row-child-session',
+      currentRow: 'session-tree-row-sibling-session',
+      focusedRow: 'session-tree-row-child-session',
+      treeFocused: true,
+      childExpanded: 'false',
+      treeRequests: [
+        '/api/sessions/sample-session/tree',
+        '/api/sessions/child-session/tree',
+      ],
+    },
+    treeAfterLateResponse: {
+      grandchildVisible: true,
       treeRequests: [
         '/api/sessions/sample-session/tree',
         '/api/sessions/child-session/tree',
@@ -793,13 +936,49 @@ it('keeps the session tree while selecting another session and loads a different
     },
     cachedTreeAfterRefreshFailure: {
       alert: 'Could not refresh the session tree: Sample tree error',
+      currentRow: 'session-tree-row-sibling-session',
+      focusedRow: 'session-tree-row-child-session',
+      treeFocused: true,
+      childExpanded: 'false',
+    },
+    reusedAfterFailedRefresh: {
+      alert: 'Could not refresh the session tree: Sample tree error',
       currentRow: 'session-tree-row-child-session',
+      treeRequests: [
+        '/api/sessions/sample-session/tree',
+        '/api/sessions/child-session/tree',
+        '/api/sessions/sibling-session/tree',
+      ],
+    },
+    treeAfterRemovedNodeRefresh: {
+      siblingTitle: 'Updated sibling session',
+      grandchildRow: false,
+      treeRequests: [
+        '/api/sessions/sample-session/tree',
+        '/api/sessions/child-session/tree',
+        '/api/sessions/sibling-session/tree',
+        '/api/sessions/sibling-session/tree',
+      ],
+    },
+    removedSessionResponse: {
+      alert:
+        'Could not load the session tree: The session tree does not contain the selected session.',
+      treeRequests: [
+        '/api/sessions/sample-session/tree',
+        '/api/sessions/child-session/tree',
+        '/api/sessions/sibling-session/tree',
+        '/api/sessions/sibling-session/tree',
+        '/api/sessions/grandchild-session/tree',
+      ],
     },
     differentTreeLoading: 'Loading session tree…',
     currentRow: 'session-tree-row-other-session',
     treeRequests: [
       '/api/sessions/sample-session/tree',
       '/api/sessions/child-session/tree',
+      '/api/sessions/sibling-session/tree',
+      '/api/sessions/sibling-session/tree',
+      '/api/sessions/grandchild-session/tree',
       '/api/sessions/other-session/tree',
     ],
   })

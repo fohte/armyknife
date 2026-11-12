@@ -19,6 +19,7 @@ import type {
 import { ResizableColumns } from '#components/resizable-columns'
 import { SessionStatusPanel } from '#components/session-status-panel'
 import { useConversationStatusPanel } from '#components/use-conversation-status-panel'
+import type { SessionTreeViewState } from '#session-tree-model'
 import type {
   ConversationResponse,
   OpenInTerminalStatus,
@@ -46,7 +47,29 @@ type ConversationPaneProps = {
   session: Session
   sessions?: readonly Session[]
   initialSessionTree?: readonly SessionTreeNode[] | null
-  onSessionTreeLoaded?: (tree: readonly SessionTreeNode[]) => void
+  initialSessionTreeError?: string | null
+  initialSessionTreeViewState?: SessionTreeViewState | null
+  shouldSkipSessionTreeFetch?: boolean
+  onSessionTreeLoaded?: (
+    tree: readonly SessionTreeNode[],
+    selectedSessionId: string,
+    refreshKey: number,
+    requestSequence: number,
+  ) => void
+  onSessionTreeRequestStarted?: (
+    selectedSessionId: string,
+    refreshKey: number,
+  ) => number
+  onSessionTreeRequestFailed?: (
+    selectedSessionId: string,
+    refreshKey: number,
+    requestSequence: number,
+    message: string,
+  ) => void
+  onSessionTreeViewStateChange?: (
+    selectedSessionId: string,
+    state: SessionTreeViewState,
+  ) => void
   refreshKey: number
   onSelectSession: (id: string) => void
   isMobile?: boolean
@@ -64,7 +87,13 @@ export function ConversationPane({
   session,
   sessions = EMPTY_SESSIONS,
   initialSessionTree = null,
+  initialSessionTreeError = null,
+  initialSessionTreeViewState = null,
+  shouldSkipSessionTreeFetch = false,
   onSessionTreeLoaded,
+  onSessionTreeRequestStarted,
+  onSessionTreeRequestFailed,
+  onSessionTreeViewStateChange,
   refreshKey,
   onSelectSession,
   isMobile = false,
@@ -88,7 +117,9 @@ export function ConversationPane({
   const [sessionTree, setSessionTree] = useState<
     readonly SessionTreeNode[] | null
   >(initialSessionTree)
-  const [sessionTreeError, setSessionTreeError] = useState<string | null>(null)
+  const [sessionTreeError, setSessionTreeError] = useState<string | null>(
+    initialSessionTreeError,
+  )
   const [actionsReady, setActionsReady] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -227,38 +258,76 @@ export function ConversationPane({
   }, [refresh, refreshKey])
 
   useEffect(() => {
+    if (initialSessionTree !== null) setSessionTree(initialSessionTree)
+  }, [initialSessionTree])
+
+  useEffect(() => {
     if (session.hasSessionTree !== true) {
       setSessionTree(null)
       setSessionTreeError(null)
       return
     }
+    if (shouldSkipSessionTreeFetch) {
+      setSessionTreeError(initialSessionTreeError)
+      return
+    }
     let current = true
     setSessionTreeError(null)
+    const requestSequence =
+      onSessionTreeRequestStarted?.(session.id, refreshKey) ?? 0
     void requestJson(
       `/api/sessions/${encodeURIComponent(session.id)}/tree`,
       isSessionTreeResponse,
     ).match(
       (response) => {
-        if (current) {
-          if (response.sessions.some((node) => node.id === session.id)) {
+        if (response.sessions.some((node) => node.id === session.id)) {
+          onSessionTreeLoaded?.(
+            response.sessions,
+            session.id,
+            refreshKey,
+            requestSequence,
+          )
+          if (current) {
             setSessionTree(response.sessions)
             setSessionTreeError(null)
-            onSessionTreeLoaded?.(response.sessions)
-          } else {
-            setSessionTreeError(
-              'The session tree does not contain the selected session.',
-            )
+          }
+        } else {
+          const errorMessage =
+            'The session tree does not contain the selected session.'
+          onSessionTreeRequestFailed?.(
+            session.id,
+            refreshKey,
+            requestSequence,
+            errorMessage,
+          )
+          if (current) {
+            setSessionTreeError(errorMessage)
           }
         }
       },
       (treeError) => {
+        onSessionTreeRequestFailed?.(
+          session.id,
+          refreshKey,
+          requestSequence,
+          treeError.message,
+        )
         if (current) setSessionTreeError(treeError.message)
       },
     )
     return () => {
       current = false
     }
-  }, [onSessionTreeLoaded, refreshKey, session.hasSessionTree, session.id])
+  }, [
+    initialSessionTreeError,
+    onSessionTreeLoaded,
+    onSessionTreeRequestFailed,
+    onSessionTreeRequestStarted,
+    refreshKey,
+    session.hasSessionTree,
+    session.id,
+    shouldSkipSessionTreeFetch,
+  ])
 
   useEffect(() => {
     setPendingPermissionAction(null)
@@ -414,6 +483,9 @@ export function ConversationPane({
     backgroundTasks: displayBackgroundTasks,
     sessionTree,
     sessionTreeError,
+    sessionTreeViewState: initialSessionTreeViewState,
+    onSessionTreeViewStateChange: (state) =>
+      onSessionTreeViewStateChange?.(session.id, state),
     onSelectSession,
     statusPanelOpen,
     onAction,

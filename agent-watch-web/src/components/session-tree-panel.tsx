@@ -7,6 +7,7 @@ import { formatElapsedTime } from '#components/format-elapsed-time'
 import {
   defaultExpandedSessionIds,
   directSessionChildCounts,
+  type SessionTreeViewState,
   visibleSessionTreeRows,
 } from '#session-tree-model'
 import type { SessionTreeNode } from '#types'
@@ -15,20 +16,37 @@ type SessionTreePanelProps = {
   sessions: readonly SessionTreeNode[]
   selectedSessionId: string
   onSelectSession: (id: string) => void
+  viewState?: SessionTreeViewState | null
+  onViewStateChange?: (state: SessionTreeViewState) => void
 }
 
 export function SessionTreePanel({
   sessions,
   selectedSessionId,
   onSelectSession,
+  viewState: controlledViewState,
+  onViewStateChange,
 }: SessionTreePanelProps) {
   const treeRef = useRef<HTMLDivElement>(null)
-  const [focusedId, setFocusedId] = useState(selectedSessionId)
   const [treeReceivedAt, setTreeReceivedAt] = useState(() => Date.now())
   const [nowMs, setNowMs] = useState(() => Date.now())
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(() =>
-    defaultExpandedSessionIds(sessions, selectedSessionId),
+  const [localViewState, setLocalViewState] = useState<SessionTreeViewState>(
+    () => ({
+      expandedSessionIds: [
+        ...defaultExpandedSessionIds(sessions, selectedSessionId),
+      ],
+      focusedSessionId: selectedSessionId,
+      treeHasFocus: false,
+    }),
   )
+  const viewState = controlledViewState ?? localViewState
+  const viewStateRef = useRef(viewState)
+  viewStateRef.current = viewState
+  const expandedIds = useMemo(
+    () => new Set(viewState.expandedSessionIds),
+    [viewState.expandedSessionIds],
+  )
+  const focusedId = viewState.focusedSessionId
   const rows = useMemo(
     () => visibleSessionTreeRows(sessions, expandedIds),
     [expandedIds, sessions],
@@ -47,6 +65,10 @@ export function SessionTreePanel({
   }, [sessions])
 
   useEffect(() => {
+    if (viewState.treeHasFocus) treeRef.current?.focus()
+  }, [viewState.treeHasFocus])
+
+  useEffect(() => {
     const interval = window.setInterval(() => {
       setNowMs(Date.now())
     }, 1_000)
@@ -55,16 +77,37 @@ export function SessionTreePanel({
     }
   }, [])
 
+  const updateViewState = (
+    update: (current: SessionTreeViewState) => SessionTreeViewState,
+  ) => {
+    const current = viewStateRef.current
+    const next = update(current)
+    if (next === current) return
+    viewStateRef.current = next
+    if (controlledViewState == null) setLocalViewState(next)
+    onViewStateChange?.(next)
+  }
   const updateFocus = (id: string) => {
-    setFocusedId(id)
+    updateViewState((current) => ({
+      ...current,
+      focusedSessionId: id,
+      treeHasFocus: true,
+    }))
     treeRef.current?.focus()
   }
+  const updateTreeFocus = (treeHasFocus: boolean) => {
+    updateViewState((current) =>
+      current.treeHasFocus === treeHasFocus
+        ? current
+        : { ...current, treeHasFocus },
+    )
+  }
   const toggleExpanded = (id: string) => {
-    setExpandedIds((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
+    updateViewState((current) => {
+      const expanded = new Set(current.expandedSessionIds)
+      if (expanded.has(id)) expanded.delete(id)
+      else expanded.add(id)
+      return { ...current, expandedSessionIds: [...expanded] }
     })
   }
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -78,7 +121,7 @@ export function SessionTreePanel({
         Math.max(0, currentIndex + (event.key === 'j' ? 1 : -1)),
       )
       const next = rows[nextIndex]
-      if (next !== undefined) setFocusedId(next.session.id)
+      if (next !== undefined) updateFocus(next.session.id)
       return
     }
     if (currentRow === undefined) return
@@ -90,7 +133,7 @@ export function SessionTreePanel({
         const parent = rows.find(
           (row) => row.session.id === currentRow.session.parentId,
         )
-        if (parent !== undefined) setFocusedId(parent.session.id)
+        if (parent !== undefined) updateFocus(parent.session.id)
       }
       return
     }
@@ -102,7 +145,7 @@ export function SessionTreePanel({
         const child = rows.find(
           (row) => row.session.parentId === currentRow.session.id,
         )
-        if (child !== undefined) setFocusedId(child.session.id)
+        if (child !== undefined) updateFocus(child.session.id)
       }
       return
     }
@@ -123,6 +166,18 @@ export function SessionTreePanel({
         tabIndex={0}
         aria-label={`Session tree for ${sessionById.get(selectedSessionId)?.title ?? 'current session'}`}
         aria-activedescendant={`session-tree-row-${focusedId}`}
+        onFocus={() => {
+          updateTreeFocus(true)
+        }}
+        onBlur={(event) => {
+          const nextTarget = event.relatedTarget
+          if (
+            nextTarget !== null &&
+            !event.currentTarget.contains(nextTarget)
+          ) {
+            updateTreeFocus(false)
+          }
+        }}
         onKeyDown={handleKeyDown}
       >
         {rows.map((row) => {
