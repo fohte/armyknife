@@ -98,7 +98,7 @@ export const ComposerWithDocumentAttachment: Story = {
 }
 
 export const MobileComposer: Story = {
-  name: 'The composer shows touch sized controls on mobile',
+  name: 'The mobile composer places send and interrupt beside the text field',
   args: {
     isMobile: true,
     canInterrupt: true,
@@ -106,8 +106,32 @@ export const MobileComposer: Story = {
   decorators: [mobileViewportDecorator],
 }
 
+export const MobileComposerWithoutInterrupt: Story = {
+  name: 'The mobile composer sends without an interrupt control',
+  args: {
+    isMobile: true,
+  },
+  decorators: [mobileViewportDecorator],
+}
+
+export const MobileComposerWithAttachment: Story = {
+  name: 'The mobile composer shows an attachment without an interrupt control',
+  args: {
+    isMobile: true,
+    attachments: [
+      {
+        id: 'example-attachment',
+        name: 'example-notes.txt',
+        size: 1024,
+        previewUrl: null,
+      },
+    ],
+  },
+  decorators: [mobileViewportDecorator],
+}
+
 export const MobileComposerWithAttachmentAndInterrupt: Story = {
-  name: 'The mobile composer keeps attachment and interrupt controls beside sending',
+  name: 'The mobile composer keeps attachment and interrupt beside sending',
   args: {
     isMobile: true,
     canInterrupt: true,

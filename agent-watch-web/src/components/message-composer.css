@@ -164,13 +164,17 @@
 }
 
 .conversation-composer[data-mobile='true'] textarea {
-  grid-column: 1 / -1;
+  grid-column: 1;
   grid-row: 1;
   min-height: 44px;
   padding: 8px 12px;
   border: 1px solid var(--aw-border-control);
   background: var(--aw-bg-app);
   font-size: 16px;
+}
+
+.conversation-composer[data-mobile='true']:has(.mobile-interrupt-button) {
+  grid-template-columns: minmax(0, 1fr) 44px 44px;
 }
 
 .conversation-composer[data-mobile='true'] .composer-attachments {
@@ -185,8 +189,8 @@
 .conversation-composer[data-mobile='true']
   .composer-footer
   [data-slot='button'] {
-  grid-column: 2;
-  grid-row: 2;
+  grid-column: -2 / -1;
+  grid-row: 1;
   width: 44px;
   height: 44px;
   min-height: 44px;
@@ -195,8 +199,8 @@
 .conversation-composer[data-mobile='true']
   .composer-footer
   .mobile-interrupt-button {
-  grid-column: 1;
-  grid-row: 2;
+  grid-column: -3 / -2;
+  grid-row: 1;
   width: 44px;
   height: 44px;
   min-height: 44px;
@@ -205,10 +209,4 @@
   background: transparent;
   box-shadow: none;
   color: var(--aw-text-muted);
-}
-
-.conversation-composer[data-mobile='true']:has(.composer-attachments)
-  .composer-footer
-  [data-slot='button'] {
-  grid-row: 3;
 }
