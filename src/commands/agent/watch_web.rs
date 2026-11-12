@@ -1,6 +1,7 @@
 mod actions;
 mod assets;
 mod attachments;
+mod crit_proxy;
 mod events;
 mod image_attachments;
 mod interrupted;
@@ -37,6 +38,7 @@ pub struct WatchWebArgs {
 }
 
 const LISTEN_PORT: u16 = 4317;
+const CRIT_PROXY_PORT: u16 = 4318;
 
 fn is_invalid_session_id_error(error: &anyhow::Error) -> bool {
     error
@@ -83,7 +85,13 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     let mut executable_identity = restart::ExecutableIdentity::read(&executable)?;
     let restart_args: Vec<OsString> = std::env::args_os().skip(1).collect();
     let address = SocketAddr::from((Ipv4Addr::LOCALHOST, LISTEN_PORT));
+    let crit_proxy_address = SocketAddr::from((Ipv4Addr::LOCALHOST, CRIT_PROXY_PORT));
     let listener = TcpListener::bind(address).await?;
+    let crit_proxy_listener = TcpListener::bind(crit_proxy_address).await?;
+    let crit_proxy_client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()?;
     let url = format!("http://{address}");
     println!("Agent Watch Web UI: {url}");
     open_browser_on_startup(
@@ -94,21 +102,36 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
     );
 
     let mut listener = listener;
+    let mut crit_proxy_listener = crit_proxy_listener;
     let mut restart_retry_interval = restart::POLL_INTERVAL;
     loop {
         let (restart_sender, restart_receiver) = watch::channel(false);
         let mut shutdown_receiver = restart_sender.subscribe();
-        let server = async move {
+        let crit_proxy_restart_receiver = restart_receiver.clone();
+        let crit_proxy_client = crit_proxy_client.clone();
+        let crit_proxy_server = async move {
+            axum::serve(
+                crit_proxy_listener,
+                crit_proxy::router(store::list_all_sessions, crit_proxy_client),
+            )
+            .with_graceful_shutdown(async move {
+                let mut shutdown_receiver = crit_proxy_restart_receiver;
+                let _ = shutdown_receiver.changed().await;
+            })
+            .await
+        };
+        let watch_web_server = async move {
             axum::serve(listener, app(restart_receiver))
                 .with_graceful_shutdown(async move {
                     let _ = shutdown_receiver.changed().await;
                 })
                 .await
         };
+        let server = async move { tokio::try_join!(watch_web_server, crit_proxy_server) };
         tokio::pin!(server);
 
         tokio::select! {
-            result = &mut server => return result.map_err(Into::into),
+            result = &mut server => return result.map(|_| ()).map_err(Into::into),
             () = restart::wait_for_replacement(&executable, executable_identity, restart_retry_interval) => {
                 restart_sender.send_replace(true);
                 server.await?;
@@ -123,6 +146,7 @@ pub async fn run(args: &WatchWebArgs) -> Result<()> {
                     }
                 }
                 listener = TcpListener::bind(address).await?;
+                crit_proxy_listener = TcpListener::bind(crit_proxy_address).await?;
             }
         }
     }

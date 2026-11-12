@@ -3,6 +3,8 @@ import '#components/crit-pane.css'
 import { Button } from '@fohte/ui/button'
 import { useState } from 'react'
 
+import { critRelayUrl } from '#components/crit-relay-url'
+
 type CritPaneProps = {
   url: string
   onClose: () => void
@@ -15,6 +17,7 @@ export function CritPane({
   defaultFullscreen = false,
 }: CritPaneProps) {
   const [isFullscreen, setIsFullscreen] = useState(defaultFullscreen)
+  const relayUrl = critRelayUrl(url)
 
   return (
     <aside
@@ -24,7 +27,7 @@ export function CritPane({
     >
       <header className="crit-pane-header">
         <span className="crit-pane-title">crit</span>
-        <a href={url} target="_blank" rel="noreferrer">
+        <a href={relayUrl} target="_blank" rel="noreferrer">
           {url}
         </a>
         <Button
@@ -49,7 +52,7 @@ export function CritPane({
           ×
         </Button>
       </header>
-      <iframe title="Crit review" src={url} />
+      <iframe title="Crit review" src={relayUrl} />
     </aside>
   )
 }

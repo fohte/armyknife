@@ -7,6 +7,15 @@ import { CritPane } from '#components/crit-pane'
 let container: HTMLDivElement
 let root: Root | null = null
 
+function relayTargets() {
+  return {
+    iframe: container
+      .querySelector<HTMLIFrameElement>('iframe')
+      ?.getAttribute('src'),
+    link: container.querySelector<HTMLAnchorElement>('a')?.getAttribute('href'),
+  }
+}
+
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
   container = document.createElement('div')
@@ -72,5 +81,22 @@ it('toggles the review between its column and fullscreen layouts', () => {
     },
     restoredClassName: 'crit-pane',
     restoredLabel: 'false',
+  })
+})
+
+it('opens the iframe and external link through the crit relay', () => {
+  root = createRoot(container)
+  act(() => {
+    root?.render(
+      <CritPane
+        url="http://127.0.0.1:48761/review/sample"
+        onClose={() => undefined}
+      />,
+    )
+  })
+
+  expect(relayTargets()).toEqual({
+    iframe: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
+    link: `${window.location.protocol}//localhost:4318/_crit/48761/review/sample`,
   })
 })
