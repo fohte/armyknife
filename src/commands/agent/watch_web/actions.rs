@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::super::resume::SHELL_COMMANDS;
 use super::super::store;
-use super::super::types::{Engine, Session, SessionStatus, TmuxInfo};
+use super::super::types::{Engine, MAIN_THREAD_AGENT_KEY, Session, SessionStatus, TmuxInfo};
 use super::super::user_turn::is_ask_user_question;
 use super::messages::RouteLoaders;
 
@@ -253,17 +253,17 @@ async fn answer_question(
 async fn approve_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
-    Json(request): Json<PermissionRequestAction>,
+    request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, request.request_id, true).await
+    resolve_permission_action(state, id, request.map(|Json(request)| request), true).await
 }
 
 async fn reject_permission(
     State(state): State<ActionState>,
     RoutePath(id): RoutePath<String>,
-    Json(request): Json<PermissionRequestAction>,
+    request: Option<Json<PermissionRequestAction>>,
 ) -> Result<Json<Success>, ApiError> {
-    resolve_permission_action(state, id, request.request_id, false).await
+    resolve_permission_action(state, id, request.map(|Json(request)| request), false).await
 }
 
 #[derive(Deserialize)]
@@ -275,7 +275,7 @@ struct PermissionRequestAction {
 async fn resolve_permission_action(
     state: ActionState,
     id: String,
-    request_id: String,
+    request: Option<PermissionRequestAction>,
     approved: bool,
 ) -> Result<Json<Success>, ApiError> {
     let session = load_session(state.clone(), id).await?;
@@ -287,17 +287,31 @@ async fn resolve_permission_action(
     if session.status == SessionStatus::Ended {
         return Err(ApiError::conflict("session has ended"));
     }
-    let Some(agent_key) = session
-        .pending_permission_request_ids
-        .iter()
-        .find(|(agent_key, pending_request_id)| {
-            pending_request_id.as_str() == request_id
-                && session
-                    .pending_permission_agent_ids
-                    .contains(agent_key.as_str())
-        })
-        .map(|(agent_key, _)| agent_key.clone())
-    else {
+    let request_id = request.map(|request| request.request_id);
+    let pending_request = match request_id {
+        Some(request_id) => session
+            .pending_permission_request_ids
+            .iter()
+            .find(|(agent_key, pending_request_id)| {
+                pending_request_id.as_str() == request_id
+                    && session
+                        .pending_permission_agent_ids
+                        .contains(agent_key.as_str())
+            })
+            .map(|(agent_key, _)| (agent_key.clone(), request_id)),
+        None => session
+            .pending_permission_agent_ids
+            .contains(MAIN_THREAD_AGENT_KEY)
+            .then(|| {
+                session
+                    .pending_permission_request_ids
+                    .get(MAIN_THREAD_AGENT_KEY)
+                    .cloned()
+            })
+            .flatten()
+            .map(|request_id| (MAIN_THREAD_AGENT_KEY.to_string(), request_id)),
+    };
+    let Some((agent_key, request_id)) = pending_request else {
         return Err(ApiError::conflict(
             "permission request is no longer pending; answer it in the terminal",
         ));
@@ -1059,6 +1073,87 @@ mod tests {
                 }),
                 store::PermissionRequestWait::Decision(expected_decision),
             ),
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_permission_action_without_body_targets_the_main_request() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        action_context.save_pending_permission_request(
+            &mut session,
+            MAIN_THREAD_AGENT_KEY,
+            "permission-request-main",
+            "Bash",
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(post_empty("/sessions/sample-session/permission/approve"))
+            .await
+            .unwrap();
+        let mut waiter =
+            store::PermissionRequestWaiter::open(&action_context.temp_dir.path().join("sessions"))
+                .unwrap();
+
+        assert_eq!(
+            (
+                response_snapshot(response, &action_context).await,
+                waiter
+                    .poll(
+                        "sample-session",
+                        MAIN_THREAD_AGENT_KEY,
+                        "permission-request-main",
+                    )
+                    .unwrap(),
+            ),
+            (
+                json!({
+                    "status": StatusCode::OK.as_u16(),
+                    "body": { "ok": true },
+                    "calls": [],
+                }),
+                store::PermissionRequestWait::Decision(store::PermissionRequestDecision::Allow),
+            ),
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_capability_is_enabled_for_a_subagent_only_request() {
+        let action_context = action_context();
+        let mut session = session("sample-session");
+        session.tmux_info = None;
+        action_context.save_pending_permission_request(
+            &mut session,
+            "agent-fixture",
+            "permission-request-subagent",
+            "Bash",
+        );
+
+        let response = action_context
+            .router()
+            .oneshot(
+                Request::builder()
+                    .uri("/sessions/sample-session/actions")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response_snapshot(response, &action_context).await,
+            json!({
+                "status": StatusCode::OK.as_u16(),
+                "body": {
+                    "message": true,
+                    "answerQuestion": false,
+                    "permission": { "approve": true, "reject": true },
+                    "interrupt": false,
+                    "openInTerminal": false,
+                },
+                "calls": [],
+            }),
         );
     }
 
