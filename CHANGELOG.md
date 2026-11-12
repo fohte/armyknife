@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.640](https://github.com/fohte/armyknife/compare/v0.1.639...v0.1.640) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent/sweep:** preserve active Crit links ([#1649](https://github.com/fohte/armyknife/issues/1649)) ([d23b504](https://github.com/fohte/armyknife/commit/d23b5047cbba120b784541bbd615984213630abc))
+
 ## [0.1.639](https://github.com/fohte/armyknife/compare/v0.1.638...v0.1.639) (2026-11-12)
 
 
