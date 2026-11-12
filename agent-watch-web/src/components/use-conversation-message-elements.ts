@@ -50,30 +50,6 @@ function contentIdentity(content: readonly UserContentPart[]): string[] {
   })
 }
 
-function fingerprint(parts: readonly string[]): string {
-  let firstHash = 2166136261
-  let secondHash = 0x9e3779b9
-  for (const part of parts) {
-    const sampleLength = Math.min(128, part.length)
-    for (let index = 0; index < sampleLength; index += 1) {
-      const code = part.charCodeAt(index)
-      firstHash = Math.imul(firstHash ^ code, 16777619)
-      secondHash = Math.imul(secondHash ^ code, 2246822519)
-    }
-    const suffixStart = Math.max(sampleLength, part.length - 128)
-    for (let index = suffixStart; index < part.length; index += 1) {
-      const code = part.charCodeAt(index)
-      firstHash = Math.imul(firstHash ^ code, 16777619)
-      secondHash = Math.imul(secondHash ^ code, 2246822519)
-    }
-    firstHash = Math.imul(firstHash ^ part.length, 16777619)
-    secondHash = Math.imul(secondHash ^ part.length, 2246822519)
-    firstHash = Math.imul(firstHash ^ 255, 16777619)
-    secondHash = Math.imul(secondHash ^ 255, 2246822519)
-  }
-  return `${(firstHash >>> 0).toString(36)}.${(secondHash >>> 0).toString(36)}`
-}
-
 function getConversationMessageIdentity(message: ChatItem): string {
   switch (message.type) {
     case 'proposal':
@@ -82,63 +58,67 @@ function getConversationMessageIdentity(message: ChatItem): string {
       return `${message.type}:${String(message.seq)}`
     case 'question':
       return message.requestId === undefined
-        ? `${message.type}:${fingerprint(
-            message.questions.flatMap((question) => [
+        ? `${message.type}:${JSON.stringify(
+            message.questions.map((question) => [
               question.header ?? '',
               question.question,
-              ...question.choices.map((choice) => choice.label),
+              String(question.multi_select),
+              ...question.choices.flatMap((choice) => [
+                choice.label,
+                choice.description ?? '',
+              ]),
             ]),
           )}`
         : `${message.type}:${message.requestId}`
     case 'permission':
       return message.requestId === undefined
-        ? `${message.type}:${fingerprint([message.tool, message.description])}`
+        ? `${message.type}:${JSON.stringify([message.tool, message.description])}`
         : `${message.type}:${message.requestId}`
     case 'tool_summary': {
       const firstOperation = message.operations?.[0]
-      return `${message.type}:${fingerprint(
+      return `${message.type}:${JSON.stringify(
         firstOperation === undefined
           ? [message.summary]
           : [firstOperation.tool, firstOperation.target ?? ''],
       )}`
     }
     case 'tool_in_progress':
-      return `${message.type}:${fingerprint([message.tool])}`
+      return `${message.type}:${JSON.stringify([message.tool])}`
     case 'user':
       return message.timestamp === undefined
-        ? `${message.type}:${fingerprint([message.from ?? '', message.text])}`
-        : `${message.type}:${message.from ?? ''}:${message.timestamp}`
+        ? `${message.type}:${JSON.stringify([message.from ?? '', message.text])}`
+        : `${message.type}:${JSON.stringify([message.from ?? '', message.timestamp])}`
     case 'queued_user':
     case 'user_with_content':
       return message.timestamp === undefined
-        ? `${message.type}:${fingerprint([
+        ? `${message.type}:${JSON.stringify([
             message.from ?? '',
             ...contentIdentity(message.content),
           ])}`
-        : `${message.type}:${message.from ?? ''}:${message.timestamp}`
+        : `${message.type}:${JSON.stringify([message.from ?? '', message.timestamp])}`
     case 'peer':
       return message.timestamp === undefined
-        ? `${message.type}:${fingerprint([
+        ? `${message.type}:${JSON.stringify([
             message.direction,
             message.session_id,
             ...contentIdentity(message.content),
           ])}`
-        : `${message.type}:${message.direction}:${message.session_id}:${message.timestamp}`
+        : `${message.type}:${JSON.stringify([message.direction, message.session_id, message.timestamp])}`
     case 'subagent_report':
-      return `${message.type}:${fingerprint([
+      return `${message.type}:${JSON.stringify([
         message.agent_id,
         message.description ?? '',
       ])}`
     case 'event':
       return message.timestamp === undefined
-        ? `${message.type}:${fingerprint([
+        ? `${message.type}:${JSON.stringify([
             message.kind,
             message.text,
             String(message.failed),
           ])}`
-        : `${message.type}:${message.kind}:${message.timestamp}`
+        : `${message.type}:${JSON.stringify([message.kind, message.timestamp])}`
     case 'assistant':
-      return `${message.type}:${fingerprint([message.text])}`
+      return `${message.type}:${JSON.stringify([message.text])}`
   }
 }
 
