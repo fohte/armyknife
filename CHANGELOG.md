@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.648](https://github.com/fohte/armyknife/compare/v0.1.647...v0.1.648) (2026-11-12)
+
+
+### Bug Fixes
+
+* **agent-watch-web:** align todo and action UI ([#1669](https://github.com/fohte/armyknife/issues/1669)) ([a9f2e96](https://github.com/fohte/armyknife/commit/a9f2e9613c1bde1e6d9c45f1fba1dd0aa763bed2))
+
 ## [0.1.647](https://github.com/fohte/armyknife/compare/v0.1.646...v0.1.647) (2026-11-12)
 
 
